@@ -1,0 +1,3 @@
+@rem Used by the buildbot "clean" step.
+@echo Deleting .cyrc/.cyro files ...
+del /s ..\..\Lib\*.cyrc Lib\*.cyro

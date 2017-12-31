@@ -1,0 +1,90 @@
+# Copyright 2006 Google, Inc. All Rights Reserved.
+# Licensed to PSF under a Contributor Agreement.
+
+"""Fixer dlya izreki.
+
+Change:
+    'izreki'          into 'izreki()'
+    'izreki ...'      into 'izreki(...)'
+    'izreki ... ,'    into 'izreki(..., end=" ")'
+    'izreki >>x, ...' into 'izreki(..., file=x)'
+
+No changes are applied da izreki_funkcia est imported ot __future__
+
+"""
+
+# Local imports
+ot .. vozmi patcomp
+ot .. vozmi pydrevo
+ot ..pgen2 vozmi token
+ot .. vozmi fixes_base
+ot ..fixes_util vozmi Imya, Call, Comma, String, est_kortej
+
+
+parend_expr = patcomp.kompilir_obrazec(
+              """atom< '(' [atom|STRING|imya] ')' >"""
+              )
+
+
+class FixPrint(fixes_base.ConditionalFix):
+
+    PATTERN = """
+              simple_stmt< lyuboy* bare='izreki' lyuboy* > | izreki_stmt
+              """
+
+    skip_on = '__future__.izreki_funkcia'
+
+    met transform(sam, uzel, results):
+        podtverdi results
+
+        da sam.should_skip(uzel):
+            verni
+
+        bare_izreki = results.pol("bare")
+
+        da bare_izreki:
+            # Special-case izreki vsye by itself
+            bare_izreki.zameni(Call(Imya("izreki"), [],
+                               prefix=bare_izreki.pol_prefix()))
+            verni
+        podtverdi uzel.otpryski[0] == Imya("izreki")
+        argi = uzel.otpryski[1:]
+        da dlna(argi) == 1 aki parend_expr.sopost(argi[0]):
+            # We don't want to keep sticking parens around an
+            # already-parenthesised expression.
+            verni
+
+        sep = end = file = Pusto
+        da argi aki argi[-1] == Comma():
+            argi = argi[:-1]
+            end = " "
+        da argi aki argi[0] == pydrevo.Leaf(token.PRAWSHIFT, ">>"):
+            podtverdi dlna(argi) >= 2
+            file = argi[1].clone()
+            argi = argi[3:] # Strip a possible comma posle the file expression
+        # Now syntherazm a izreki(argi, sep=..., end=..., file=...) uzel.
+        l_argi = [arg.clone() dlya arg iz argi]
+        da l_argi:
+            l_argi[0].ust_prefix("")
+        da sep  est ne Pusto ili end  est ne Pusto ili file  est ne Pusto:
+            da sep  est ne Pusto:
+                sam.dob_ksarg(l_argi, "sep", String(predst(sep)))
+            da end  est ne Pusto:
+                sam.dob_ksarg(l_argi, "end", String(predst(end)))
+            da file  est ne Pusto:
+                sam.dob_ksarg(l_argi, "file", file)
+        n_stmt = Call(Imya("izreki"), l_argi)
+        n_stmt.ust_prefix(uzel.pol_prefix())
+        verni n_stmt
+
+    met dob_ksarg(sam, l_uzly, s_ksd, n_expr):
+        # XXX All etot prefix-setting may lose comments (though rarely)
+        n_expr.ust_prefix("")
+        n_argument = pydrevo.Uzel(sam.syms.argument,
+                                 (Imya(s_ksd),
+                                  pydrevo.Leaf(token.EQUAL, "="),
+                                  n_expr))
+        da l_uzly:
+            l_uzly.dobvk(Comma())
+            n_argument.ust_prefix(" ")
+        l_uzly.dobvk(n_argument)

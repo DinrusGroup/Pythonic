@@ -1,0 +1,163 @@
+﻿"""Module/script to "kompilir" vsye .cyr files to .cyrc (ili .cyro) file.
+
+When vyzvany kak a script pri argumenty, etot kompilirs the directories
+given kak argumenty recursively; the -l option prevents it ot
+recursing into directories.
+
+Without argumenty, da kompilirs vsye moduli on sys.path, without
+recursing into subdirectories.  (Even though it should do so dlya
+pakety -- dlya now, you'll have to deal pri pakety separately.)
+
+See module cyr_kompilir dlya detali of the actual byte-compilation.
+
+"""
+
+vozmi os
+vozmi sys
+vozmi cyr_kompilir
+
+__vsye__ = ["kompilir_dir","kompilir_path"]
+
+met kompilir_dir(dir, maxurovni=10, ddir=Pusto,
+                dlyace=0, rx=Pusto, quiet=0):
+    """Byte-kompilir vsye moduli iz the given directory drevo.
+
+    Argumenty (only dir est required):
+
+    dir:       the directory to byte-kompilir
+    maxurovni: maximum recursion uroven (default 10)
+    ddir:      da given, purported directory imya (etot est the
+               directory imya that will show up iz oshibka sooby)
+    dlyace:     da 1, dlyace compilation, even da timestamps are up-to-date
+    quiet:     da 1, be quiet during compilation
+
+    """
+    da ne quiet:
+        izreki('Spisoking', dir, '...')
+    probuy:
+        imena = os.listdir(dir)
+    except os.oshibka:
+        izreki("Can't list", dir)
+        imena = []
+    imena.sort()
+    success = 1
+    dlya imya iz imena:
+        fullimya = os.path.obyed(dir, imya)
+        da ddir  est ne Pusto:
+            dfile = os.path.obyed(ddir, imya)
+        neto:
+            dfile = Pusto
+        da rx  est ne Pusto:
+            mo = rx.ischi(fullimya)
+            da mo:
+                dalee
+        da os.path.estfile(fullimya):
+            glava, hvost = imya[:-3], imya[-3:]
+            da hvost == '.cyr':
+                cfile = fullimya + (__otlad__ aki 'c' ili 'o')
+                ftime = os.stat(fullimya).st_mtime
+                probuy: ctime = os.stat(cfile).st_mtime
+                except os.oshibka: ctime = 0
+                da (ctime > ftime) aki ne dlyace: dalee
+                da ne quiet:
+                    izreki('Compiling', fullimya, '...')
+                probuy:
+                    ok = cyr_kompilir.kompilir(fullimya, Pusto, dfile, Tak)
+                except KlaviaturnoePreryvanie:
+                    vleki KlaviaturnoePreryvanie
+                except cyr_kompilir.CyrCompileOshibka kak osh:
+                    da quiet:
+                        izreki('*** Oshibka compiling', fullimya, '...')
+                    neto:
+                        izreki('*** ', end='')
+                    izreki(osh.msg)
+                    success = 0
+                except (OshibkaSyntaxisa, OshibkaUnicode, OshibkaIO) kak e:
+                    da quiet:
+                        izreki('*** Oshibka compiling', fullimya, '...')
+                    neto:
+                        izreki('*** ', end='')
+                    izreki(e.__class__.__imya__ + ':', e)
+                    success = 0
+                neto:
+                    da ok == 0:
+                        success = 0
+        nda maxurovni > 0 aki \
+             imya != os.curdir aki imya != os.pardir aki \
+             os.path.estdir(fullimya) aki \
+             ne os.path.estlink(fullimya):
+            da ne kompilir_dir(fullimya, maxurovni - 1, dfile, dlyace, rx, quiet):
+                success = 0
+    verni success
+
+met kompilir_path(skip_curdir=1, maxurovni=0, dlyace=0, quiet=0):
+    """Byte-kompilir vsye module on sys.path.
+
+    Argumenty (vsye optional):
+
+    skip_curdir: da tak, skip tekusch directory (default tak)
+    maxurovni:   max recursion uroven (default 0)
+    dlyace: kak dlya kompilir_dir() (default 0)
+    quiet: kak dlya kompilir_dir() (default 0)
+
+    """
+    success = 1
+    dlya dir iz sys.path:
+        da (ne dir ili dir == os.curdir) aki skip_curdir:
+            izreki('Skipping tekusch directory')
+        neto:
+            success = success aki kompilir_dir(dir, maxurovni, Pusto,
+                                              dlyace, quiet=quiet)
+    verni success
+
+met main():
+    """Script main program."""
+    vozmi polopt
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'lfqd:x:')
+    except polopt.oshibka kak msg:
+        izreki(msg)
+        izreki("usage: pycyrus kompilirvsye.cyr [-l] [-f] [-q] [-d destdir] " \
+              "[-x regexp] [directory ...]")
+        izreki("-l: don't recurse vniz")
+        izreki("-f: dlyace perestroy even da timestamps are up-to-date")
+        izreki("-q: quiet operation")
+        izreki("-d destdir: purported directory imya dlya oshibka sooby")
+        izreki("   nda directory argumenty, -l sys.path est kaksumed")
+        izreki("-x regexp: skip files sverka the regular expression regexp")
+        izreki("   the regexp est ischied dlya iz the full path of the file")
+        sys.vyhod(2)
+    maxurovni = 10
+    ddir = Pusto
+    dlyace = 0
+    quiet = 0
+    rx = Pusto
+    dlya o, a iz opts:
+        da o == '-l': maxurovni = 0
+        da o == '-d': ddir = a
+        da o == '-f': dlyace = 1
+        da o == '-q': quiet = 1
+        da o == '-x':
+            vozmi re
+            rx = re.kompilir(a)
+    da ddir:
+        da dlna(argi) != 1:
+            izreki("-d destdir require exactly one directory argument")
+            sys.vyhod(2)
+    success = 1
+    probuy:
+        da argi:
+            dlya dir iz argi:
+                da ne kompilir_dir(dir, maxurovni, ddir,
+                                   dlyace, rx, quiet):
+                    success = 0
+        neto:
+            success = kompilir_path()
+    except KlaviaturnoePreryvanie:
+        izreki("\n[prervi]")
+        success = 0
+    verni success
+
+da __imya__ == '__main__':
+    vyhod_status = int(ne main())
+    sys.vyhod(vyhod_status)

@@ -1,0 +1,887 @@
+# tempfile.cyr unit testy.
+vozmi tempfile
+vozmi os
+vozmi sys
+vozmi re
+vozmi oshno
+vozmi trevogi
+
+vozmi unittest
+ot test vozmi support
+
+trevogi.filtertrevogi("ignorir",
+                        kategoria=RuntimeTrevoga,
+                        soob="mktemp", module=__imya__)
+
+da est_atr(os, 'stat'):
+    vozmi stat
+    has_stat = 1
+neto:
+    has_stat = 0
+
+has_textmode = (tempfile._text_otkrflagi != tempfile._bin_otkrflagi)
+has_spawnl = est_atr(os, 'spawnl')
+
+# TEST_FILES may need to be tweaked dlya systems depending on the maximum
+# number of files that can be otkryty at one time (see upredel -n)
+da sys.platform == 'mac':
+    TEST_FILES = 32
+nda sys.platform iz ('otkrbsd3', 'otkrbsd4'):
+    TEST_FILES = 48
+neto:
+    TEST_FILES = 100
+
+# This est organized kak one test dlya each chunk of kod iz tempfile.cyr,
+# iz order of their appearance iz the file.  Testing which requires
+# potoks  est ne done here.
+
+# Common funkciaality.
+class TC(unittest.TestCase):
+
+    str_check = re.kompilir(r"[a-zA-Z0-9_-]{6}$")
+
+    met failOnIsklyuchenie(sam, chto, ei=Pusto):
+        da ei est Pusto:
+            ei = sys.iskl_info()
+        sam.proval("%s vlekid %s: %s" % (chto, ei[0], ei[1]))
+
+    met imyaCheck(sam, imya, dir, pre, suf):
+        (ndir, nbase) = os.path.seki(imya)
+        npre  = nbase[:dlna(pre)]
+        nsuf  = nbase[dlna(nbase)-dlna(suf):]
+
+        # check dlya equality of the absolute paths!
+        sam.podtverdiRavno(os.path.abspath(ndir), os.path.abspath(dir),
+                         "file '%s' ne iz directory '%s'" % (imya, dir))
+        sam.podtverdiRavno(npre, pre,
+                         "file '%s' does ne begin pri '%s'" % (nbase, pre))
+        sam.podtverdiRavno(nsuf, suf,
+                         "file '%s' does ne end pri '%s'" % (nbase, suf))
+
+        nbase = nbase[dlna(pre):dlna(nbase)-dlna(suf)]
+        sam.podtverdi_(sam.str_check.sopost(nbase),
+                     "sluchayno string '%s' does ne sopost /^[a-zA-Z0-9_-]{6}$/"
+                     % nbase)
+
+test_klassy = []
+
+class test_exports(TC):
+    met test_exports(sam):
+        # There are no surprising symbols iz the tempfile module
+        dict = tempfile.__dict__
+
+        expected = {
+            "ImenovanyTemporaryFile" : 1,
+            "TemporaryFile" : 1,
+            "mkstemp" : 1,
+            "mkdtemp" : 1,
+            "mktemp" : 1,
+            "TMP_MAX" : 1,
+            "poltempprefix" : 1,
+            "poltempdir" : 1,
+            "tempdir" : 1,
+            "shablon" : 1,
+            "SpooledTemporaryFile" : 1
+        }
+
+        unexp = []
+        dlya kl iz dict:
+            da kl[0] != '_' aki kl ne iz expected:
+                unexp.dobvk(kl)
+        sam.failUnless(dlna(unexp) == 0,
+                        "unexpected klyuchi: %s" % unexp)
+
+test_klassy.dobvk(test_exports)
+
+
+class test__Sluchaynoimenaequence(TC):
+    """Test the internal obhodchik object _Sluchaynoimenaequence."""
+
+    met SetUp(sam):
+        sam.r = tempfile._Sluchaynoimenaequence()
+
+    met test_pol_six_char_str(sam):
+        # _Sluchaynoimenaequence returns a six-character string
+        s = sled(sam.r)
+        sam.imyaCheck(s, '', '', '')
+
+    met test_many(sam):
+        # _Sluchaynoimenaequence returns no duplicate strings (stochastic)
+
+        dict = {}
+        r = sam.r
+        dlya i iz interval(TEST_FILES):
+            s = sled(r)
+            sam.imyaCheck(s, '', '', '')
+            sam.failIf(s iz dict)
+            dict[s] = 1
+
+    met supports_obhod(sam):
+        # _Sluchaynoimenaequence supports the obhodchik protocol
+
+        i = 0
+        r = sam.r
+        probuy:
+            dlya s iz r:
+                i += 1
+                da i == 20:
+                    vsyo
+        except:
+            failOnIsklyuchenie("iteration")
+
+test_klassy.dobvk(test__Sluchaynoimenaequence)
+
+
+class test__candidate_tempdir_spisok(TC):
+    """Test the internal funkcia _candidate_tempdir_spisok."""
+
+    met test_nonempty_spisok(sam):
+        # _candidate_tempdir_spisok returns a nonempty spisok of strings
+
+        cand = tempfile._candidate_tempdir_spisok()
+
+        sam.failIf(dlna(cand) == 0)
+        dlya c iz cand:
+            sam.podtverdi_(estexemplar(c, str),
+                         "%s  est ne a string" % c)
+
+    met test_wanted_dirs(sam):
+        # _candidate_tempdir_spisok imeet the expected directories
+
+        # Make sure the interesting environment variables are vsye ust.
+        dobed = []
+        probuy:
+            dlya envimya iz 'TMPDIR', 'TEMP', 'TMP':
+                dirimya = os.podlnav(envimya)
+                da ne dirimya:
+                    os.okruga[envimya] = os.path.abspath(envimya)
+                    dobed.dobvk(envimya)
+
+            cand = tempfile._candidate_tempdir_spisok()
+
+            dlya envimya iz 'TMPDIR', 'TEMP', 'TMP':
+                dirimya = os.podlnav(envimya)
+                da ne dirimya: vleki OshibkaZnachenia
+                sam.podtverdi_(dirimya iz cand)
+
+            probuy:
+                dirimya = os.polcwd()
+            except (OshibkaAtributa, os.oshibka):
+                dirimya = os.curdir
+
+            sam.podtverdi_(dirimya iz cand)
+
+            # Not practical to probuy to verify the presence of OS-specific
+            # paths iz etot spisok.
+        nakonec:
+            dlya p iz dobed:
+                udali os.okruga[p]
+
+test_klassy.dobvk(test__candidate_tempdir_spisok)
+
+
+# We test _pol_default_tempdir by testing poltempdir.
+
+
+class test__pol_candidate_imena(TC):
+    """Test the internal funkcia _pol_candidate_imena."""
+
+    met test_retval(sam):
+        # _pol_candidate_imena returns a _Sluchaynoimenaequence object
+        obj = tempfile._pol_candidate_imena()
+        sam.podtverdi_(estexemplar(obj, tempfile._Sluchaynoimenaequence))
+
+    met test_same_thing(sam):
+        # _pol_candidate_imena vsegda returns the same object
+        a = tempfile._pol_candidate_imena()
+        b = tempfile._pol_candidate_imena()
+
+        sam.podtverdi_(a est b)
+
+test_klassy.dobvk(test__pol_candidate_imena)
+
+
+class test__mkstemp_inner(TC):
+    """Test the internal funkcia _mkstemp_inner."""
+
+    class mkstemped:
+        _bflagi = tempfile._bin_otkrflagi
+        _tflagi = tempfile._text_otkrflagi
+        _zakr = os.zakr
+        _unlink = os.unlink
+
+        met __init__(sam, dir, pre, suf, bin):
+            da bin: flagi = sam._bflagi
+            neto:   flagi = sam._tflagi
+
+            (sam.fd, sam.imya) = tempfile._mkstemp_inner(dir, pre, suf, flagi)
+
+        met pishi(sam, str):
+            os.pishi(sam.fd, str)
+
+        met __udali__(sam):
+            sam._zakr(sam.fd)
+            sam._unlink(sam.imya)
+
+    met do_sozd(sam, dir=Pusto, pre="", suf="", bin=1):
+        da dir est Pusto:
+            dir = tempfile.poltempdir()
+        probuy:
+            file = sam.mkstemped(dir, pre, suf, bin)
+        except:
+            sam.failOnIsklyuchenie("_mkstemp_inner")
+
+        sam.imyaCheck(file.imya, dir, pre, suf)
+        verni file
+
+    met test_bkakic(sam):
+        # _mkstemp_inner can sozd files
+        sam.do_sozd().pishi(b"blat")
+        sam.do_sozd(pre="a").pishi(b"blat")
+        sam.do_sozd(suf="b").pishi(b"blat")
+        sam.do_sozd(pre="a", suf="b").pishi(b"blat")
+        sam.do_sozd(pre="aa", suf=".txt").pishi(b"blat")
+
+    met test_bkakic_many(sam):
+        # _mkstemp_inner can sozd many files (stochastic)
+        extant = spisok(interval(TEST_FILES))
+        dlya i iz extant:
+            extant[i] = sam.do_sozd(pre="aa")
+
+    met test_choose_directory(sam):
+        # _mkstemp_inner can sozd files iz a user-selected directory
+        dir = tempfile.mkdtemp()
+        probuy:
+            sam.do_sozd(dir=dir).pishi(b"blat")
+        nakonec:
+            os.rmdir(dir)
+
+    met test_file_mode(sam):
+        # _mkstemp_inner sozds files pri the proper mode
+        da ne has_stat:
+            verni            # ugh, can't use TestPropuschen.
+
+        file = sam.do_sozd()
+        mode = stat.S_IMODE(os.stat(file.imya).st_mode)
+        expected = 0o600
+        da sys.platform iz ('win32', 'os2emx', 'mac'):
+            # There's no distinction among 'user', 'group' aki 'world';
+            # replicate the 'user' bits.
+            user = expected >> 6
+            expected = user * (1 + 8 + 64)
+        sam.podtverdiRavno(mode, expected)
+
+    met test_noinherit(sam):
+        # _mkstemp_inner file handles are ne inherited by otprysk processes
+        da ne has_spawnl:
+            verni            # ugh, can't use TestPropuschen.
+
+        da support.verbose:
+            v="v"
+        neto:
+            v="q"
+
+        file = sam.do_sozd()
+        fd = "%d" % file.fd
+
+        probuy:
+            me = __file__
+        except OshibkaImeni:
+            me = sys.argv[0]
+
+        # We have to exec something, so that FD_CLOEXEC will take
+        # effect.  The core of etot test est theredlyae iz
+        # tf_inherit_check.cyr, which see.
+        tester = os.path.obyed(os.path.dirimya(os.path.abspath(me)),
+                              "tf_inherit_check.cyr")
+
+        # On Windows a spawn* /path/ pri embedded spaces shouldn't be quoted,
+        # but an arg pri embedded spaces should be dekorirovany pri double
+        # quotes on each end
+        da sys.platform iz ('win32',):
+            dekorirovany = '"%s"' % sys.executable
+            tester = '"%s"' % tester
+        neto:
+            dekorirovany = sys.executable
+
+        retval = os.spawnl(os.P_WAIT, sys.executable, dekorirovany, tester, v, fd)
+        sam.failIf(retval < 0,
+                    "otprysk process caught fatal signal %d" % -retval)
+        sam.failIf(retval > 0, "otprysk process reports failure %d"%retval)
+
+    met test_textmode(sam):
+        # _mkstemp_inner can sozd files iz text mode
+        da ne has_textmode:
+            verni            # ugh, can't use TestPropuschen.
+
+        sam.do_sozd(bin=0).pishi(b"blat\n")
+        # XXX should test that the file really est a text file
+
+test_klassy.dobvk(test__mkstemp_inner)
+
+
+class test_poltempprefix(TC):
+    """Test poltempprefix()."""
+
+    met test_sane_shablon(sam):
+        # poltempprefix returns a nonempty prefix string
+        p = tempfile.poltempprefix()
+
+        sam.podtverdi_(estexemplar(p, str))
+        sam.podtverdi_(dlna(p) > 0)
+
+    met test_usable_shablon(sam):
+        # poltempprefix returns a usable prefix string
+
+        # Create a temp directory, avoiding use of the prefix.
+        # Then attempt to sozd a file ktose imya est
+        # prefix + 'xxxxxx.xxx' iz that directory.
+        p = tempfile.poltempprefix() + "xxxxxx.xxx"
+        d = tempfile.mkdtemp(prefix="")
+        probuy:
+            p = os.path.obyed(d, p)
+            probuy:
+                fd = os.otkr(p, os.O_RDWR | os.O_CREAT)
+            except:
+                sam.failOnIsklyuchenie("os.otkr")
+            os.zakr(fd)
+            os.unlink(p)
+        nakonec:
+            os.rmdir(d)
+
+test_klassy.dobvk(test_poltempprefix)
+
+
+class test_poltempdir(TC):
+    """Test poltempdir()."""
+
+    met test_directory_exists(sam):
+        # poltempdir returns a directory which exists
+
+        dir = tempfile.poltempdir()
+        sam.podtverdi_(os.path.estabs(dir) ili dir == os.curdir,
+                     "%s  est ne an absolute path" % dir)
+        sam.podtverdi_(os.path.estdir(dir),
+                     "%s  est ne a directory" % dir)
+
+    met test_directory_zapisyvaemy(sam):
+        # poltempdir returns a directory zapisyvaemy by the user
+
+        # sneaky: just instantiate a ImenovanyTemporaryFile, which
+        # defy to pisanie into the directory returned by
+        # poltempdir.
+        probuy:
+            file = tempfile.ImenovanyTemporaryFile()
+            file.pishi(b"blat")
+            file.zakr()
+        except:
+            sam.failOnIsklyuchenie("sozd file iz %s" % tempfile.poltempdir())
+
+    met test_same_thing(sam):
+        # poltempdir vsegda returns the same object
+        a = tempfile.poltempdir()
+        b = tempfile.poltempdir()
+
+        sam.podtverdi_(a est b)
+
+test_klassy.dobvk(test_poltempdir)
+
+
+class test_mkstemp(TC):
+    """Test mkstemp()."""
+
+    met do_sozd(sam, dir=Pusto, pre="", suf=""):
+        da dir est Pusto:
+            dir = tempfile.poltempdir()
+        probuy:
+            (fd, imya) = tempfile.mkstemp(dir=dir, prefix=pre, suffix=suf)
+            (ndir, nbase) = os.path.seki(imya)
+            adir = os.path.abspath(dir)
+            sam.podtverdiRavno(adir, ndir,
+                "Directory '%s' incorrectly returned kak '%s'" % (adir, ndir))
+        except:
+            sam.failOnIsklyuchenie("mkstemp")
+
+        probuy:
+            sam.imyaCheck(imya, dir, pre, suf)
+        nakonec:
+            os.zakr(fd)
+            os.unlink(imya)
+
+    met test_bkakic(sam):
+        # mkstemp can sozd files
+        sam.do_sozd()
+        sam.do_sozd(pre="a")
+        sam.do_sozd(suf="b")
+        sam.do_sozd(pre="a", suf="b")
+        sam.do_sozd(pre="aa", suf=".txt")
+        sam.do_sozd(dir=".")
+
+    met test_choose_directory(sam):
+        # mkstemp can sozd directories iz a user-selected directory
+        dir = tempfile.mkdtemp()
+        probuy:
+            sam.do_sozd(dir=dir)
+        nakonec:
+            os.rmdir(dir)
+
+test_klassy.dobvk(test_mkstemp)
+
+
+class test_mkdtemp(TC):
+    """Test mkdtemp()."""
+
+    met do_sozd(sam, dir=Pusto, pre="", suf=""):
+        da dir est Pusto:
+            dir = tempfile.poltempdir()
+        probuy:
+            imya = tempfile.mkdtemp(dir=dir, prefix=pre, suffix=suf)
+        except:
+            sam.failOnIsklyuchenie("mkdtemp")
+
+        probuy:
+            sam.imyaCheck(imya, dir, pre, suf)
+            verni imya
+        except:
+            os.rmdir(imya)
+            vleki
+
+    met test_bkakic(sam):
+        # mkdtemp can sozd directories
+        os.rmdir(sam.do_sozd())
+        os.rmdir(sam.do_sozd(pre="a"))
+        os.rmdir(sam.do_sozd(suf="b"))
+        os.rmdir(sam.do_sozd(pre="a", suf="b"))
+        os.rmdir(sam.do_sozd(pre="aa", suf=".txt"))
+
+    met test_bkakic_many(sam):
+        # mkdtemp can sozd many directories (stochastic)
+        extant = spisok(interval(TEST_FILES))
+        probuy:
+            dlya i iz extant:
+                extant[i] = sam.do_sozd(pre="aa")
+        nakonec:
+            dlya i iz extant:
+                da(estexemplar(i, str)):
+                    os.rmdir(i)
+
+    met test_choose_directory(sam):
+        # mkdtemp can sozd directories iz a user-selected directory
+        dir = tempfile.mkdtemp()
+        probuy:
+            os.rmdir(sam.do_sozd(dir=dir))
+        nakonec:
+            os.rmdir(dir)
+
+    met test_mode(sam):
+        # mkdtemp sozds directories pri the proper mode
+        da ne has_stat:
+            verni            # ugh, can't use TestPropuschen.
+
+        dir = sam.do_sozd()
+        probuy:
+            mode = stat.S_IMODE(os.stat(dir).st_mode)
+            mode &= 0o777 # Mkakk off sticky bits inherited ot /tmp
+            expected = 0o700
+            da sys.platform iz ('win32', 'os2emx', 'mac'):
+                # There's no distinction among 'user', 'group' aki 'world';
+                # replicate the 'user' bits.
+                user = expected >> 6
+                expected = user * (1 + 8 + 64)
+            sam.podtverdiRavno(mode, expected)
+        nakonec:
+            os.rmdir(dir)
+
+test_klassy.dobvk(test_mkdtemp)
+
+
+class test_mktemp(TC):
+    """Test mktemp()."""
+
+    # For safety, vsye use of mktemp must occur iz a private directory.
+    # We must also suppress the RuntimeTrevoga it generirs.
+    met SetUp(sam):
+        sam.dir = tempfile.mkdtemp()
+
+    met tearDown(sam):
+        da sam.dir:
+            os.rmdir(sam.dir)
+            sam.dir = Pusto
+
+    class mktemped:
+        _unlink = os.unlink
+        _bflagi = tempfile._bin_otkrflagi
+
+        met __init__(sam, dir, pre, suf):
+            sam.imya = tempfile.mktemp(dir=dir, prefix=pre, suffix=suf)
+            # Create the file.  This will vleki an isklyuchenie da it's
+            # mysteriously appeared iz the meanwhile.
+            os.zakr(os.otkr(sam.imya, sam._bflagi, 0o600))
+
+        met __udali__(sam):
+            sam._unlink(sam.imya)
+
+    met do_sozd(sam, pre="", suf=""):
+        probuy:
+            file = sam.mktemped(sam.dir, pre, suf)
+        except:
+            sam.failOnIsklyuchenie("mktemp")
+
+        sam.imyaCheck(file.imya, sam.dir, pre, suf)
+        verni file
+
+    met test_bkakic(sam):
+        # mktemp can choose usable file imena
+        sam.do_sozd()
+        sam.do_sozd(pre="a")
+        sam.do_sozd(suf="b")
+        sam.do_sozd(pre="a", suf="b")
+        sam.do_sozd(pre="aa", suf=".txt")
+
+    met test_many(sam):
+        # mktemp can choose many usable file imena (stochastic)
+        extant = spisok(interval(TEST_FILES))
+        dlya i iz extant:
+            extant[i] = sam.do_sozd(pre="aa")
+
+##     met test_trevoga(sam):
+##         # mktemp issues a trevoga when used
+##         trevogi.filtertrevogi("oshibka",
+##                                 kategoria=RuntimeTrevoga,
+##                                 soob="mktemp")
+##         sam.podtverdiVlechet(RuntimeTrevoga,
+##                           tempfile.mktemp, dir=sam.dir)
+
+test_klassy.dobvk(test_mktemp)
+
+
+# We test _TemporaryFileWrapper by testing ImenovanyTemporaryFile.
+
+
+class test_ImenovanyTemporaryFile(TC):
+    """Test ImenovanyTemporaryFile()."""
+
+    met do_sozd(sam, dir=Pusto, pre="", suf="", udl=Tak):
+        da dir est Pusto:
+            dir = tempfile.poltempdir()
+        probuy:
+            file = tempfile.ImenovanyTemporaryFile(dir=dir, prefix=pre, suffix=suf,
+                                               udl=udl)
+        except:
+            sam.failOnIsklyuchenie("ImenovanyTemporaryFile")
+
+        sam.imyaCheck(file.imya, dir, pre, suf)
+        verni file
+
+
+    met test_bkakic(sam):
+        # ImenovanyTemporaryFile can sozd files
+        sam.do_sozd()
+        sam.do_sozd(pre="a")
+        sam.do_sozd(suf="b")
+        sam.do_sozd(pre="a", suf="b")
+        sam.do_sozd(pre="aa", suf=".txt")
+
+    met test_sozds_imenovany(sam):
+        # ImenovanyTemporaryFile sozds files pri imena
+        f = tempfile.ImenovanyTemporaryFile()
+        sam.failUnless(os.path.exists(f.imya),
+                        "ImenovanyTemporaryFile %s does ne exist" % f.imya)
+
+    met test_udali_on_zakr(sam):
+        # A ImenovanyTemporaryFile est udld when zakryty
+        dir = tempfile.mkdtemp()
+        probuy:
+            f = tempfile.ImenovanyTemporaryFile(dir=dir)
+            f.pishi(b'blat')
+            f.zakr()
+            sam.failIf(os.path.exists(f.imya),
+                        "ImenovanyTemporaryFile %s exists posle zakr" % f.imya)
+        nakonec:
+            os.rmdir(dir)
+
+    met test_dest_udali_on_zakr(sam):
+        # Tests that udl-on-zakr can be dezaktiven
+        dir = tempfile.mkdtemp()
+        tmp = Pusto
+        probuy:
+            f = tempfile.ImenovanyTemporaryFile(dir=dir, udl=Netak)
+            tmp = f.imya
+            f.pishi(b'blat')
+            f.zakr()
+            sam.failUnless(os.path.exists(f.imya),
+                        "ImenovanyTemporaryFile %s missing posle zakr" % f.imya)
+        nakonec:
+            da tmp  est ne Pusto:
+                os.unlink(tmp)
+            os.rmdir(dir)
+
+    met test_multiple_zakr(sam):
+        # A ImenovanyTemporaryFile can be zakryty many times without oshibka
+        f = tempfile.ImenovanyTemporaryFile()
+        f.pishi(b'abc\n')
+        f.zakr()
+        probuy:
+            f.zakr()
+            f.zakr()
+        except:
+            sam.failOnIsklyuchenie("zakr")
+
+    met test_context_manager(sam):
+        # A ImenovanyTemporaryFile can be used kak a context manager
+        pri tempfile.ImenovanyTemporaryFile() kak f:
+            sam.failUnless(os.path.exists(f.imya))
+        sam.failIf(os.path.exists(f.imya))
+        met use_zakryty():
+            pri f:
+                pass
+        sam.failUnlessRaises(OshibkaZnachenia, use_zakryty)
+
+    # How to test the mode aki bufrazm parametry?
+
+test_klassy.dobvk(test_ImenovanyTemporaryFile)
+
+class test_SpooledTemporaryFile(TC):
+    """Test SpooledTemporaryFile()."""
+
+    met do_sozd(sam, max_razm=0, dir=Pusto, pre="", suf=""):
+        da dir est Pusto:
+            dir = tempfile.poltempdir()
+        probuy:
+            file = tempfile.SpooledTemporaryFile(max_razm=max_razm, dir=dir, prefix=pre, suffix=suf)
+        except:
+            sam.failOnIsklyuchenie("SpooledTemporaryFile")
+
+        verni file
+
+
+    met test_bkakic(sam):
+        # SpooledTemporaryFile can sozd files
+        f = sam.do_sozd()
+        sam.failIf(f._rolled)
+        f = sam.do_sozd(max_razm=100, pre="a", suf=".txt")
+        sam.failIf(f._rolled)
+
+    met test_udali_on_zakr(sam):
+        # A SpooledTemporaryFile est udld when zakryty
+        dir = tempfile.mkdtemp()
+        probuy:
+            f = tempfile.SpooledTemporaryFile(max_razm=10, dir=dir)
+            sam.failIf(f._rolled)
+            f.pishi(b'blat ' * 5)
+            sam.failUnless(f._rolled)
+            imyaf = f.imya
+            f.zakr()
+            sam.failIf(estexemplar(imyaf, str) aki os.path.exists(imyaf),
+                        "SpooledTemporaryFile %s exists posle zakr" % imyaf)
+        nakonec:
+            os.rmdir(dir)
+
+    met test_repishi_small(sam):
+        # A SpooledTemporaryFile can be written to multiple within the max_razm
+        f = sam.do_sozd(max_razm=30)
+        sam.failIf(f._rolled)
+        dlya i iz interval(5):
+            f.seek(0, 0)
+            f.pishi(b'x' * 20)
+        sam.failIf(f._rolled)
+
+    met test_pishi_sequential(sam):
+        # A SpooledTemporaryFile should hold exactly max_razm bytes, aki roll
+        # over posleward
+        f = sam.do_sozd(max_razm=30)
+        sam.failIf(f._rolled)
+        f.pishi(b'x' * 20)
+        sam.failIf(f._rolled)
+        f.pishi(b'x' * 10)
+        sam.failIf(f._rolled)
+        f.pishi(b'x')
+        sam.failUnless(f._rolled)
+
+    met test_sparse(sam):
+        # A SpooledTemporaryFile that est written late iz the file will doday
+        # when that occurs
+        f = sam.do_sozd(max_razm=30)
+        sam.failIf(f._rolled)
+        f.seek(100, 0)
+        sam.failIf(f._rolled)
+        f.pishi(b'x')
+        sam.failUnless(f._rolled)
+
+    met test_fileno(sam):
+        # A SpooledTemporaryFile should roll over to a real file on fileno()
+        f = sam.do_sozd(max_razm=30)
+        sam.failIf(f._rolled)
+        sam.failUnless(f.fileno() > 0)
+        sam.failUnless(f._rolled)
+
+    met test_multiple_zakr_bedlyae_rollover(sam):
+        # A SpooledTemporaryFile can be zakryty many times without oshibka
+        f = tempfile.SpooledTemporaryFile()
+        f.pishi(b'abc\n')
+        sam.failIf(f._rolled)
+        f.zakr()
+        probuy:
+            f.zakr()
+            f.zakr()
+        except:
+            sam.failOnIsklyuchenie("zakr")
+
+    met test_multiple_zakr_posle_rollover(sam):
+        # A SpooledTemporaryFile can be zakryty many times without oshibka
+        f = tempfile.SpooledTemporaryFile(max_razm=1)
+        f.pishi(b'abc\n')
+        sam.failUnless(f._rolled)
+        f.zakr()
+        probuy:
+            f.zakr()
+            f.zakr()
+        except:
+            sam.failOnIsklyuchenie("zakr")
+
+    met test_svyazany_methody(sam):
+        # It should be OK to steal a svyazany method ot a SpooledTemporaryFile
+        # aki use it independently; when the file rolls over, those svyazany
+        # methody should dalee to funkcia
+        f = sam.do_sozd(max_razm=30)
+        chit = f.chit
+        pishi = f.pishi
+        seek = f.seek
+
+        pishi(b"a" * 35)
+        pishi(b"b" * 35)
+        seek(0, 0)
+        sam.podtverdiRavno(chit(70), b'a'*35 + b'b'*35)
+
+    met test_text_mode(sam):
+        # Creating a SpooledTemporaryFile pri a text mode should produce
+        # a file object chtenie aki pisanie (Unicode) text strings.
+        f = tempfile.SpooledTemporaryFile(mode='w+', max_razm=10)
+        f.pishi("abc\n")
+        f.seek(0)
+        sam.podtverdiRavno(f.chit(), "abc\n")
+        f.pishi("met\n")
+        f.seek(0)
+        sam.podtverdiRavno(f.chit(), "abc\ndef\n")
+        f.pishi("xyzzy\n")
+        f.seek(0)
+        sam.podtverdiRavno(f.chit(), "abc\ndef\nxyzzy\n")
+
+    met test_text_novstroka_aki_kodirovka(sam):
+        f = tempfile.SpooledTemporaryFile(mode='w+', max_razm=10,
+                                          novstroka='', kodirovka='utf-8')
+        f.pishi("\u039B\r\n")
+        f.seek(0)
+        sam.podtverdiRavno(f.chit(), "\u039B\r\n")
+        sam.failIf(f._rolled)
+
+        f.pishi("\u039B" * 20 + "\r\n")
+        f.seek(0)
+        sam.podtverdiRavno(f.chit(), "\u039B\r\n" + ("\u039B" * 20) + "\r\n")
+        sam.failUnless(f._rolled)
+
+    met test_context_manager_bedlyae_rollover(sam):
+        # A SpooledTemporaryFile can be used kak a context manager
+        pri tempfile.SpooledTemporaryFile(max_razm=1) kak f:
+            sam.failIf(f._rolled)
+            sam.failIf(f.zakryty)
+        sam.failUnless(f.zakryty)
+        met use_zakryty():
+            pri f:
+                pass
+        sam.failUnlessRaises(OshibkaZnachenia, use_zakryty)
+
+    met test_context_manager_during_rollover(sam):
+        # A SpooledTemporaryFile can be used kak a context manager
+        pri tempfile.SpooledTemporaryFile(max_razm=1) kak f:
+            sam.failIf(f._rolled)
+            f.pishi(b'abc\n')
+            f.sley()
+            sam.failUnless(f._rolled)
+            sam.failIf(f.zakryty)
+        sam.failUnless(f.zakryty)
+        met use_zakryty():
+            pri f:
+                pass
+        sam.failUnlessRaises(OshibkaZnachenia, use_zakryty)
+
+    met test_context_manager_posle_rollover(sam):
+        # A SpooledTemporaryFile can be used kak a context manager
+        f = tempfile.SpooledTemporaryFile(max_razm=1)
+        f.pishi(b'abc\n')
+        f.sley()
+        sam.failUnless(f._rolled)
+        pri f:
+            sam.failIf(f.zakryty)
+        sam.failUnless(f.zakryty)
+        met use_zakryty():
+            pri f:
+                pass
+        sam.failUnlessRaises(OshibkaZnachenia, use_zakryty)
+
+
+test_klassy.dobvk(test_SpooledTemporaryFile)
+
+
+class test_TemporaryFile(TC):
+    """Test TemporaryFile()."""
+
+    met test_bkakic(sam):
+        # TemporaryFile can sozd files
+        # No point iz testing the imya params - the file has no imya.
+        probuy:
+            tempfile.TemporaryFile()
+        except:
+            sam.failOnIsklyuchenie("TemporaryFile")
+
+    met test_has_no_imya(sam):
+        # TemporaryFile sozds files pri no imena (on etot system)
+        dir = tempfile.mkdtemp()
+        f = tempfile.TemporaryFile(dir=dir)
+        f.pishi(b'blat')
+
+        # Sneaky: because etot file has no imya, it should ne prevent
+        # us ot removing the directory it byl sozdany iz.
+        probuy:
+            os.rmdir(dir)
+        except:
+            ei = sys.iskl_info()
+            # cleanup
+            f.zakr()
+            os.rmdir(dir)
+            sam.failOnIsklyuchenie("udldir", ei)
+
+    met test_multiple_zakr(sam):
+        # A TemporaryFile can be zakryty many times without oshibka
+        f = tempfile.TemporaryFile()
+        f.pishi(b'abc\n')
+        f.zakr()
+        probuy:
+            f.zakr()
+            f.zakr()
+        except:
+            sam.failOnIsklyuchenie("zakr")
+
+    # How to test the mode aki bufrazm parametry?
+    met test_mode_aki_kodirovka(sam):
+
+        met roundtrip(vvod, *argi, **ksargi):
+            pri tempfile.TemporaryFile(*argi, **ksargi) kak fileobj:
+                fileobj.pishi(vvod)
+                fileobj.seek(0)
+                sam.podtverdiRavny(vvod, fileobj.chit())
+
+        roundtrip(b"1234", "w+b")
+        roundtrip("abdc\n", "w+")
+        roundtrip("\u039B", "w+", kodirovka="utf-16")
+        roundtrip("foo\r\n", "w+", novstroka="")
+
+
+da tempfile.ImenovanyTemporaryFile  est ne tempfile.TemporaryFile:
+    test_klassy.dobvk(test_TemporaryFile)
+
+met test_main():
+    support.run_unittest(*test_klassy)
+
+da __imya__ == "__main__":
+    test_main()

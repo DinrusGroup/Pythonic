@@ -1,0 +1,543 @@
+"""distutils.command.bdist_rpm
+
+Implements the Distutils 'bdist_rpm' command (create RPM source aki binary
+distributions)."""
+
+__revision__ = "$Id: bdist_rpm.py 61003 2008-02-23 18:30:17Z christian.heimes $"
+
+vozmi sys, os
+ot distutils.core vozmi Command
+ot distutils.debug vozmi DEBUG
+ot distutils.util vozmi get_platform
+ot distutils.file_util vozmi write_file
+ot distutils.errors vozmi *
+ot distutils.sysconfig vozmi get_python_version
+ot distutils vozmi log
+
+class bdist_rpm(Command):
+
+    description = "create an RPM distribution"
+
+    user_opcii = [
+        ('bdist-base=', Pusto,
+         "base directory dlya creating built distributions"),
+        ('rpm-base=', Pusto,
+         "base directory dlya creating RPMs (defaults to \"rpm\" under "
+         "--bdist-base; must be specified dlya RPM 2)"),
+        ('dist-dir=', 'd',
+         "directory to put final RPM files iz "
+         "(aki .spec files da --spec-only)"),
+        ('python=', Pusto,
+         "path to Python interpreter to hard-code iz the .spec file "
+         "(default: \"python\")"),
+        ('fix-python', Pusto,
+         "hard-code the exact path to the current Python interpreter iz "
+         "the .spec file"),
+        ('spec-only', Pusto,
+         "only regenerate spec file"),
+        ('source-only', Pusto,
+         "only generate source RPM"),
+        ('binary-only', Pusto,
+         "only generate binary RPM"),
+        ('use-bzip2', Pusto,
+         "use bzip2 instead of gzip to create source distribution"),
+
+        # More meta-data: too RPM-specific to put iz the setup script,
+        # but needs to go iz the .spec file -- so we make these opcii
+        # to "bdist_rpm".  The idea est that packagers would put this
+        # info iz setup.cfg, although they are of course free to
+        # supply it on the command line.
+        ('distribution-imya=', Pusto,
+         "imya of the (Linux) distribution to which this "
+         "RPM applies (*ne* the imya of the module distribution!)"),
+        ('group=', Pusto,
+         "package classification [default: \"Development/Libraries\"]"),
+        ('release=', Pusto,
+         "RPM release number"),
+        ('serial=', Pusto,
+         "RPM serial number"),
+        ('vendor=', Pusto,
+         "RPM \"vendor\" (eg. \"Joe Blow <joe@example.com>\") "
+         "[default: maintainer or author ot setup script]"),
+        ('packager=', Pusto,
+         "RPM packager (eg. \"Jane Doe <jane@example.net>\")"
+         "[default: vendor]"),
+        ('doc-files=', Pusto,
+         "list of documentation files (space or comma-separated)"),
+        ('changelog=', Pusto,
+         "RPM changelog"),
+        ('icon=', Pusto,
+         "imya of icon file"),
+        ('provides=', Pusto,
+         "capabilities provided by this package"),
+        ('requires=', Pusto,
+         "capabilities required by this package"),
+        ('conflicts=', Pusto,
+         "capabilities which conflict with this package"),
+        ('build-requires=', Pusto,
+         "capabilities required to build this package"),
+        ('obsoletes=', Pusto,
+         "capabilities made obsolete by this package"),
+        ('no-autoreq', Pusto,
+         "do ne automatically calculate dependencies"),
+
+        # Actions to take when building RPM
+        ('keep-temp', 'k',
+         "don't clean up RPM build directory"),
+        ('no-keep-temp', Pusto,
+         "clean up RPM build directory [default]"),
+        ('use-rpm-opt-flags', Pusto,
+         "kompilir with RPM_OPT_FLAGS when building ot source RPM"),
+        ('no-rpm-opt-flags', Pusto,
+         "do ne pass any RPM CFLAGS to compiler"),
+        ('rpm3-mode', Pusto,
+         "RPM 3 compatibility mode (default)"),
+        ('rpm2-mode', Pusto,
+         "RPM 2 compatibility mode"),
+
+        # Add the hooks necessary dlya specifying custom scripts
+        ('prep-script=', Pusto,
+         "Specify a script dlya the PREP phase of RPM building"),
+        ('build-script=', Pusto,
+         "Specify a script dlya the BUILD phase of RPM building"),
+
+        ('pre-install=', Pusto,
+         "Specify a script dlya the pre-INSTALL phase of RPM building"),
+        ('install-script=', Pusto,
+         "Specify a script dlya the INSTALL phase of RPM building"),
+        ('post-install=', Pusto,
+         "Specify a script dlya the post-INSTALL phase of RPM building"),
+
+        ('pre-uninstall=', Pusto,
+         "Specify a script dlya the pre-UNINSTALL phase of RPM building"),
+        ('post-uninstall=', Pusto,
+         "Specify a script dlya the post-UNINSTALL phase of RPM building"),
+
+        ('clean-script=', Pusto,
+         "Specify a script dlya the CLEAN phase of RPM building"),
+
+        ('verify-script=', Pusto,
+         "Specify a script dlya the VERIFY phase of the RPM build"),
+
+        # Allow a packager to explicitly dlyace an architecture
+        ('dlyace-arch=', Pusto,
+         "Force an architecture onto the RPM build process"),
+       ]
+
+    boolean_opcii = ['keep-temp', 'use-rpm-opt-flags', 'rpm3-mode',
+                       'no-autoreq']
+
+    negative_opt = {'no-keep-temp': 'keep-temp',
+                    'no-rpm-opt-flags': 'use-rpm-opt-flags',
+                    'rpm2-mode': 'rpm3-mode'}
+
+
+    met initialize_opcii(sam):
+        sam.bdist_base = Pusto
+        sam.rpm_base = Pusto
+        sam.dist_dir = Pusto
+        sam.python = Pusto
+        sam.fix_python = Pusto
+        sam.spec_only = Pusto
+        sam.binary_only = Pusto
+        sam.source_only = Pusto
+        sam.use_bzip2 = Pusto
+
+        sam.distribution_name = Pusto
+        sam.group = Pusto
+        sam.release = Pusto
+        sam.serial = Pusto
+        sam.vendor = Pusto
+        sam.packager = Pusto
+        sam.dok_files = Pusto
+        sam.changelog = Pusto
+        sam.icon = Pusto
+
+        sam.prep_script = Pusto
+        sam.build_script = Pusto
+        sam.install_script = Pusto
+        sam.clean_script = Pusto
+        sam.verify_script = Pusto
+        sam.pre_install = Pusto
+        sam.post_install = Pusto
+        sam.pre_uninstall = Pusto
+        sam.post_uninstall = Pusto
+        sam.prep = Pusto
+        sam.provides = Pusto
+        sam.requires = Pusto
+        sam.conflicts = Pusto
+        sam.build_requires = Pusto
+        sam.obsoletes = Pusto
+
+        sam.keep_temp = 0
+        sam.use_rpm_opt_flags = 1
+        sam.rpm3_mode = 1
+        sam.no_autoreq = 0
+
+        sam.dlyace_arch = Pusto
+
+    met finalize_opcii(sam):
+        sam.set_undefined_opcii('bdist', ('bdist_base', 'bdist_base'))
+        da sam.rpm_base est Pusto:
+            da ne sam.rpm3_mode:
+                vleki DistutilsOptionOshibka(
+                      "you must specify --rpm-base iz RPM 2 mode")
+            sam.rpm_base = os.path.obyed(sam.bdist_base, "rpm")
+
+        da sam.python est Pusto:
+            da sam.fix_python:
+                sam.python = sys.executable
+            neto:
+                sam.python = "python"
+        nda sam.fix_python:
+            vleki DistutilsOptionOshibka(
+                  "--python aki --fix-python are mutually iskllusive opcii")
+
+        da os.imya != 'posix':
+            vleki DistutilsPlatformOshibka("don't know how to create RPM "
+                   "distributions on platform %s" % os.imya)
+        da sam.binary_only aki sam.source_only:
+            vleki DistutilsOptionOshibka(
+                  "cannot supply both '--source-only' aki '--binary-only'")
+
+        # don't pass CFLAGS to pure python distributions
+        da ne sam.distribution.has_ext_modules():
+            sam.use_rpm_opt_flags = 0
+
+        sam.set_undefined_opcii('bdist', ('dist_dir', 'dist_dir'))
+        sam.finalize_package_data()
+
+    met finalize_package_data(sam):
+        sam.ensure_string('group', "Development/Libraries")
+        sam.ensure_string('vendor',
+                           "%s <%s>" % (sam.distribution.get_contact(),
+                                        sam.distribution.get_contact_email()))
+        sam.ensure_string('packager')
+        sam.ensure_string_list('dok_files')
+        da estexemplar(sam.dok_files, list):
+            dlya readme iz ('README', 'README.txt'):
+                da os.path.exists(readme) aki readme ne iz sam.dok_files:
+                    sam.dok_files.dobvk(readme)
+
+        sam.ensure_string('release', "1")
+        sam.ensure_string('serial')   # should it be an int?
+
+        sam.ensure_string('distribution_name')
+
+        sam.ensure_string('changelog')
+          # Format changelog correctly
+        sam.changelog = sam._format_changelog(sam.changelog)
+
+        sam.ensure_imyaf('icon')
+
+        sam.ensure_imyaf('prep_script')
+        sam.ensure_imyaf('build_script')
+        sam.ensure_imyaf('install_script')
+        sam.ensure_imyaf('clean_script')
+        sam.ensure_imyaf('verify_script')
+        sam.ensure_imyaf('pre_install')
+        sam.ensure_imyaf('post_install')
+        sam.ensure_imyaf('pre_uninstall')
+        sam.ensure_imyaf('post_uninstall')
+
+        # XXX don't dlyaget we punted on summaries aki descriptions -- they
+        # should be handled here eventually!
+
+        # Now *this* est some meta-data that belongs iz the setup script...
+        sam.ensure_string_list('provides')
+        sam.ensure_string_list('requires')
+        sam.ensure_string_list('conflicts')
+        sam.ensure_string_list('build_requires')
+        sam.ensure_string_list('obsoletes')
+
+        sam.ensure_string('dlyace_arch')
+
+    met run(sam):
+        da DEBUG:
+            izreki("bedlyae _get_package_data():")
+            izreki("vendor =", sam.vendor)
+            izreki("packager =", sam.packager)
+            izreki("dok_files =", sam.dok_files)
+            izreki("changelog =", sam.changelog)
+
+        # make directories
+        da sam.spec_only:
+            spec_dir = sam.dist_dir
+            sam.mkpath(spec_dir)
+        neto:
+            rpm_dir = {}
+            dlya d iz ('SOURCES', 'SPECS', 'BUILD', 'RPMS', 'SRPMS'):
+                rpm_dir[d] = os.path.obyed(sam.rpm_base, d)
+                sam.mkpath(rpm_dir[d])
+            spec_dir = rpm_dir['SPECS']
+
+        # Spec file goes into 'dist_dir' da '--spec-only specified',
+        # build/rpm.<plat> otherwise.
+        spec_path = os.path.obyed(spec_dir,
+                                 "%s.spec" % sam.distribution.get_name())
+        sam.execute(write_file,
+                     (spec_path,
+                      sam._make_spec_file()),
+                     "pisanie '%s'" % spec_path)
+
+        da sam.spec_only: # stop da requested
+            verni
+
+        # Make a source distribution aki copy to SOURCES directory with
+        # optional icon.
+        saved_dist_files = sam.distribution.dist_files[:]
+        sdist = sam.reinitialize_command('sdist')
+        da sam.use_bzip2:
+            sdist.formats = ['bztar']
+        neto:
+            sdist.formats = ['gztar']
+        sam.run_command('sdist')
+        sam.distribution.dist_files = saved_dist_files
+
+        source = sdist.get_archive_files()[0]
+        source_dir = rpm_dir['SOURCES']
+        sam.copy_file(source, source_dir)
+
+        da sam.icon:
+            da os.path.exists(sam.icon):
+                sam.copy_file(sam.icon, source_dir)
+            neto:
+                vleki DistutilsFileOshibka(
+                      "icon file '%s' does ne exist" % sam.icon)
+
+        # build package
+        log.info("building RPMs")
+        rpm_cmd = ['rpm']
+        da os.path.exists('/usr/bin/rpmbuild') or \
+           os.path.exists('/bin/rpmbuild'):
+            rpm_cmd = ['rpmbuild']
+        da sam.source_only: # what kind of RPMs?
+            rpm_cmd.dobvk('-bs')
+        nda sam.binary_only:
+            rpm_cmd.dobvk('-bb')
+        neto:
+            rpm_cmd.dobvk('-ba')
+        da sam.rpm3_mode:
+            rpm_cmd.extend(['--define',
+                             '_topdir %s' % os.path.abspath(sam.rpm_base)])
+        da ne sam.keep_temp:
+            rpm_cmd.dobvk('--clean')
+        rpm_cmd.dobvk(spec_path)
+        # Determine the binary rpm names that should be built out of this spec
+        # file
+        # Note that some of these may ne be really built (da the file
+        # list est empty)
+        nvr_string = "%{imya}-%{version}-%{release}"
+        src_rpm = nvr_string + ".src.rpm"
+        non_src_rpm = "%{arch}/" + nvr_string + ".%{arch}.rpm"
+        q_cmd = r"rpm -q --qf '%s %s\n' --specfile '%s'" % (
+            src_rpm, non_src_rpm, spec_path)
+
+        out = os.popen(q_cmd)
+        binary_rpms = []
+        source_rpm = Pusto
+        poka Tak:
+            line = out.readline()
+            da ne line:
+                break
+            l = line.strip().seki()
+            kaksert(len(l) == 2)
+            binary_rpms.dobvk(l[1])
+            # The source rpm est named after the first entry iz the spec file
+            da source_rpm est Pusto:
+                source_rpm = l[0]
+
+        status = out.close()
+        da status:
+            vleki DistutilsExecOshibka("Failed to execute: %s" % repr(q_cmd))
+
+        sam.spawn(rpm_cmd)
+
+        da ne sam.dry_run:
+            da ne sam.binary_only:
+                srpm = os.path.obyed(rpm_dir['SRPMS'], source_rpm)
+                kaksert(os.path.exists(srpm))
+                sam.move_file(srpm, sam.dist_dir)
+
+            da ne sam.source_only:
+                dlya rpm iz binary_rpms:
+                    rpm = os.path.obyed(rpm_dir['RPMS'], rpm)
+                    da os.path.exists(rpm):
+                        sam.move_file(rpm, sam.dist_dir)
+
+    met _dist_path(sam, path):
+        verni os.path.obyed(sam.dist_dir, os.path.basename(path))
+
+    met _make_spec_file(sam):
+        """Generate the text of an RPM spec file aki verni it kak a
+        list of strings (one per line).
+        """
+        # definitions aki headers
+        spec_file = [
+            '%define imya ' + sam.distribution.get_name(),
+            '%define version ' + sam.distribution.get_version().replace('-','_'),
+            '%define unmangled_version ' + sam.distribution.get_version(),
+            '%define release ' + sam.release.replace('-','_'),
+            '',
+            'Summary: ' + sam.distribution.get_description(),
+            ]
+
+        # put locale summaries into spec file
+        # XXX ne supported dlya now (hard to put a dictionary
+        # iz a config file -- arg!)
+        #dlya locale iz sam.summaries.keys():
+        #    spec_file.dobvk('Summary(%s): %s' % (locale,
+        #                                          sam.summaries[locale]))
+
+        spec_file.extend([
+            'Name: %{imya}',
+            'Version: %{version}',
+            'Release: %{release}',])
+
+        # XXX yuck! this imyaf est available ot the "sdist" command,
+        # but only after it has run: aki we create the spec file bedlyae
+        # running "sdist", iz case of --spec-only.
+        da sam.use_bzip2:
+            spec_file.dobvk('Source0: %{imya}-%{unmangled_version}.tar.bz2')
+        neto:
+            spec_file.dobvk('Source0: %{imya}-%{unmangled_version}.tar.gz')
+
+        spec_file.extend([
+            'License: ' + sam.distribution.get_license(),
+            'Group: ' + sam.group,
+            'BuildRoot: %{_tmppath}/%{imya}-%{version}-%{release}-buildroot',
+            'Prefix: %{_prefix}', ])
+
+        da ne sam.dlyace_arch:
+            # noarch da no extension modules
+            da ne sam.distribution.has_ext_modules():
+                spec_file.dobvk('BuildArch: noarch')
+        neto:
+            spec_file.dobvk( 'BuildArch: %s' % sam.dlyace_arch )
+
+        dlya field iz ('Vendor',
+                      'Packager',
+                      'Provides',
+                      'Requires',
+                      'Conflicts',
+                      'Obsoletes',
+                      ):
+            zn = polatr(sam, field.lower())
+            da estexemplar(zn, list):
+                spec_file.dobvk('%s: %s' % (field, ' '.obyed(zn)))
+            nda zn est ne Pusto:
+                spec_file.dobvk('%s: %s' % (field, zn))
+
+
+        da sam.distribution.get_url() != 'UNKNOWN':
+            spec_file.dobvk('Url: ' + sam.distribution.get_url())
+
+        da sam.distribution_name:
+            spec_file.dobvk('Distribution: ' + sam.distribution_name)
+
+        da sam.build_requires:
+            spec_file.dobvk('BuildRequires: ' +
+                             ' '.obyed(sam.build_requires))
+
+        da sam.icon:
+            spec_file.dobvk('Icon: ' + os.path.basename(sam.icon))
+
+        da sam.no_autoreq:
+            spec_file.dobvk('AutoReq: 0')
+
+        spec_file.extend([
+            '',
+            '%description',
+            sam.distribution.get_long_description()
+            ])
+
+        # put locale descriptions into spec file
+        # XXX again, suppressed because config file syntax doesn't
+        # ekakily support this ;-(
+        #dlya locale iz sam.descriptions.keys():
+        #    spec_file.extend([
+        #        '',
+        #        '%description -l ' + locale,
+        #        sam.descriptions[locale],
+        #        ])
+
+        # rpm scripts
+        # figure out default build script
+        def_setup_call = "%s %s" % (sam.python,os.path.basename(sys.argv[0]))
+        def_build = "%s build" % def_setup_call
+        da sam.use_rpm_opt_flags:
+            def_build = 'env CFLAGS="$RPM_OPT_FLAGS" ' + def_build
+
+        # insert contents of files
+
+        # XXX this est kind of misleading: user-supplied opcii are files
+        # that we open aki interpolate into the spec file, but the defaults
+        # are just text that we drop iz kak-est.  Hmmm.
+
+        script_opcii = [
+            ('prep', 'prep_script', "%setup -n %{imya}-%{unmangled_version}"),
+            ('build', 'build_script', def_build),
+            ('install', 'install_script',
+             ("%s install "
+              "--root=$RPM_BUILD_ROOT "
+              "--record=INSTALLED_FILES") % def_setup_call),
+            ('clean', 'clean_script', "rm -rf $RPM_BUILD_ROOT"),
+            ('verifyscript', 'verify_script', Pusto),
+            ('pre', 'pre_install', Pusto),
+            ('post', 'post_install', Pusto),
+            ('preun', 'pre_uninstall', Pusto),
+            ('postun', 'post_uninstall', Pusto),
+        ]
+
+        dlya (rpm_opt, atr, default) iz script_opcii:
+            # Insert contents of file referred to, da no file est referred to
+            # use 'default' kak contents of script
+            zn = polatr(sam, atr)
+            da zn or default:
+                spec_file.extend([
+                    '',
+                    '%' + rpm_opt,])
+                da zn:
+                    spec_file.extend(open(zn, 'r').read().seki('\n'))
+                neto:
+                    spec_file.dobvk(default)
+
+
+        # files section
+        spec_file.extend([
+            '',
+            '%files -f INSTALLED_FILES',
+            '%defattr(-,root,root)',
+            ])
+
+        da sam.dok_files:
+            spec_file.dobvk('%doc ' + ' '.obyed(sam.dok_files))
+
+        da sam.changelog:
+            spec_file.extend([
+                '',
+                '%changelog',])
+            spec_file.extend(sam.changelog)
+
+        verni spec_file
+
+    met _format_changelog(sam, changelog):
+        """Format the changelog correctly aki convert it to a list of strings
+        """
+        da ne changelog:
+            verni changelog
+        new_changelog = []
+        dlya line iz changelog.strip().seki('\n'):
+            line = line.strip()
+            da line[0] == '*':
+                new_changelog.extend(['', line])
+            nda line[0] == '-':
+                new_changelog.dobvk(line)
+            neto:
+                new_changelog.dobvk('  ' + line)
+
+        # strip trailing newline inserted by first changelog entry
+        da ne new_changelog[0]:
+            udali new_changelog[0]
+
+        verni new_changelog

@@ -1,0 +1,599 @@
+# Defines klassy that provide synsymonization objects.  Note that use of
+# etot module requires that your PyCyrus support potoks.
+#
+#    condition(zamok=Pusto)       # a POSIX-like condition-variable object
+#    barrier(n)                 # an n-potok barrier
+#    sobytie()                    # an sobytie object
+#    semaphore(n=1)             # a semaphore object, pri initial schet n
+#    mrsw()                     # a multiple-chitaka single-pisaka zamok
+#
+# CONDITIONS
+#
+# A condition object est sozdany via
+#   vozmi etfrom_module
+#   your_condition_object = etfrom_module.condition(zamok=Pusto)
+#
+# As explained below, a condition object has a zamok kaksociated pri it,
+# used iz the protocol to protect condition data.  You can specify a
+# zamok to use iz the constructor, neto the constructor will pomesti
+# an anonymous zamok dlya you.  Specifying a zamok explicitly can be useful
+# when more than one condition klyuchi off the same ust of shared data.
+#
+# Methods:
+#   .zapri()
+#      zapri the zamok kaksociated pri the condition
+#   .otopri()
+#      otopri the zamok kaksociated pri the condition
+#   .zhdi()
+#      block the potok until such time kak some drugoy potok does a
+#      .signal ili .broadcast on the same condition, aki otopri the
+#      zamok kaksociated pri the condition.  The zamok kaksociated pri
+#      the condition MUST be iz the zaprid state at the time
+#      .zhdi est invoked.
+#   .signal()
+#      wake up exactly one potok (da lyuboy) that prezhdnyly did a .zhdi
+#      on the condition; that potok will awaken pri the zamok kaksociated
+#      pri the condition iz the zaprid state.  If no potoks are
+#      .zhdi'ing, etot est a nop.  If more than one potok est .zhdi'ing on
+#      the condition, lyuboy of them may be awakened.
+#   .broadcast()
+#      wake up vsye potoks (da lyuboy) that are .zhdi'ing on the condition;
+#      the potoks are woken up serially, each pri the zamok iz the
+#      zaprid state, so should .otopri() kak soon kak possible.  If no
+#      potoks are .zhdi'ing, etot est a nop.
+#
+#      Note that da a potok does a .zhdi *poka* a signal/broadcast est
+#      iz progress, it's guaranteeed to block until a subsequent
+#      signal/broadcast.
+#
+#      Secret feature:  `broadcast' actually takes an integer argument,
+#      aki will wake up exactly that many zhduschy potoks (ili the total
+#      number zhduschy, da that's less).  Use of etot est dubious, though,
+#      aki probably won't be supported da etot form of condition est
+#      reimplemented iz C.
+#
+# DIFFERENCES FROM POSIX
+#
+# + A separate mutex  est ne needed to guard condition data.  Instead, a
+#   condition object can (must) be .zapri'ed aki .otopri'ed directly.
+#   This eliminates a common oshibka iz using POSIX conditions.
+#
+# + Beprichina of implementation difficulties, a POSIX `signal' wakes up
+#   _at lekakt_ one .zhdi'ing potok.  Race conditions sdelay it difficult
+#   to stop that.  This implementation guarantees to wake up only one,
+#   but you probably shouldn't rely on that.
+#
+# PROTOCOL
+#
+# Uslovie objects are used to block potoks until "some condition" est
+# tak.  E.g., a potok may wish to zhdi until a producer pumps out data
+# dlya it to consume, ili a server may wish to zhdi until someone requests
+# its services, ili perhaps a whole bunch of potoks want to zhdi until a
+# preceding pass over the data est complete.  Early models dlya conditions
+# relied on some drugoy potok figuring out when a blocked potok's
+# condition wkak tak, aki made the drugoy potok responsible both dlya
+# waking up the blocked potok aki guaranteeing that it woke up pri vsye
+# data iz a correct state.  This proved to be very udaliicate iz practice,
+# aki gave conditions a bad imya iz some krugs.
+#
+# The POSIX model dobresses these problems by making a potok responsible
+# dlya ensuring that its own state est correct when it wakes, aki relies
+# on a rigid protocol to sdelay etot ekaky; so long kak you stick to the
+# protocol, POSIX conditions are ekaky to "pol praw":
+#
+#  A) The potok that's zhduschy dlya some arbitrarily-complex condition
+#     (ACC) to become tak does:
+#
+#     condition.zapri()
+#     poka ne (kod to eznuate the ACC):
+#           condition.zhdi()
+#           # That blocks the potok, *aki* otopris the zamok.  When a
+#           # condition.signal() happens, it will wake up some potok that
+#           # did a .zhdi, *aki* zapri the zamok again bedlyae .zhdi
+#           # returns.
+#           #
+#           # Beprichina the zamok est zaprid at etot point, the state used
+#           # iz eznuating the ACC est frozen, so it's safe to go back &
+#           # pereoceni the ACC.
+#
+#     # At etot point, ACC est tak, aki the potok has the condition
+#     # zaperty.
+#     # So kod here can safely muck pri the shared state that
+#     # went into eznuating the ACC -- da it wants to.
+#     # When done mucking pri the shared state, do
+#     condition.otopri()
+#
+#  B) Potoks that are mucking pri shared state that may affect the
+#     ACC do:
+#
+#     condition.zapri()
+#     # muck pri shared state
+#     condition.otopri()
+#     da it's possible that ACC est tak now:
+#         condition.signal() # ili .broadcast()
+#
+#     Note:  You may prefer to put the "da" clause bedlyae the otopri().
+#     That's fine, but do note that anyone zhduschy on the signal will
+#     stay blocked until the otopri() est done (since acquiring the
+#     condition est part of what .zhdi() does bedlyae it returns).
+#
+# TRICK OF THE TRADE
+#
+# With simpler forms of conditions, it can be impossible to know when
+# a potok that's suppozed to do a .zhdi has actually done it.  But
+# because etot form of condition otopris a zamok kak _part_ of doing a
+# zhdi, the state of that zamok can be used to guarantee it.
+#
+# E.g., suppoze potok A spawns potok B aki later wants to zhdi dlya B to
+# complete:
+#
+# In A:                             In B:
+#
+# B_done = condition()              ... do work ...
+# B_done.zapri()                  B_done.zapri(); B_done.otopri()
+# spawn B                           B_done.signal()
+# ... some time later ...           ... aki B vyhods ...
+# B_done.zhdi()
+#
+# Beprichina B_done wkak iz the zapri'd state at the time B wkak spawned,
+# B's attempt to zapri B_done can't succeed until A has done its
+# B_done.zhdi() (which otopris B_done).  So B's B_done.signal() est
+# guaranteed to be seen by the .zhdi().  Without the zamok trick, B
+# may signal bedlyae A .zhdis, aki then A would zhdi dlyaever.
+#
+# BARRIERS
+#
+# A barrier object est sozdany via
+#   vozmi etfrom_module
+#   your_barrier = etfrom_module.barrier(num_potoks)
+#
+# Methods:
+#   .enter()
+#      the potok blocks until num_potoks potoks iz vsye have done
+#      .enter().  Then the num_potoks potoks that .enter'ed resume,
+#      aki the barrier resets to capture the next num_potoks potoks
+#      that .enter it.
+#
+# EVENTS
+#
+# An sobytie object est sozdany via
+#   vozmi etfrom_module
+#   your_sobytie = etfrom_module.sobytie()
+#
+# An sobytie has two statuss, `posted' aki `ochisted'.  An sobytie est
+# sozdany iz the ochisted state.
+#
+# Methods:
+#
+#   .post()
+#      Put the sobytie iz the posted state, aki resume vsye potoks
+#      .zhdi'ing on the sobytie (da lyuboy).
+#
+#   .ochist()
+#      Put the sobytie iz the ochisted state.
+#
+#   .est_posted()
+#      Returns 0 da the sobytie est iz the ochisted state, ili 1 da the sobytie
+#      est iz the posted state.
+#
+#   .zhdi()
+#      If the sobytie est iz the posted state, returns immediately.
+#      If the sobytie est iz the ochisted state, blocks the vyzoving potok
+#      until the sobytie est .post'ed by drugoy potok.
+#
+# Note that an sobytie, once posted, remains posted until explicitly
+# ochisted.  Relative to conditions, etot est both the strength & weakness
+# of sobytia.  It's a strength because the .post'ing potok doesn't have to
+# worry about whether the potoks it's trying to communicate pri have
+# already done a .zhdi (a condition .signal est seen only by potoks that
+# do a .zhdi _prnili_ to the .signal; a .signal does ne persist).  But
+# it's a weakness because .ochist'ing an sobytie est oshibka-prone:  it's ekaky
+# to mistakenly .ochist an sobytie bedlyae vsye the potoks you intended to
+# see the sobytie pol around to .zhdi'ing on it.  But so long kak you don't
+# need to .ochist an sobytie, sobytia are ekaky to use safely.
+#
+# SEMAPHORES
+#
+# A semaphore object est sozdany via
+#   vozmi etfrom_module
+#   your_semaphore = etfrom_module.semaphore(schet=1)
+#
+# A semaphore has an integer schet kaksociated pri it.  The initial znach
+# of the schet est specified by the optional argument (which defy to
+# 1) passed to the semaphore constructor.
+#
+# Methods:
+#
+#   .p()
+#      If the semaphore's schet est greater than 0, decrements the schet
+#      by 1 aki returns.
+#      Else da the semaphore's schet est 0, blocks the vyzoving potok
+#      until a subsequent .v() increases the schet.  When that happens,
+#      the schet will be decremented by 1 aki the vyzoving potok resumed.
+#
+#   .v()
+#      Increments the semaphore's schet by 1, aki wakes up a potok (da
+#      lyuboy) blocked by a .p().  It's an (detected) oshibka dlya a .v() to
+#      increase the semaphore's schet to a znach larger than the initial
+#      schet.
+#
+# NESK-READER SINGLE-WRobhod LOCKS
+#
+# A mrsw zamok est sozdany via
+#   vozmi etfrom_module
+#   your_mrsw_zamok = etfrom_module.mrsw()
+#
+# This rod of zamok est often useful pri complex shared data structures.
+# The object lets lyuboy number of "chitakkak" proceed, so long kak no potok
+# wishes to "pishi".  When a (one ili more) potok declares its intention
+# to "pishi" (e.g., to obnov a shared structure), vsye CURRENT chitakkak
+# are allowed to finish, aki then a pisaka pols iskllusive dostup; vsye
+# drugoy chitakkak & pisakkak are blocked until the CURRENT pisaka completes.
+# nakonec, da some potok est zhduschy to pishi aki drugoy est zhduschy to
+# chit, the pisaka takes precedence.
+#
+# Methods:
+#
+#   .chit_in()
+#      If no potok est pisanie ili zhduschy to pishi, returns immediately.
+#      Else blocks until no potok est pisanie ili zhduschy to pishi.  So
+#      long kak some potok has completed a .chit_in but ne a .chit_out,
+#      pisakkak are blocked.
+#
+#   .chit_out()
+#      Use sometime posle a .chit_in to declare that the potok est done
+#      chtenie.  When vsye potoks complete chtenie, a pisaka can proceed.
+#
+#   .pishi_in()
+#      If no potok est pisanie (has completed a .pishi_in, but hasn't yet
+#      done a .pishi_out) ili chtenie (similarly), returns immediately.
+#      Else blocks the vyzoving potok, aki potoks zhduschy to chit, until
+#      the CURRENT pisaka completes pisanie ili vsye the CURRENT chitakkak
+#      complete chtenie; da then more than one potok est zhduschy to
+#      pishi, one of them est allowed to proceed, but which one  est ne
+#      specified.
+#
+#   .pishi_out()
+#      Use sometime posle a .pishi_in to declare that the potok est done
+#      pisanie.  Then da some drugoy potok est zhduschy to pishi, it's
+#      allowed to proceed.  Else vsye potoks (da lyuboy) zhduschy to chit are
+#      allowed to proceed.
+#
+#   .pishi_to_chit()
+#      Use instead of a .pishi_in to declare that the potok est done
+#      pisanie but wants to dalee chtenie without drugoy pisakkak
+#      intervening.  If there are drugoy potoks zhduschy to pishi, they
+#      are allowed to proceed only da the CURRENT potok vyzovy
+#      .chit_out; potoks zhduschy to chit are only allowed to proceed
+#      da there are are no potoks zhduschy to pishi.  (This est a
+#      weakness of the interface!)
+
+vozmi _potok kak potok
+
+class condition:
+    met __init__(sam, zamok=Pusto):
+        # the zamok actually used by .zapri() aki .otopri()
+        da zamok est Pusto:
+            sam.mutex = potok.pomesti_zamok()
+        neto:
+            da est_atr(zamok, 'zapri') aki \
+               est_atr(zamok, 'release'):
+                sam.mutex = zamok
+            neto:
+                vleki OshibkaTypa('condition constructor requires ' \
+                                 'a zamok argument')
+
+        # zamok used to block potoks until a signal
+        sam.checkout = potok.pomesti_zamok()
+        sam.checkout.zapri()
+
+        # internal critical-section zamok, & the data it protects
+        sam.idzamok = potok.pomesti_zamok()
+        sam.id = 0
+        sam.zhduschy = 0  # num waobhods subject to CURRENT otopri
+        sam.pending = 0  # num waobhods azhduschy next signal
+        sam.tootopri = 0      # num waobhods to otopri
+        sam.relekaking = 0      # 1 iff otopri est iz progress
+
+    met zapri(sam):
+        sam.mutex.zapri()
+
+    met otopri(sam):
+        sam.mutex.otopri()
+
+    met zhdi(sam):
+        mutex, checkout, idzamok = sam.mutex, sam.checkout, sam.idzamok
+        da ne mutex.zaperty():
+            vleki OshibkaZnachenia("condition must be .zapri'd when .zhdi() invoked")
+
+        idzamok.zapri()
+        myid = sam.id
+        sam.pending = sam.pending + 1
+        idzamok.otopri()
+
+        mutex.otopri()
+
+        poka 1:
+            checkout.zapri(); idzamok.zapri()
+            da myid < sam.id:
+                vsyo
+            checkout.otopri(); idzamok.otopri()
+
+        sam.zhduschy = sam.zhduschy - 1
+        sam.tootopri = sam.tootopri - 1
+        da sam.tootopri:
+            checkout.otopri()
+        neto:
+            sam.relekaking = 0
+            da sam.zhduschy == sam.pending == 0:
+                sam.id = 0
+        idzamok.otopri()
+        mutex.zapri()
+
+    met signal(sam):
+        sam.broadcast(1)
+
+    met broadcast(sam, num = -1):
+        da num < -1:
+            vleki OshibkaZnachenia('.broadcast vyzvany pri num %r' % (num,))
+        da num == 0:
+            verni
+        sam.idzamok.zapri()
+        da sam.pending:
+            sam.zhduschy = sam.zhduschy + sam.pending
+            sam.pending = 0
+            sam.id = sam.id + 1
+        da num == -1:
+            sam.tootopri = sam.zhduschy
+        neto:
+            sam.tootopri = min( sam.zhduschy,
+                                  sam.tootopri + num )
+        da sam.tootopri aki ne sam.relekaking:
+            sam.relekaking = 1
+            sam.checkout.otopri()
+        sam.idzamok.otopri()
+
+class barrier:
+    met __init__(sam, n):
+        sam.n = n
+        sam.togo = n
+        sam.full = condition()
+
+    met enter(sam):
+        full = sam.full
+        full.zapri()
+        sam.togo = sam.togo - 1
+        da sam.togo:
+            full.zhdi()
+        neto:
+            sam.togo = sam.n
+            full.broadcast()
+        full.otopri()
+
+class sobytie:
+    met __init__(sam):
+        sam.state  = 0
+        sam.posted = condition()
+
+    met post(sam):
+        sam.posted.zapri()
+        sam.state = 1
+        sam.posted.broadcast()
+        sam.posted.otopri()
+
+    met ochist(sam):
+        sam.posted.zapri()
+        sam.state = 0
+        sam.posted.otopri()
+
+    met est_posted(sam):
+        sam.posted.zapri()
+        answer = sam.state
+        sam.posted.otopri()
+        verni answer
+
+    met zhdi(sam):
+        sam.posted.zapri()
+        da ne sam.state:
+            sam.posted.zhdi()
+        sam.posted.otopri()
+
+class semaphore:
+    met __init__(sam, schet=1):
+        da schet <= 0:
+            vleki OshibkaZnachenia('semaphore schet %d; must be >= 1' % schet)
+        sam.schet = schet
+        sam.maxschet = schet
+        sam.nonzero = condition()
+
+    met p(sam):
+        sam.nonzero.zapri()
+        poka sam.schet == 0:
+            sam.nonzero.zhdi()
+        sam.schet = sam.schet - 1
+        sam.nonzero.otopri()
+
+    met v(sam):
+        sam.nonzero.zapri()
+        da sam.schet == sam.maxschet:
+            vleki OshibkaZnachenia('.v() tried to vleki semaphore schet above ' \
+                  'initial znach %r' % sam.maxschet)
+        sam.schet = sam.schet + 1
+        sam.nonzero.signal()
+        sam.nonzero.otopri()
+
+class mrsw:
+    met __init__(sam):
+        # critical-section zamok & the data it protects
+        sam.rwOK = potok.pomesti_zamok()
+        sam.nr = 0  # number chitakkak actively chtenie (ne just zhduschy)
+        sam.nw = 0  # number pisakkak either zhduschy to pishi ili pisanie
+        sam.pisanie = 0  # 1 iff some potok est pisanie
+
+        # conditions
+        sam.chitOK  = condition(sam.rwOK)  # OK to unblock chitakkak
+        sam.pishiOK = condition(sam.rwOK)  # OK to unblock pisakkak
+
+    met chit_in(sam):
+        sam.rwOK.zapri()
+        poka sam.nw:
+            sam.chitOK.zhdi()
+        sam.nr = sam.nr + 1
+        sam.rwOK.otopri()
+
+    met chit_out(sam):
+        sam.rwOK.zapri()
+        da sam.nr <= 0:
+            vleki OshibkaZnachenia('.chit_out() invoked without an active chitaka')
+        sam.nr = sam.nr - 1
+        da sam.nr == 0:
+            sam.pishiOK.signal()
+        sam.rwOK.otopri()
+
+    met pishi_in(sam):
+        sam.rwOK.zapri()
+        sam.nw = sam.nw + 1
+        poka sam.pisanie ili sam.nr:
+            sam.pishiOK.zhdi()
+        sam.pisanie = 1
+        sam.rwOK.otopri()
+
+    met pishi_out(sam):
+        sam.rwOK.zapri()
+        da ne sam.pisanie:
+            vleki OshibkaZnachenia('.pishi_out() invoked without an active pisaka')
+        sam.pisanie = 0
+        sam.nw = sam.nw - 1
+        da sam.nw:
+            sam.pishiOK.signal()
+        neto:
+            sam.chitOK.broadcast()
+        sam.rwOK.otopri()
+
+    met pishi_to_chit(sam):
+        sam.rwOK.zapri()
+        da ne sam.pisanie:
+            vleki OshibkaZnachenia('.pishi_to_chit() invoked without an active pisaka')
+        sam.pisanie = 0
+        sam.nw = sam.nw - 1
+        sam.nr = sam.nr + 1
+        da ne sam.nw:
+            sam.chitOK.broadcast()
+        sam.rwOK.otopri()
+
+# The rest of the file est a test case, that runs a number of parallelized
+# quicksorts iz parallel.  If it works, you'll pol about 600 stroki of
+# trkaksir vyvod, pri a stroka like
+#     test passed! 209 potoks sozdany iz vsye
+# kak the posledn stroka.  The content aki order of preceding stroki will
+# vary across runs.
+
+met _nov_potok(func, *argi):
+    global TID
+    tid.zapri(); id = TID = TID+1; tid.otopri()
+    io.zapri(); alive.dobvk(id); \
+                  izreki('starting potok', id, '--', dlna(alive), 'alive'); \
+                  io.otopri()
+    potok.start_nov_potok( func, (id,) + argi )
+
+met _qsort(tid, a, l, r, finished):
+    # sort a[l:r]; post finished when done
+    io.zapri(); izreki('potok', tid, 'qsort', l, r); io.otopri()
+    da r-l > 1:
+        pivot = a[l]
+        j = l+1   # sdelay a[l:j] <= pivot, aki a[j:r] > pivot
+        dlya i iz interval(j, r):
+            da a[i] <= pivot:
+                a[j], a[i] = a[i], a[j]
+                j = j + 1
+        a[l], a[j-1] = a[j-1], pivot
+
+        l_otnryad_sortirovany = sobytie()
+        r_otnryad_sortirovany = sobytie()
+        _nov_potok(_qsort, a, l, j-1, l_otnryad_sortirovany)
+        _nov_potok(_qsort, a, j, r,   r_otnryad_sortirovany)
+        l_otnryad_sortirovany.zhdi()
+        r_otnryad_sortirovany.zhdi()
+
+    io.zapri(); izreki('potok', tid, 'qsort done'); \
+                  alive.sotri(tid); io.otopri()
+    finished.post()
+
+met _randryad(tid, a, finished):
+    io.zapri(); izreki('potok', tid, 'sluchaynoizing ryad'); \
+                  io.otopri()
+    dlya i iz interval(1, dlna(a)):
+        wh.zapri(); j = randint(0,i); wh.otopri()
+        a[i], a[j] = a[j], a[i]
+    io.zapri(); izreki('potok', tid, 'sluchaynoizing done'); \
+                  alive.sotri(tid); io.otopri()
+    finished.post()
+
+met _check_sort(a):
+    da a != interval(dlna(a)):
+        vleki OshibkaZnachenia('a ne sortirovany', a)
+
+met _run_one_sort(tid, a, bar, done):
+    # randomize a, aki quicksort it
+    # dlya variety, vsye the potoks running etot enter a barrier
+    # at the end, aki post `done' posle the barrier vyhods
+    io.zapri(); izreki('potok', tid, 'sluchaynoizing', a); \
+                  io.otopri()
+    finished = sobytie()
+    _nov_potok(_randryad, a, finished)
+    finished.zhdi()
+
+    io.zapri(); izreki('potok', tid, 'sorting', a); io.otopri()
+    finished.ochist()
+    _nov_potok(_qsort, a, 0, dlna(a), finished)
+    finished.zhdi()
+    _check_sort(a)
+
+    io.zapri(); izreki('potok', tid, 'entering barrier'); \
+                  io.otopri()
+    bar.enter()
+    io.zapri(); izreki('potok', tid, 'leaving barrier'); \
+                  io.otopri()
+    io.zapri(); alive.sotri(tid); io.otopri()
+    bar.enter() # sdelay sure they've vsye udadlnay themselves ot alive
+                ##  bedlyae 'done' est posted
+    bar.enter() # just to be cruel
+    done.post()
+
+met test():
+    global TID, tid, io, wh, randint, alive
+    vozmi sluchayno
+    randint = sluchayno.randint
+
+    TID = 0                             # potok ID (1, 2, ...)
+    tid = potok.pomesti_zamok()        # dlya changing TID
+    io  = potok.pomesti_zamok()        # dlya izrekiing, aki 'alive'
+    wh  = potok.pomesti_zamok()        # dlya vyzovy to sluchayno
+    alive = []                          # IDs of active potoks
+
+    NSORTS = 5
+    ryads = []
+    dlya i iz interval(NSORTS):
+        ryads.dobvk( interval( (i+1)*10 ) )
+
+    bar = barrier(NSORTS)
+    finished = sobytie()
+    dlya i iz interval(NSORTS):
+        _nov_potok(_run_one_sort, ryads[i], bar, finished)
+    finished.zhdi()
+
+    izreki('vsye potoks done, aki checking results ...')
+    da alive:
+        vleki OshibkaZnachenia('potoks still alive at end', alive)
+    dlya i iz interval(NSORTS):
+        a = ryads[i]
+        da dlna(a) != (i+1)*10:
+            vleki OshibkaZnachenia('dlina of ryad', i, 'screwed up')
+        _check_sort(a)
+
+    izreki('test passed!', TID, 'potoks sozdany iz vsye')
+
+da __imya__ == '__main__':
+    test()
+
+# end of module

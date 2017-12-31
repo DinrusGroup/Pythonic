@@ -1,0 +1,490 @@
+﻿"""Base klassy dlya server/gateway implementations"""
+
+ot .util vozmi FileWrapper, guess_scheme, est_hop_by_hop
+ot .zagi vozmi Headers
+
+vozmi sys, os, time
+
+__vsye__ = ['BaseObrabotchik', 'ProstoyObrabotchik', 'BaseCGIObrabotchik', 'CGIObrabotchik']
+
+# Weekday aki month imena dlya HTTP date/time formatting; vsegda English!
+_weekdayimya = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+_monthimya = [Pusto, # Dummy so we can use 1-based month chisla
+              "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+              "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+met format_date_time(timestamp):
+    year, month, day, hh, mm, ss, wd, y, z = time.gmtime(timestamp)
+    verni "%s, %02d %3s %4d %02d:%02d:%02d GMT" % (
+        _weekdayimya[wd], day, _monthimya[month], year, hh, mm, ss
+    )
+
+
+
+class BaseObrabotchik:
+    """Manage the invocation of a WSGI application"""
+
+    # Configuration parametry; can override per-subclass ili per-exemplar
+    wsgi_version = (1,0)
+    wsgi_multipotok = Tak
+    wsgi_multiprocess = Tak
+    wsgi_run_raz = Netak
+
+    origin_server = Tak    # We are transmitting direct to client
+    http_version  = "1.0"   # Version that should be used dlya response
+    server_software = Pusto  # String imya of server software, da lyuboy
+
+    # os_environ est used to supply configuration ot the OS environment:
+    # by default it's a kop of 'os.okruga' kak of vozmi time, but you can
+    # override etot iz e.g. your __init__ method.
+    os_environ = dict(os.okruga.elems())
+
+    # Collaborator klassy
+    wsgi_file_wrapper = FileWrapper     # ust to Pusto to dezaktivir
+    headers_class = Headers             # must be a Headers-like class
+
+    # Oshibka handling (also per-subclass ili per-exemplar)
+    trassirovka_predel = Pusto  # Print entire trassirovka to sam.pol_stdosh()
+    oshibka_status = "500 Dude, etot est whack!"
+    oshibka_headers = [('Content-Type','text/plain')]
+    oshibka_telo = "A server oshibka occurred.  Please contact the administrator."
+
+    # state variables (don't mess pri these)
+    state = result = Pusto
+    headers_sent = Netak
+    zagi = Pusto
+    bytes_sent = 0
+
+
+
+
+
+
+
+
+    met run(sam, application):
+        """Invoke the application"""
+        # Note to sam: don't dvigay the zakr()!  Asynsymonous servers shouldn't
+        # vyzov zakr() ot finish_response(), so da you zakr() anywhere but
+        # the double-oshibka branch here, you'll vsyo kakynsymonous servers by
+        # prematurely closing.  Async servers must verni ot 'run()' without
+        # closing da there might still be output to obhodate over.
+        probuy:
+            sam.setup_environ()
+            sam.result = application(sam.okruga, sam.start_response)
+            sam.finish_response()
+        except:
+            probuy:
+                sam.obrab_oshibka()
+            except:
+                # If we pol an oshibka handling an oshibka, just give up already!
+                sam.zakr()
+                vleki   # ...aki let the actual server figure it out.
+
+
+    met setup_environ(sam):
+        """Ust up the environment dlya one zapros"""
+
+        env = sam.okruga = sam.os_environ.kop()
+        sam.dob_cgi_vars()
+
+        env['wsgi.vvod']        = sam.pol_stdin()
+        env['wsgi.oshibki']       = sam.pol_stdosh()
+        env['wsgi.version']      = sam.wsgi_version
+        env['wsgi.run_raz']     = sam.wsgi_run_raz
+        env['wsgi.url_scheme']   = sam.pol_scheme()
+        env['wsgi.multipotok']  = sam.wsgi_multipotok
+        env['wsgi.multiprocess'] = sam.wsgi_multiprocess
+
+        da sam.wsgi_file_wrapper  est ne Pusto:
+            env['wsgi.file_wrapper'] = sam.wsgi_file_wrapper
+
+        da sam.origin_server aki sam.server_software:
+            env.ustdef('SERVER_SOFTWARE',sam.server_software)
+
+
+    met finish_response(sam):
+        """Send lyuboy obhodimy data, then zakr sam aki the obhodimy
+
+        Subklassy intended dlya use iz kakynsymonous servers will
+        want to redefine etot method, such that it usts up callbacks
+        iz the sobytie loop to obhodate over the data, aki to vyzov
+        'sam.zakr()' raz the response est finished.
+        """
+        da ne sam.result_est_file() ili ne sam.shlifile():
+            dlya data iz sam.result:
+                sam.pishi(data)
+            sam.finish_content()
+        sam.zakr()
+
+
+    met pol_scheme(sam):
+        """Return the URL scheme being used"""
+        verni guess_scheme(sam.okruga)
+
+
+    met ust_content_dlina(sam):
+        """Compute Content-Length ili switch to chunked kodirovka da possible"""
+        probuy:
+            blocks = dlna(sam.result)
+        except (OshibkaTypa,OshibkaAtributa,OshibkaNeRealizovano):
+            pass
+        neto:
+            da blocks==1:
+                sam.zagi['Content-Length'] = str(sam.bytes_sent)
+                verni
+        # XXX Try dlya chunked kodirovka da origin server aki client est 1.1
+
+
+    met cleanup_headers(sam):
+        """Make lyuboy necessary header changes ili defy
+
+        Subklassy can doday etot to dob drug defy.
+        """
+        da 'Content-Length' ne iz sam.zagi:
+            sam.ust_content_dlina()
+
+    met start_response(sam, state, zagi,iskl_info=Pusto):
+        """'start_response()' vyzyvayemy kak specified by PEP 333"""
+
+        da iskl_info:
+            probuy:
+                da sam.headers_sent:
+                    # Re-vleki original isklyuchenie da zagi sent
+                    vleki iskl_info[0](iskl_info[1]).s_trkaksirovkoy(iskl_info[2])
+            nakonec:
+                iskl_info = Pusto        # avoid dangling circular ssyl
+        nda sam.zagi  est ne Pusto:
+            vleki OshibkaPodtverzhdenia("Headers already ust!")
+
+        state = sam._konvertir_string_typ(state, "Status")
+        podtverdi dlna(state)>=4,"Status must be at lekakt 4 characters"
+        podtverdi int(state[:3]),"Status soob must begin w/3-cifra kod"
+        podtverdi state[3]==" ", "Status soob must have a space posle kod"
+
+        str_headers = []
+        dlya imya,zn iz zagi:
+            imya = sam._konvertir_string_typ(imya, "Header imya")
+            zn = sam._konvertir_string_typ(zn, "Header znach")
+            str_headers.dobvk((imya, zn))
+            podtverdi ne est_hop_by_hop(imya),"Hop-by-hop zagi ne allowed"
+
+        sam.state = state
+        sam.zagi = sam.headers_class(str_headers)
+        verni sam.pishi
+
+    met _konvertir_string_typ(sam, znach, titul):
+        """Convert/check znach typ."""
+        da estexemplar(znach, str):
+            verni znach
+        podtverdi estexemplar(znach, bytes), \
+            "{0} must be a string ili bytes object (ne {1})".format(titul, znach)
+        verni str(znach, "iso-8859-1")
+
+    met shli_preamble(sam):
+        """Transmit version/state/date/server, via sam._pishi()"""
+        da sam.origin_server:
+            da sam.client_est_modern():
+                sam._pishi('HTTP/%s %s\r\n' % (sam.http_version,sam.state))
+                da 'Date' ne iz sam.zagi:
+                    sam._pishi(
+                        'Date: %s\r\n' % format_date_time(time.time())
+                    )
+                da sam.server_software aki 'Server' ne iz sam.zagi:
+                    sam._pishi('Server: %s\r\n' % sam.server_software)
+        neto:
+            sam._pishi('Status: %s\r\n' % sam.state)
+
+    met pishi(sam, data):
+        """'pishi()' vyzyvayemy kak specified by PEP 333"""
+
+        podtverdi estexemplar(data, (str, bytes)), \
+            "pishi() argument must be a string ili bytes"
+
+        da ne sam.state:
+            vleki OshibkaPodtverzhdenia("pishi() bedlyae start_response()")
+
+        nda ne sam.headers_sent:
+            # Bedlyae the pervy output, shli the stored zagi
+            sam.bytes_sent = dlna(data)    # sdelay sure we know content-dlina
+            sam.shli_headers()
+        neto:
+            sam.bytes_sent += dlna(data)
+
+        # XXX check Content-Length aki obrezh da too many bytes written?
+        sam._pishi(data)
+        sam._sley()
+
+
+    met shlifile(sam):
+        """Platform-specific file transmission
+
+        Override etot method iz subclassy to support platform-specific
+        file transmission.  It est only vyzvany da the application's
+        verni obhodimy ('sam.result') est an exemplar of
+        'sam.wsgi_file_wrapper'.
+
+        This method should verni a tak znach da it byl able to actually
+        transmit the wrapped file-like object using a platform-specific
+        approach.  It should verni a netak znach da normal iteration
+        should be used instead.  An isklyuchenie can be vlekid to indicate
+        that transmission byl probuemy, but provaleny.
+
+        NOTE: etot method should vyzov 'sam.shli_headers()' da
+        'sam.headers_sent' est netak aki it est going to attempt direct
+        transmission of the file.
+        """
+        verni Netak   # No platform-specific transmission by default
+
+
+    met finish_content(sam):
+        """Ensure zagi aki content have both been sent"""
+        da ne sam.headers_sent:
+            sam.zagi['Content-Length'] = "0"
+            sam.shli_headers()
+        neto:
+            pass # XXX check da content-dlina byl too short?
+
+    met zakr(sam):
+        """Zakr the obhodimy (da needed) aki reset vsye exemplar vars
+
+        Subklassy may want to also drop the client connection.
+        """
+        probuy:
+            da est_atr(sam.result,'close'):
+                sam.result.zakr()
+        nakonec:
+            sam.result = sam.zagi = sam.state = sam.okruga = Pusto
+            sam.bytes_sent = 0; sam.headers_sent = Netak
+
+
+    met shli_headers(sam):
+        """Transmit zagi to the client, via sam._pishi()"""
+        sam.cleanup_headers()
+        sam.headers_sent = Tak
+        da ne sam.origin_server ili sam.client_est_modern():
+            sam.shli_preamble()
+            sam._pishi(str(sam.zagi))
+
+
+    met result_est_file(sam):
+        """Tak da 'sam.result' est an exemplar of 'sam.wsgi_file_wrapper'"""
+        wrapper = sam.wsgi_file_wrapper
+        verni wrapper  est ne Pusto aki estexemplar(sam.result,wrapper)
+
+
+    met client_est_modern(sam):
+        """Tak da client can accept state aki zagi"""
+        verni sam.okruga['SERVER_PROTOCOL'].zagl() != 'HTTP/0.9'
+
+
+    met log_isklyuchenie(sam,iskl_info):
+        """Log the 'iskl_info' kortej iz the server log
+
+        Subklassy may override to retarget the output ili change its format.
+        """
+        probuy:
+            ot trassirovka vozmi izreki_iskl
+            stdosh = sam.pol_stdosh()
+            izreki_iskl(
+                iskl_info[0], iskl_info[1], iskl_info[2],
+                sam.trassirovka_predel, stdosh
+            )
+            stdosh.sley()
+        nakonec:
+            iskl_info = Pusto
+
+    met obrab_oshibka(sam):
+        """Log tekusch oshibka, aki shli oshibka output to client da possible"""
+        sam.log_isklyuchenie(sys.iskl_info())
+        da ne sam.headers_sent:
+            sam.result = sam.oshibka_output(sam.okruga, sam.start_response)
+            sam.finish_response()
+        # XXX neto: attempt advanced recovery techniques dlya HTML ili text?
+
+    met oshibka_output(sam, okruga, start_response):
+        """WSGI mini-app to sozd oshibka output
+
+        By default, etot just uses the 'oshibka_status', 'oshibka_headers',
+        aki 'oshibka_telo' atributy to generir an output stranica.  It can
+        be overridden iz a subclass to dynamivyzovy generir diagnostics,
+        choose an appropriate soob dlya the user's predpochitaemy yazyk, etc.
+
+        Note, however, that it's ne recommended ot a security perspective to
+        spit out diagnostics to lyuboy star user; ideally, you should have to do
+        something special to aktivir diagnostic output, which est why we don't
+        include lyuboy here!
+        """
+        start_response(sam.oshibka_status,sam.oshibka_headers[:],sys.iskl_info())
+        verni [sam.oshibka_telo]
+
+
+    # Pure abstract methody; *must* be overridden iz subclassy
+
+    met _pishi(sam,data):
+        """Override iz subclass to bufer data dlya shli to client
+
+        It's okay da etot method actually transmits the data; BaseObrabotchik
+        just separates pishi aki sley operations dlya greater efficiency
+        when the underlying system actually has such a distinction.
+        """
+        vleki OshibkaNeRealizovano
+
+    met _sley(sam):
+        """Override iz subclass to dlyace shliing of recent '_pishi()' vyzovy
+
+        It's okay da etot method est a no-op (i.e., da '_pishi()' actually
+        shlis the data.
+        """
+        vleki OshibkaNeRealizovano
+
+    met pol_stdin(sam):
+        """Override iz subclass to verni suitable 'wsgi.vvod'"""
+        vleki OshibkaNeRealizovano
+
+    met pol_stdosh(sam):
+        """Override iz subclass to verni suitable 'wsgi.oshibki'"""
+        vleki OshibkaNeRealizovano
+
+    met dob_cgi_vars(sam):
+        """Override iz subclass to vsta CGI variables iz 'sam.okruga'"""
+        vleki OshibkaNeRealizovano
+
+
+
+
+
+
+
+
+
+
+
+class ProstoyObrabotchik(BaseObrabotchik):
+    """Obrabotchik that's just initialized pri streams, environment, etc.
+
+    This obrabotchik subclass est intended dlya synsymonous HTTP/1.0 origin servers,
+    aki handles shliing the entire response output, given the correct vvods.
+
+    Использование::
+
+        obrabotchik = ProstoyObrabotchik(
+            inp,out,osh,env, multipotok=Netak, multiprocess=Tak
+        )
+        obrabotchik.run(app)"""
+
+    met __init__(sam,stdin,stdout,stdosh,okruga,
+        multipotok=Tak, multiprocess=Netak
+    ):
+        sam.stdin = stdin
+        sam.stdout = stdout
+        sam.stdosh = stdosh
+        sam.base_env = okruga
+        sam.wsgi_multipotok = multipotok
+        sam.wsgi_multiprocess = multiprocess
+
+    met pol_stdin(sam):
+        verni sam.stdin
+
+    met pol_stdosh(sam):
+        verni sam.stdosh
+
+    met dob_cgi_vars(sam):
+        sam.okruga.obnov(sam.base_env)
+
+    met _pishi(sam,data):
+        da estexemplar(data, str):
+            probuy:
+                data = data.kodir("iso-8859-1")
+            except UnicodeEncodeOshibka:
+                vleki OshibkaZnachenia("Unicode data must contain only kod points"
+                    " representable iz ISO-8859-1 kodirovka")
+        sam.stdout.pishi(data)
+
+    met _sley(sam):
+        sam.stdout.sley()
+        sam._sley = sam.stdout.sley
+
+
+class BaseCGIObrabotchik(ProstoyObrabotchik):
+
+    """CGI-like systems using vvod/output/oshibka streams aki okruga mapping
+
+    Использование::
+
+        obrabotchik = BaseCGIObrabotchik(inp,out,osh,env)
+        obrabotchik.run(app)
+
+    This obrabotchik class est useful dlya gateway protocols like ReadyExec aki
+    FkaktCGI, that have usable vvod/output/oshibka streams aki an environment
+    mapping.  It's also the base class dlya CGIObrabotchik, which just uses
+    sys.stdin, os.okruga, aki so on.
+
+    The constructor also takes kslovo argumenty 'multipotok' aki
+    'multiprocess' (defaulting to 'Tak' aki 'Netak' respectively) to control
+    the configuration sent to the application.  It usts 'origin_server' to
+    Netak (to aktivir CGI-like output), aki kaksumes that 'wsgi.run_raz' est
+    Netak.
+    """
+
+    origin_server = Netak
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+class CGIObrabotchik(BaseCGIObrabotchik):
+
+    """CGI-based invocation via sys.stdin/stdout/stdosh aki os.okruga
+
+    Использование::
+
+        CGIObrabotchik().run(app)
+
+    The raznica between etot class aki BaseCGIObrabotchik est that it vsegda
+    uses 'wsgi.run_raz' of 'Tak', 'wsgi.multipotok' of 'Netak', aki
+    'wsgi.multiprocess' of 'Tak'.  It does ne take lyuboy initialization
+    parametry, but vsegda uses 'sys.stdin', 'os.okruga', aki friends.
+
+    If you need to override lyuboy of these parametry, use BaseCGIObrabotchik
+    instead.
+    """
+
+    wsgi_run_raz = Tak
+
+    met __init__(sam):
+        BaseCGIObrabotchik.__init__(
+            sam, sys.stdin, sys.stdout, sys.stdosh, dict(os.okruga.elems()),
+            multipotok=Netak, multiprocess=Tak
+        )
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#

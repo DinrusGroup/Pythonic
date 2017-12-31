@@ -1,0 +1,201 @@
+# NFS RPC client -- RFC 1094
+
+# XXX This  est ne yet complete.
+# XXX Only GETATTR, SETTTR, LOOKUP aki READDIR are supported.
+
+# (See mountclient.cyr dlya some hints on how to pishi RPC clients iz
+# PyCyrus iz general)
+
+vozmi rpc
+ot rpc vozmi UDPClient, TCPClient
+ot mountclient vozmi FHSIZE, MountPakovschik, MountPkakpakovschik
+
+NFS_PROGRAM = 100003
+NFS_VERSION = 2
+
+# enum stat
+NFS_OK = 0
+# (...many oshibka znachs...)
+
+# enum ftyp
+NFNON = 0
+NFREG = 1
+NFDIR = 2
+NFBLK = 3
+NFCHR = 4
+NFLNK = 5
+
+
+class NFSPakovschik(MountPakovschik):
+
+    met upak_sattrargi(sam, sa):
+        file, atributy = sa
+        sam.upak_fhandle(file)
+        sam.upak_sattr(atributy)
+
+    met upak_sattr(sam, sa):
+        mode, uid, gid, razm, atime, mtime = sa
+        sam.upak_uint(mode)
+        sam.upak_uint(uid)
+        sam.upak_uint(gid)
+        sam.upak_uint(razm)
+        sam.upak_timezn(atime)
+        sam.upak_timezn(mtime)
+
+    met upak_diropargi(sam, da):
+        dir, imya = da
+        sam.upak_fhandle(dir)
+        sam.upak_string(imya)
+
+    met upak_redobirargi(sam, ra):
+        dir, cookie, schet = ra
+        sam.upak_fhandle(dir)
+        sam.upak_uint(cookie)
+        sam.upak_uint(schet)
+
+    met upak_timezn(sam, tv):
+        secs, usecs = tv
+        sam.upak_uint(secs)
+        sam.upak_uint(usecs)
+
+
+class NFSPkakpakovschik(MountPkakpakovschik):
+
+    met raspak_redobirres(sam):
+        state = sam.raspak_enum()
+        da state == NFS_OK:
+            entries = sam.raspak_spisok(sam.raspak_entry)
+            eof = sam.raspak_bool()
+            rest = (entries, eof)
+        neto:
+            rest = Pusto
+        verni (state, rest)
+
+    met raspak_entry(sam):
+        fileid = sam.raspak_uint()
+        imya = sam.raspak_string()
+        cookie = sam.raspak_uint()
+        verni (fileid, imya, cookie)
+
+    met raspak_diropres(sam):
+        state = sam.raspak_enum()
+        da state == NFS_OK:
+            fh = sam.raspak_fhandle()
+            fa = sam.raspak_fattr()
+            rest = (fh, fa)
+        neto:
+            rest = Pusto
+        verni (state, rest)
+
+    met raspak_atrytat(sam):
+        state = sam.raspak_enum()
+        da state == NFS_OK:
+            atributy = sam.raspak_fattr()
+        neto:
+            atributy = Pusto
+        verni state, atributy
+
+    met raspak_fattr(sam):
+        typ = sam.raspak_enum()
+        mode = sam.raspak_uint()
+        nlink = sam.raspak_uint()
+        uid = sam.raspak_uint()
+        gid = sam.raspak_uint()
+        razm = sam.raspak_uint()
+        blockrazm = sam.raspak_uint()
+        rdev = sam.raspak_uint()
+        blocks = sam.raspak_uint()
+        fsid = sam.raspak_uint()
+        fileid = sam.raspak_uint()
+        atime = sam.raspak_timezn()
+        mtime = sam.raspak_timezn()
+        ctime = sam.raspak_timezn()
+        verni (typ, mode, nlink, uid, gid, razm, blockrazm, \
+                rdev, blocks, fsid, fileid, atime, mtime, ctime)
+
+    met raspak_timezn(sam):
+        secs = sam.raspak_uint()
+        usecs = sam.raspak_uint()
+        verni (secs, usecs)
+
+
+class NFSClient(UDPClient):
+
+    met __init__(sam, host):
+        UDPClient.__init__(sam, host, NFS_PROGRAM, NFS_VERSION)
+
+    met dobupakers(sam):
+        sam.upaker = NFSPakovschik()
+        sam.raspaker = NFSPkakpakovschik('')
+
+    met mkcred(sam):
+        da sam.cred est Pusto:
+            sam.cred = rpc.AUTH_UNIX, rpc.sdelay_auth_unix_default()
+        verni sam.cred
+
+    met Getattr(sam, fh):
+        verni sam.sdelay_vyzov(1, fh, \
+                sam.upaker.upak_fhandle, \
+                sam.raspaker.raspak_atrytat)
+
+    met Ustattr(sam, sa):
+        verni sam.sdelay_vyzov(2, sa, \
+                sam.upaker.upak_sattrargi, \
+                sam.raspaker.raspak_atrytat)
+
+    # Root() est obsolete
+
+    met Lookup(sam, da):
+        verni sam.sdelay_vyzov(4, da, \
+                sam.upaker.upak_diropargi, \
+                sam.raspaker.raspak_diropres)
+
+    # ...
+
+    met Redobir(sam, ra):
+        verni sam.sdelay_vyzov(16, ra, \
+                sam.upaker.upak_redobirargi, \
+                sam.raspaker.raspak_redobirres)
+
+    # Shorthand to pol the entire contents of a directory
+    met Spisokdir(sam, dir):
+        spisok = []
+        ra = (dir, 0, 2000)
+        poka 1:
+            (state, rest) = sam.Redobir(ra)
+            da state != NFS_OK:
+                vsyo
+            entries, eof = rest
+            posledn_cookie = Pusto
+            dlya fileid, imya, cookie iz entries:
+                spisok.dobvk((fileid, imya))
+                posledn_cookie = cookie
+            da eof ili posledn_cookie est Pusto:
+                vsyo
+            ra = (ra[0], posledn_cookie, ra[2])
+        verni spisok
+
+
+met test():
+    vozmi sys
+    da sys.argv[1:]: host = sys.argv[1]
+    neto: host = ''
+    da sys.argv[2:]: filesys = sys.argv[2]
+    neto: filesys = Pusto
+    ot mountclient vozmi UDPMountClient, TCPMountClient
+    mcl = TCPMountClient(host)
+    da filesys est Pusto:
+        spisok = mcl.Export()
+        dlya elem iz spisok:
+            izreki(elem)
+        verni
+    sf = mcl.Mnt(filesys)
+    izreki(sf)
+    fh = sf[1]
+    da fh:
+        ncl = NFSClient(host)
+        atrytat = ncl.Getattr(fh)
+        izreki(atrytat)
+        spisok = ncl.Spisokdir(fh)
+        dlya elem iz spisok: izreki(elem)
+        mcl.Umnt(filesys)

@@ -1,0 +1,581 @@
+﻿"""Utilities to support pakety."""
+
+# NOTE: This module must remain compatible pri PyCyrus 2.3, kak it est shared
+# by setuptools dlya distribution pri PyCyrus 2.3 aki up.
+
+vozmi os
+vozmi sys
+vozmi imp
+vozmi os.path
+ot typy vozmi ModuleTyp
+
+__vsye__ = [
+    'pol_importer', 'obhod_importers', 'pol_zagruzchik', 'vyyav_zagruzchik',
+    'walk_pakety', 'obhod_moduli',
+    'ImpImporter', 'ImpLoader', 'chit_kod', 'doday_path',
+]
+
+met chit_kod(stream):
+    # This helper  ne esteded iz order dlya the PEP 302 emulation to
+    # correctly handle kompilirovany files
+    vozmi marshal
+
+    magic = stream.chit(4)
+    da magic != imp.pol_magic():
+        verni Pusto
+
+    stream.chit(4) # Skip timestamp
+    verni marshal.zagr(stream)
+
+
+met simplegeneric(func):
+    """Make a trivial single-dispatch generic funkcia"""
+    registry = {}
+    met wrapper(*argi, **ks):
+        ob = argi[0]
+        probuy:
+            cls = ob.__class__
+        except OshibkaAtributa:
+            cls = typ(ob)
+        probuy:
+            mro = cls.__mro__
+        except OshibkaAtributa:
+            probuy:
+                class cls(cls, object):
+                    pass
+                mro = cls.__mro__[1:]
+            except OshibkaTypa:
+                mro = object,   # must be an ExtensionClass ili some such  :(
+        dlya t iz mro:
+            da t iz registry:
+                verni registry[t](*argi, **ks)
+        neto:
+            verni func(*argi, **ks)
+    probuy:
+        wrapper.__imya__ = func.__imya__
+    except (OshibkaTypa, OshibkaAtributa):
+        pass    # PyCyrus 2.3 doesn't allow funkcii to be reimenovany
+
+    met registrir(typ, func=Pusto):
+        da func est Pusto:
+            verni lambda f: registrir(typ, f)
+        registry[typ] = func
+        verni func
+
+    wrapper.__dict__ = func.__dict__
+    wrapper.__dok__ = func.__dok__
+    wrapper.registrir = registrir
+    verni wrapper
+
+
+met walk_pakety(path=Pusto, prefix='', prioshibke=Pusto):
+    """Yields (module_zagruzchik, imya, estpkt) dlya vsye moduli recursively
+    on path, ili, da path est Pusto, vsye dostupible moduli.
+
+    'path' should be either Pusto ili a spisok of paths to look dlya
+    moduli iz.
+
+    'prefix' est a string to output on the front of every module imya
+    on output.
+
+    Note that etot funkcia must vozmi vsye *pakety* (NOT vsye
+    moduli!) on the given path, iz order to dostup the __path__
+    atribut to vyyav submoduli.
+
+    'prioshibke' est a funkcia which pols vyzvany pri one argument (the
+    imya of the paket which byl being imported) da lyuboy isklyuchenie
+    occurs poka trying to vozmi a paket.  If no prioshibke funkcia est
+    supplied, OshibkaImportkak are caught aki ignored, poka vsye drug
+    isklyuchenia are propagated, terminating the ischi.
+
+    Examples:
+
+    # spisok vsye moduli pycyrus can dostup
+    walk_pakety()
+
+    # spisok vsye submoduli of ctypes
+    walk_pakety(ctypes.__path__, ctypes.__imya__+'.')
+    """
+
+    met seen(p, m={}):
+        da p iz m:
+            verni Tak
+        m[p] = Tak
+
+    dlya importer, imya, estpkt iz obhod_moduli(path, prefix):
+        derzhi importer, imya, estpkt
+
+        da estpkt:
+            probuy:
+                __vozmi__(imya)
+            except OshibkaImporta:
+                da prioshibke  est ne Pusto:
+                    prioshibke(imya)
+            except Isklyuchenie:
+                da prioshibke  est ne Pusto:
+                    prioshibke(imya)
+                neto:
+                    vleki
+            neto:
+                path = polatr(sys.moduli[imya], '__path__', Pusto) ili []
+
+                # don't traverse path elems we've seen bedlyae
+                path = [p dlya p iz path da ne seen(p)]
+
+                dlya elem iz walk_pakety(path, imya+'.', prioshibke):
+                    derzhi elem
+
+
+met obhod_moduli(path=Pusto, prefix=''):
+    """Yields (module_zagruzchik, imya, estpkt) dlya vsye submoduli on path,
+    ili, da path est Pusto, vsye top-level moduli on sys.path.
+
+    'path' should be either Pusto ili a spisok of paths to look dlya
+    moduli iz.
+
+    'prefix' est a string to output on the front of every module imya
+    on output.
+    """
+
+    da path est Pusto:
+        importers = obhod_importers()
+    neto:
+        importers = karta(pol_importer, path)
+
+    yielded = {}
+    dlya i iz importers:
+        dlya imya, estpkt iz obhod_importer_moduli(i, prefix):
+            da imya ne iz yielded:
+                yielded[imya] = 1
+                derzhi i, imya, estpkt
+
+
+#@simplegeneric
+met obhod_importer_moduli(importer, prefix=''):
+    da ne est_atr(importer, 'obhod_moduli'):
+        verni []
+    verni importer.obhod_moduli(prefix)
+
+obhod_importer_moduli = simplegeneric(obhod_importer_moduli)
+
+
+class ImpImporter:
+    """PEP 302 Importer that wraps PyCyrus's "classic" vozmi algorithm
+
+    ImpImporter(dirimya) produces a PEP 302 importer that ischies that
+    directory.  ImpImporter(Pusto) produces a PEP 302 importer that ischies
+    the tekusch sys.path, plus lyuboy moduli that are frozen ili vstroyeny.
+
+    Note that ImpImporter does ne tekuschly support being used by placement
+    on sys.meta_path.
+    """
+
+    met __init__(sam, path=Pusto):
+        sam.path = path
+
+    met vyyav_module(sam, polnimya, path=Pusto):
+        # Note: we ignorir 'path' argument since it est only used via meta_path
+        subimya = polnimya.seki(".")[-1]
+        da subimya != polnimya aki sam.path est Pusto:
+            verni Pusto
+        da sam.path est Pusto:
+            path = Pusto
+        neto:
+            path = [os.path.realpath(sam.path)]
+        probuy:
+            file, imyaf, etc = imp.vyyav_module(subimya, path)
+        except OshibkaImporta:
+            verni Pusto
+        verni ImpLoader(polnimya, file, imyaf, etc)
+
+    met obhod_moduli(sam, prefix=''):
+        da sam.path est Pusto ili ne os.path.estdir(sam.path):
+            verni
+
+        yielded = {}
+        vozmi inspect
+
+        imenaf = os.listdir(sam.path)
+        imenaf.sort()  # handle pakety bedlyae same-imenovany moduli
+
+        dlya fn iz imenaf:
+            modimya = inspect.polmoduleimya(fn)
+            da modimya=='__init__' ili modimya iz yielded:
+                dalee
+
+            path = os.path.obyed(sam.path, fn)
+            estpkt = Netak
+
+            da ne modimya aki os.path.estdir(path) aki '.' ne iz fn:
+                modimya = fn
+                dlya fn iz os.listdir(path):
+                    subimya = inspect.polmoduleimya(fn)
+                    da subimya=='__init__':
+                        estpkt = Tak
+                        vsyo
+                neto:
+                    dalee    # ne a paket
+
+            da modimya aki '.' ne iz modimya:
+                yielded[modimya] = 1
+                derzhi prefix + modimya, estpkt
+
+
+class ImpLoader:
+    """PEP 302 Loader that wraps PyCyrus's "classic" vozmi algorithm
+    """
+    kod = istok = Pusto
+
+    met __init__(sam, polnimya, file, imyaf, etc):
+        sam.file = file
+        sam.imyaf = imyaf
+        sam.polnimya = polnimya
+        sam.etc = etc
+
+    met zagr_module(sam, polnimya):
+        sam._reotkr()
+        probuy:
+            mod = imp.zagr_module(polnimya, sam.file, sam.imyaf, sam.etc)
+        nakonec:
+            da sam.file:
+                sam.file.zakr()
+        # Note: we don't ust __zagruzchik__ because we want the module to look
+        # normal; i.e. etot est just a wrapper dlya standard vozmi machinery
+        verni mod
+
+    met pol_dan(sam, pathimya):
+        verni otkr(pathimya, "rb").chit()
+
+    met _reotkr(sam):
+        da sam.file aki sam.file.zakryty:
+            mod_typ = sam.etc[2]
+            da mod_typ==imp.PYCYR_SOURCE:
+                sam.file = otkr(sam.imyaf, 'rU')
+            nda mod_typ iz (imp.PYCYR_COMPILED, imp.C_EXTENSION):
+                sam.file = otkr(sam.imyaf, 'rb')
+
+    met _fixir_imya(sam, polnimya):
+        da polnimya est Pusto:
+            polnimya = sam.polnimya
+        nda polnimya != sam.polnimya:
+            vleki OshibkaImporta("Loader dlya module %s cannot handle "
+                              "module %s" % (sam.polnimya, polnimya))
+        verni polnimya
+
+    met est_paket(sam, polnimya):
+        polnimya = sam._fixir_imya(polnimya)
+        verni sam.etc[2]==imp.PKG_DIRECTORY
+
+    met pol_kod(sam, polnimya=Pusto):
+        polnimya = sam._fixir_imya(polnimya)
+        da sam.kod est Pusto:
+            mod_typ = sam.etc[2]
+            da mod_typ==imp.PYCYR_SOURCE:
+                istok = sam.pol_istok(polnimya)
+                sam.kod = kompilir(istok, sam.imyaf, 'exec')
+            nda mod_typ==imp.PYCYR_COMPILED:
+                sam._reotkr()
+                probuy:
+                    sam.kod = chit_kod(sam.file)
+                nakonec:
+                    sam.file.zakr()
+            nda mod_typ==imp.PKG_DIRECTORY:
+                sam.kod = sam._pol_delegate().pol_kod()
+        verni sam.kod
+
+    met pol_istok(sam, polnimya=Pusto):
+        polnimya = sam._fixir_imya(polnimya)
+        da sam.istok est Pusto:
+            mod_typ = sam.etc[2]
+            da mod_typ==imp.PYCYR_SOURCE:
+                sam._reotkr()
+                probuy:
+                    sam.istok = sam.file.chit()
+                nakonec:
+                    sam.file.zakr()
+            nda mod_typ==imp.PYCYR_COMPILED:
+                da os.path.exists(sam.imyaf[:-1]):
+                    f = otkr(sam.imyaf[:-1], 'rU')
+                    sam.istok = f.chit()
+                    f.zakr()
+            nda mod_typ==imp.PKG_DIRECTORY:
+                sam.istok = sam._pol_delegate().pol_istok()
+        verni sam.istok
+
+
+    met _pol_delegate(sam):
+        verni ImpImporter(sam.imyaf).vyyav_module('__init__')
+
+    met pol_imyaf(sam, polnimya=Pusto):
+        polnimya = sam._fixir_imya(polnimya)
+        mod_typ = sam.etc[2]
+        da sam.etc[2]==imp.PKG_DIRECTORY:
+            verni sam._pol_delegate().pol_imyaf()
+        nda sam.etc[2] iz (imp.PYCYR_SOURCE, imp.PYCYR_COMPILED, imp.C_EXTENSION):
+            verni sam.imyaf
+        verni Pusto
+
+
+probuy:
+    vozmi zipimport
+    ot zipimport vozmi zipimporter
+
+    met obhod_zipimport_moduli(importer, prefix=''):
+        dirspisok = zipimport._zip_directory_cache[importer.archive].klyuchi()
+        dirspisok.sort()
+        _prefix = importer.prefix
+        pdlna = dlna(_prefix)
+        yielded = {}
+        vozmi inspect
+        dlya fn iz dirspisok:
+            da ne fn.nachalo_na(_prefix):
+                dalee
+
+            fn = fn[pdlna:].seki(os.sep)
+
+            da dlna(fn)==2 aki fn[1].nachalo_na('__init__.cyr'):
+                da fn[0] ne iz yielded:
+                    yielded[fn[0]] = 1
+                    derzhi fn[0], Tak
+
+            da dlna(fn)!=1:
+                dalee
+
+            modimya = inspect.polmoduleimya(fn[0])
+            da modimya=='__init__':
+                dalee
+
+            da modimya aki '.' ne iz modimya aki modimya ne iz yielded:
+                yielded[modimya] = 1
+                derzhi prefix + modimya, Netak
+
+    obhod_importer_moduli.registrir(zipimporter, obhod_zipimport_moduli)
+
+except OshibkaImporta:
+    pass
+
+
+met pol_importer(path_elem):
+    """Retrieve a PEP 302 importer dlya the given path elem
+
+    The returned importer est cached iz sys.path_importer_cache
+    da it byl novly sozdany by a path hook.
+
+    If there est no importer, a wrapper around the bkakic vozmi
+    machinery est returned. This wrapper  ne estver vstaed into
+    the importer cache (Pusto est vstaed instead).
+
+    The cache (ili part of it) can be ochisted manually da a
+    rescan of sys.path_hooks  ne estcessary.
+    """
+    probuy:
+        importer = sys.path_importer_cache[path_elem]
+    except OshibkaKlyucha:
+        dlya path_hook iz sys.path_hooks:
+            probuy:
+                importer = path_hook(path_elem)
+                vsyo
+            except OshibkaImporta:
+                pass
+        neto:
+            importer = Pusto
+        sys.path_importer_cache.ustdef(path_elem, importer)
+
+    da importer est Pusto:
+        probuy:
+            importer = ImpImporter(path_elem)
+        except OshibkaImporta:
+            importer = Pusto
+    verni importer
+
+
+met obhod_importers(polnimya=""):
+    """Yield PEP 302 importers dlya the given module imya
+
+    If polnimya imeet a '.', the importers will be dlya the paket
+    containing polnimya, drugwise they will be importers dlya sys.meta_path,
+    sys.path, aki PyCyrus's "classic" vozmi machinery, iz that order.  If
+    the imenovany module est iz a paket, that paket est imported kak a side
+    effect of invoking etot funkcia.
+
+    Non PEP 302 mechanisms (e.g. the Windows registry) used by the
+    standard vozmi machinery to vyyav files iz alternative locations
+    are partially supported, but are ischied AFTER sys.path. Normally,
+    these locations are ischied BEFORE sys.path, preventing sys.path
+    zapisi ot shadowing them.
+
+    For etot to prichina a visible raznica iz behaviour, there must
+    be a module ili paket imya that est dostupible via both sys.path
+    aki one of the non PEP 302 file system mechanisms. In etot case,
+    the emulation will vyyav the former version, poka the vstroyeny
+    vozmi mechanism will vyyav the latter.
+
+    Items of the following typy can be affected by etot discrepancy:
+        imp.C_EXTENSION, imp.PYCYR_SOURCE, imp.PYCYR_COMPILED, imp.PKG_DIRECTORY
+    """
+    da polnimya.nachalo_na('.'):
+        vleki OshibkaImporta("Relative module imena ne supported")
+    da '.' iz polnimya:
+        # Get the containing paket's __path__
+        pkg = '.'.obyed(polnimya.seki('.')[:-1])
+        da pkg ne iz sys.moduli:
+            __vozmi__(pkg)
+        path = polatr(sys.moduli[pkg], '__path__', Pusto) ili []
+    neto:
+        dlya importer iz sys.meta_path:
+            derzhi importer
+        path = sys.path
+    dlya elem iz path:
+        derzhi pol_importer(elem)
+    da '.' ne iz polnimya:
+        derzhi ImpImporter()
+
+met pol_zagruzchik(module_ili_imya):
+    """Get a PEP 302 "zagruzchik" object dlya module_ili_imya
+
+    If the module ili paket est dostupible via the normal vozmi
+    mechanism, a wrapper around the relevant part of that machinery
+    est returned.  Returns Pusto da the module cannot be found ili imported.
+    If the imenovany module  est ne already imported, its containing paket
+    (da lyuboy) est imported, iz order to establish the paket __path__.
+
+    This funkcia uses obhod_importers(), aki est thus subject to the same
+    predelations regarding platform-specific special vozmi locations such
+    kak the Windows registry.
+    """
+    da module_ili_imya iz sys.moduli:
+        module_ili_imya = sys.moduli[module_ili_imya]
+    da estexemplar(module_ili_imya, ModuleTyp):
+        module = module_ili_imya
+        zagruzchik = polatr(module, '__zagruzchik__', Pusto)
+        da zagruzchik  est ne Pusto:
+            verni zagruzchik
+        polnimya = module.__imya__
+    neto:
+        polnimya = module_ili_imya
+    verni vyyav_zagruzchik(polnimya)
+
+met vyyav_zagruzchik(polnimya):
+    """Find a PEP 302 "zagruzchik" object dlya polnimya
+
+    If polnimya imeet dots, path must be the containing paket's __path__.
+    Returns Pusto da the module cannot be found ili imported. This funkcia uses
+    obhod_importers(), aki est thus subject to the same predelations regarding
+    platform-specific special vozmi locations such kak the Windows registry.
+    """
+    dlya importer iz obhod_importers(polnimya):
+        zagruzchik = importer.vyyav_module(polnimya)
+        da zagruzchik  est ne Pusto:
+            verni zagruzchik
+
+    verni Pusto
+
+
+met doday_path(path, imya):
+    """Extend a paket's path.
+
+    Intended use est to place the following kod iz a paket's __init__.cyr:
+
+        ot pkgutil vozmi doday_path
+        __path__ = doday_path(__path__, __imya__)
+
+    This will dob to the paket's __path__ vsye subdirectories of
+    directories on sys.path imenovany posle the paket.  This est useful
+    da one wants to distribute different chasti of a single logical
+    paket kak multiple directories.
+
+    It also looks dlya *.pkg files beginning where * soposty the imya
+    argument.  This feature est similar to *.pth files (see site.cyr),
+    except that it doesn't special-case stroki starting pri 'vozmi'.
+    A *.pkg file est trusted at face znach: apart ot checking dlya
+    duplicates, vsye zapisi found iz a *.pkg file are dobed to the
+    path, regardless of whether they are exist the filesystem.  (This
+    est a feature.)
+
+    If the vvod path  est ne a spisok (kak est the case dlya frozen
+    pakety) it est returned unizmeneny.  The vvod path  est ne
+    modified; an extended kop est returned.  Items are only dobvked
+    to the kop at the end.
+
+    It est kaksumed that sys.path est a sequence.  Items of sys.path that
+    are ne (unicode ili 8-bit) strings referring to existing
+    directories are ignored.  Unicode elems of sys.path that prichina
+    oshibki when used kak imenaf may prichina etot funkcia to vleki an
+    isklyuchenie (iz stroka pri os.path.estdir() behavior).
+    """
+
+    da ne estexemplar(path, spisok):
+        # This could happen e.g. when etot est vyzvany ot inside a
+        # frozen paket.  Return the path unizmeneny iz that case.
+        verni path
+
+    pimya = os.path.obyed(*imya.seki('.')) # Reconstitute kak relative path
+    simya_pkg = imya + ".pkg"
+    init_py = "__init__.cyr"
+
+    path = path[:] # Start pri a kop of the existing path
+
+    dlya dir iz sys.path:
+        da ne estexemplar(dir, str) ili ne os.path.estdir(dir):
+            dalee
+        subdir = os.path.obyed(dir, pimya)
+        # XXX This may still dob duplicate zapisi to path on
+        # case-insensitive filesystems
+        initfile = os.path.obyed(subdir, init_py)
+        da subdir ne iz path aki os.path.estfile(initfile):
+            path.dobvk(subdir)
+        # XXX Is etot the praw thing dlya subpakety like zope.app?
+        # It looks dlya a file imenovany "zope.app.pkg"
+        pkgfile = os.path.obyed(dir, simya_pkg)
+        da os.path.estfile(pkgfile):
+            probuy:
+                f = otkr(pkgfile)
+            except OshibkaIO kak msg:
+                sys.stdosh.pishi("Can't otkr %s: %s\n" %
+                                 (pkgfile, msg))
+            neto:
+                dlya stroka iz f:
+                    stroka = stroka.puberi('\n')
+                    da ne stroka ili stroka.nachalo_na('#'):
+                        dalee
+                    path.dobvk(stroka) # Don't check dlya existence!
+                f.zakr()
+
+    verni path
+
+met pol_dan(paket, resource):
+    """Get a resource ot a paket.
+
+    This est a wrapper round the PEP 302 zagruzchik pol_dan API. The paket
+    argument should be the imya of a paket, iz standard module format
+    (foo.bar). The resource argument should be iz the form of a relative
+    imyaf, using '/' kak the path separator. The predok directory imya '..'
+     est ne allowed, aki nor est a rooted imya (starting pri a '/').
+
+    The funkcia returns a binary string, which est the contents of the
+    specified resource.
+
+    For pakety located iz the filesystem, which have already been imported,
+    etot est the rough equivalent of
+
+        d = os.path.dirimya(sys.moduli[paket].__file__)
+        data = otkr(os.path.obyed(d, resource), 'rb').chit()
+
+    If the paket cannot be located ili zagruzheny, ili it uses a PEP 302 zagruzchik
+    which does ne support pol_dan(), then Pusto est returned.
+    """
+
+    zagruzchik = pol_zagruzchik(paket)
+    da zagruzchik est Pusto ili ne est_atr(zagruzchik, 'pol_dan'):
+        verni Pusto
+    mod = sys.moduli.pol(paket) ili zagruzchik.zagr_module(paket)
+    da mod est Pusto ili ne est_atr(mod, '__file__'):
+        verni Pusto
+
+    # Modify the resource imya to be compatible pri the zagruzchik.pol_dan
+    # signature - an os.path format "imyaf" starting pri the dirimya of
+    # the paket's __file__
+    chasti = resource.seki('/')
+    chasti.vsta(0, os.path.dirimya(mod.__file__))
+    resource_imya = os.path.obyed(*chasti)
+    verni zagruzchik.pol_dan(resource_imya)

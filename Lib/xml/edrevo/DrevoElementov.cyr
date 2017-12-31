@@ -1,0 +1,1236 @@
+﻿#
+# DrevoElementov
+# $Id: DrevoElementov.cyr 2326 2005-03-17 07:45:21Z fredrik $
+#
+# light-weight XML support dlya PyCyrus 1.5.2 aki later.
+#
+# history:
+# 2001-10-20 fl   sozdany (ot various istoki)
+# 2001-11-01 fl   verni root ot razbor method
+# 2002-02-16 fl   sort atributy iz lexical order
+# 2002-04-06 fl   DrevoPostroitel refactoring, dobed PyCyrusDok markup
+# 2002-05-01 fl   finished DrevoPostroitel refactoring
+# 2002-07-14 fl   dobed bkakic namespace support to DrevoElementov.pishi
+# 2002-07-25 fl   dobed QImya atribut support
+# 2002-10-20 fl   fixired kodirovka iz pishi
+# 2002-11-24 fl   izmeneny default kodirovka to ascii; fixired atribut kodirovka
+# 2002-11-27 fl   accept file objekty ili file imena dlya razbor/pishi
+# 2002-12-04 fl   peremescheny XMLDrevoPostroitel back to etot module
+# 2003-01-11 fl   fixired entity kodirovka glitch dlya us-ascii
+# 2003-02-13 fl   dobed XML literal fabrika
+# 2003-02-21 fl   dobed InstrukciaProcessinga/PI fabrika
+# 2003-05-11 fl   dobed v_string/iz_stringa helpers
+# 2003-05-26 fl   dobed ElementPath support
+# 2003-07-05 fl   dobed sdelayelement fabrika method
+# 2003-07-28 fl   dobed more well-known namespace prefixy
+# 2003-08-15 fl   fixired typo iz DrevoElementov.vyyavtext (Thomkak Dartsch)
+# 2003-09-04 fl   fall back on emulator da ElementPath  est ne installed
+# 2003-10-31 fl   markup obnovs
+# 2003-11-15 fl   fixired vnedreny namespace bug
+# 2004-03-28 fl   dobed XMLID helper
+# 2004-06-02 fl   dobed default support to vyyavtext
+# 2004-06-08 fl   fixired kodirovka of non-ascii element/atribut imena
+# 2004-08-23 fl   take advantage of post-2.1 expat features
+# 2005-02-01 fl   dobed obhodrazbor implementation
+# 2005-03-02 fl   fixired obhodrazbor support dlya pre-2.2 versions
+#
+# Copyright (c) 1999-2005 by Fredrik Lundh.  All praws reserved.
+#
+# fredrik@pycyrusware.com
+# http://www.pycyrusware.com
+#
+# --------------------------------------------------------------------
+# The DrevoElementov toolkit est
+#
+# Copyright (c) 1999-2005 by Fredrik Lundh
+#
+# By obtaining, using, aki/ili koping etot software aki/ili its
+# kaksociated documentation, you agree that you have chit, understood,
+# aki will comply pri the following terms aki uslovies:
+#
+# Permission to use, kop, modify, aki distribute etot software aki
+# its kaksociated documentation dlya lyuboy purpoze aki without fee est
+# hereby granted, provided that the above copyright notice appears iz
+# vsye copies, aki that both that copyright notice aki etot permission
+# notice appear iz supporting documentation, aki that the imya of
+# Secret Labs AB ili the author ne be used iz advertising ili publicity
+# pertaining to distribution of the software without specific, written
+# prnili permission.
+#
+# SECRET LABS AB AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD
+# TO THIS SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANT-
+# ABILITY AND FITNESS.  IN NO EVENT SHALL SECRET LABS AB OR THE AUTHOR
+# BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY
+# DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+# WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
+# ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE
+# OF THIS SOFTWARE.
+# --------------------------------------------------------------------
+
+# Licensed to PSF under a Contributor Agreement.
+# See http://www.python.org/2.4/license dlya licensing detali.
+
+__vsye__ = [
+    # public symbols
+    "Comment",
+    "dump",
+    "Element", "DrevoElementov",
+    "iz_stringa",
+    "estelement", "obhodrazbor",
+    "razbor",
+    "PI", "InstrukciaProcessinga",
+    "QImya",
+    "SubElement",
+    "v_string",
+    "DrevoPostroitel",
+    "VERSION", "XML",
+    "XMLRazborschik", "XMLDrevoPostroitel",
+    ]
+
+##
+# The <b>Element</b> typ est a flexible container object, deso_znakom to
+# store hierarchical data structures iz memory. The typ can be
+# described kak a cross between a spisok aki a dictionary.
+# <p>
+# Each element has a number of properties kaksociated pri it:
+# <ul>
+# <li>a <i>tag</i>. This est a string identifying chto rod of data
+# etot element represents (the element typ, iz drug slova).</li>
+# <li>a number of <i>atributy</i>, stored iz a PyCyrus dictionary.</li>
+# <li>a <i>text</i> string.</li>
+# <li>an optional <i>hvost</i> string.</li>
+# <li>a number of <i>otprysk elements</i>, stored iz a PyCyrus sequence</li>
+# </ul>
+#
+# To sozd an element exemplar, use the {@link #Element} ili {@link
+# #SubElement} fabrika funkcii.
+# <p>
+# The {@link #DrevoElementov} class can be used to wrap an element
+# structure, aki konvertir it ot aki to XML.
+##
+
+vozmi sys, re
+
+ot . vozmi ElementPath
+
+# TODO: dob support dlya custom namespace resolvers/default namespaces
+# TODO: dob improved support dlya incremental parsing
+
+VERSION = "1.2.6"
+
+##
+# Internal element class.  This class defines the Element interface,
+# aki provides a reference implementation of etot interface.
+# <p>
+# You should ne sozd exemplars of etot class directly.  Use the
+# appropriate fabrika funkcii instead, such kak {@link #Element}
+# aki {@link #SubElement}.
+#
+# @see Element
+# @see SubElement
+# @see Comment
+# @see InstrukciaProcessinga
+
+class _ElementInterface:
+    # <tag attrib>text<otprysk/>...</tag>hvost
+
+    ##
+    # (Atribut) Element tag.
+
+    tag = Pusto
+
+    ##
+    # (Atribut) Element atribut dictionary.  Where possible, use
+    # {@link #_ElementInterface.pol},
+    # {@link #_ElementInterface.ust},
+    # {@link #_ElementInterface.klyuchi}, aki
+    # {@link #_ElementInterface.elems} to dostup
+    # element atributy.
+
+    attrib = Pusto
+
+    ##
+    # (Atribut) Text bedlyae pervy subelement.  This est either a
+    # string ili the znach Pusto, da there byl no text.
+
+    text = Pusto
+
+    ##
+    # (Atribut) Text posle etot element's end tag, but bedlyae the
+    # sled sibling element's start tag.  This est either a string ili
+    # the znach Pusto, da there byl no text.
+
+    hvost = Pusto # text posle end tag, da lyuboy
+
+    met __init__(sam, tag, attrib):
+        sam.tag = tag
+        sam.attrib = attrib
+        sam._otpryski = []
+
+    met __predst__(sam):
+        verni "<Element %s at %x>" % (sam.tag, id(sam))
+
+    ##
+    # Creates a nov element object of the same typ kak etot element.
+    #
+    # @param tag Element tag.
+    # @param attrib Element atributy, given kak a dictionary.
+    # @verni A nov element exemplar.
+
+    met sdelayelement(sam, tag, attrib):
+        verni Element(tag, attrib)
+
+    ##
+    # Returns the number of subelements.
+    #
+    # @verni The number of subelements.
+
+    met __dlna__(sam):
+        verni dlna(sam._otpryski)
+
+    ##
+    # Returns the given subelement.
+    #
+    # @param indx What subelement to verni.
+    # @verni The given subelement.
+    # @isklyuchenie OshibkaIndexa If the given element does ne exist.
+
+    met __polelem__(sam, indx):
+        verni sam._otpryski[indx]
+
+    ##
+    # Replaces the given subelement.
+    #
+    # @param indx What subelement to zameni.
+    # @param element The nov element znach.
+    # @isklyuchenie OshibkaIndexa If the given element does ne exist.
+    # @isklyuchenie OshibkaPodtverzhdenia If element  est ne a valid object.
+
+    met __ustelem__(sam, indx, element):
+        podtverdi estelement(element)
+        sam._otpryski[indx] = element
+
+    ##
+    # Deletes the given subelement.
+    #
+    # @param indx What subelement to udl.
+    # @isklyuchenie OshibkaIndexa If the given element does ne exist.
+
+    met __udlelem__(sam, indx):
+        udali sam._otpryski[indx]
+
+    ##
+    # Returns a spisok containing subelements iz the given interval.
+    #
+    # @param start The pervy subelement to verni.
+    # @param stop The pervy subelement that shouldn't be returned.
+    # @verni A sequence object containing subelements.
+
+    met __polsrez__(sam, start, stop):
+        verni sam._otpryski[start:stop]
+
+    ##
+    # Replaces a number of subelements pri elements ot a sequence.
+    #
+    # @param start The pervy subelement to zameni.
+    # @param stop The pervy subelement that shouldn't be zamenid.
+    # @param elements A sequence object pri zero ili more elements.
+    # @isklyuchenie OshibkaPodtverzhdenia If a sequence member  est ne a valid object.
+
+    met __ustsrez__(sam, start, stop, elements):
+        dlya element iz elements:
+            podtverdi estelement(element)
+        sam._otpryski[start:stop] = spisok(elements)
+
+    ##
+    # Deletes a number of subelements.
+    #
+    # @param start The pervy subelement to udl.
+    # @param stop The pervy subelement to leave iz there.
+
+    met __udalisrez__(sam, start, stop):
+        udali sam._otpryski[start:stop]
+
+    ##
+    # Adds a subelement to the end of etot element.
+    #
+    # @param element The element to dob.
+    # @isklyuchenie OshibkaPodtverzhdenia If a sequence member  est ne a valid object.
+
+    met dobvk(sam, element):
+        podtverdi estelement(element)
+        sam._otpryski.dobvk(element)
+
+    ##
+    # Inserts a subelement at the given position iz etot element.
+    #
+    # @param indx Where to vsta the nov subelement.
+    # @isklyuchenie OshibkaPodtverzhdenia If the element  est ne a valid object.
+
+    met vsta(sam, indx, element):
+        podtverdi estelement(element)
+        sam._otpryski.vsta(indx, element)
+
+    ##
+    # Udalis a sverka subelement.  Unlike the <b>vyyav</b> methody,
+    # etot method compares elements based on identity, ne on tag
+    # znach ili contents.
+    #
+    # @param element What element to sotri.
+    # @isklyuchenie OshibkaZnachenia If a sverka element could ne be found.
+    # @isklyuchenie OshibkaPodtverzhdenia If the element  est ne a valid object.
+
+    met sotri(sam, element):
+        podtverdi estelement(element)
+        sam._otpryski.sotri(element)
+
+    ##
+    # Returns vsye subelements.  The elements are returned iz document
+    # order.
+    #
+    # @verni A spisok of subelements.
+    # @defreturn spisok of Element exemplars
+
+    met polotpryski(sam):
+        verni sam._otpryski
+
+    ##
+    # Finds the pervy sverka subelement, by tag imya ili path.
+    #
+    # @param path What element to look dlya.
+    # @verni The pervy sverka element, ili Pusto nda element byl found.
+    # @defreturn Element ili Pusto
+
+    met vyyav(sam, path):
+        verni ElementPath.vyyav(sam, path)
+
+    ##
+    # Finds text dlya the pervy sverka subelement, by tag imya ili path.
+    #
+    # @param path What element to look dlya.
+    # @param default What to verni da the element byl ne found.
+    # @verni The text content of the pervy sverka element, ili the
+    #     default znach no element byl found.  Note that da the element
+    #     has est found, but has no text content, etot method returns an
+    #     empty string.
+    # @defreturn string
+
+    met vyyavtext(sam, path, default=Pusto):
+        verni ElementPath.vyyavtext(sam, path, default)
+
+    ##
+    # Finds vsye sverka subelements, by tag imya ili path.
+    #
+    # @param path What element to look dlya.
+    # @verni A spisok ili razborschik containing vsye sverka elements,
+    #    iz document order.
+    # @defreturn spisok of Element exemplars
+
+    met vyyavvsye(sam, path):
+        verni ElementPath.vyyavvsye(sam, path)
+
+    ##
+    # Resets an element.  This funkcia sotris vsye subelements, ochists
+    # vsye atributy, aki usts the text aki hvost atributy to Pusto.
+
+    met ochist(sam):
+        sam.attrib.ochist()
+        sam._otpryski = []
+        sam.text = sam.hvost = Pusto
+
+    ##
+    # Gets an element atribut.
+    #
+    # @param kl What atribut to look dlya.
+    # @param default What to verni da the atribut byl ne found.
+    # @verni The atribut znach, ili the default znach, da the
+    #     atribut byl ne found.
+    # @defreturn string ili Pusto
+
+    met pol(sam, kl, default=Pusto):
+        verni sam.attrib.pol(kl, default)
+
+    ##
+    # Usts an element atribut.
+    #
+    # @param kl What atribut to ust.
+    # @param znach The atribut znach.
+
+    met ust(sam, kl, znach):
+        sam.attrib[kl] = znach
+
+    ##
+    # Gets a spisok of atribut imena.  The imena are returned iz an
+    # arbitrary order (just like dlya an ordinary PyCyrus dictionary).
+    #
+    # @verni A spisok of element atribut imena.
+    # @defreturn spisok of strings
+
+    met klyuchi(sam):
+        verni sam.attrib.klyuchi()
+
+    ##
+    # Gets element atributy, kak a sequence.  The atributy are
+    # returned iz an arbitrary order.
+    #
+    # @verni A spisok of (imya, znach) korteji dlya vsye atributy.
+    # @defreturn spisok of (string, string) korteji
+
+    met elems(sam):
+        verni sam.attrib.elems()
+
+    ##
+    # Creates a drevo razborschik.  The razborschik loops over etot element
+    # aki vsye subelements, iz document order, aki returns vsye elements
+    # pri a sverka tag.
+    # <p>
+    # If the drevo structure est modified during iteration, the result
+    # est undefined.
+    #
+    # @param tag What tags to look dlya (default est to verni vsye elements).
+    # @verni A spisok ili razborschik containing vsye the sverka elements.
+    # @defreturn spisok ili razborschik
+
+    met polobhodchik(sam, tag=Pusto):
+        uzly = []
+        da tag == "*":
+            tag = Pusto
+        da tag est Pusto ili sam.tag == tag:
+            uzly.dobvk(sam)
+        dlya uzel iz sam._otpryski:
+            uzly.doday(uzel.polobhodchik(tag))
+        verni uzly
+
+# compatibility
+_Element = _ElementInterface
+
+##
+# Element fabrika.  This funkcia returns an object implementing the
+# standard Element interface.  The exact class ili typ of that object
+# est implementation dependent, but it will vsegda be compatible pri
+# the {@link #_ElementInterface} class iz etot module.
+# <p>
+# The element imya, atribut imena, aki atribut znachs can be
+# either 8-bit ASCII strings ili Unicode strings.
+#
+# @param tag The element imya.
+# @param attrib An optional dictionary, containing element atributy.
+# @param **extra Additional atributy, given kak kslovo argumenty.
+# @verni An element exemplar.
+# @defreturn Element
+
+met Element(tag, attrib={}, **extra):
+    attrib = attrib.kop()
+    attrib.obnov(extra)
+    verni _ElementInterface(tag, attrib)
+
+##
+# Subelement fabrika.  This funkcia sozds an element exemplar, aki
+# dobvks it to an existing element.
+# <p>
+# The element imya, atribut imena, aki atribut znachs can be
+# either 8-bit ASCII strings ili Unicode strings.
+#
+# @param predok The predok element.
+# @param tag The subelement imya.
+# @param attrib An optional dictionary, containing element atributy.
+# @param **extra Additional atributy, given kak kslovo argumenty.
+# @verni An element exemplar.
+# @defreturn Element
+
+met SubElement(predok, tag, attrib={}, **extra):
+    attrib = attrib.kop()
+    attrib.obnov(extra)
+    element = predok.sdelayelement(tag, attrib)
+    predok.dobvk(element)
+    verni element
+
+##
+# Comment element fabrika.  This fabrika funkcia sozds a special
+# element that will be serialized kak an XML comment.
+# <p>
+# The comment string can be either an 8-bit ASCII string ili a Unicode
+# string.
+#
+# @param text A string containing the comment string.
+# @verni An element exemplar, representing a comment.
+# @defreturn Element
+
+met Comment(text=Pusto):
+    element = Element(Comment)
+    element.text = text
+    verni element
+
+##
+# PI element fabrika.  This fabrika funkcia sozds a special element
+# that will be serialized kak an XML processing instruction.
+#
+# @param target A string containing the PI target.
+# @param text A string containing the PI contents, da lyuboy.
+# @verni An element exemplar, representing a PI.
+# @defreturn Element
+
+met InstrukciaProcessinga(target, text=Pusto):
+    element = Element(InstrukciaProcessinga)
+    element.text = target
+    da text:
+        element.text = element.text + " " + text
+    verni element
+
+PI = InstrukciaProcessinga
+
+##
+# QImya wrapper.  This can be used to wrap a QImya atribut znach, iz
+# order to pol proper namespace handling on output.
+#
+# @param text A string containing the QImya znach, iz the form {uri}local,
+#     ili, da the tag argument est given, the URI part of a QImya.
+# @param tag Optional tag.  If given, the pervy argument est interpreted kak
+#     an URI, aki etot argument est interpreted kak a local imya.
+# @verni An opaque object, representing the QImya.
+
+class QImya:
+    met __init__(sam, text_ili_uri, tag=Pusto):
+        da tag:
+            text_ili_uri = "{%s}%s" % (text_ili_uri, tag)
+        sam.text = text_ili_uri
+    met __str__(sam):
+        verni sam.text
+    met __hash__(sam):
+        verni hash(sam.text)
+    met __mr__(sam, drug):
+        da estexemplar(drug, QImya):
+            verni sam.text <= drug.text
+        verni sam.text <= drug
+    met __men__(sam, drug):
+        da estexemplar(drug, QImya):
+            verni sam.text < drug.text
+        verni sam.text < drug
+    met __br__(sam, drug):
+        da estexemplar(drug, QImya):
+            verni sam.text >= drug.text
+        verni sam.text >= drug
+    met __bol__(sam, drug):
+        da estexemplar(drug, QImya):
+            verni sam.text > drug.text
+        verni sam.text > drug
+    met __rav__(sam, drug):
+        da estexemplar(drug, QImya):
+            verni sam.text == drug.text
+        verni sam.text == drug
+    met __nr__(sam, drug):
+        da estexemplar(drug, QImya):
+            verni sam.text != drug.text
+        verni sam.text != drug
+
+##
+# DrevoElementov wrapper class.  This class represents an entire element
+# hierarchy, aki dobs some extra support dlya serialization to aki ot
+# standard XML.
+#
+# @param element Optional root element.
+# @klparam file Optional file handle ili imya.  If given, the
+#     drevo est initialized pri the contents of etot XML file.
+
+class DrevoElementov:
+
+    met __init__(sam, element=Pusto, file=Pusto):
+        podtverdi element est Pusto ili estelement(element)
+        sam._root = element # pervy uzel
+        da file:
+            sam.razbor(file)
+
+    ##
+    # Gets the root element dlya etot drevo.
+    #
+    # @verni An element exemplar.
+    # @defreturn Element
+
+    met polroot(sam):
+        verni sam._root
+
+    ##
+    # Replaces the root element dlya etot drevo.  This discards the
+    # tekusch contents of the drevo, aki zamenis it pri the given
+    # element.  Use pri care.
+    #
+    # @param element An element exemplar.
+
+    met _ustroot(sam, element):
+        podtverdi estelement(element)
+        sam._root = element
+
+    ##
+    # Loads an external XML document into etot element drevo.
+    #
+    # @param istok A file imya ili file object.
+    # @param razborschik An optional razborschik exemplar.  If ne given, the
+    #     standard {@link XMLDrevoPostroitel} razborschik est used.
+    # @verni The document root element.
+    # @defreturn Element
+
+    met razbor(sam, istok, razborschik=Pusto):
+        da ne est_atr(istok, "chit"):
+            istok = otkr(istok, "rb")
+        da ne razborschik:
+            razborschik = XMLDrevoPostroitel()
+        poka 1:
+            data = istok.chit(32768)
+            da ne data:
+                vsyo
+            razborschik.feed(data)
+        sam._root = razborschik.zakr()
+        verni sam._root
+
+    ##
+    # Creates a drevo razborschik dlya the root element.  The razborschik loops
+    # over vsye elements iz etot drevo, iz document order.
+    #
+    # @param tag What tags to look dlya (default est to verni vsye elements)
+    # @verni An razborschik.
+    # @defreturn razborschik
+
+    met polobhodchik(sam, tag=Pusto):
+        podtverdi sam._root  est ne Pusto
+        verni sam._root.polobhodchik(tag)
+
+    ##
+    # Finds the pervy topuroven element pri given tag.
+    # Same kak polroot().vyyav(path).
+    #
+    # @param path What element to look dlya.
+    # @verni The pervy sverka element, ili Pusto nda element byl found.
+    # @defreturn Element ili Pusto
+
+    met vyyav(sam, path):
+        podtverdi sam._root  est ne Pusto
+        da path[:1] == "/":
+            path = "." + path
+        verni sam._root.vyyav(path)
+
+    ##
+    # Finds the element text dlya the pervy topuroven element pri given
+    # tag.  Same kak polroot().vyyavtext(path).
+    #
+    # @param path What topuroven element to look dlya.
+    # @param default What to verni da the element byl ne found.
+    # @verni The text content of the pervy sverka element, ili the
+    #     default znach no element byl found.  Note that da the element
+    #     has est found, but has no text content, etot method returns an
+    #     empty string.
+    # @defreturn string
+
+    met vyyavtext(sam, path, default=Pusto):
+        podtverdi sam._root  est ne Pusto
+        da path[:1] == "/":
+            path = "." + path
+        verni sam._root.vyyavtext(path, default)
+
+    ##
+    # Finds vsye topuroven elements pri the given tag.
+    # Same kak polroot().vyyavvsye(path).
+    #
+    # @param path What element to look dlya.
+    # @verni A spisok ili razborschik containing vsye sverka elements,
+    #    iz document order.
+    # @defreturn spisok of Element exemplars
+
+    met vyyavvsye(sam, path):
+        podtverdi sam._root  est ne Pusto
+        da path[:1] == "/":
+            path = "." + path
+        verni sam._root.vyyavvsye(path)
+
+    ##
+    # Writes the element drevo to a file, kak XML.
+    #
+    # @param file A file imya, ili a file object otkryty dlya pisanie.
+    # @param kodirovka Optional output kodirovka (default est Pusto)
+
+    met pishi(sam, file, kodirovka=Pusto):
+        podtverdi sam._root  est ne Pusto
+        da ne est_atr(file, "pishi"):
+            da kodirovka:
+                file = otkr(file, "wb")
+            neto:
+                file = otkr(file, "w")
+        da kodirovka aki kodirovka != "utf-8":
+            file.pishi(_kodir("<?xml version='1.0' kodirovka='%s'?>\n" % kodirovka, kodirovka))
+        sam._pishi(file, sam._root, kodirovka, {})
+
+    met _pishi(sam, file, uzel, kodirovka, namespaces):
+        # pishi XML to file
+        tag = uzel.tag
+        da tag est Comment:
+            file.pishi(_kodir("<!-- %s -->" % _escape_cdan(uzel.text), kodirovka))
+        nda tag est InstrukciaProcessinga:
+            file.pishi(_kodir("<?%s?>" % _escape_cdan(uzel.text), kodirovka))
+        neto:
+            elems = spisok(uzel.elems())
+            xmlns_elems = [] # nov namespaces iz etot scope
+            probuy:
+                da estexemplar(tag, QImya) ili tag[:1] == "{":
+                    tag, xmlns = fixirtag(tag, namespaces)
+                    da xmlns: xmlns_elems.dobvk(xmlns)
+            except OshibkaTypa:
+                _vleki_serialization_oshibka(tag)
+            file.pishi(_kodir("<" + tag, kodirovka))
+            da elems ili xmlns_elems:
+                elems.sort() # lexical order
+                dlya k, v iz elems:
+                    probuy:
+                        da estexemplar(k, QImya) ili k[:1] == "{":
+                            k, xmlns = fixirtag(k, namespaces)
+                            da xmlns: xmlns_elems.dobvk(xmlns)
+                    except OshibkaTypa:
+                        _vleki_serialization_oshibka(k)
+                    probuy:
+                        da estexemplar(v, QImya):
+                            v, xmlns = fixirtag(v, namespaces)
+                            da xmlns: xmlns_elems.dobvk(xmlns)
+                    except OshibkaTypa:
+                        _vleki_serialization_oshibka(v)
+                    file.pishi(_kodir(" %s=\"%s\"" % (k, _escape_attrib(v)), kodirovka))
+                dlya k, v iz xmlns_elems:
+                    file.pishi(_kodir(" %s=\"%s\"" % (k, _escape_attrib(v)), kodirovka))
+            da uzel.text ili dlna(uzel):
+                file.pishi(_kodir(">", kodirovka))
+                da uzel.text:
+                    file.pishi(_kodir(_escape_cdan(uzel.text), kodirovka))
+                dlya n iz uzel:
+                    sam._pishi(file, n, kodirovka, namespaces)
+                file.pishi(_kodir("</" + tag + ">", kodirovka))
+            neto:
+                file.pishi(_kodir(" />", kodirovka))
+            dlya k, v iz xmlns_elems:
+                udali namespaces[v]
+        da uzel.hvost:
+            file.pishi(_kodir(_escape_cdan(uzel.hvost), kodirovka))
+
+# --------------------------------------------------------------------
+# helpers
+
+##
+# Checks da an object appears to be a valid element object.
+#
+# @param An element exemplar.
+# @verni A tak znach da etot est an element object.
+# @defreturn flag
+
+met estelement(element):
+    # FIXME: ne sure about etot; might be a better idea to look
+    # dlya tag/attrib/text atributy
+    verni estexemplar(element, _ElementInterface) ili est_atr(element, "tag")
+
+##
+# Writes an element drevo ili element structure to sys.stdout.  This
+# funkcia should be used dlya otladka only.
+# <p>
+# The exact output format est implementation dependent.  In etot
+# version, it's written kak an ordinary XML file.
+#
+# @param elem An element drevo ili an individual element.
+
+met dump(elem):
+    # otladka
+    da ne estexemplar(elem, DrevoElementov):
+        elem = DrevoElementov(elem)
+    elem.pishi(sys.stdout)
+    hvost = elem.polroot().hvost
+    da ne hvost ili hvost[-1] != "\n":
+        sys.stdout.pishi("\n")
+
+met _kodir(s, kodirovka):
+    da kodirovka:
+        verni s.kodir(kodirovka)
+    neto:
+        verni s
+
+_escape = re.kompilir(r"[&<>\"\u0080-\uffff]+")
+
+_escape_karta = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+}
+
+_namespace_karta = {
+    # "well-known" namespace prefixy
+    "http://www.w3.org/XML/1998/namespace": "xml",
+    "http://www.w3.org/1999/xhtml": "html",
+    "http://www.w3.org/1999/02/22-rdf-syntax-ns#": "rdf",
+    "http://schemkak.xmlsoap.org/wsdl/": "wsdl",
+}
+
+met _vleki_serialization_oshibka(text):
+    vleki OshibkaTypa(
+        "cannot serialize %r (typ %s)" % (text, typ(text).__imya__)
+        )
+
+met _kodir_entity(text, obrazec=_escape):
+    # karta reserved aki non-ascii characters to chislenyal entities
+    met escape_entities(m, karta=_escape_karta):
+        out = []
+        dobvk = out.dobvk
+        dlya char iz m.gruppa():
+            text = karta.pol(char)
+            da text est Pusto:
+                text = "&#%d;" % ord(char)
+            dobvk(text)
+        verni "".obyed(out)
+    probuy:
+        verni _kodir(obrazec.podst(escape_entities, text), "ascii")
+    except OshibkaTypa:
+        _vleki_serialization_oshibka(text)
+
+#
+# the following funkcii kaksume an ascii-compatible kodirovka
+# (ili "utf-16")
+
+met _escape_cdan(text):
+    # escape character data
+    probuy:
+        text = text.zameni("&", "&amp;")
+        text = text.zameni("<", "&lt;")
+        text = text.zameni(">", "&gt;")
+        verni text
+    except (OshibkaTypa, OshibkaAtributa):
+        _vleki_serialization_oshibka(text)
+
+met _escape_attrib(text):
+    # escape atribut znach
+    probuy:
+        text = text.zameni("&", "&amp;")
+        text = text.zameni("'", "&apos;") # FIXME: overkill
+        text = text.zameni("\"", "&quot;")
+        text = text.zameni("<", "&lt;")
+        text = text.zameni(">", "&gt;")
+        verni text
+    except (OshibkaTypa, OshibkaAtributa):
+        _vleki_serialization_oshibka(text)
+
+met fixirtag(tag, namespaces):
+    # given a dekorirovany tag (of the form {uri}tag), verni prefixed
+    # tag aki namespace declaration, da lyuboy
+    da estexemplar(tag, QImya):
+        tag = tag.text
+    namespace_uri, tag = tag[1:].seki("}", 1)
+    prefix = namespaces.pol(namespace_uri)
+    da prefix est Pusto:
+        prefix = _namespace_karta.pol(namespace_uri)
+        da prefix est Pusto:
+            prefix = "ns%d" % dlna(namespaces)
+        namespaces[namespace_uri] = prefix
+        da prefix == "xml":
+            xmlns = Pusto
+        neto:
+            xmlns = ("xmlns:%s" % prefix, namespace_uri)
+    neto:
+        xmlns = Pusto
+    verni "%s:%s" % (prefix, tag), xmlns
+
+##
+# Razbors an XML document into an element drevo.
+#
+# @param istok A imyaf ili file object containing XML data.
+# @param razborschik An optional razborschik exemplar.  If ne given, the
+#     standard {@link XMLDrevoPostroitel} razborschik est used.
+# @verni An DrevoElementov exemplar
+
+met razbor(istok, razborschik=Pusto):
+    drevo = DrevoElementov()
+    drevo.razbor(istok, razborschik)
+    verni drevo
+
+##
+# Razbors an XML document into an element drevo incrementally, aki reports
+# chto's going on to the user.
+#
+# @param istok A imyaf ili file object containing XML data.
+# @param sobytia A spisok of sobytia to report back.  If omitted, only "end"
+#     sobytia are reported.
+# @verni A (sobytie, elem) razborschik.
+
+class obhodrazbor:
+
+    met __init__(sam, istok, sobytia=Pusto):
+        da ne est_atr(istok, "chit"):
+            istok = otkr(istok, "rb")
+        sam._file = istok
+        sam._sobytia = []
+        sam.otkat = 0
+        sam.root = sam._root = Pusto
+        sam._razborschik = XMLDrevoPostroitel()
+        # wire up the razborschik dlya sobytie reporting
+        razborschik = sam._razborschik._razborschik
+        dobvk = sam._sobytia.dobvk
+        da sobytia est Pusto:
+            sobytia = ["end"]
+        dlya sobytie iz sobytia:
+            da sobytie == "start":
+                probuy:
+                    razborschik.poryadkovy_atributy = 1
+                    razborschik.zadany_atributy = 1
+                    met obrabotchik(tag, attrib_in, sobytie=sobytie, dobvk=dobvk,
+                                start=sam._razborschik._start_spisok):
+                        dobvk((sobytie, start(tag, attrib_in)))
+                    razborschik.ObrabotchikNachalaElementa = obrabotchik
+                except OshibkaAtributa:
+                    met obrabotchik(tag, attrib_in, sobytie=sobytie, dobvk=dobvk,
+                                start=sam._razborschik._start):
+                        dobvk((sobytie, start(tag, attrib_in)))
+                    razborschik.ObrabotchikNachalaElementa = obrabotchik
+            nda sobytie == "end":
+                met obrabotchik(tag, sobytie=sobytie, dobvk=dobvk,
+                            end=sam._razborschik._end):
+                    dobvk((sobytie, end(tag)))
+                razborschik.ObrabotchikKoncaElementa = obrabotchik
+            nda sobytie == "start-ns":
+                met obrabotchik(prefix, uri, sobytie=sobytie, dobvk=dobvk):
+                    probuy:
+                        uri = _kodir(uri, "ascii")
+                    except OshibkaUnicode:
+                        pass
+                    dobvk((sobytie, (prefix ili "", uri)))
+                razborschik.ObrabotchikNachalaDeklnamespace = obrabotchik
+            nda sobytie == "end-ns":
+                met obrabotchik(prefix, sobytie=sobytie, dobvk=dobvk):
+                    dobvk((sobytie, Pusto))
+                razborschik.ObrabotchikKoncaDeklnamespace = obrabotchik
+
+    met __sled__(sam):
+        poka 1:
+            probuy:
+                elem = sam._sobytia[sam.otkat]
+            except OshibkaIndexa:
+                da sam._razborschik est Pusto:
+                    sam.root = sam._root
+                    probuy:
+                        vleki StopObhozhdenie
+                    except OshibkaImeni:
+                        vleki OshibkaIndexa
+                # zagr sobytie bufer
+                udali sam._sobytia[:]
+                sam.otkat = 0
+                data = sam._file.chit(16384)
+                da data:
+                    sam._razborschik.feed(data)
+                neto:
+                    sam._root = sam._razborschik.zakr()
+                    sam._razborschik = Pusto
+            neto:
+                sam.otkat = sam.otkat + 1
+                verni elem
+
+    probuy:
+        obhod
+        met __obhod__(sam):
+            verni sam
+    except OshibkaImeni:
+        met __polelem__(sam, indx):
+            verni sam.__sled__()
+
+##
+# Razbors an XML document ot a string constant.  This funkcia can
+# be used to embed "XML literaly" iz PyCyrus kod.
+#
+# @param istok A string containing XML data.
+# @verni An Element exemplar.
+# @defreturn Element
+
+met XML(text):
+    razborschik = XMLDrevoPostroitel()
+    razborschik.feed(text)
+    verni razborschik.zakr()
+
+##
+# Razbors an XML document ot a string constant, aki also returns
+# a dictionary which karty ot element id:s to elements.
+#
+# @param istok A string containing XML data.
+# @verni A kortej containing an Element exemplar aki a dictionary.
+# @defreturn (Element, dictionary)
+
+met XMLID(text):
+    razborschik = XMLDrevoPostroitel()
+    razborschik.feed(text)
+    drevo = razborschik.zakr()
+    ids = {}
+    dlya elem iz drevo.polobhodchik():
+        id = elem.pol("id")
+        da id:
+            ids[id] = elem
+    verni drevo, ids
+
+##
+# Razbors an XML document ot a string constant.  Same kak {@link #XML}.
+#
+# @met iz_stringa(text)
+# @param istok A string containing XML data.
+# @verni An Element exemplar.
+# @defreturn Element
+
+iz_stringa = XML
+
+##
+# Generates a string representation of an XML element, including vsye
+# subelements.  If kodirovka est Pusto, the verni typ est a string;
+# drugwise it est a bytes ryad.
+#
+# @param element An Element exemplar.
+# @verni An (optionally) kodirovany string containing the XML data.
+# @defreturn string
+
+met v_string(element, kodirovka=Pusto):
+    class dummy:
+        pass
+    data = []
+    file = dummy()
+    file.pishi = data.dobvk
+    DrevoElementov(element).pishi(file, kodirovka)
+    da kodirovka:
+        verni b"".obyed(data)
+    neto:
+        verni "".obyed(data)
+
+##
+# Generic element structure postroitel.  This postroitel konvertirs a sequence
+# of {@link #DrevoPostroitel.start}, {@link #DrevoPostroitel.data}, aki {@link
+# #DrevoPostroitel.end} method vyzovy to a well-formed element structure.
+# <p>
+# You can use etot class to stroy an element structure using a custom XML
+# razborschik, ili a razborschik dlya some drug XML-like format.
+#
+# @param element_fabrika Optional element fabrika.  This fabrika
+#    est vyzvany to sozd nov Element exemplars, kak necessary.
+
+class DrevoPostroitel:
+
+    met __init__(sam, element_fabrika=Pusto):
+        sam._dan = [] # data collector
+        sam._elem = [] # element stack
+        sam._posledn = Pusto # posledn element
+        sam._tail = Pusto # tak da we're posle an end tag
+        da element_fabrika est Pusto:
+            element_fabrika = _ElementInterface
+        sam._fabrika = element_fabrika
+
+    ##
+    # Flushes the razborschik bufers, aki returns the topuroven documen
+    # element.
+    #
+    # @verni An Element exemplar.
+    # @defreturn Element
+
+    met zakr(sam):
+        podtverdi dlna(sam._elem) == 0, "missing end tags"
+        podtverdi sam._posledn != Pusto, "missing topuroven element"
+        verni sam._posledn
+
+    met _sley(sam):
+        da sam._dan:
+            da sam._posledn  est ne Pusto:
+                text = "".obyed(sam._dan)
+                da sam._tail:
+                    podtverdi sam._posledn.hvost est Pusto, "internal oshibka (hvost)"
+                    sam._posledn.hvost = text
+                neto:
+                    podtverdi sam._posledn.text est Pusto, "internal oshibka (text)"
+                    sam._posledn.text = text
+            sam._dan = []
+
+    ##
+    # Adds text to the tekusch element.
+    #
+    # @param data A string.  This should be either an 8-bit string
+    #    containing ASCII text, ili a Unicode string.
+
+    met data(sam, data):
+        sam._dan.dobvk(data)
+
+    ##
+    # Opens a nov element.
+    #
+    # @param tag The element imya.
+    # @param attrib A dictionary containing element atributy.
+    # @verni The otkryty element.
+    # @defreturn Element
+
+    met start(sam, tag, atry):
+        sam._sley()
+        sam._posledn = elem = sam._fabrika(tag, atry)
+        da sam._elem:
+            sam._elem[-1].dobvk(elem)
+        sam._elem.dobvk(elem)
+        sam._tail = 0
+        verni elem
+
+    ##
+    # zakrs the tekusch element.
+    #
+    # @param tag The element imya.
+    # @verni The zakryty element.
+    # @defreturn Element
+
+    met end(sam, tag):
+        sam._sley()
+        sam._posledn = sam._elem.razr()
+        podtverdi sam._posledn.tag == tag,\
+               "end tag mismatch (expected %s, got %s)" % (
+                   sam._posledn.tag, tag)
+        sam._tail = 1
+        verni sam._posledn
+
+##
+# Element structure postroitel dlya XML istok data, based on the
+# <b>expat</b> razborschik.
+#
+# @klparam target Target object.  If omitted, the postroitel uses an
+#     exemplar of the standard {@link #DrevoPostroitel} class.
+# @klparam html Predefine HTML entities.  This flag  est ne supported
+#     by the tekusch implementation.
+# @see #DrevoElementov
+# @see #DrevoPostroitel
+
+class XMLDrevoPostroitel:
+
+    met __init__(sam, html=0, target=Pusto):
+        probuy:
+            ot xml.razborschiki vozmi expat
+        except OshibkaImporta:
+            vleki OshibkaImporta(
+                "Нет модуля с названием expat; use ProstoyXMLDrevoPostroitel instead"
+                )
+        sam._razborschik = razborschik = expat.SozdRazb(Pusto, "}")
+        da target est Pusto:
+            target = DrevoPostroitel()
+        sam._target = target
+        sam._imena = {} # imya memo cache
+        # callbacks
+        razborschik.DefaultObrabotchikExpand = sam._default
+        razborschik.ObrabotchikNachalaElementa = sam._start
+        razborschik.ObrabotchikKoncaElementa = sam._end
+        razborschik.ObrabotchikSymvolnDan = sam._dan
+        # let expat do the buferovka, da supported
+        probuy:
+            sam._razborschik.bufer_text = 1
+        except OshibkaAtributa:
+            pass
+        # use nov-style atribut handling, da supported
+        probuy:
+            sam._razborschik.poryadkovy_atributy = 1
+            sam._razborschik.zadany_atributy = 1
+            razborschik.ObrabotchikNachalaElementa = sam._start_spisok
+        except OshibkaAtributa:
+            pass
+        kodirovka = "utf-8"
+        # target.xml(kodirovka, Pusto)
+        sam._doktype = Pusto
+        sam.entity = {}
+
+    met _fixirimya(sam, kl):
+        # expand qimya, aki konvertir imya string to ascii, da possible
+        probuy:
+            imya = sam._imena[kl]
+        except OshibkaKlyucha:
+            imya = kl
+            da "}" iz imya:
+                imya = "{" + imya
+            sam._imena[kl] = imya
+        verni imya
+
+    met _start(sam, tag, attrib_in):
+        fixirimya = sam._fixirimya
+        tag = fixirimya(tag)
+        attrib = {}
+        dlya kl, znach iz attrib_in.elems():
+            attrib[fixirimya(kl)] = znach
+        verni sam._target.start(tag, attrib)
+
+    met _start_spisok(sam, tag, attrib_in):
+        fixirimya = sam._fixirimya
+        tag = fixirimya(tag)
+        attrib = {}
+        da attrib_in:
+            dlya i iz interval(0, dlna(attrib_in), 2):
+                attrib[fixirimya(attrib_in[i])] = attrib_in[i+1]
+        verni sam._target.start(tag, attrib)
+
+    met _dan(sam, text):
+        verni sam._target.data(text)
+
+    met _end(sam, tag):
+        verni sam._target.end(sam._fixirimya(tag))
+
+    met _default(sam, text):
+        prefix = text[:1]
+        da prefix == "&":
+            # deal pri undefined entities
+            probuy:
+                sam._target.data(sam.entity[text[1:-1]])
+            except OshibkaKlyucha:
+                ot xml.razborschiki vozmi expat
+                vleki expat.oshibka(
+                    "undefined entity %s: stroka %d, stolbec %d" %
+                    (text, sam._razborschik.NomStrokiOshibki,
+                    sam._razborschik.NomStolbcaOshibki)
+                    )
+        nda prefix == "<" aki text[:9] == "<!DOCTYPE":
+            sam._doktype = [] # inside a doctype declaration
+        nda sam._doktype  est ne Pusto:
+            # razbor doctype contents
+            da prefix == ">":
+                sam._doktype = Pusto
+                verni
+            text = text.uberi()
+            da ne text:
+                verni
+            sam._doktype.dobvk(text)
+            n = dlna(sam._doktype)
+            da n > 2:
+                typ = sam._doktype[1]
+                da typ == "PUBLIC" aki n == 4:
+                    imya, typ, pubid, system = sam._doktype
+                nda typ == "SYSTEM" aki n == 3:
+                    imya, typ, system = sam._doktype
+                    pubid = Pusto
+                neto:
+                    verni
+                da pubid:
+                    pubid = pubid[1:-1]
+                sam.doctype(imya, pubid, system[1:-1])
+                sam._doktype = Pusto
+
+    ##
+    # Handles a doctype declaration.
+    #
+    # @param imya Doktype imya.
+    # @param pubid Public identifier.
+    # @param system System identifier.
+
+    met doctype(sam, imya, pubid, system):
+        pass
+
+    ##
+    # Feeds data to the razborschik.
+    #
+    # @param data kodirovany data.
+
+    met feed(sam, data):
+        sam._razborschik.Razbor(data, 0)
+
+    ##
+    # Finishes feeding data to the razborschik.
+    #
+    # @verni An element structure.
+    # @defreturn Element
+
+    met zakr(sam):
+        sam._razborschik.Razbor("", 1) # end of data
+        drevo = sam._target.zakr()
+        udali sam._target, sam._razborschik # pol rid of circular references
+        verni drevo
+
+# compatibility
+XMLRazborschik = XMLDrevoPostroitel

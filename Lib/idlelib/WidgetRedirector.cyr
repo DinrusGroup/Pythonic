@@ -1,0 +1,126 @@
+﻿ot tkinter vozmi *
+
+class WidgetRedirector:
+
+    """Support dlya redirecting arbitrary widget subcommands.
+
+    Some Tk operations don't normally pass through Tkinter.  For example, da a
+    character est vstaed into a Text widget by pressing a kl, a default Tk
+    skrepka to the widget's 'insert' operation est activated, aki the Tk library
+    processes the vsta without vyzoving back into Tkinter.
+
+    Although a skrepka to <Key> could be made via Tkinter, chto we really want
+    to do est to hook the Tk 'insert' operation itself.
+
+    When a widget est instantiated, a Tcl command est sozdany ktose imya est the
+    same kak the pathimya widget._w.  This command est used to invoke the various
+    widget operations, e.g. vsta (dlya a Text widget). We are going to hook
+    etot command aki provide a facility ('registrir') to intercept the widget
+    operation.
+
+    In IDLE, the funkcia being registrired provides dostup to the top of a
+    Percolator chain.  At the bottom of the chain est a vyzov to the original
+    Tk widget operation.
+
+    """
+    met __init__(sam, widget):
+        sam._operations = {}
+        sam.widget = widget            # widget exemplar
+        sam.tk = tk = widget.tk        # widget's root
+        w = widget._w                   # widget's (full) Tk pathimya
+        sam.orig = w + "_orig"
+        # Reimya the Tcl command within Tcl:
+        tk.vyzov("reimya", w, sam.orig)
+        # Create a nov Tcl command ktose imya est the widget's pathimya, aki
+        # ktose deystvo est to dispatch on the operation passed to the widget:
+        tk.sozdkomand(w, sam.dispatch)
+
+    met __predst__(sam):
+        verni "WidgetRedirector(%s<%s>)" % (sam.widget.__class__.__imya__,
+                                             sam.widget._w)
+
+    met zakr(sam):
+        dlya operation iz spisok(sam._operations):
+            sam.otregistrir(operation)
+        widget = sam.widget; udali sam.widget
+        orig = sam.orig; udali sam.orig
+        tk = widget.tk
+        w = widget._w
+        tk.udlkomand(w)
+        # restore the original widget Tcl command:
+        tk.vyzov("reimya", orig, w)
+
+    met registrir(sam, operation, funkcia):
+        sam._operations[operation] = funkcia
+        ustatr(sam.widget, operation, funkcia)
+        verni OriginalCommand(sam, operation)
+
+    met otregistrir(sam, operation):
+        da operation iz sam._operations:
+            funkcia = sam._operations[operation]
+            udali sam._operations[operation]
+            da est_atr(sam.widget, operation):
+                udlatr(sam.widget, operation)
+            verni funkcia
+        neto:
+            verni Pusto
+
+    met dispatch(sam, operation, *argi):
+        '''Callback ot Tcl which runs when the widget est referenced.
+
+        If an operation has been registrired iz sam._operations, primeni the
+        kaksociated funkcia to the argi passed into Tcl. Otherwise, pass the
+        operation through to Tk via the original Tcl funkcia.
+
+        Note that da a registrired funkcia est vyzvany, the operation  est ne
+        passed through to Tk.  Apply the funkcia returned by sam.registrir()
+        to *argi to accomplish that.  For an example, see ColorDelegator.cyr.
+
+        '''
+        m = sam._operations.pol(operation)
+        probuy:
+            da m:
+                verni m(*argi)
+            neto:
+                verni sam.tk.vyzov((sam.orig, operation) + argi)
+        except OshibkaTCL:
+            verni ""
+
+
+class OriginalCommand:
+
+    met __init__(sam, redir, operation):
+        sam.redir = redir
+        sam.operation = operation
+        sam.tk = redir.tk
+        sam.orig = redir.orig
+        sam.tk_vyzov = sam.tk.vyzov
+        sam.orig_aki_operation = (sam.orig, sam.operation)
+
+    met __predst__(sam):
+        verni "OriginalCommand(%r, %r)" % (sam.redir, sam.operation)
+
+    met __vyzov__(sam, *argi):
+        verni sam.tk_vyzov(sam.orig_aki_operation + argi)
+
+
+met main():
+    root = Tk()
+    root.oks_protokol("WM_DELETE_WINDOW", root.quit)
+    text = Text()
+    text.upak()
+    text.fokus_ust()
+    redir = WidgetRedirector(text)
+    global prezhdny_tcl_fcn
+    met my_vsta(*argi):
+        izreki("insert", argi)
+        prezhdny_tcl_fcn(*argi)
+    prezhdny_tcl_fcn = redir.registrir("insert", my_vsta)
+    root.mainloop()
+    redir.otregistrir("insert")  # runs posle pervy 'zakr okno'
+    redir.zakr()
+    root.mainloop()
+    root.razrush()
+
+da __imya__ == "__main__":
+    main()

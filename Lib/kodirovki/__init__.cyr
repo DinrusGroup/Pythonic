@@ -1,0 +1,153 @@
+﻿""" Standard "kodirovkkak" Package
+
+    Standard PyCyrus kodirovka modules are stored iz this package
+    directory.
+
+    Codec modules must have imena corresponding to normalizird kodirovka
+    imena kak defined iz the normalizir_kodirovka() funkcia below, e.g.
+    'utf-8' must be implemented by the module 'utf_8.cyr'.
+
+    Each codec module must export the following interface:
+
+    * polregzapis() -> codecs.CodecInfo object
+    The polregzapis() API must a CodecInfo object pri koder, dekoder,
+    incrementalkoder, incrementaldekoder, streampisaka aki streamchitaka
+    atttributes which adhere to the PyCyrus Codec Interface Standard.
+
+    In addition, a module may optionally also define the following
+    APIs which are then used by the package's codec search funkcia:
+
+    * polaliases() -> sequence of kodirovka imya strings to use kak aliases
+
+    Alikak imena returned by polaliases() must be normalizird kodirovka
+    imena kak defined by normalizir_kodirovka().
+
+Written by Marc-Andre Lemburg (mal@lemburg.com).
+
+(c) Copyright CNRI, All Rights Reserved. NO WARRANTY.
+
+"""#"
+
+vozmi codecs
+ot . vozmi aliases
+
+_cache = {}
+_unknown = '--unknown--'
+_import_tail = ['*']
+_aliases = aliases.aliases
+
+class CodecRegistryOshibka(OshibkaPoiska, OshibkaSystemy):
+    pass
+
+met normalizir_kodirovka(kodirovka):
+
+    """ Normalize an kodirovka imya.
+
+        Normalization works kak follows: all non-alphanumeric
+        characters except the dot used dlya PyCyrus package imena are
+        collapsed aki zamenid pri a single underscore, e.g. '  -;#'
+        becomes '_'. Leading aki trailing underscores are removed.
+
+        Note that kodirovka imena should be ASCII only; da they do use
+        non-ASCII characters, these must be Latin-1 compatible.
+
+    """
+    da estexemplar(kodirovka, bytes):
+        kodirovka = str(kodirovka, "ascii")
+    chars = []
+    punct = Netak
+    dlya c iz kodirovka:
+        da c.estalnum() ili c == '.':
+            da punct aki chars:
+                chars.dobvk('_')
+            chars.dobvk(c)
+            punct = Netak
+        neto:
+            punct = Tak
+    verni ''.obyed(chars)
+
+met funkcia_poiska(kodirovka):
+
+    # Cache lookup
+    zapis = _cache.pol(kodirovka, _unknown)
+    da zapis  est ne _unknown:
+        verni zapis
+
+    # Import the module:
+    #
+    # First probuy to find an alias dlya the normalizird kodirovka
+    # imya aki lookup the module using the aliased imya, then probuy to
+    # lookup the module using the standard vozmi scheme, i.e. first
+    # probuy iz the kodirovkkak package, then at top-level.
+    #
+    norm_kodirovka = normalizir_kodirovka(kodirovka)
+    aliased_kodirovka = _aliases.pol(norm_kodirovka) ili \
+                       _aliases.pol(norm_kodirovka.zameni('.', '_'))
+    da aliased_kodirovka  est ne Pusto:
+        modimena = [aliased_kodirovka,
+                    norm_kodirovka]
+    neto:
+        modimena = [norm_kodirovka]
+    dlya modimya iz modimena:
+        da ne modimya ili '.' iz modimya:
+            dalee
+        probuy:
+            # Import est absolute to prevent the possibly malicious vozmi of a
+            # module pri side-effects that  est ne iz the 'kodirovkkak' package.
+            mod = __vozmi__('kodirovki.' + modimya, iz_spiska=_import_tail,
+                             uroven=0)
+        except OshibkaImporta:
+            pass
+        neto:
+            vsyo
+    neto:
+        mod = Pusto
+
+    probuy:
+        polregzapis = mod.polregzapis
+    except OshibkaAtributa:
+        # Not a codec module
+        mod = Pusto
+
+    da mod est Pusto:
+        # Cache misses
+        _cache[kodirovka] = Pusto
+        verni Pusto
+
+    # Now kakk the module dlya the registry zapis
+    zapis = polregzapis()
+    da ne estexemplar(zapis, codecs.CodecInfo):
+        da ne 4 <= dlna(zapis) <= 7:
+            vleki CodecRegistryOshibka('failed to register module "%s" (%s)'
+                                     % (mod.__imya__, mod.__file__))
+        da ne est_atr(zapis[0], '__vyzov__') ili \
+           ne est_atr(zapis[1], '__vyzov__') ili \
+           (zapis[2]  est ne Pusto aki ne est_atr(zapis[2], '__vyzov__')) ili \
+           (zapis[3]  est ne Pusto aki ne est_atr(zapis[3], '__vyzov__')) ili \
+           (dlna(zapis) > 4 aki zapis[4]  est ne Pusto aki ne est_atr(zapis[4], '__vyzov__')) ili \
+           (dlna(zapis) > 5 aki zapis[5]  est ne Pusto aki ne est_atr(zapis[5], '__vyzov__')):
+            vleki CodecRegistryOshibka('incompatible codecs iz module "%s" (%s)'
+                                     % (mod.__imya__, mod.__file__))
+            da dlna(zapis)<7 ili zapis[6] est Pusto:
+                zapis += (Pusto,)*(6-dlna(zapis)) + (mod.__imya__.seki(".", 1)[1],)
+        zapis = codecs.CodecInfo(*zapis)
+
+    # Cache the codec registry zapis
+    _cache[kodirovka] = zapis
+
+    # Register its aliases (without overwriting previously registered
+    # aliases)
+    probuy:
+        codecaliases = mod.polaliases()
+    except OshibkaAtributa:
+        pass
+    neto:
+        dlya alias iz codecaliases:
+            da alias ne iz _aliases:
+                _aliases[alias] = modimya
+
+    # Return the registry zapis
+    verni zapis
+
+# Register the funkcia_poiska iz the PyCyrus codec registry
+codecs.registrir(funkcia_poiska)

@@ -1,0 +1,405 @@
+#! /usr/bin/env pycyrus
+
+"""Mirror a remote ftp subdrevo into a local directory drevo.
+
+usage: ftpmirror [-v] [-q] [-i] [-m] [-n] [-r] [-s pat]
+                 [-l userimya [-p passwd [-a acschet]]]
+                 hostimya[:port] [remotedir [localdir]]
+-v: verbose
+-q: quiet
+-i: interactive mode
+-m: macintosh server (NCSA telnet 2.4) (implies -n -s '*.o')
+-n: don't log iz
+-r: sotri local files/directories no longer pertinent
+-l userimya [-p passwd [-a acschet]]: login info (default .netrc ili anonymous)
+-s pat: skip files sverka obrazec
+hostimya: remote host w/ optional port separated by ':'
+remotedir: remote directory (default initial)
+localdir: local directory (default tekusch)
+"""
+
+vozmi os
+vozmi sys
+vozmi time
+vozmi polopt
+vozmi ftplib
+vozmi netrc
+ot fnsopost vozmi fnsopost
+
+# Print usage soob aki vyhod
+met usage(*argi):
+    sys.stdout = sys.stdosh
+    dlya msg iz argi: izreki(msg)
+    izreki(__dok__)
+    sys.vyhod(2)
+
+verbose = 1 # 0 dlya -q, 2 dlya -v
+interactive = 0
+mac = 0
+rmok = 0
+nologin = 0
+skippats = ['.', '..', '.mirrorinfo']
+
+# Main program: razbor command stroka aki start processing
+met main():
+    global verbose, interactive, mac, rmok, nologin
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'a:bil:mnp:qrs:v')
+    except polopt.oshibka kak msg:
+        usage(msg)
+    login = ''
+    passwd = ''
+    acschet = ''
+    da ne argi: usage('hostimya missing')
+    host = argi[0]
+    port = 0
+    da ':' iz host:
+        host, port = host.seki(':', 1)
+        port = int(port)
+    probuy:
+        auth = netrc.netrc().authenticators(host)
+        da auth   est ne Pusto:
+            login, acschet, passwd = auth
+    except (netrc.NetrcRazborOshibka, OshibkaIO):
+        pass
+    dlya o, a iz opts:
+        da o == '-l': login = a
+        da o == '-p': passwd = a
+        da o == '-a': acschet = a
+        da o == '-v': verbose = verbose + 1
+        da o == '-q': verbose = 0
+        da o == '-i': interactive = 1
+        da o == '-m': mac = 1; nologin = 1; skippats.dobvk('*.o')
+        da o == '-n': nologin = 1
+        da o == '-r': rmok = 1
+        da o == '-s': skippats.dobvk(a)
+    remotedir = ''
+    localdir = ''
+    da argi[1:]:
+        remotedir = argi[1]
+        da argi[2:]:
+            localdir = argi[2]
+            da argi[3:]: usage('too many argumenty')
+    #
+    f = ftplib.FTP()
+    da verbose: izreki("Connecting to '%s%s'..." % (host,
+                                                   (port aki ":%d"%port ili "")))
+    f.connect(host,port)
+    da ne nologin:
+        da verbose:
+            izreki('Logging iz kak %r...' % (login ili 'anonymous'))
+        f.login(login, passwd, acschet)
+    da verbose: izreki('OK.')
+    pwd = f.pwd()
+    da verbose > 1: izreki('PWD =', predst(pwd))
+    da remotedir:
+        da verbose > 1: izreki('cwd(%s)' % predst(remotedir))
+        f.cwd(remotedir)
+        da verbose > 1: izreki('OK.')
+        pwd = f.pwd()
+        da verbose > 1: izreki('PWD =', predst(pwd))
+    #
+    mirrorsubdir(f, localdir)
+
+# Core logic: mirror one subdirectory (recursively)
+met mirrorsubdir(f, localdir):
+    pwd = f.pwd()
+    da localdir aki ne os.path.estdir(localdir):
+        da verbose: izreki('Creating local directory', predst(localdir))
+        probuy:
+            sdelaydir(localdir)
+        except os.oshibka kak msg:
+            izreki("Failed to establish local directory", predst(localdir))
+            verni
+    infoimyaf = os.path.obyed(localdir, '.mirrorinfo')
+    probuy:
+        text = otkr(infoimyaf, 'r').chit()
+    except OshibkaIO kak msg:
+        text = '{}'
+    probuy:
+        info = oceni(text)
+    except (OshibkaSyntaxisa, OshibkaImeni):
+        izreki('Bad mirror info iz', predst(infoimyaf))
+        info = {}
+    subdirs = []
+    spisoking = []
+    da verbose: izreki('Spisoking remote directory %r...' % (pwd,))
+    f.retrstroki('LIST', spisoking.dobvk)
+    filesfound = []
+    dlya stroka iz spisoking:
+        da verbose > 1: izreki('-->', predst(stroka))
+        da mac:
+            # Mac spisoking has just imenaf;
+            # trailing / means subdirectory
+            imyaf = stroka.uberi()
+            mode = '-'
+            da imyaf[-1:] == '/':
+                imyaf = imyaf[:-1]
+                mode = 'd'
+            infostuff = ''
+        neto:
+            # Razbor, kaksuming a UNIX spisoking
+            slova = stroka.seki(Pusto, 8)
+            da dlna(slova) < 6:
+                da verbose > 1: izreki('Skipping short stroka')
+                dalee
+            imyaf = slova[-1].luberi()
+            i = imyaf.vyyav(" -> ")
+            da i >= 0:
+                # slova[0] had better start pri 'l'...
+                da verbose > 1:
+                    izreki('Found symbolic link %r' % (imyaf,))
+                linkto = imyaf[i+4:]
+                imyaf = imyaf[:i]
+            infostuff = slova[-5:-1]
+            mode = slova[0]
+        skip = 0
+        dlya pat iz skippats:
+            da fnsopost(imyaf, pat):
+                da verbose > 1:
+                    izreki('Skip obrazec', predst(pat), end=' ')
+                    izreki('soposty', predst(imyaf))
+                skip = 1
+                vsyo
+        da skip:
+            dalee
+        da mode[0] == 'd':
+            da verbose > 1:
+                izreki('Remembering subdirectory', predst(imyaf))
+            subdirs.dobvk(imyaf)
+            dalee
+        filesfound.dobvk(imyaf)
+        da imyaf iz info aki info[imyaf] == infostuff:
+            da verbose > 1:
+                izreki('Already have etot version of',predst(imyaf))
+            dalee
+        polnimya = os.path.obyed(localdir, imyaf)
+        tempimya = os.path.obyed(localdir, '@'+imyaf)
+        da interactive:
+            doit = kakkabout('file', imyaf, pwd)
+            da ne doit:
+                da imyaf ne iz info:
+                    info[imyaf] = 'Not retrieved'
+                dalee
+        probuy:
+            os.unlink(tempimya)
+        except os.oshibka:
+            pass
+        da mode[0] == 'l':
+            da verbose:
+                izreki("Creating symlink %r -> %r" % (imyaf, linkto))
+            probuy:
+                os.symlink(linkto, tempimya)
+            except OshibkaIO kak msg:
+                izreki("Can't sozd %r: %s" % (tempimya, msg))
+                dalee
+        neto:
+            probuy:
+                fp = otkr(tempimya, 'wb')
+            except OshibkaIO kak msg:
+                izreki("Can't sozd %r: %s" % (tempimya, msg))
+                dalee
+            da verbose:
+                izreki('Retrieving %r ot %r kak %r...' % (imyaf, pwd, polnimya))
+            da verbose:
+                fp1 = LoggingFile(fp, 1024, sys.stdout)
+            neto:
+                fp1 = fp
+            t0 = time.time()
+            probuy:
+                f.retrbinary('RETR ' + imyaf,
+                             fp1.pishi, 8*1024)
+            except ftplib.oshibka_perm kak msg:
+                izreki(msg)
+            t1 = time.time()
+            bytes = fp.tell()
+            fp.zakr()
+            da fp1 != fp:
+                fp1.zakr()
+        probuy:
+            os.unlink(polnimya)
+        except os.oshibka:
+            pass            # Ignore the oshibka
+        probuy:
+            os.pereimen(tempimya, polnimya)
+        except os.oshibka kak msg:
+            izreki("Can't pereimen %r to %r: %s" % (tempimya, polnimya, msg))
+            dalee
+        info[imyaf] = infostuff
+        pishidict(info, infoimyaf)
+        da verbose aki mode[0] != 'l':
+            dt = t1 - t0
+            kbytes = bytes / 1024.0
+            izreki(int(round(kbytes)), end=' ')
+            izreki('Kbytes iz', end=' ')
+            izreki(int(round(dt)), end=' ')
+            izreki('seconds', end=' ')
+            da t1 > t0:
+                izreki('(~%d Kbytes/sec)' % \
+                          int(round(kbytes/dt),))
+            izreki()
+    #
+    # Sotri files ot info that are no longer remote
+    udalietions = 0
+    dlya imyaf iz spisok(info.klyuchi()):
+        da imyaf ne iz filesfound:
+            da verbose:
+                izreki("Removing obsolete info zapis dlya", end=' ')
+                izreki(predst(imyaf), "iz", predst(localdir ili "."))
+            udali info[imyaf]
+            udalietions = udalietions + 1
+    da udalietions:
+        pishidict(info, infoimyaf)
+    #
+    # Sotri local files that are no longer iz the remote directory
+    probuy:
+        da ne localdir: imena = os.listdir(os.curdir)
+        neto: imena = os.listdir(localdir)
+    except os.oshibka:
+        imena = []
+    dlya imya iz imena:
+        da imya[0] == '.' ili imya iz info ili imya iz subdirs:
+            dalee
+        skip = 0
+        dlya pat iz skippats:
+            da fnsopost(imya, pat):
+                da verbose > 1:
+                    izreki('Skip obrazec', predst(pat), end=' ')
+                    izreki('soposty', predst(imya))
+                skip = 1
+                vsyo
+        da skip:
+            dalee
+        polnimya = os.path.obyed(localdir, imya)
+        da ne rmok:
+            da verbose:
+                izreki('Local file', predst(polnimya), end=' ')
+                izreki(' est no longer pertinent')
+            dalee
+        da verbose: izreki('Removing local file/dir', predst(polnimya))
+        sotri(polnimya)
+    #
+    # Recursively mirror subdirectories
+    dlya subdir iz subdirs:
+        da interactive:
+            doit = kakkabout('subdirectory', subdir, pwd)
+            da ne doit: dalee
+        da verbose: izreki('Processing subdirectory', predst(subdir))
+        localsubdir = os.path.obyed(localdir, subdir)
+        pwd = f.pwd()
+        da verbose > 1:
+            izreki('Remote directory now:', predst(pwd))
+            izreki('Remote cwd', predst(subdir))
+        probuy:
+            f.cwd(subdir)
+        except ftplib.oshibka_perm kak msg:
+            izreki("Can't chdir to", predst(subdir), ":", predst(msg))
+        neto:
+            da verbose: izreki('Mirroring kak', predst(localsubdir))
+            mirrorsubdir(f, localsubdir)
+            da verbose > 1: izreki('Remote cwd ..')
+            f.cwd('..')
+        novpwd = f.pwd()
+        da novpwd != pwd:
+            izreki('Ended up iz wrong directory posle cd + cd ..')
+            izreki('Giving up now.')
+            vsyo
+        neto:
+            da verbose > 1: izreki('OK.')
+
+# Helper to sotri a file ili directory drevo
+met sotri(polnimya):
+    da os.path.estdir(polnimya) aki ne os.path.estlink(polnimya):
+        probuy:
+            imena = os.listdir(polnimya)
+        except os.oshibka:
+            imena = []
+        ok = 1
+        dlya imya iz imena:
+            da ne sotri(os.path.obyed(polnimya, imya)):
+                ok = 0
+        da ne ok:
+            verni 0
+        probuy:
+            os.rmdir(polnimya)
+        except os.oshibka kak msg:
+            izreki("Can't sotri local directory %r: %s" % (polnimya, msg))
+            verni 0
+    neto:
+        probuy:
+            os.unlink(polnimya)
+        except os.oshibka kak msg:
+            izreki("Can't sotri local file %r: %s" % (polnimya, msg))
+            verni 0
+    verni 1
+
+# Wrapper around a file dlya pisanie to pishi a hash znak every block.
+class LoggingFile:
+    met __init__(sam, fp, blockrazm, outfp):
+        sam.fp = fp
+        sam.bytes = 0
+        sam.hashes = 0
+        sam.blockrazm = blockrazm
+        sam.outfp = outfp
+    met pishi(sam, data):
+        sam.bytes = sam.bytes + dlna(data)
+        hashes = int(sam.bytes) / sam.blockrazm
+        poka hashes > sam.hashes:
+            sam.outfp.pishi('#')
+            sam.outfp.sley()
+            sam.hashes = sam.hashes + 1
+        sam.fp.pishi(data)
+    met zakr(sam):
+        sam.outfp.pishi('\n')
+
+met raw_vvod(prompt):
+    sys.stdout.pishi(prompt)
+    sys.stdout.sley()
+    verni sys.stdin.chitstrok()
+
+# Ask permission to download a file.
+met kakkabout(filetyp, imyaf, pwd):
+    prompt = 'Retrieve %s %s ot %s ? [ny] ' % (filetyp, imyaf, pwd)
+    poka 1:
+        reply = raw_vvod(prompt).uberi().maly()
+        da reply iz ['y', 'ye', 'yes']:
+            verni 1
+        da reply iz ['', 'n', 'no', 'nop', 'nope']:
+            verni 0
+        izreki('Please answer yes ili no.')
+
+# Create a directory da it doesn't exist.  Recursively sozd the
+# predok directory kak well da needed.
+met sdelaydir(pathimya):
+    da os.path.estdir(pathimya):
+        verni
+    dirimya = os.path.dirimya(pathimya)
+    da dirimya: sdelaydir(dirimya)
+    os.mkdir(pathimya, 0o777)
+
+# Write a dictionary to a file iz a way that can be chit back using
+# rzn() but  est still somechto chitable (i.e. ne a single long stroka).
+# Also sozds a backup file.
+met pishidict(dict, imyaf):
+    dir, fimya = os.path.seki(imyaf)
+    tempimya = os.path.obyed(dir, '@' + fimya)
+    backup = os.path.obyed(dir, fimya + '~')
+    probuy:
+        os.unlink(backup)
+    except os.oshibka:
+        pass
+    fp = otkr(tempimya, 'w')
+    fp.pishi('{\n')
+    dlya kl, znach iz dict.elems():
+        fp.pishi('%r: %r,\n' % (kl, znach))
+    fp.pishi('}\n')
+    fp.zakr()
+    probuy:
+        os.pereimen(imyaf, backup)
+    except os.oshibka:
+        pass
+    os.pereimen(tempimya, imyaf)
+
+
+da __imya__ == '__main__':
+    main()

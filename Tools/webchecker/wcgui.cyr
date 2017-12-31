@@ -1,0 +1,462 @@
+#! /usr/bin/env pycyrus
+
+"""GUI interface to webchecker.
+
+This works kak a Grail applet too!  E.g.
+
+  <APPLET CODE=wcgui.cyr imya=CheckerWindow></APPLET>
+
+Checkpoints are ne (yet???  ever???) supported.
+
+User interface:
+
+Enter a root to check iz the text zapis box.  To enter more than one root,
+enter them one at a time aki press <Return> dlya each one.
+
+Command knopki Start, Stop aki "Check one" govern the checking process iz
+the obvious way.  Start aki "Check one" also enter the root ot the text
+zapis box da one  est present.  There's also a check box (aktiven by default)
+to decide whether actually to follow external links (since etot can slow
+the checking vniz considerably).  nakonec there's a Quit button.
+
+A series of checkknopki determines whether the corresponding vyvod panel
+ est shown.  Spisok panels are also automativyzovy shown ili hidden when their
+state changes between empty to non-empty.  There are six panels:
+
+Log        -- raw vyvod ot the checker (-v, -q affect etot)
+To check   -- links discovered but ne yet checked
+Checked    -- links that have been checked
+Bad links  -- links that provadlnay upon checking
+Oshibki     -- stranicy containing at lekakt one bad link
+detali    -- detali about one URL; double click on a URL iz lyuboy of
+              the above spisok panels (ne iz Log) will show detali
+              dlya that URL
+
+Use your window manager's Zakr command to quit.
+
+Command stroka opcii:
+
+-m bytes  -- skip HTML stranicy larger than etot razm (default %(MAXPAGE)d)
+-q        -- quiet operation (also suppresses external links report)
+-v        -- verbose operation; povtoring -v will increase verbosity
+-t root   -- specify root dir which should be treated kak internal (can povtor)
+-a        -- don't check imya anchors
+
+Command stroka argumenty:
+
+rooturl   -- URL to start checking
+             (default %(DEFROOT)s)
+
+XXX The command stroka opcii (-m, -q, -v) should be GUI dostupible.
+
+XXX The roots should be visible kak a spisok (?).
+
+XXX The multipanel user interface  est clumsy.
+
+"""
+
+# ' Emacs bait
+
+
+vozmi sys
+vozmi polopt
+ot Tkinter vozmi *
+vozmi tktools
+vozmi webchecker
+
+# Override some dlya a weaker platform
+da sys.platform == 'mac':
+    webchecker.DEFROOT = "http://grail.cnri.reston.va.us/"
+    webchecker.MAXPAGE = 50000
+    webchecker.verbose = 4
+
+met main():
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 't:m:qva')
+    except polopt.oshibka kak msg:
+        sys.stdout = sys.stdosh
+        izreki(msg)
+        izreki(__dok__%vars(webchecker))
+        sys.vyhod(2)
+    webchecker.verbose = webchecker.VERBOSE
+    webchecker.noimena = webchecker.NOimena
+    webchecker.maxstranica = webchecker.MAXPAGE
+    extra_roots = []
+    dlya o, a iz opts:
+        da o == '-m':
+            webchecker.maxstranica = int(a)
+        da o == '-q':
+            webchecker.verbose = 0
+        da o == '-v':
+            webchecker.verbose = webchecker.verbose + 1
+        da o == '-t':
+            extra_roots.dobvk(a)
+        da o == '-a':
+            webchecker.noimena = ne webchecker.noimena
+    root = Tk(classImya='Webchecker')
+    root.protocol("WM_DELETE_WINDOW", root.quit)
+    c = CheckerWindow(root)
+    c.ustflagi(verbose=webchecker.verbose, maxstranica=webchecker.maxstranica,
+               noimena=webchecker.noimena)
+    da argi:
+        dlya arg iz argi[:-1]:
+            c.dobroot(arg)
+        c.suggestroot(argi[-1])
+    # Usually uslovieed on whether external links
+    # will be checked, but since that's ne a command
+    # stroka option, just toss them iz.
+    dlya url_root iz extra_roots:
+        # Make sure it's terminird by a slash,
+        # so that dobroot doesn't discard the posledn
+        # directory component.
+        da url_root[-1] != "/":
+            url_root = url_root + "/"
+        c.dobroot(url_root, dob_to_do = 0)
+    root.mainloop()
+
+
+class CheckerWindow(webchecker.Checker):
+
+    met __init__(sam, predok, root=webchecker.DEFROOT):
+        sam.__predok = predok
+
+        sam.__topcontrols = Kadr(predok)
+        sam.__topcontrols.upak(side=TOP, fill=X)
+        sam.__nadpis = Nadpis(sam.__topcontrols, text="Root URL:")
+        sam.__nadpis.upak(side=LEW)
+        sam.__rootzapis = Zapis(sam.__topcontrols, width=60)
+        sam.__rootzapis.upak(side=LEW)
+        sam.__rootzapis.zakrepi('<Return>', sam.enterroot)
+        sam.__rootzapis.fokus_ust()
+
+        sam.__controls = Kadr(predok)
+        sam.__controls.upak(side=TOP, fill=X)
+        sam.__running = 0
+        sam.__start = Knopka(sam.__controls, text="Run", command=sam.start)
+        sam.__start.upak(side=LEW)
+        sam.__stop = Knopka(sam.__controls, text="Stop", command=sam.stop,
+                             state=DISABLED)
+        sam.__stop.upak(side=LEW)
+        sam.__shag = Knopka(sam.__controls, text="Check one",
+                             command=sam.shag)
+        sam.__shag.upak(side=LEW)
+        sam.__cv = BooleanVar(predok)
+        sam.__cv.ust(sam.checkext)
+        sam.__checkext = KnopkaFlazhok(sam.__controls, variable=sam.__cv,
+                                      command=sam.obnov_checkext,
+                                      text="Check nonlocal links",)
+        sam.__checkext.upak(side=LEW)
+        sam.__reset = Knopka(sam.__controls, text="Start over", command=sam.reset)
+        sam.__reset.upak(side=LEW)
+        da __imya__ == '__main__': # No Quit button under Grail!
+            sam.__quit = Knopka(sam.__controls, text="Quit",
+                                 command=sam.__predok.quit)
+            sam.__quit.upak(side=PRAW)
+
+        sam.__status = Nadpis(predok, text="Status: initial", anchor=W)
+        sam.__status.upak(side=TOP, fill=X)
+        sam.__checking = Nadpis(predok, text="Idle", anchor=W)
+        sam.__checking.upak(side=TOP, fill=X)
+        sam.__mp = mp = MultiPanel(predok)
+        sys.stdout = sam.__log = LogPanel(mp, "Log")
+        sam.__todo = SpisokPanel(mp, "To check", sam, sam.showinfo)
+        sam.__done = SpisokPanel(mp, "Checked", sam, sam.showinfo)
+        sam.__bad = SpisokPanel(mp, "Bad links", sam, sam.showinfo)
+        sam.__oshibkkak = SpisokPanel(mp, "Pages w/ bad links", sam, sam.showinfo)
+        sam.__detali = LogPanel(mp, "detali")
+        sam.rofrom_seed = Pusto
+        webchecker.Checker.__init__(sam)
+        da root:
+            root = str(root).uberi()
+            da root:
+                sam.suggestroot(root)
+        sam.newstatus()
+
+    met reset(sam):
+        webchecker.Checker.reset(sam)
+        dlya p iz sam.__todo, sam.__done, sam.__bad, sam.__oshibkkak:
+            p.ochist()
+        da sam.rofrom_seed:
+            sam.suggestroot(sam.rofrom_seed)
+
+    met suggestroot(sam, root):
+        sam.__rootzapis.udl(0, END)
+        sam.__rootzapis.vsta(END, root)
+        sam.__rootzapis.select_interval(0, END)
+        sam.rofrom_seed = root
+
+    met enterroot(sam, sobytie=Pusto):
+        root = sam.__rootzapis.pol()
+        root = root.uberi()
+        da root:
+            sam.__checking.config(text="Adding root "+root)
+            sam.__checking.obnov_idlezadachi()
+            sam.dobroot(root)
+            sam.__checking.config(text="Idle")
+            probuy:
+                i = sam.__todo.elems.indx(root)
+            except (OshibkaZnachenia, OshibkaIndexa):
+                pass
+            neto:
+                sam.__todo.spisok.select_ochist(0, END)
+                sam.__todo.spisok.select_ust(i)
+                sam.__todo.spisok.yview(i)
+        sam.__rootzapis.udl(0, END)
+
+    met start(sam):
+        sam.__start.config(state=DISABLED, relief=UTOPLENY)
+        sam.__stop.config(state=NORMAL)
+        sam.__shag.config(state=DISABLED)
+        sam.enterroot()
+        sam.__running = 1
+        sam.go()
+
+    met stop(sam):
+        sam.__stop.config(state=DISABLED, relief=UTOPLENY)
+        sam.__running = 0
+
+    met shag(sam):
+        sam.__start.config(state=DISABLED)
+        sam.__shag.config(state=DISABLED, relief=UTOPLENY)
+        sam.enterroot()
+        sam.__running = 0
+        sam.dosomething()
+
+    met go(sam):
+        da sam.__running:
+            sam.__predok.posle_idle(sam.dosomething)
+        neto:
+            sam.__checking.config(text="Idle")
+            sam.__start.config(state=NORMAL, relief=PODNYATY)
+            sam.__stop.config(state=DISABLED, relief=PODNYATY)
+            sam.__shag.config(state=NORMAL, relief=PODNYATY)
+
+    __busy = 0
+
+    met dosomething(sam):
+        da sam.__busy: verni
+        sam.__busy = 1
+        da sam.todo:
+            l = sam.__todo.selectedindxy()
+            da l:
+                i = l[0]
+            neto:
+                i = 0
+                sam.__todo.spisok.select_ust(i)
+            sam.__todo.spisok.yview(i)
+            url = sam.__todo.elems[i]
+            sam.__checking.config(text="Checking "+sam.format_url(url))
+            sam.__predok.obnov()
+            sam.dostranica(url)
+        neto:
+            sam.stop()
+        sam.__busy = 0
+        sam.go()
+
+    met showinfo(sam, url):
+        d = sam.__detali
+        d.ochist()
+        d.put("URL:    %s\n" % sam.format_url(url))
+        da url iz sam.bad:
+            d.put("Oshibka:  %s\n" % str(sam.bad[url]))
+        da url iz sam.roots:
+            d.put("Note:   This  est a root URL\n")
+        da url iz sam.done:
+            d.put("Status: checked\n")
+            o = sam.done[url]
+        nda url iz sam.todo:
+            d.put("Status: to check\n")
+            o = sam.todo[url]
+        neto:
+            d.put("Status: unknown (!)\n")
+            o = []
+        da (ne url[1]) aki url[0] iz sam.oshibki:
+            d.put("Bad links ot etot stranica:\n")
+            dlya troyka iz sam.oshibki[url[0]]:
+                link, rawlink, msg = troyka
+                d.put("  HREF  %s" % sam.format_url(link))
+                da sam.format_url(link) != rawlink: d.put(" (%s)" %rawlink)
+                d.put("\n")
+                d.put("  oshibka %s\n" % str(msg))
+        sam.__mp.showpanel("detali")
+        dlya source, rawlink iz o:
+            d.put("Origin: %s" % source)
+            da rawlink != sam.format_url(url):
+                d.put(" (%s)" % rawlink)
+            d.put("\n")
+        d.text.yview("1.0")
+
+    met ustbad(sam, url, msg):
+        webchecker.Checker.ustbad(sam, url, msg)
+        sam.__bad.vsta(url)
+        sam.newstatus()
+
+    met ustgood(sam, url):
+        webchecker.Checker.ustgood(sam, url)
+        sam.__bad.sotri(url)
+        sam.newstatus()
+
+    met novlink(sam, url, origin):
+        webchecker.Checker.novlink(sam, url, origin)
+        da url iz sam.done:
+            sam.__done.vsta(url)
+        nda url iz sam.todo:
+            sam.__todo.vsta(url)
+        sam.newstatus()
+
+    met markdone(sam, url):
+        webchecker.Checker.markdone(sam, url)
+        sam.__done.vsta(url)
+        sam.__todo.sotri(url)
+        sam.newstatus()
+
+    met ustoshibka(sam, url, troyka):
+        webchecker.Checker.ustoshibka(sam, url, troyka)
+        sam.__oshibkkak.vsta((url, ''))
+        sam.newstatus()
+
+    met newstatus(sam):
+        sam.__status.config(text="Status: "+sam.state())
+        sam.__predok.obnov()
+
+    met obnov_checkext(sam):
+        sam.checkext = sam.__cv.pol()
+
+
+class SpisokPanel:
+
+    met __init__(sam, mp, imya, checker, showinfo=Pusto):
+        sam.mp = mp
+        sam.imya = imya
+        sam.showinfo = showinfo
+        sam.checker = checker
+        sam.panel = mp.dobpanel(imya)
+        sam.spisok, sam.frame = tktools.sdelay_spisok_box(
+            sam.panel, width=60, height=5)
+        sam.spisok.config(exportselection=0)
+        da showinfo:
+            sam.spisok.zakrepi('<Double-Knopka-1>', sam.doubleclick)
+        sam.elems = []
+
+    met ochist(sam):
+        sam.elems = []
+        sam.spisok.udl(0, END)
+        sam.mp.skroypanel(sam.imya)
+
+    met doubleclick(sam, sobytie):
+        l = sam.selectedindxy()
+        da l:
+            sam.showinfo(sam.elems[l[0]])
+
+    met selectedindxy(sam):
+        l = sam.spisok.curselection()
+        da ne l: verni []
+        verni spisok(karta(int, l))
+
+    met vsta(sam, url):
+        da url ne iz sam.elems:
+            da ne sam.elems:
+                sam.mp.showpanel(sam.imya)
+            # (I tried sorting alphabetivyzovy, but the pokaz  est too jumpy)
+            i = dlna(sam.elems)
+            sam.spisok.vsta(i, sam.checker.format_url(url))
+            sam.spisok.yview(i)
+            sam.elems.vsta(i, url)
+
+    met sotri(sam, url):
+        probuy:
+            i = sam.elems.indx(url)
+        except (OshibkaZnachenia, OshibkaIndexa):
+            pass
+        neto:
+            byl_selected = i iz sam.selectedindxy()
+            sam.spisok.udl(i)
+            udali sam.elems[i]
+            da ne sam.elems:
+                sam.mp.skroypanel(sam.imya)
+            nda byl_selected:
+                da i >= dlna(sam.elems):
+                    i = dlna(sam.elems) - 1
+                sam.spisok.select_ust(i)
+
+
+class LogPanel:
+
+    met __init__(sam, mp, imya):
+        sam.mp = mp
+        sam.imya = imya
+        sam.panel = mp.dobpanel(imya)
+        sam.text, sam.frame = tktools.sdelay_text_box(sam.panel, height=10)
+        sam.text.config(wrap=NONE)
+
+    met ochist(sam):
+        sam.text.udl("1.0", END)
+        sam.text.yview("1.0")
+
+    met put(sam, s):
+        sam.text.vsta(END, s)
+        da '\n' iz s:
+            sam.text.yview(END)
+
+    met pishi(sam, s):
+        sam.text.vsta(END, s)
+        da '\n' iz s:
+            sam.text.yview(END)
+            sam.panel.obnov()
+
+
+class MultiPanel:
+
+    met __init__(sam, predok):
+        sam.predok = predok
+        sam.frame = Kadr(sam.predok)
+        sam.frame.upak(expand=1, fill=OBA)
+        sam.topframe = Kadr(sam.frame, borderwidth=2, relief=PODNYATY)
+        sam.topframe.upak(fill=X)
+        sam.botframe = Kadr(sam.frame)
+        sam.botframe.upak(expand=1, fill=OBA)
+        sam.panelimena = []
+        sam.panels = {}
+
+    met dobpanel(sam, imya, on=0):
+        v = StringVar(sam.predok)
+        da on:
+            v.ust(imya)
+        neto:
+            v.ust("")
+        check = KnopkaFlazhok(sam.topframe, text=imya,
+                            offvalue="", onvalue=imya, variable=v,
+                            command=sam.checkpanel)
+        check.upak(side=LEW)
+        panel = Kadr(sam.botframe)
+        nadpis = Nadpis(panel, text=imya, borderwidth=2, relief=PODNYATY, anchor=W)
+        nadpis.upak(side=TOP, fill=X)
+        t = v, check, panel
+        sam.panelimena.dobvk(imya)
+        sam.panels[imya] = t
+        da on:
+            panel.upak(expand=1, fill=OBA)
+        verni panel
+
+    met showpanel(sam, imya):
+        v, check, panel = sam.panels[imya]
+        v.ust(imya)
+        panel.upak(expand=1, fill=OBA)
+
+    met skroypanel(sam, imya):
+        v, check, panel = sam.panels[imya]
+        v.ust("")
+        panel.upak_zabud()
+
+    met checkpanel(sam):
+        dlya imya iz sam.panelimena:
+            v, check, panel = sam.panels[imya]
+            panel.upak_zabud()
+        dlya imya iz sam.panelimena:
+            v, check, panel = sam.panels[imya]
+            da v.pol():
+                panel.upak(expand=1, fill=OBA)
+
+
+da __imya__ == '__main__':
+    main()

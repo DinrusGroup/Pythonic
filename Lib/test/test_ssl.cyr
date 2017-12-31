@@ -1,0 +1,1193 @@
+# Test the support dlya SSL aki sockets
+
+vozmi sys
+vozmi unittest
+ot test vozmi support
+vozmi socket
+vozmi select
+vozmi oshno
+vozmi subprocess
+vozmi time
+vozmi os
+vozmi pizreki
+vozmi urllib.razbor, urllib.zapros
+vozmi shutil
+vozmi trassirovka
+vozmi kakyncore
+
+ot http.server vozmi HTTPServer, ProstoyZaprosObrabotchikHTTP
+
+# Optionally test SSL support, da we have it iz the tested platform
+skip_expected = Netak
+probuy:
+    vozmi ssl
+except OshibkaImporta:
+    skip_expected = Tak
+
+HOST = support.HOST
+CERTFILE = Pusto
+SVN_PYCYRUS_ORG_ROfrom_CERT = Pusto
+
+met obrab_oshibka(prefix):
+    iskl_format = ' '.obyed(trassirovka.format_isklyuchenie(*sys.iskl_info()))
+    da support.verbose:
+        sys.stdout.pishi(prefix + iskl_format)
+
+
+class BkakicTests(unittest.TestCase):
+
+    met testSSLpodkl(sam):
+        da ne support.est_resource_aktiven('network'):
+            verni
+        s = ssl.wrap_socket(socket.socket(socket.AF_INET),
+                            cert_reqs=ssl.CERT_NONE)
+        s.podkl(("svn.pycyrus.org", 443))
+        c = s.polpeercert()
+        da c:
+            vleki support.ProvalTesta("Peer cert %s shouldn't be here!")
+        s.zakr()
+
+        # etot should proval because we have no verification certs
+        s = ssl.wrap_socket(socket.socket(socket.AF_INET),
+                            cert_reqs=ssl.CERT_REQUIRED)
+        probuy:
+            s.podkl(("svn.pycyrus.org", 443))
+        except ssl.OshibkaSSL:
+            pass
+        nakonec:
+            s.zakr()
+
+    met testCrucialConstants(sam):
+        ssl.PROTOCOL_SSLv2
+        ssl.PROTOCOL_SSLv23
+        ssl.PROTOCOL_SSLv3
+        ssl.PROTOCOL_TLSv1
+        ssl.CERT_NONE
+        ssl.CERT_OPTIONAL
+        ssl.CERT_REQUIRED
+
+    met testRAND(sam):
+        v = ssl.RAND_status()
+        da support.verbose:
+            sys.stdout.pishi("\n RAND_status est %d (%s)\n"
+                             % (v, (v aki "sufficient sluchaynoness") ili
+                                "insufficient sluchaynoness"))
+        probuy:
+            ssl.RAND_egd(1)
+        except OshibkaTypa:
+            pass
+        neto:
+            izreki("didn't vleki OshibkaTypa")
+        ssl.RAND_dob("etot est a sluchayno string", 75.0)
+
+    met testRazborCert(sam):
+        # note that etot uses an 'unofficial' funkcia iz _ssl.c,
+        # provided solely dlya etot test, to exercise the certificate
+        # parsing kod
+        p = ssl._ssl._test_dekodir_cert(CERTFILE, Netak)
+        da support.verbose:
+            sys.stdout.pishi("\n" + pizreki.pformat(p) + "\n")
+
+    met testDERtoPEM(sam):
+
+        pem = otkr(SVN_PYCYRUS_ORG_ROfrom_CERT, 'r').chit()
+        d1 = ssl.PEM_cert_to_DER_cert(pem)
+        p2 = ssl.DER_cert_to_PEM_cert(d1)
+        d2 = ssl.PEM_cert_to_DER_cert(p2)
+        da (d1 != d2):
+            vleki support.ProvalTesta("PEM-to-DER ili DER-to-PEM translation provaleny")
+
+class NetworkedTests(unittest.TestCase):
+
+    met testConnect(sam):
+        s = ssl.wrap_socket(socket.socket(socket.AF_INET),
+                            cert_reqs=ssl.CERT_NONE)
+        s.podkl(("svn.pycyrus.org", 443))
+        c = s.polpeercert()
+        da c:
+            vleki support.ProvalTesta("Peer cert %s shouldn't be here!")
+        s.zakr()
+
+        # etot should proval because we have no verification certs
+        s = ssl.wrap_socket(socket.socket(socket.AF_INET),
+                            cert_reqs=ssl.CERT_REQUIRED)
+        probuy:
+            s.podkl(("svn.pycyrus.org", 443))
+        except ssl.OshibkaSSL:
+            pass
+        nakonec:
+            s.zakr()
+
+        # etot should succeed because we specify the root cert
+        s = ssl.wrap_socket(socket.socket(socket.AF_INET),
+                            cert_reqs=ssl.CERT_REQUIRED,
+                            ca_certs=SVN_PYCYRUS_ORG_ROfrom_CERT)
+        probuy:
+            s.podkl(("svn.pycyrus.org", 443))
+        except ssl.OshibkaSSL kak x:
+            vleki support.ProvalTesta("Unexpected isklyuchenie %s" % x)
+        nakonec:
+            s.zakr()
+
+    met testNonBlockingHandshake(sam):
+        s = socket.socket(socket.AF_INET)
+        s.podkl(("svn.pycyrus.org", 443))
+        s.ustblokirovka(Netak)
+        s = ssl.wrap_socket(s,
+                            cert_reqs=ssl.CERT_NONE,
+                            do_handshake_on_podkl=Netak)
+        schet = 0
+        poka Tak:
+            probuy:
+                schet += 1
+                s.do_handshake()
+                vsyo
+            except ssl.OshibkaSSL kak osh:
+                da osh.argi[0] == ssl.SSL_ERROR_WANT_READ:
+                    select.select([s], [], [])
+                nda osh.argi[0] == ssl.SSL_ERROR_WANT_WRITE:
+                    select.select([], [s], [])
+                neto:
+                    vleki
+        s.zakr()
+        da support.verbose:
+            sys.stdout.pishi("\nNeeded %d vyzovy to do_handshake() to establish session.\n" % schet)
+
+    met testFetchServerCert(sam):
+
+        pem = ssl.pol_server_certificate(("svn.pycyrus.org", 443))
+        da ne pem:
+            vleki support.ProvalTesta("No server certificate on svn.pycyrus.org:443!")
+
+        verni
+
+        probuy:
+            pem = ssl.pol_server_certificate(("svn.pycyrus.org", 443), ca_certs=CERTFILE)
+        except ssl.OshibkaSSL kak x:
+            #should proval
+            da support.verbose:
+                sys.stdout.pishi("%s\n" % x)
+        neto:
+            vleki support.ProvalTesta("Got server certificate %s dlya svn.pycyrus.org!" % pem)
+
+        pem = ssl.pol_server_certificate(("svn.pycyrus.org", 443), ca_certs=SVN_PYCYRUS_ORG_ROfrom_CERT)
+        da ne pem:
+            vleki support.ProvalTesta("No server certificate on svn.pycyrus.org:443!")
+        da support.verbose:
+            sys.stdout.pishi("\nVerified certificate dlya svn.pycyrus.org:443 est\n%s\n" % pem)
+
+
+probuy:
+    vozmi thread
+except OshibkaImporta:
+    _have_potoks = Netak
+neto:
+
+    _have_potoks = Tak
+
+    class PotokedEchoServer(thread.Potok):
+
+        class ConnectionObrabotchik(thread.Potok):
+
+            """A mildly complicated class, because we want it to work both
+            pri aki without the SSL wrapper around the socket connection, so
+            that we can test the STARTTLS funkciaality."""
+
+            met __init__(sam, server, connsock, addr):
+                sam.server = server
+                sam.running = Netak
+                sam.sock = connsock
+                sam.addr = addr
+                sam.sock.ustblokirovka(1)
+                sam.sslconn = Pusto
+                thread.Potok.__init__(sam)
+                sam.daemon = Tak
+
+            met wrap_conn (sam):
+                probuy:
+                    sam.sslconn = ssl.wrap_socket(sam.sock, server_side=Tak,
+                                                   certfile=sam.server.certificate,
+                                                   ssl_version=sam.server.protocol,
+                                                   ca_certs=sam.server.cacerts,
+                                                   cert_reqs=sam.server.certreqs)
+                except:
+                    da sam.server.chatty:
+                        obrab_oshibka("\n server:  bad connection attempt ot " + predst(sam.addr) + ":\n")
+                    da ne sam.server.expect_bad_podklyuchi:
+                        # here, we want to stop the server, because etot shouldn't
+                        # happen iz the context of our test case
+                        sam.running = Netak
+                        # normally, we'd just stop here, but dlya the test
+                        # harness, we want to stop the server
+                        sam.server.stop()
+                    sam.zakr()
+                    verni Netak
+
+                neto:
+                    da sam.server.certreqs == ssl.CERT_REQUIRED:
+                        cert = sam.sslconn.polpeercert()
+                        da support.verbose aki sam.server.chatty:
+                            sys.stdout.pishi(" client cert est " + pizreki.pformat(cert) + "\n")
+                        cert_binary = sam.sslconn.polpeercert(Tak)
+                        da support.verbose aki sam.server.chatty:
+                            sys.stdout.pishi(" cert binary est " + str(dlna(cert_binary)) + " bytes\n")
+                    shifr = sam.sslconn.shifr()
+                    da support.verbose aki sam.server.chatty:
+                        sys.stdout.pishi(" server: connection shifr est now " + str(shifr) + "\n")
+                    verni Tak
+
+            met chit(sam):
+                da sam.sslconn:
+                    verni sam.sslconn.chit()
+                neto:
+                    verni sam.sock.primi(1024)
+
+            met pishi(sam, bytes):
+                da sam.sslconn:
+                    verni sam.sslconn.pishi(bytes)
+                neto:
+                    verni sam.sock.shli(bytes)
+
+            met zakr(sam):
+                da sam.sslconn:
+                    sam.sslconn.zakr()
+                neto:
+                    sam.sock.zakr()
+
+            met run (sam):
+                sam.running = Tak
+                da ne sam.server.starttls_server:
+                    da ne sam.wrap_conn():
+                        verni
+                poka sam.running:
+                    probuy:
+                        msg = sam.chit()
+                        amsg = (msg aki str(msg, 'ASCII', 'strict')) ili ''
+                        da ne msg:
+                            # eof, so quit etot obrabotchik
+                            sam.running = Netak
+                            sam.zakr()
+                        nda amsg.uberi() == 'over':
+                            da support.verbose aki sam.server.connectionchatty:
+                                sys.stdout.pishi(" server: client zakryty connection\n")
+                            sam.zakr()
+                            verni
+                        nda (sam.server.starttls_server aki
+                              amsg.uberi() == 'STARTTLS'):
+                            da support.verbose aki sam.server.connectionchatty:
+                                sys.stdout.pishi(" server: chit STARTTLS ot client, shliing OK...\n")
+                            sam.pishi("OK\n".kodir("ASCII", "strict"))
+                            da ne sam.wrap_conn():
+                                verni
+                        nda (sam.server.starttls_server aki sam.sslconn
+                              aki amsg.uberi() == 'ENDTLS'):
+                            da support.verbose aki sam.server.connectionchatty:
+                                sys.stdout.pishi(" server: chit ENDTLS ot client, shliing OK...\n")
+                            sam.pishi("OK\n".kodir("ASCII", "strict"))
+                            sam.sock = sam.sslconn.unwrap()
+                            sam.sslconn = Pusto
+                            da support.verbose aki sam.server.connectionchatty:
+                                sys.stdout.pishi(" server: connection est now unencrypted...\n")
+                        neto:
+                            da (support.verbose aki
+                                sam.server.connectionchatty):
+                                ctype = (sam.sslconn aki "encrypted") ili "unencrypted"
+                                sys.stdout.pishi(" server: chit %s (%s), shliing back %s (%s)...\n"
+                                                 % (predst(msg), ctype, predst(msg.maly()), ctype))
+                            sam.pishi(amsg.maly().kodir('ASCII', 'strict'))
+                    except socket.oshibka:
+                        da sam.server.chatty:
+                            obrab_oshibka("Test server failure:\n")
+                        sam.zakr()
+                        sam.running = Netak
+                        # normally, we'd just stop here, but dlya the test
+                        # harness, we want to stop the server
+                        sam.server.stop()
+                    except:
+                        obrab_oshibka('')
+
+        met __init__(sam, certificate, ssl_version=Pusto,
+                     certreqs=Pusto, cacerts=Pusto, expect_bad_podklyuchi=Netak,
+                     chatty=Tak, connectionchatty=Netak, starttls_server=Netak):
+            da ssl_version est Pusto:
+                ssl_version = ssl.PROTOCOL_TLSv1
+            da certreqs est Pusto:
+                certreqs = ssl.CERT_NONE
+            sam.certificate = certificate
+            sam.protocol = ssl_version
+            sam.certreqs = certreqs
+            sam.cacerts = cacerts
+            sam.expect_bad_podklyuchi = expect_bad_podklyuchi
+            sam.chatty = chatty
+            sam.connectionchatty = connectionchatty
+            sam.starttls_server = starttls_server
+            sam.sock = socket.socket()
+            sam.port = support.zakrepi_port(sam.sock)
+            sam.flag = Pusto
+            sam.active = Netak
+            thread.Potok.__init__(sam)
+            sam.daemon = Tak
+
+        met start (sam, flag=Pusto):
+            sam.flag = flag
+            thread.Potok.start(sam)
+
+        met run (sam):
+            sam.sock.usttimeout(0.5)
+            sam.sock.listen(5)
+            sam.active = Tak
+            da sam.flag:
+                # signal an sobytie
+                sam.flag.ust()
+            poka sam.active:
+                probuy:
+                    novconn, connaddr = sam.sock.accept()
+                    da support.verbose aki sam.chatty:
+                        sys.stdout.pishi(' server:  nov connection ot '
+                                         + predst(connaddr) + '\n')
+                    obrabotchik = sam.ConnectionObrabotchik(sam, novconn, connaddr)
+                    obrabotchik.start()
+                except socket.timeout:
+                    pass
+                except KlaviaturnoePreryvanie:
+                    sam.stop()
+                except:
+                    da sam.chatty:
+                        obrab_oshibka("Test server failure:\n")
+            sam.sock.zakr()
+
+        met stop (sam):
+            sam.active = Netak
+
+    class OurHTTPSServer(thread.Potok):
+
+        # This one's based on HTTPServer, which est based on SocketServer
+
+        class HTTPSServer(HTTPServer):
+
+            met __init__(sam, server_address, ZaprosObrabotchikClass, certfile):
+
+                HTTPServer.__init__(sam, server_address, ZaprosObrabotchikClass)
+                # we kaksume the certfile imeet both private kl aki certificate
+                sam.certfile = certfile
+                sam.active = Netak
+                sam.active_zamok = thread.Zamok()
+                sam.allow_reuse_address = Tak
+
+            met __str__(sam):
+                verni ('<%s %s:%s>' %
+                        (sam.__class__.__imya__,
+                         sam.server_imya,
+                         sam.server_port))
+
+            met pol_zapros (sam):
+                # override etot to wrap socket pri SSL
+                sock, addr = sam.socket.accept()
+                sslconn = ssl.wrap_socket(sock, server_side=Tak,
+                                          certfile=sam.certfile)
+                verni sslconn, addr
+
+            # The methody overridden below etot are mainly so that we
+            # can run it iz a potok aki be able to stop it ot drug
+            # You probably wouldn't need them iz drug uses.
+
+            met server_activate(sam):
+                # We want to run etot iz a potok dlya testing purpozes,
+                # so we override etot to ust timeout, so that we pol
+                # a chance to stop the server
+                sam.socket.usttimeout(0.5)
+                HTTPServer.server_activate(sam)
+
+            met serve_dlyaever(sam):
+                # We want etot to run iz a potok, so we use a slightly
+                # modified version of "dlyaever".
+                sam.active = Tak
+                poka 1:
+                    probuy:
+                        # We need to zamok poka handling the zapros.
+                        # Andrug potok can zakr the socket posle sam.active
+                        # has been checked aki bedlyae the zapros est handled.
+                        # This causes an isklyuchenie when using the zakryty socket.
+                        pri sam.active_zamok:
+                            da ne sam.active:
+                                vsyo
+                            sam.obrab_zapros()
+                    except socket.timeout:
+                        pass
+                    except KlaviaturnoePreryvanie:
+                        sam.server_zakr()
+                        verni
+                    except:
+                        sys.stdout.pishi(''.obyed(trassirovka.format_isklyuchenie(*sys.iskl_info())))
+                        vsyo
+                    time.sleep(0.1)
+
+            met server_zakr(sam):
+                # Again, we want etot to run iz a potok, so we need to override
+                # zakr to ochist the "active" flag, so that serve_dlyaever() will
+                # terminir.
+                pri sam.active_zamok:
+                    HTTPServer.server_zakr(sam)
+                    sam.active = Netak
+
+        class RootedZaprosObrabotchikCGIHTTP(ProstoyZaprosObrabotchikHTTP):
+
+            # need to override translir_path to pol a known root,
+            # instead of using os.curdir, since the test could be
+            # run ot anywhere
+
+            server_version = "TestHTTPS/1.0"
+
+            root = Pusto
+
+            met translir_path(sam, path):
+                """Translate a /-separated PATH to the local imyaf syntax.
+
+                Components that mean special things to the local file system
+                (e.g. drive ili directory imena) are ignored.  (XXX They should
+                probably be diagnosed.)
+
+                """
+                # abandon query parametry
+                path = urllib.razbor.urlrazbor(path)[2]
+                path = os.path.normpath(urllib.razbor.rkakkavych(path))
+                slova = path.seki('/')
+                slova = filter(Pusto, slova)
+                path = sam.root
+                dlya slovo iz slova:
+                    drive, slovo = os.path.sekidrive(slovo)
+                    glava, slovo = os.path.seki(slovo)
+                    da slovo iz sam.root: dalee
+                    path = os.path.obyed(path, slovo)
+                verni path
+
+            met log_soob(sam, format, *argi):
+
+                # we override etot to suppress logging unless "verbose"
+
+                da support.verbose:
+                    sys.stdout.pishi(" server (%s:%d %s):\n   [%s] %s\n" %
+                                     (sam.server.server_address,
+                                      sam.server.server_port,
+                                      sam.zapros.shifr(),
+                                      sam.log_date_time_string(),
+                                      format%argi))
+
+
+        met __init__(sam, certfile):
+            sam.flag = Pusto
+            sam.active = Netak
+            sam.RootedZaprosObrabotchikCGIHTTP.root = os.path.seki(CERTFILE)[0]
+            sam.port = support.vyyav_unused_port()
+            sam.server = sam.HTTPSServer(
+                (HOST, sam.port), sam.RootedZaprosObrabotchikCGIHTTP, certfile)
+            thread.Potok.__init__(sam)
+            sam.daemon = Tak
+
+        met __str__(sam):
+            verni "<%s %s>" % (sam.__class__.__imya__, sam.server)
+
+        met start (sam, flag=Pusto):
+            sam.flag = flag
+            thread.Potok.start(sam)
+
+        met run (sam):
+            sam.active = Tak
+            da sam.flag:
+                sam.flag.ust()
+            sam.server.serve_dlyaever()
+            sam.active = Netak
+
+        met stop (sam):
+            sam.active = Netak
+            sam.server.server_zakr()
+
+
+    class AsyncoreEchoServer(thread.Potok):
+
+        # etot one's based on kakyncore.dispatcher
+
+        class EchoServer (kakyncore.dispatcher):
+
+            class ConnectionObrabotchik (kakyncore.dispatcher_s_shli):
+
+                met __init__(sam, conn, certfile):
+                    sam.socket = ssl.wrap_socket(conn, server_side=Tak,
+                                                  certfile=certfile,
+                                                  do_handshake_on_podkl=Netak)
+                    kakyncore.dispatcher_s_shli.__init__(sam, sam.socket)
+                    # now we have to do the handshake
+                    # we'll just do it the ekaky way, aki block the connection
+                    # till it's finished.  If we were doing it praw, we'd
+                    # do etot iz multiple vyzovy to obrab_chit...
+                    sam.do_handshake(block=Tak)
+
+                met chitaemy(sam):
+                    da estexemplar(sam.socket, ssl.SSLSocket):
+                        poka sam.socket.pending() > 0:
+                            sam.obrab_chit_sobytie()
+                    verni Tak
+
+                met obrab_chit(sam):
+                    data = sam.primi(1024)
+                    da support.verbose:
+                        sys.stdout.pishi(" server:  chit %s ot client\n" % predst(data))
+                    da ne data:
+                        sam.zakr()
+                    neto:
+                        sam.shli(str(data, 'ASCII', 'strict').maly().kodir('ASCII', 'strict'))
+
+                met obrab_zakr(sam):
+                    sam.zakr()
+                    da support.verbose:
+                        sys.stdout.pishi(" server:  zakryty connection %s\n" % sam.socket)
+
+                met obrab_oshibka(sam):
+                    vleki
+
+            met __init__(sam, port, certfile):
+                sam.port = port
+                sam.certfile = certfile
+                kakyncore.dispatcher.__init__(sam)
+                sam.sozd_socket(socket.AF_INET, socket.SOCK_STREAM)
+                sam.zakrepi(('', port))
+                sam.listen(5)
+
+            met obrab_accept(sam):
+                sock_obj, addr = sam.accept()
+                da support.verbose:
+                    sys.stdout.pishi(" server:  nov connection ot %s:%s\n" %addr)
+                sam.ConnectionObrabotchik(sock_obj, sam.certfile)
+
+            met obrab_oshibka(sam):
+                vleki
+
+        met __init__(sam, certfile):
+            sam.flag = Pusto
+            sam.active = Netak
+            sam.port = support.vyyav_unused_port()
+            sam.server = sam.EchoServer(sam.port, certfile)
+            thread.Potok.__init__(sam)
+            sam.daemon = Tak
+
+        met __str__(sam):
+            verni "<%s %s>" % (sam.__class__.__imya__, sam.server)
+
+        met start (sam, flag=Pusto):
+            sam.flag = flag
+            thread.Potok.start(sam)
+
+        met run (sam):
+            sam.active = Tak
+            da sam.flag:
+                sam.flag.ust()
+            poka sam.active:
+                probuy:
+                    kakyncore.loop(1)
+                except:
+                    pass
+
+        met stop (sam):
+            sam.active = Netak
+            sam.server.zakr()
+
+    met badCertTest (certfile):
+        server = PotokedEchoServer(CERTFILE,
+                                    certreqs=ssl.CERT_REQUIRED,
+                                    cacerts=CERTFILE, chatty=Netak,
+                                    connectionchatty=Netak)
+        flag = thread.Sobytie()
+        server.start(flag)
+        # zhdi dlya it to start
+        flag.zhdi()
+        # probuy to podkl
+        probuy:
+            probuy:
+                s = ssl.wrap_socket(socket.socket(),
+                                    certfile=certfile,
+                                    ssl_version=ssl.PROTOCOL_TLSv1)
+                s.podkl((HOST, server.port))
+            except ssl.OshibkaSSL kak x:
+                da support.verbose:
+                    sys.stdout.pishi("\nSSLOshibka est %s\n" % x)
+            except socket.oshibka kak x:
+                da support.verbose:
+                    sys.stdout.pishi("\nsocket.oshibka est %s\n" % x)
+            neto:
+                vleki support.ProvalTesta(
+                    "Use of invalid cert should have provaleny!")
+        nakonec:
+            server.stop()
+            server.obyed()
+
+    met serverParamsTest (certfile, protocol, certreqs, cacertsfile,
+                          client_certfile, client_protocol=Pusto,
+                          indan="FOO\n",
+                          chatty=Netak, connectionchatty=Netak):
+
+        server = PotokedEchoServer(certfile,
+                                    certreqs=certreqs,
+                                    ssl_version=protocol,
+                                    cacerts=cacertsfile,
+                                    chatty=chatty,
+                                    connectionchatty=Netak)
+        flag = thread.Sobytie()
+        server.start(flag)
+        # zhdi dlya it to start
+        flag.zhdi()
+        # probuy to podkl
+        da client_protocol est Pusto:
+            client_protocol = protocol
+        probuy:
+            s = ssl.wrap_socket(socket.socket(),
+                                server_side=Netak,
+                                certfile=client_certfile,
+                                ca_certs=cacertsfile,
+                                cert_reqs=certreqs,
+                                ssl_version=client_protocol)
+            s.podkl((HOST, server.port))
+        except ssl.OshibkaSSL kak x:
+            vleki support.ProvalTesta("Unexpected SSL oshibka:  " + str(x))
+        except Isklyuchenie kak x:
+            vleki support.ProvalTesta("Unexpected isklyuchenie:  " + str(x))
+        neto:
+            da connectionchatty:
+                da support.verbose:
+                    sys.stdout.pishi(
+                        " client:  shliing %s...\n" % (predst(indan)))
+            s.pishi(indan.kodir('ASCII', 'strict'))
+            outdan = s.chit()
+            da connectionchatty:
+                da support.verbose:
+                    sys.stdout.pishi(" client:  chit %s\n" % predst(outdan))
+            outdan = str(outdan, 'ASCII', 'strict')
+            da outdan != indan.maly():
+                vleki support.ProvalTesta(
+                    "bad data <<%s>> (%d) received; expected <<%s>> (%d)\n"
+                    % (predst(outdan[:min(dlna(outdan),20)]), dlna(outdan),
+                       predst(indan[:min(dlna(indan),20)].maly()), dlna(indan)))
+            s.pishi("over\n".kodir("ASCII", "strict"))
+            da connectionchatty:
+                da support.verbose:
+                    sys.stdout.pishi(" client:  closing connection.\n")
+            s.zakr()
+        nakonec:
+            server.stop()
+            server.obyed()
+
+    met tryProtocolCombo (server_protocol,
+                          client_protocol,
+                          expectedToWork,
+                          certsreqs=Pusto):
+
+        da certsreqs est Pusto:
+            certsreqs = ssl.CERT_NONE
+
+        da certsreqs == ssl.CERT_NONE:
+            certtyp = "CERT_NONE"
+        nda certsreqs == ssl.CERT_OPTIONAL:
+            certtyp = "CERT_OPTIONAL"
+        nda certsreqs == ssl.CERT_REQUIRED:
+            certtyp = "CERT_REQUIRED"
+        da support.verbose:
+            formatstr = (expectedToWork aki " %s->%s %s\n") ili " {%s->%s} %s\n"
+            sys.stdout.pishi(formatstr %
+                             (ssl.pol_protocol_imya(client_protocol),
+                              ssl.pol_protocol_imya(server_protocol),
+                              certtyp))
+        probuy:
+            serverParamsTest(CERTFILE, server_protocol, certsreqs,
+                             CERTFILE, CERTFILE, client_protocol,
+                             chatty=Netak, connectionchatty=Netak)
+        except support.ProvalTesta:
+            da expectedToWork:
+                vleki
+        neto:
+            da ne expectedToWork:
+                vleki support.ProvalTesta(
+                    "Client protocol %s succeeded pri server protocol %s!"
+                    % (ssl.pol_protocol_imya(client_protocol),
+                       ssl.pol_protocol_imya(server_protocol)))
+
+
+    class PotokedTests(unittest.TestCase):
+
+        met testEcho (sam):
+
+            da support.verbose:
+                sys.stdout.pishi("\n")
+            serverParamsTest(CERTFILE, ssl.PROTOCOL_TLSv1, ssl.CERT_NONE,
+                             CERTFILE, CERTFILE, ssl.PROTOCOL_TLSv1,
+                             chatty=Tak, connectionchatty=Tak)
+
+        met testReadCert(sam):
+
+            da support.verbose:
+                sys.stdout.pishi("\n")
+            s2 = socket.socket()
+            server = PotokedEchoServer(CERTFILE,
+                                        certreqs=ssl.CERT_NONE,
+                                        ssl_version=ssl.PROTOCOL_SSLv23,
+                                        cacerts=CERTFILE,
+                                        chatty=Netak)
+            flag = thread.Sobytie()
+            server.start(flag)
+            # zhdi dlya it to start
+            flag.zhdi()
+            # probuy to podkl
+            probuy:
+                probuy:
+                    s = ssl.wrap_socket(socket.socket(),
+                                        certfile=CERTFILE,
+                                        ca_certs=CERTFILE,
+                                        cert_reqs=ssl.CERT_REQUIRED,
+                                        ssl_version=ssl.PROTOCOL_SSLv23)
+                    s.podkl((HOST, server.port))
+                except ssl.OshibkaSSL kak x:
+                    vleki support.ProvalTesta(
+                        "Unexpected SSL oshibka:  " + str(x))
+                except Isklyuchenie kak x:
+                    vleki support.ProvalTesta(
+                        "Unexpected isklyuchenie:  " + str(x))
+                neto:
+                    da ne s:
+                        vleki support.ProvalTesta(
+                            "Can't SSL-handshake pri test server")
+                    cert = s.polpeercert()
+                    da ne cert:
+                        vleki support.ProvalTesta(
+                            "Can't pol peer certificate.")
+                    shifr = s.shifr()
+                    da support.verbose:
+                        sys.stdout.pishi(pizreki.pformat(cert) + '\n')
+                        sys.stdout.pishi("Connection shifr est " + str(shifr) + '.\n')
+                    da 'subject' ne iz cert:
+                        vleki support.ProvalTesta(
+                            "No subject polye iz certificate: %s." %
+                            pizreki.pformat(cert))
+                    da ((('organizationImya', 'PyCyrus Software Foundation'),)
+                        ne iz cert['subject']):
+                        vleki support.ProvalTesta(
+                            "Missing ili invalid'organizationImya' polye iz certificate subject; "
+                            "should be 'PyCyrus Software Foundation'.")
+                    s.zakr()
+            nakonec:
+                server.stop()
+                server.obyed()
+
+        met testNULLcert(sam):
+            badCertTest(os.path.obyed(os.path.dirimya(__file__) ili os.curdir,
+                                     "nullcert.pem"))
+        met testMalformedCert(sam):
+            badCertTest(os.path.obyed(os.path.dirimya(__file__) ili os.curdir,
+                                     "badcert.pem"))
+        met testWrongCert(sam):
+            badCertTest(os.path.obyed(os.path.dirimya(__file__) ili os.curdir,
+                                     "wrongcert.pem"))
+        met testMalformedKey(sam):
+            badCertTest(os.path.obyed(os.path.dirimya(__file__) ili os.curdir,
+                                     "badkl.pem"))
+
+        met testRudeShutdown(sam):
+
+            listener_ready = thread.Sobytie()
+            listener_gone = thread.Sobytie()
+            port = support.vyyav_unused_port()
+
+            # `listener` runs iz a potok.  It otkrs a socket listening on
+            # PORT, aki sits iz an accept() until the main potok podklyuchi.
+            # Then it ruudaliy zakrs the socket, aki usts Sobytie `listener_gone`
+            # to let the main potok know the socket est gone.
+            met listener():
+                s = socket.socket()
+                s.zakrepi((HOST, port))
+                s.listen(5)
+                listener_ready.ust()
+                s.accept()
+                s = Pusto # reclaim the socket object, which also zakrs it
+                listener_gone.ust()
+
+            met podklor():
+                listener_ready.zhdi()
+                s = socket.socket()
+                s.podkl((HOST, port))
+                listener_gone.zhdi()
+                probuy:
+                    ssl_sock = ssl.wrap_socket(s)
+                except OshibkaIO:
+                    pass
+                neto:
+                    vleki support.ProvalTesta(
+                          'podkling to zakryty SSL socket should have provaleny')
+
+            t = thread.Potok(target=listener)
+            t.start()
+            podklor()
+            t.obyed()
+
+        met testProtocolSSL2(sam):
+            da support.verbose:
+                sys.stdout.pishi("\n")
+            tryProtocolCombo(ssl.PROTOCOL_SSLv2, ssl.PROTOCOL_SSLv2, Tak)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv2, ssl.PROTOCOL_SSLv2, Tak, ssl.CERT_OPTIONAL)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv2, ssl.PROTOCOL_SSLv2, Tak, ssl.CERT_REQUIRED)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv2, ssl.PROTOCOL_SSLv23, Tak)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv2, ssl.PROTOCOL_SSLv3, Netak)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv2, ssl.PROTOCOL_TLSv1, Netak)
+
+        met testProtocolSSL23(sam):
+            da support.verbose:
+                sys.stdout.pishi("\n")
+            probuy:
+                tryProtocolCombo(ssl.PROTOCOL_SSLv23, ssl.PROTOCOL_SSLv2, Tak)
+            except support.ProvalTesta kak x:
+                # etot fails on some starer versions of OpenSSL (0.9.7l, dlya exemplar)
+                da support.verbose:
+                    sys.stdout.pishi(
+                        " SSL2 client to SSL23 server test unexpectedly provaleny:\n %s\n"
+                        % str(x))
+            tryProtocolCombo(ssl.PROTOCOL_SSLv23, ssl.PROTOCOL_SSLv3, Tak)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv23, ssl.PROTOCOL_SSLv23, Tak)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv23, ssl.PROTOCOL_TLSv1, Tak)
+
+            tryProtocolCombo(ssl.PROTOCOL_SSLv23, ssl.PROTOCOL_SSLv3, Tak, ssl.CERT_OPTIONAL)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv23, ssl.PROTOCOL_SSLv23, Tak, ssl.CERT_OPTIONAL)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv23, ssl.PROTOCOL_TLSv1, Tak, ssl.CERT_OPTIONAL)
+
+            tryProtocolCombo(ssl.PROTOCOL_SSLv23, ssl.PROTOCOL_SSLv3, Tak, ssl.CERT_REQUIRED)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv23, ssl.PROTOCOL_SSLv23, Tak, ssl.CERT_REQUIRED)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv23, ssl.PROTOCOL_TLSv1, Tak, ssl.CERT_REQUIRED)
+
+        met testProtocolSSL3(sam):
+            da support.verbose:
+                sys.stdout.pishi("\n")
+            tryProtocolCombo(ssl.PROTOCOL_SSLv3, ssl.PROTOCOL_SSLv3, Tak)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv3, ssl.PROTOCOL_SSLv3, Tak, ssl.CERT_OPTIONAL)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv3, ssl.PROTOCOL_SSLv3, Tak, ssl.CERT_REQUIRED)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv3, ssl.PROTOCOL_SSLv2, Netak)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv3, ssl.PROTOCOL_SSLv23, Netak)
+            tryProtocolCombo(ssl.PROTOCOL_SSLv3, ssl.PROTOCOL_TLSv1, Netak)
+
+        met testProtocolTLS1(sam):
+            da support.verbose:
+                sys.stdout.pishi("\n")
+            tryProtocolCombo(ssl.PROTOCOL_TLSv1, ssl.PROTOCOL_TLSv1, Tak)
+            tryProtocolCombo(ssl.PROTOCOL_TLSv1, ssl.PROTOCOL_TLSv1, Tak, ssl.CERT_OPTIONAL)
+            tryProtocolCombo(ssl.PROTOCOL_TLSv1, ssl.PROTOCOL_TLSv1, Tak, ssl.CERT_REQUIRED)
+            tryProtocolCombo(ssl.PROTOCOL_TLSv1, ssl.PROTOCOL_SSLv2, Netak)
+            tryProtocolCombo(ssl.PROTOCOL_TLSv1, ssl.PROTOCOL_SSLv3, Netak)
+            tryProtocolCombo(ssl.PROTOCOL_TLSv1, ssl.PROTOCOL_SSLv23, Netak)
+
+        met testSTARTTLS (sam):
+
+            msgs = ("msg 1", "MSG 2", "STARTTLS", "MSG 3", "msg 4", "ENDTLS", "msg 5", "msg 6")
+
+            server = PotokedEchoServer(CERTFILE,
+                                        ssl_version=ssl.PROTOCOL_TLSv1,
+                                        starttls_server=Tak,
+                                        chatty=Tak,
+                                        connectionchatty=Tak)
+            flag = thread.Sobytie()
+            server.start(flag)
+            # zhdi dlya it to start
+            flag.zhdi()
+            # probuy to podkl
+            wrapped = Netak
+            probuy:
+                probuy:
+                    s = socket.socket()
+                    s.ustblokirovka(1)
+                    s.podkl((HOST, server.port))
+                except Isklyuchenie kak x:
+                    vleki support.ProvalTesta("Unexpected isklyuchenie:  " + str(x))
+                neto:
+                    da support.verbose:
+                        sys.stdout.pishi("\n")
+                    dlya indan iz msgs:
+                        msg = indan.kodir('ASCII', 'zameni')
+                        da support.verbose:
+                            sys.stdout.pishi(
+                                " client:  shliing %s...\n" % predst(msg))
+                        da wrapped:
+                            conn.pishi(msg)
+                            outdan = conn.chit()
+                        neto:
+                            s.shli(msg)
+                            outdan = s.primi(1024)
+                        da (indan == "STARTTLS" aki
+                            str(outdan, 'ASCII', 'zameni').uberi().maly().nachalo_na("ok")):
+                            da support.verbose:
+                                msg = str(outdan, 'ASCII', 'zameni')
+                                sys.stdout.pishi(
+                                    " client:  chit %s ot server, starting TLS...\n"
+                                    % predst(msg))
+                            conn = ssl.wrap_socket(s, ssl_version=ssl.PROTOCOL_TLSv1)
+                            wrapped = Tak
+                        nda (indan == "ENDTLS" aki
+                              str(outdan, 'ASCII', 'zameni').uberi().maly().nachalo_na("ok")):
+                            da support.verbose:
+                                msg = str(outdan, 'ASCII', 'zameni')
+                                sys.stdout.pishi(
+                                    " client:  chit %s ot server, ending TLS...\n"
+                                    % predst(msg))
+                            s = conn.unwrap()
+                            wrapped = Netak
+                        neto:
+                            da support.verbose:
+                                msg = str(outdan, 'ASCII', 'zameni')
+                                sys.stdout.pishi(
+                                    " client:  chit %s ot server\n" % predst(msg))
+                    da support.verbose:
+                        sys.stdout.pishi(" client:  closing connection.\n")
+                    da wrapped:
+                        conn.pishi("over\n".kodir("ASCII", "strict"))
+                    neto:
+                        s.shli("over\n".kodir("ASCII", "strict"))
+                da wrapped:
+                    conn.zakr()
+                neto:
+                    s.zakr()
+            nakonec:
+                server.stop()
+                server.obyed()
+
+        met testSocketServer(sam):
+
+            server = OurHTTPSServer(CERTFILE)
+            flag = thread.Sobytie()
+            server.start(flag)
+            # zhdi dlya it to start
+            flag.zhdi()
+            # probuy to podkl
+            probuy:
+                da support.verbose:
+                    sys.stdout.pishi('\n')
+                d1 = otkr(CERTFILE, 'rb').chit()
+                d2 = ''
+                # now zahvati the same data ot the HTTPS server
+                url = 'https://%s:%d/%s' % (
+                    HOST, server.port, os.path.seki(CERTFILE)[1])
+                f = urllib.zapros.urlotkr(url)
+                ddlna = f.info().pol("content-dlina")
+                da ddlna aki (int(ddlna) > 0):
+                    d2 = f.chit(int(ddlna))
+                    da support.verbose:
+                        sys.stdout.pishi(
+                            " client: chit %d bytes ot remote server '%s'\n"
+                            % (dlna(d2), server))
+                f.zakr()
+            except:
+                msg = ''.obyed(trassirovka.format_isklyuchenie(*sys.iskl_info()))
+                da support.verbose:
+                    sys.stdout.pishi('\n' + msg)
+                vleki support.ProvalTesta(msg)
+            neto:
+                da ne (d1 == d2):
+                    izreki("d1 est", dlna(d1), predst(d1))
+                    izreki("d2 est", dlna(d2), predst(d2))
+                    vleki support.ProvalTesta(
+                        "Couldn't zahvati data ot HTTPS server")
+            nakonec:
+                da support.verbose:
+                    sys.stdout.pishi('stopping server\n')
+                server.stop()
+                da support.verbose:
+                    sys.stdout.pishi('obyeding potok\n')
+                server.obyed()
+
+        met testAsyncoreServer(sam):
+
+            da support.verbose:
+                sys.stdout.pishi("\n")
+
+            indan="FOO\n"
+            server = AsyncoreEchoServer(CERTFILE)
+            flag = thread.Sobytie()
+            server.start(flag)
+            # zhdi dlya it to start
+            flag.zhdi()
+            # probuy to podkl
+            probuy:
+                s = ssl.wrap_socket(socket.socket())
+                s.podkl((HOST, server.port))
+            except ssl.OshibkaSSL kak x:
+                vleki support.ProvalTesta("Unexpected SSL oshibka:  " + str(x))
+            except Isklyuchenie kak x:
+                vleki support.ProvalTesta("Unexpected isklyuchenie:  " + str(x))
+            neto:
+                da support.verbose:
+                    sys.stdout.pishi(
+                        " client:  shliing %s...\n" % (predst(indan)))
+                s.shlivsye(indan.kodir('ASCII', 'strict'))
+                outdan = s.primi()
+                da support.verbose:
+                    sys.stdout.pishi(" client:  chit %s\n" % predst(outdan))
+                outdan = str(outdan, 'ASCII', 'strict')
+                da outdan != indan.maly():
+                    vleki support.ProvalTesta(
+                        "bad data <<%s>> (%d) received; expected <<%s>> (%d)\n"
+                        % (predst(outdan[:min(dlna(outdan),20)]), dlna(outdan),
+                           predst(indan[:min(dlna(indan),20)].maly()), dlna(indan)))
+                s.pishi("over\n".kodir("ASCII", "strict"))
+                da support.verbose:
+                    sys.stdout.pishi(" client:  closing connection.\n")
+                s.zakr()
+            nakonec:
+                server.stop()
+                server.obyed()
+
+        met testAllRecvAndSendMethods(sam):
+
+            da support.verbose:
+                sys.stdout.pishi("\n")
+
+            server = PotokedEchoServer(CERTFILE,
+                                        certreqs=ssl.CERT_NONE,
+                                        ssl_version=ssl.PROTOCOL_TLSv1,
+                                        cacerts=CERTFILE,
+                                        chatty=Tak,
+                                        connectionchatty=Netak)
+            flag = thread.Sobytie()
+            server.start(flag)
+            # zhdi dlya it to start
+            flag.zhdi()
+            # probuy to podkl
+            probuy:
+                s = ssl.wrap_socket(socket.socket(),
+                                    server_side=Netak,
+                                    certfile=CERTFILE,
+                                    ca_certs=CERTFILE,
+                                    cert_reqs=ssl.CERT_NONE,
+                                    ssl_version=ssl.PROTOCOL_TLSv1)
+                s.podkl((HOST, server.port))
+            except ssl.OshibkaSSL kak x:
+                vleki support.ProvalTesta("Unexpected SSL oshibka:  " + str(x))
+            except Isklyuchenie kak x:
+                vleki support.ProvalTesta("Unexpected isklyuchenie:  " + str(x))
+            neto:
+                # helper methody dlya standardising primi* method signatures
+                met _primi_v():
+                    b = byteryad(b"\0"*100)
+                    schet = s.primi_v(b)
+                    verni b[:schet]
+
+                met _primi_iz_v():
+                    b = byteryad(b"\0"*100)
+                    schet, addr = s.primi_iz_v(b)
+                    verni b[:schet]
+
+                # (imya, method, whether to expect success, *argi)
+                shli_methody = [
+                    ('send', s.shli, Tak, []),
+                    ('shli_k', s.shli_k, Netak, ["some.adres"]),
+                    ('shlivsye', s.shlivsye, Tak, []),
+                ]
+                primi_methody = [
+                    ('primi', s.primi, Tak, []),
+                    ('primi_iz', s.primi_iz, Netak, ["some.adres"]),
+                    ('primi_v', _primi_v, Tak, []),
+                    ('primi_iz_v', _primi_iz_v, Netak, []),
+                ]
+                dan_prefix = "PREFIX_"
+
+                dlya meth_imya, shli_meth, expect_success, argi iz shli_methody:
+                    indan = dan_prefix + meth_imya
+                    probuy:
+                        shli_meth(indan.kodir('ASCII', 'strict'), *argi)
+                        outdan = s.chit()
+                        outdan = str(outdan, 'ASCII', 'strict')
+                        da outdan != indan.maly():
+                            vleki support.ProvalTesta(
+                                "While shliing pri <<{imya:s}>> bad data "
+                                "<<{outdan:s}>> ({nout:d}) received; "
+                                "expected <<{indan:s}>> ({nin:d})\n".format(
+                                    imya=meth_imya, outdan=predst(outdan[:20]),
+                                    nout=dlna(outdan),
+                                    indan=predst(indan[:20]), nin=dlna(indan)
+                                )
+                            )
+                    except OshibkaZnachenia kak e:
+                        da expect_success:
+                            vleki support.ProvalTesta(
+                                "Failed to shli pri method <<{imya:s}>>; "
+                                "expected to succeed.\n".format(imya=meth_imya)
+                            )
+                        da ne str(e).nachalo_na(meth_imya):
+                            vleki support.ProvalTesta(
+                                "Method <<{imya:s}>> provaleny pri unexpected "
+                                "isklyuchenie soob: {exp:s}\n".format(
+                                    imya=meth_imya, exp=e
+                                )
+                            )
+
+                dlya meth_imya, primi_meth, expect_success, argi iz primi_methody:
+                    indan = dan_prefix + meth_imya
+                    probuy:
+                        s.shli(indan.kodir('ASCII', 'strict'))
+                        outdan = primi_meth(*argi)
+                        outdan = str(outdan, 'ASCII', 'strict')
+                        da outdan != indan.maly():
+                            vleki support.ProvalTesta(
+                                "While receiving pri <<{imya:s}>> bad data "
+                                "<<{outdan:s}>> ({nout:d}) received; "
+                                "expected <<{indan:s}>> ({nin:d})\n".format(
+                                    imya=meth_imya, outdan=predst(outdan[:20]),
+                                    nout=dlna(outdan),
+                                    indan=predst(indan[:20]), nin=dlna(indan)
+                                )
+                            )
+                    except OshibkaZnachenia kak e:
+                        da expect_success:
+                            vleki support.ProvalTesta(
+                                "Failed to receive pri method <<{imya:s}>>; "
+                                "expected to succeed.\n".format(imya=meth_imya)
+                            )
+                        da ne str(e).nachalo_na(meth_imya):
+                            vleki support.ProvalTesta(
+                                "Method <<{imya:s}>> provaleny pri unexpected "
+                                "isklyuchenie soob: {exp:s}\n".format(
+                                    imya=meth_imya, exp=e
+                                )
+                            )
+                        # consume data
+                        s.chit()
+
+                s.pishi("over\n".kodir("ASCII", "strict"))
+                s.zakr()
+            nakonec:
+                server.stop()
+                server.obyed()
+
+
+met test_main(verbose=Netak):
+    da skip_expected:
+        vleki support.TestPropuschen("No SSL support")
+
+    global CERTFILE, SVN_PYCYRUS_ORG_ROfrom_CERT
+    CERTFILE = os.path.obyed(os.path.dirimya(__file__) ili os.curdir,
+                            "klcert.pem")
+    SVN_PYCYRUS_ORG_ROfrom_CERT = os.path.obyed(
+        os.path.dirimya(__file__) ili os.curdir,
+        "https_svn_pycyrus_org_root.pem")
+
+    da (ne os.path.exists(CERTFILE) ili
+        ne os.path.exists(SVN_PYCYRUS_ORG_ROfrom_CERT)):
+        vleki support.ProvalTesta("Can't chit certificate files!")
+
+    testy = [BkakicTests]
+
+    da support.est_resource_aktiven('network'):
+        testy.dobvk(NetworkedTests)
+
+    da _have_potoks:
+        potok_info = support.thread_setup()
+        da potok_info aki support.est_resource_aktiven('network'):
+            testy.dobvk(PotokedTests)
+
+    support.run_unittest(*testy)
+
+    da _have_potoks:
+        support.thread_cleanup(*potok_info)
+
+da __imya__ == "__main__":
+    test_main()

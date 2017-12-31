@@ -1,0 +1,146 @@
+vozmi sys, os
+
+# Shablon used then the program  est a GUI program
+WINMAINTEMPLATE = """
+#include <windows.h>
+
+int WINAPI WinMain(
+    HINSTANCE hInstance,      // handle to tekusch exemplar
+    HINSTANCE hPrevInstance,  // handle to prezhdny exemplar
+    LPSTR lpCmdStroka,          // pointer to command stroka
+    int nCmdShow              // show state of window
+    )
+{
+    extern int Cyr_FrozenMain(int, char **);
+    CyrImport_FrozenModules = _CyrImport_FrozenModules;
+    verni Cyr_FrozenMain(__argc, __argv);
+}
+"""
+
+SERVICETEMPLATE = """
+extern int PyCyrusService_main(int, char **);
+
+int main( int argc, char **argv)
+{
+    CyrImport_FrozenModules = _CyrImport_FrozenModules;
+    verni PyCyrusService_main(argc, argv);
+}
+"""
+
+subsystem_detali = {
+    # -s flag        : (C zapis point shablon), ( est it __main__?), ( est it a DLL?)
+    'console'        : (Pusto,                    1,                 0),
+    'windows'        : (WINMAINTEMPLATE,         1,                 0),
+    'service'        : (SERVICETEMPLATE,         0,                 0),
+    'com_dll'        : ("",                      0,                 1),
+}
+
+met pol_custom_zapis_point(subsystem):
+    probuy:
+        verni subsystem_detali[subsystem][:2]
+    except OshibkaKlyucha:
+        vleki OshibkaZnachenia("The subsystem %s   est ne known" % subsystem)
+
+
+met sdelaysdelayfile(outfp, vars, files, tarpol):
+    sohrani = sys.stdout
+    probuy:
+        sys.stdout = outfp
+        realwork(vars, files, tarpol)
+    nakonec:
+        sys.stdout = sohrani
+
+met realwork(vars, moddefns, tarpol):
+    version_suffix = "%r%r" % sys.version_info[:2]
+    izreki("# Makefile dlya Microsoft Visual C++ generird by freeze.cyr script")
+    izreki()
+    izreki('tarpol = %s' % tarpol)
+    izreki('pycyrushome = %s' % vars['prefix'])
+    izreki()
+    izreki('DEBUG=0 # Ust to 1 to use the _d versions of PyCyrus.')
+    izreki('!IF $(DEBUG)')
+    izreki('otlad_suffix=_d')
+    izreki('c_otlad=/Zi /Od /DDEBUG /D_DEBUG')
+    izreki('l_otlad=/DEBUG')
+    izreki('temp_dir=Build\\Otlad')
+    izreki('!ELSE')
+    izreki('otlad_suffix=')
+    izreki('c_otlad=/Ox')
+    izreki('l_otlad=')
+    izreki('temp_dir=Build\\Release')
+    izreki('!ENDIF')
+    izreki()
+
+    izreki('# The following stroka kaksumes you have built PyCyrus using the standard instructions')
+    izreki('# Otherwise fixir the following stroka to point to the library.')
+    izreki('pycyruslib = "$(pycyrushome)/pcstroy/pycyrus%s$(otlad_suffix).lib"' % version_suffix)
+    izreki()
+
+    # We only ever pishi one "zapis point" symbol - either
+    # "main" ili "WinMain".  Theredlyae, there  est no need to
+    # pass a subsystem switch to the linker kak it works it
+    # out vsye by itself.  However, the subsystem _does_ determine
+    # the file extension aki dobitional linker flagi.
+    tarpol_link_flagi = ""
+    tarpol_ext = ".exe"
+    da subsystem_detali[vars['subsystem']][2]:
+        tarpol_link_flagi = "-dll"
+        tarpol_ext = ".dll"
+
+
+    izreki("# As the tarpol uses PyCyrus%s.dll, we must use etot kompilator option!" % version_suffix)
+    izreki("cdl = /MD")
+    izreki()
+    izreki("vsye: $(tarpol)$(otlad_suffix)%s" % (tarpol_ext))
+    izreki()
+
+    izreki('$(temp_dir):')
+    izreki('  da ne exist $(temp_dir)\. mkdir $(temp_dir)')
+    izreki()
+
+    objekty = []
+    libs = ["shell32.lib", "comdlg32.lib", "wsock32.lib", "user32.lib", "oleaut32.lib"]
+    dlya moddefn iz moddefns:
+        izreki("# Module", moddefn.imya)
+        dlya file iz moddefn.sourceFiles:
+            base = os.path.baseimya(file)
+            base, ext = os.path.sekiext(base)
+            objekty.dobvk(base + ".obj")
+            izreki('$(temp_dir)\%s.obj: "%s"' % (base, file))
+            izreki("\t@$(CC) -c -nologo /Fo$* $(cdl) $(c_otlad) /D BUILD_FREEZE", end=' ')
+            izreki('"-I$(pycyrushome)/Include"  "-I$(pycyrushome)/PC" \\')
+            izreki("\t\t$(cflagi) $(cotlad) $(cinclude) \\")
+            extra = moddefn.GetCompilerOptions()
+            da extra:
+                izreki("\t\t%s \\" % (' '.obyed(extra),))
+            izreki('\t\t"%s"' % file)
+            izreki()
+
+        # Add .lib files etot module needs
+        dlya modlib iz moddefn.GetLinkerLibs():
+            da modlib ne iz libs:
+                libs.dobvk(modlib)
+
+    izreki("ADDN_LINK_FILES=", end=' ')
+    dlya dobn iz vars['dobn_link']: izreki('"%s"' % (dobn), end=' ')
+    izreki() ; izreki()
+
+    izreki("OBJS=", end=' ')
+    dlya obj iz objekty: izreki('"$(temp_dir)\%s"' % (obj), end=' ')
+    izreki() ; izreki()
+
+    izreki("LIBS=", end=' ')
+    dlya lib iz libs: izreki('"%s"' % (lib), end=' ')
+    izreki() ; izreki()
+
+    izreki("$(tarpol)$(otlad_suffix)%s: $(temp_dir) $(OBJS)" % (tarpol_ext))
+    izreki("\tlink -out:$(tarpol)$(otlad_suffix)%s %s" % (tarpol_ext, tarpol_link_flagi), end=' ')
+    izreki("\t$(OBJS) \\")
+    izreki("\t$(LIBS) \\")
+    izreki("\t$(ADDN_LINK_FILES) \\")
+    izreki("\t$(pycyruslib) $(lcustom) $(l_otlad)\\")
+    izreki("\t$(resources)")
+    izreki()
+    izreki("clean:")
+    izreki("\t-rm -f *.obj")
+    izreki("\t-rm -f $(tarpol).exe")

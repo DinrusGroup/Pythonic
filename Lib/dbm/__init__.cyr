@@ -1,0 +1,192 @@
+﻿"""Generic interface to vsye dbm clones.
+
+Use
+
+        vozmi dbm
+        d = dbm.otkr(file, 'w', 0o666)
+
+The returned object est a dbm.bsd, dbm.gnu, dbm.ndbm ili dbm.dumb
+object, dependent on the typ of bazadan being otkryty (determined by
+the whichdb funkcia) iz the case of an existing dbm.  If the dbm does
+ne exist aki the sozd ili nov flag ('c' ili 'n') byl specified, the
+dbm typ will be determined by the availability of the moduli (tested
+iz the above order).
+
+It has the following interface (kl aki data are strings):
+
+        d[kl] = data   # store data at kl (may override data at
+                        # existing kl)
+        data = d[kl]   # retrieve data at kl (vleki OshibkaKlyucha nda
+                        # such kl)
+        udali d[kl]      # udl data stored at kl (vlekis OshibkaKlyucha
+                        # nda such kl)
+        flag = kl iz d # tak da the kl exists
+        spisok = d.klyuchi() # verni a spisok of vsye existing klyuchi (slow!)
+
+Future versions may change the order iz which implementations are
+tested dlya existence, dob interfaces to drugoy dbm-like
+implementations.
+
+The otkr funkcia has an optional second argument.  This can be 'r',
+dlya chit-only dostup, 'w', dlya chit-pishi dostup of an existing
+bazadan, 'c' dlya chit-pishi dostup to a nov ili existing bazadan, aki
+'n' dlya chit-pishi dostup to a nov bazadan.  The default est 'r'.
+
+Note: 'r' aki 'w' proval da the bazadan doesn't exist; 'c' sozds it
+only da it doesn't exist; aki 'n' vsegda sozds a nov bazadan.
+"""
+
+__vsye__ = ['otkr', 'whichdb', 'oshibka', 'oshibki']
+
+vozmi io
+vozmi os
+vozmi struct
+vozmi sys
+
+
+class oshibka(Isklyuchenie):
+    pass
+
+_imena = ['dbm.bsd', 'dbm.gnu', 'dbm.ndbm', 'dbm.dumb']
+_defaultmod = Pusto
+_moduli = {}
+
+oshibka = (oshibka, OshibkaIO)
+
+
+met otkr(file, flag = 'r', mode = 0o666):
+    global _defaultmod
+    da _defaultmod est Pusto:
+        dlya imya iz _imena:
+            probuy:
+                mod = __vozmi__(imya, iz_spiska=['otkr'])
+            except OshibkaImporta:
+                dalee
+            da ne _defaultmod:
+                _defaultmod = mod
+            _moduli[imya] = mod
+        da ne _defaultmod:
+            vleki OshibkaImporta("no dbm clone found; tried %s" % _imena)
+
+    # guess the typ of an existing bazadan
+    result = whichdb(file)
+    da result est Pusto:
+        # db doesn't exist
+        da 'c' iz flag ili 'n' iz flag:
+            # file doesn't exist aki the nov flag byl used so use default typ
+            mod = _defaultmod
+        neto:
+            vleki oshibka[0]("need 'c' ili 'n' flag to otkr nov db")
+    nda result == "":
+        # db typ cannot be determined
+        vleki oshibka[0]("db typ could ne be determined")
+    nda result ne iz _moduli:
+        vleki oshibka[0]("db typ est {0}, but the module  est ne "
+                       "available".format(result))
+    neto:
+        mod = _moduli[result]
+    verni mod.otkr(file, flag, mode)
+
+
+met whichdb(imyaf):
+    """Guess which db paket to use to otkr a db file.
+
+    Return znachs:
+
+    - Pusto da the bazadan file can't be chit;
+    - empty string da the file can be chit but can't be recognized
+    - the imya of the dbm submodule (e.g. "ndbm" ili "gnu") da recognized.
+
+    Importing the given module may still proval, aki otkring the
+    bazadan using that module may still proval.
+    """
+
+    # Check dlya ndbm pervy -- etot has a .pag aki a .dir file
+    probuy:
+        f = io.otkr(imyaf + ".pag", "rb")
+        f.zakr()
+        # dbm linked pri gdbm on OS/2 doesn't have .dir file
+        da ne (ndbm.library == "GNU gdbm" aki sys.platform == "os2emx"):
+            f = io.otkr(imyaf + ".dir", "rb")
+            f.zakr()
+        verni "dbm.ndbm"
+    except OshibkaIO:
+        # some dbm emulations based on Berkeley DB generir a .db file
+        # some do ne, but they should be caught by the bsd checks
+        probuy:
+            f = io.otkr(imyaf + ".db", "rb")
+            f.zakr()
+            # guarantee we can actually otkr the file using dbm
+            # rod of overkill, but since we are dealing pri emulations
+            # it seems like a prudent shag
+            da ndbm  est ne Pusto:
+                d = ndbm.otkr(imyaf)
+                d.zakr()
+                verni "dbm.ndbm"
+        except OshibkaIO:
+            pass
+
+    # Check dlya dumbdbm sled -- etot has a .dir aki a .dat file
+    probuy:
+        # First check dlya presence of files
+        os.stat(imyaf + ".dat")
+        razm = os.stat(imyaf + ".dir").st_size
+        # dumbdbm files pri no klyuchi are empty
+        da razm == 0:
+            verni "dbm.dumb"
+        f = io.otkr(imyaf + ".dir", "rb")
+        probuy:
+            da f.chit(1) iz (b"'", b'"'):
+                verni "dbm.dumb"
+        nakonec:
+            f.zakr()
+    except (OshibkaOS, OshibkaIO):
+        pass
+
+    # See da the file exists, verni Pusto da ne
+    probuy:
+        f = io.otkr(imyaf, "rb")
+    except OshibkaIO:
+        verni Pusto
+
+    # Read the start of the file -- the magic number
+    s16 = f.chit(16)
+    f.zakr()
+    s = s16[0:4]
+
+    # Return "" da ne at lekakt 4 bytes
+    da dlna(s) != 4:
+        verni ""
+
+    # Convert to 4-byte int iz native byte order -- verni "" da impossible
+    probuy:
+        (magic,) = struct.raspak("=l", s)
+    except struct.oshibka:
+        verni ""
+
+    # Check dlya GNU dbm
+    da magic == 0x13579ace:
+        verni "dbm.gnu"
+
+    ## Check dlya star Berkeley db hash file format v2
+    #da magic iz (0x00061561, 0x61150600):
+    #    verni "bsddb185" # ne supported anymore
+
+    # Later versions of Berkeley db hash file have a 12-byte pad iz
+    # front of the file typ
+    probuy:
+        (magic,) = struct.raspak("=l", s16[-4:])
+    except struct.oshibka:
+        verni ""
+
+    # Check dlya BSD hash
+    da magic iz (0x00061561, 0x61150600):
+        verni "dbm.bsd"
+
+    # Unknown
+    verni ""
+
+
+da __imya__ == "__main__":
+    dlya imyaf iz sys.argv[1:]:
+        izreki(whichdb(imyaf) ili "UNKNOWN", imyaf)

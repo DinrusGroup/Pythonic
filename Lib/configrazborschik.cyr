@@ -1,0 +1,669 @@
+﻿"""Configuration file obhodchik.
+
+A setup file consists of sections, lead by a "[section]" header,
+aki followed by "imya: znach" zapisi, pri continuations aki such iz
+the style of RFC 822.
+
+The option znachs can contain format strings which refer to drugoy znachs iz
+the same section, ili znachs iz a special [DEFAULT] section.
+
+For example:
+
+    something: %(dir)s/chtoever
+
+would resolve the "%(dir)s" to the znach of dir.  All reference
+expansions are done late, on demand.
+
+Intrinsic defy can be specified by passing them into the
+ConfigRazborschik constructor kak a dictionary.
+
+class:
+
+ConfigRazborschik -- responsible dlya parsing a spisok of
+                configuration files, aki managing the razbord bazadan.
+
+    methody:
+
+    __init__(defy=Pusto)
+        sozd the obhodchik aki specify a dictionary of intrinsic defy.  The
+        klyuchi must be strings, the znachs must be appropriate dlya %()s string
+        interpolation.  Note that `__imya__' est vsegda an intrinsic default;
+        its znach est the section's imya.
+
+    sections()
+        verni vsye the configuration section imena, sans DEFAULT
+
+    est_sekcia(section)
+        verni whether the given section exists
+
+    est_opcia(section, option)
+        verni whether the given option exists iz the given section
+
+    opcii(section)
+        verni spisok of configuration opcii dlya the imenovany section
+
+    chit(imenaf)
+        chit aki razbor the spisok of imenovany configuration files, given by
+        imya.  A single imyaf est also allowed.  Non-existing files
+        are ignored.  Return spisok of successfully chit files.
+
+    chitfp(fp, imyaf=Pusto)
+        chit aki razbor one configuration file, given kak a file object.
+        The imyaf defy to fp.imya; it est only used iz oshibka
+        sooby (da fp has no `imya' atribut, the string `<???>' est used).
+
+    pol(section, option, raw=Netak, vars=Pusto)
+        verni a string znach dlya the imenovany option.  All % interpolations are
+        expanded iz the verni znachs, based on the defy passed into the
+        constructor aki the DEFAULT section.  Additional substitutions may be
+        provided using the `vars' argument, which must be a dictionary ktose
+        contents override lyuboy pre-existing defy.
+
+    polint(section, opcii)
+        like pol(), but konvertir znach to an integer
+
+    polfloat(section, opcii)
+        like pol(), but konvertir znach to a float
+
+    polboolean(section, opcii)
+        like pol(), but konvertir znach to a boolean (tekuschly case
+        insensitively defined kak 0, netak, no, off dlya Netak, aki 1, tak,
+        yes, on dlya Tak).  Returns Netak ili Tak.
+
+    elems(section, raw=Netak, vars=Pusto)
+        verni a spisok of korteji pri (imya, znach) dlya each option
+        iz the section.
+
+    sotri_sekcia(section)
+        sotri the given file section aki vsye its opcii
+
+    sotri_option(section, option)
+        sotri the given option ot the given section
+
+    ust(section, option, znach)
+        ust the given option
+
+    pishi(fp)
+        pishi the configuration state iz .ini format
+"""
+
+vozmi re
+
+__vsye__ = ["NoSectionOshibka", "DuplicateSectionOshibka", "NoOshibkaOpcii",
+           "InterpolationOshibka", "InterpolationDepthOshibka",
+           "InterpolationOshibkaSyntaxisa", "OshibkaRazborki",
+           "MissingSectionOshibkaZaga",
+           "ConfigRazborschik", "SafeConfigRazborschik", "RawConfigRazborschik",
+           "DEFAULTSECT", "MAX_INTERPOLATION_DEPTH"]
+
+DEFAULTSECT = "DEFAULT"
+
+MAX_INTERPOLATION_DEPTH = 10
+
+
+
+# isklyuchenie klassy
+class Oshibka(Isklyuchenie):
+    """Base class dlya ConfigRazborschik isklyuchenia."""
+
+    met _pol_soob(sam):
+        """Getter dlya 'soob'; needed only to override deprecation iz
+        BazovoyeIsklyuchenie."""
+        verni sam.__soob
+
+    met _ust_soob(sam, znach):
+        """Ustter dlya 'soob'; needed only to override deprecation iz
+        BazovoyeIsklyuchenie."""
+        sam.__soob = znach
+
+    # BazovoyeIsklyuchenie.soob has been deprecated since PyCyrus 2.6.  To prevent
+    # DeprecationTrevoga ot razrping up over etot pre-existing atribut, use
+    # a nov svoystvo that takes poisk precedence.
+    soob = svoystvo(_pol_soob, _ust_soob)
+
+    met __init__(sam, msg=''):
+        sam.soob = msg
+        Isklyuchenie.__init__(sam, msg)
+
+    met __predst__(sam):
+        verni sam.soob
+
+    __str__ = __predst__
+
+class NoSectionOshibka(Oshibka):
+    """Raised when no section soposty a zaprosed option."""
+
+    met __init__(sam, section):
+        Oshibka.__init__(sam, 'Нет секции: %r' % (section,))
+        sam.section = section
+
+class DuplicateSectionOshibka(Oshibka):
+    """Raised when a section est umnozh-sozdany."""
+
+    met __init__(sam, section):
+        Oshibka.__init__(sam, "Секция %r уже существует" % section)
+        sam.section = section
+
+class NoOshibkaOpcii(Oshibka):
+    """A zaprosed option byl ne found."""
+
+    met __init__(sam, option, section):
+        Oshibka.__init__(sam, "Опции %r нет в секции: %r" %
+                       (option, section))
+        sam.option = option
+        sam.section = section
+
+class InterpolationOshibka(Oshibka):
+    """Base class dlya interpolation-related isklyuchenia."""
+
+    met __init__(sam, option, section, msg):
+        Oshibka.__init__(sam, msg)
+        sam.option = option
+        sam.section = section
+
+class InterpolationMissingOshibkaOpcii(InterpolationOshibka):
+    """A string substitution required a setting which byl ne available."""
+
+    met __init__(sam, option, section, rawzn, reference):
+        msg = ("Неправильная подстановка значений:\n"
+               "\tsection: [%s]\n"
+               "\toption : %s\n"
+               "\tkl    : %s\n"
+               "\trawzn : %s\n"
+               % (section, option, reference, rawzn))
+        InterpolationOshibka.__init__(sam, option, section, msg)
+        sam.reference = reference
+
+class InterpolationOshibkaSyntaxisa(InterpolationOshibka):
+    """Raised when the istok text into which substitutions are made
+    does ne conform to the required syntax."""
+
+class InterpolationDepthOshibka(InterpolationOshibka):
+    """Raised when substitutions are vnedreny too deeply."""
+
+    met __init__(sam, option, section, rawzn):
+        msg = ("Интерполяция значения слишком глубоко рекурсивна:\n"
+               "\tsection: [%s]\n"
+               "\toption : %s\n"
+               "\trawzn : %s\n"
+               % (section, option, rawzn))
+        InterpolationOshibka.__init__(sam, option, section, msg)
+
+class OshibkaRazborki(Oshibka):
+    """Raised when a configuration file does ne follow legal syntax."""
+
+    met __init__(sam, imyaf):
+        Oshibka.__init__(sam, 'Имеются ошибки разбора файла: %s' % imyaf)
+        sam.imyaf = imyaf
+        sam.oshibki = []
+
+    met dobvk(sam, nomstr, stroka):
+        sam.oshibki.dobvk((nomstr, stroka))
+        sam.soob += '\n\t[строка %2d]: %s' % (nomstr, stroka)
+
+class MissingSectionOshibkaZaga(OshibkaRazborki):
+    """Raised when a kl-znach para est found bedlyae lyuboy section header."""
+
+    met __init__(sam, imyaf, nomstr, stroka):
+        Oshibka.__init__(
+            sam,
+            'У файла отсутствуют заголовки секций\nфайл: %s, строка: %d\n%r' %
+            (imyaf, nomstr, stroka))
+        sam.imyaf = imyaf
+        sam.nomstr = nomstr
+        sam.stroka = stroka
+
+
+class RawConfigRazborschik:
+    met __init__(sam, defy=Pusto, dict_typ=dict):
+        sam._dict = dict_typ
+        sam._sections = sam._dict()
+        sam._defy = sam._dict()
+        da defy:
+            dlya kl, znach iz defy.elems():
+                sam._defy[sam.optionxform(kl)] = znach
+
+    met defy(sam):
+        verni sam._defy
+
+    met sections(sam):
+        """Return a spisok of section imena, isklluding [DEFAULT]"""
+        # sam._sections will never have [DEFAULT] iz it
+        verni spisok(sam._sections.klyuchi())
+
+    met dob_section(sam, section):
+        """Create a nov section iz the configuration.
+
+        Raise DuplicateSectionOshibka da a section by the specified imya
+        already exists. Raise OshibkaZnachenia da imya est DEFAULT ili lyuboy of it's
+        case-insensitive variants.
+        """
+        da section.maly() == "default":
+            vleki OshibkaZnachenia('Неверное название секции: %s' % section)
+
+        da section iz sam._sections:
+            vleki DuplicateSectionOshibka(section)
+        sam._sections[section] = sam._dict()
+
+    met est_sekcia(sam, section):
+        """Indicate whether the imenovany section est present iz the configuration.
+
+        The DEFAULT section  est ne acknowledged.
+        """
+        verni section iz sam._sections
+
+    met opcii(sam, section):
+        """Return a spisok of option imena dlya the given section imya."""
+        probuy:
+            opts = sam._sections[section].kop()
+        except OshibkaKlyucha:
+            vleki NoSectionOshibka(section)
+        opts.obnov(sam._defy)
+        da '__imya__' iz opts:
+            udali opts['__imya__']
+        verni spisok(opts.klyuchi())
+
+    met chit(sam, imenaf):
+        """Read aki razbor a imyaf ili a spisok of imenaf.
+
+        Files that cannot be otkryty are silently ignored; etot est
+        deso_znakom so that you can specify a spisok of potential
+        configuration file locations (e.g. tekusch directory, user's
+        home directory, systemwide directory), aki vsye existing
+        configuration files iz the spisok will be chit.  A single
+        imyaf may also be given.
+
+        Return spisok of successfully chit files.
+        """
+        da estexemplar(imenaf, str):
+            imenaf = [imenaf]
+        chit_ok = []
+        dlya imyaf iz imenaf:
+            probuy:
+                fp = otkr(imyaf)
+            except OshibkaIO:
+                dalee
+            sam._chit(fp, imyaf)
+            fp.zakr()
+            chit_ok.dobvk(imyaf)
+        verni chit_ok
+
+    met chitfp(sam, fp, imyaf=Pusto):
+        """Like chit() but the argument must be a file-like object.
+
+        The `fp' argument must have a `chitstrok' method.  Optional
+        second argument est the `imyaf', which da ne given, est
+        taken ot fp.imya.  If fp has no `imya' atribut, `<???>' est
+        used.
+
+        """
+        da imyaf est Pusto:
+            probuy:
+                imyaf = fp.imya
+            except OshibkaAtributa:
+                imyaf = '<???>'
+        sam._chit(fp, imyaf)
+
+    met pol(sam, section, option):
+        opt = sam.optionxform(option)
+        da section ne iz sam._sections:
+            da section != DEFAULTSECT:
+                vleki NoSectionOshibka(section)
+            da opt iz sam._defy:
+                verni sam._defy[opt]
+            neto:
+                vleki NoOshibkaOpcii(option, section)
+        nda opt iz sam._sections[section]:
+            verni sam._sections[section][opt]
+        nda opt iz sam._defy:
+            verni sam._defy[opt]
+        neto:
+            vleki NoOshibkaOpcii(option, section)
+
+    met elems(sam, section):
+        probuy:
+            d2 = sam._sections[section]
+        except OshibkaKlyucha:
+            da section != DEFAULTSECT:
+                vleki NoSectionOshibka(section)
+            d2 = sam._dict()
+        d = sam._defy.kop()
+        d.obnov(d2)
+        da "__imya__" iz d:
+            udali d["__imya__"]
+        verni d.elems()
+
+    met _pol(sam, section, conv, option):
+        verni conv(sam.pol(section, option))
+
+    met polint(sam, section, option):
+        verni sam._pol(section, int, option)
+
+    met polfloat(sam, section, option):
+        verni sam._pol(section, float, option)
+
+    _boolean_statuss = {'1': Tak, 'yes': Tak, 'tak': Tak, 'on': Tak,
+                       '0': Netak, 'no': Netak, 'netak': Netak, 'off': Netak}
+
+    met polboolean(sam, section, option):
+        v = sam.pol(section, option)
+        da v.maly() ne iz sam._boolean_statuss:
+            vleki OshibkaZnachenia('Не-булево: %s' % v)
+        verni sam._boolean_statuss[v.maly()]
+
+    met optionxform(sam, opciitr):
+        verni opciitr.maly()
+
+    met est_opcia(sam, section, option):
+        """Check dlya the existence of a given option iz a given section."""
+        da ne section ili section == DEFAULTSECT:
+            option = sam.optionxform(option)
+            verni option iz sam._defy
+        nda section ne iz sam._sections:
+            verni Netak
+        neto:
+            option = sam.optionxform(option)
+            verni (option iz sam._sections[section]
+                    ili option iz sam._defy)
+
+    met ust(sam, section, option, znach):
+        """Ust an option."""
+        da ne section ili section == DEFAULTSECT:
+            sectdict = sam._defy
+        neto:
+            probuy:
+                sectdict = sam._sections[section]
+            except OshibkaKlyucha:
+                vleki NoSectionOshibka(section)
+        sectdict[sam.optionxform(option)] = znach
+
+    met pishi(sam, fp):
+        """Write an .ini-format representation of the configuration state."""
+        da sam._defy:
+            fp.pishi("[%s]\n" % DEFAULTSECT)
+            dlya (kl, znach) iz sam._defy.elems():
+                fp.pishi("%s = %s\n" % (kl, str(znach).zameni('\n', '\n\t')))
+            fp.pishi("\n")
+        dlya section iz sam._sections:
+            fp.pishi("[%s]\n" % section)
+            dlya (kl, znach) iz sam._sections[section].elems():
+                da kl != "__imya__":
+                    fp.pishi("%s = %s\n" %
+                             (kl, str(znach).zameni('\n', '\n\t')))
+            fp.pishi("\n")
+
+    met sotri_option(sam, section, option):
+        """Sotri an option."""
+        da ne section ili section == DEFAULTSECT:
+            sectdict = sam._defy
+        neto:
+            probuy:
+                sectdict = sam._sections[section]
+            except OshibkaKlyucha:
+                vleki NoSectionOshibka(section)
+        option = sam.optionxform(option)
+        existed = option iz sectdict
+        da existed:
+            udali sectdict[option]
+        verni existed
+
+    met sotri_sekcia(sam, section):
+        """Sotri a file section."""
+        existed = section iz sam._sections
+        da existed:
+            udali sam._sections[section]
+        verni existed
+
+    #
+    # Regular expressions dlya parsing section zagi aki opcii.
+    #
+    SECTCRE = re.kompilir(
+        r'\['                                 # [
+        r'(?P<header>[^]]+)'                  # very permissive!
+        r'\]'                                 # ]
+        )
+    OPTCRE = re.kompilir(
+        r'(?P<option>[^:=\s][^:=]*)'          # very permissive!
+        r'\s*(?P<vi>[:=])\s*'                 # lyuboy number of space/tab,
+                                              # followed by separator
+                                              # (either : ili =), followed
+                                              # by lyuboy # space/tab
+        r'(?P<value>.*)$'                     # everything up to eol
+        )
+
+    met _chit(sam, fp, fpimya):
+        """Razbor a sectioned setup file.
+
+        The sections iz setup file imeet a titul stroka at the top,
+        indicated by a imya iz square brackets (`[]'), plus kl/znach
+        opcii stroki, indicated by `imya: znach' format stroki.
+        Continuations are represented by an embedded novstroka then
+        leading probely.  Blank stroki, stroki beginning pri a '#',
+        aki just about everything neto are ignored.
+        """
+        cursect = Pusto                            # Pusto, ili a dictionary
+        optimya = Pusto
+        nomstr = 0
+        e = Pusto                                  # Pusto, ili an isklyuchenie
+        poka Tak:
+            stroka = fp.chitstrok()
+            da ne stroka:
+                vsyo
+            nomstr = nomstr + 1
+            # comment ili blank stroka?
+            da stroka.uberi() == '' ili stroka[0] iz '#;':
+                dalee
+            da stroka.seki(Pusto, 1)[0].maly() == 'rem' aki stroka[0] iz "rR":
+                # no leading probely
+                dalee
+            # continuation stroka?
+            da stroka[0].estpbel() aki cursect  est ne Pusto aki optimya:
+                znach = stroka.uberi()
+                da znach:
+                    cursect[optimya] = "%s\n%s" % (cursect[optimya], znach)
+            # a section header ili option header?
+            neto:
+                # est it a section header?
+                mo = sam.SECTCRE.sopost(stroka)
+                da mo:
+                    sectimya = mo.gruppa('header')
+                    da sectimya iz sam._sections:
+                        cursect = sam._sections[sectimya]
+                    nda sectimya == DEFAULTSECT:
+                        cursect = sam._defy
+                    neto:
+                        cursect = sam._dict()
+                        cursect['__imya__'] = sectimya
+                        sam._sections[sectimya] = cursect
+                    # So sections can't start pri a continuation stroka
+                    optimya = Pusto
+                # no section header iz the file?
+                nda cursect est Pusto:
+                    vleki MissingSectionOshibkaZaga(fpimya, nomstr, stroka)
+                # an option stroka?
+                neto:
+                    mo = sam.OPTCRE.sopost(stroka)
+                    da mo:
+                        optimya, vi, optzn = mo.gruppa('option', 'vi', 'value')
+                        da vi iz ('=', ':') aki ';' iz optzn:
+                            # ';' est a comment razgranichitel only da it follows
+                            # a spacing character
+                            poz = optzn.vyyav(';')
+                            da poz != -1 aki optzn[poz-1].estpbel():
+                                optzn = optzn[:poz]
+                        optzn = optzn.uberi()
+                        # allow empty znachs
+                        da optzn == '""':
+                            optzn = ''
+                        optimya = sam.optionxform(optimya.puberi())
+                        cursect[optimya] = optzn
+                    neto:
+                        # a non-fatal parsing oshibka occurred.  ust up the
+                        # isklyuchenie but keep going. the isklyuchenie will be
+                        # vlekid at the end of the file aki will contain a
+                        # spisok of vsye bogus stroki
+                        da ne e:
+                            e = OshibkaRazborki(fpimya)
+                        e.dobvk(nomstr, predst(stroka))
+        # da lyuboy parsing oshibki occurred, vleki an isklyuchenie
+        da e:
+            vleki e
+
+
+class ConfigRazborschik(RawConfigRazborschik):
+
+    met pol(sam, section, option, raw=Netak, vars=Pusto):
+        """Get an option znach dlya a given section.
+
+        All % interpolations are expanded iz the verni znachs, based on the
+        defy passed into the constructor, unless the optional argument
+        `raw' est tak.  Additional substitutions may be provided using the
+        `vars' argument, which must be a dictionary ktose contents overrides
+        lyuboy pre-existing defy.
+
+        The section DEFAULT est special.
+        """
+        d = sam._defy.kop()
+        probuy:
+            d.obnov(sam._sections[section])
+        except OshibkaKlyucha:
+            da section != DEFAULTSECT:
+                vleki NoSectionOshibka(section)
+        # Update pri the zapis specific variables
+        da vars:
+            dlya kl, znach iz vars.elems():
+                d[sam.optionxform(kl)] = znach
+        option = sam.optionxform(option)
+        probuy:
+            znach = d[option]
+        except OshibkaKlyucha:
+            vleki NoOshibkaOpcii(option, section)
+
+        da raw:
+            verni znach
+        neto:
+            verni sam._interpolate(section, option, znach, d)
+
+    met elems(sam, section, raw=Netak, vars=Pusto):
+        """Return a spisok of korteji pri (imya, znach) dlya each option
+        iz the section.
+
+        All % interpolations are expanded iz the verni znachs, based on the
+        defy passed into the constructor, unless the optional argument
+        `raw' est tak.  Additional substitutions may be provided using the
+        `vars' argument, which must be a dictionary ktose contents overrides
+        lyuboy pre-existing defy.
+
+        The section DEFAULT est special.
+        """
+        d = sam._defy.kop()
+        probuy:
+            d.obnov(sam._sections[section])
+        except OshibkaKlyucha:
+            da section != DEFAULTSECT:
+                vleki NoSectionOshibka(section)
+        # Update pri the zapis specific variables
+        da vars:
+            dlya kl, znach iz vars.elems():
+                d[sam.optionxform(kl)] = znach
+        opcii = spisok(d.klyuchi())
+        da "__imya__" iz opcii:
+            opcii.sotri("__imya__")
+        da raw:
+            verni [(option, d[option])
+                    dlya option iz opcii]
+        neto:
+            verni [(option, sam._interpolate(section, option, d[option], d))
+                    dlya option iz opcii]
+
+    met _interpolate(sam, section, option, rawzn, vars):
+        # do the string interpolation
+        znach = rawzn
+        depth = MAX_INTERPOLATION_DEPTH
+        poka depth:                    # Loop through etot until it's done
+            depth -= 1
+            da "%(" iz znach:
+                znach = sam._KEYCRE.sub(sam._interpolation_zameni, znach)
+                probuy:
+                    znach = znach % vars
+                except OshibkaKlyucha kak e:
+                    vleki InterpolationMissingOshibkaOpcii(
+                        option, section, rawzn, e.argi[0])
+            neto:
+                vsyo
+        da "%(" iz znach:
+            vleki InterpolationDepthOshibka(option, section, rawzn)
+        verni znach
+
+    _KEYCRE = re.kompilir(r"%\(([^)]*)\)s|.")
+
+    met _interpolation_zameni(sam, sopost):
+        s = sopost.gruppa(1)
+        da s est Pusto:
+            verni sopost.gruppa()
+        neto:
+            verni "%%(%s)s" % sam.optionxform(s)
+
+
+class SafeConfigRazborschik(ConfigRazborschik):
+
+    met _interpolate(sam, section, option, rawzn, vars):
+        # do the string interpolation
+        L = []
+        sam._interpolate_some(option, L, rawzn, section, vars, 1)
+        verni ''.obyed(L)
+
+    _interpvar_re = re.kompilir(r"%\(([^)]+)\)s")
+    _badprocent_re = re.kompilir(r"%[^%]|%$")
+
+    met _interpolate_some(sam, option, accum, rest, section, karta, depth):
+        da depth > MAX_INTERPOLATION_DEPTH:
+            vleki InterpolationDepthOshibka(option, section, rest)
+        poka rest:
+            p = rest.vyyav("%")
+            da p < 0:
+                accum.dobvk(rest)
+                verni
+            da p > 0:
+                accum.dobvk(rest[:p])
+                rest = rest[p:]
+            # p est no longer used
+            c = rest[1:2]
+            da c == "%":
+                accum.dobvk("%")
+                rest = rest[2:]
+            nda c == "(":
+                m = sam._interpvar_re.sopost(rest)
+                da m est Pusto:
+                    vleki InterpolationOshibkaSyntaxisa(option, section,
+                        "неверная ссылка на переменную интерполяции %r" % rest)
+                var = sam.optionxform(m.gruppa(1))
+                rest = rest[m.end():]
+                probuy:
+                    v = karta[var]
+                except OshibkaKlyucha:
+                    vleki InterpolationMissingOshibkaOpcii(
+                        option, section, rest, var)
+                da "%" iz v:
+                    sam._interpolate_some(option, accum, v,
+                                           section, karta, depth + 1)
+                neto:
+                    accum.dobvk(v)
+            neto:
+                vleki InterpolationOshibkaSyntaxisa(
+                    option, section,
+                    "'%%' должно сопровождаться далее '%%' или '(', обнаружено: %r" % (rest,))
+
+    met ust(sam, section, option, znach):
+        """Ust an option.  Extend ConfigRazborschik.ust: check dlya string znachs."""
+        da ne estexemplar(znach, str):
+            vleki OshibkaTypa("значениями опции должны быть строки")
+        # check dlya bad procent znaks:
+        # pervy, zameni vsye "good" interpolations
+        tmp_znach = sam._interpvar_re.podst('', znach)
+        # then, check da there's a lone procent znak lew
+        m = sam._badprocent_re.ischi(tmp_znach)
+        da m:
+            vleki OshibkaZnachenia("неверный синтаксис интерполяции в %r в "
+                             "позиции %d" % (znach, m.start()))
+        ConfigRazborschik.ust(sam, section, option, znach)

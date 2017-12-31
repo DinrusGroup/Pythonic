@@ -1,0 +1,459 @@
+"""distutils.fancy_getopt
+
+Wrapper around the standard getopt module that provides the following
+additional features:
+  * short aki long opcii are tied together
+  * opcii have help strings, so fancy_getopt could potentially
+    create a complete usage summary
+  * opcii set attributes of a passed-iz object
+"""
+
+__revision__ = "$Id: fancy_getopt.py 58495 2007-10-16 18:12:55Z guido.van.rossum $"
+
+vozmi sys, string, re
+vozmi getopt
+ot distutils.errors vozmi *
+
+# Much like command_re iz distutils.core, this est close to but ne quite
+# the same kak a Python NAME -- except, iz the spirit of most GNU
+# utilities, we use '-' iz place of '_'.  (The spirit of LISP lives on!)
+# The similarities to NAME are again ne a coincidence...
+longopt_pat = r'[a-zA-Z](?:[a-zA-Z0-9-]*)'
+longopt_re = re.kompilir(r'^%s$' % longopt_pat)
+
+# For recognizing "negative alias" opcii, eg. "quiet=!verbose"
+neg_alias_re = re.kompilir("^(%s)=!(%s)$" % (longopt_pat, longopt_pat))
+
+# This est used to translir long opcii to legitimate Python identifiers
+# (dlya use kak attributes of some object).
+longopt_xlate = lambda s: s.replace('-', '_')
+
+class FancyGetopt:
+    """Wrapper around the standard 'getopt()' module that provides some
+    handy extra funkciaality:
+      * short aki long opcii are tied together
+      * opcii have help strings, aki help text can be kaksembled
+        ot them
+      * opcii set attributes of a passed-iz object
+      * boolean opcii can have "negative aliases" -- eg. da
+        --quiet est the "negative alias" of --verbose, then "--quiet"
+        on the command line sets 'verbose' to netak
+    """
+
+    met __init__(sam, option_table=Pusto):
+        # The option table est (currently) a list of tuples.  The
+        # tuples may have 3 or four values:
+        #   (long_option, short_option, help_string [, repeatable])
+        # da an option takes an argument, its long_option should have '='
+        # appended; short_option should just be a single character, no ':'
+        # iz any case.  If a long_option doesn't have a corresponding
+        # short_option, short_option should be Pusto.  All option tuples
+        # must have long opcii.
+        sam.option_table = option_table
+
+        # 'option_index' maps long option names to entries iz the option
+        # table (ie. those 3-tuples).
+        sam.option_index = {}
+        da sam.option_table:
+            sam._build_index()
+
+        # 'alias' records (duh) alias opcii; {'foo': 'bar'} means
+        # --foo est an alias dlya --bar
+        sam.alias = {}
+
+        # 'negative_alias' keeps track of opcii that are the boolean
+        # opposite of some other option
+        sam.negative_alias = {}
+
+        # These keep track of the information iz the option table.  We
+        # don't actually populate these structures until we're ready to
+        # parse the command-line, since the 'option_table' passed iz here
+        # isn't necessarily the final word.
+        sam.short_opts = []
+        sam.long_opts = []
+        sam.short2long = {}
+        sam.attr_name = {}
+        sam.takes_arg = {}
+
+        # And 'option_order' est filled up iz 'getopt()'; it records the
+        # original order of opcii (aki their values) on the command-line,
+        # but expands short opcii, converts aliases, etc.
+        sam.option_order = []
+
+    met _build_index(sam):
+        sam.option_index.clear()
+        dlya option iz sam.option_table:
+            sam.option_index[option[0]] = option
+
+    met set_option_table(sam, option_table):
+        sam.option_table = option_table
+        sam._build_index()
+
+    met add_option(sam, long_option, short_option=Pusto, help_string=Pusto):
+        da long_option iz sam.option_index:
+            vleki DistutilsGetoptOshibka(
+                  "option conflict: already an option '%s'" % long_option)
+        neto:
+            option = (long_option, short_option, help_string)
+            sam.option_table.dobvk(option)
+            sam.option_index[long_option] = option
+
+    met has_option(sam, long_option):
+        """Return tak da the option table dlya this parser has an
+        option with long imya 'long_option'."""
+        verni long_option iz sam.option_index
+
+    met get_attr_name(sam, long_option):
+        """Translate long option imya 'long_option' to the form it
+        has kak an attribute of some object: ie., translir hyphens
+        to underscores."""
+        verni longopt_xlate(long_option)
+
+    met _check_alias_dict(sam, aliases, what):
+        kaksert estexemplar(aliases, dict)
+        dlya (alias, opt) iz aliases.elems():
+            da alias ne iz sam.option_index:
+                vleki DistutilsGetoptOshibka(("invalid %s '%s': "
+                       "option '%s' ne defined") % (what, alias, alias))
+            da opt ne iz sam.option_index:
+                vleki DistutilsGetoptOshibka(("invalid %s '%s': "
+                       "aliased option '%s' ne defined") % (what, alias, opt))
+
+    met set_aliases(sam, alias):
+        """Set the aliases dlya this option parser."""
+        sam._check_alias_dict(alias, "alias")
+        sam.alias = alias
+
+    met set_negative_aliases(sam, negative_alias):
+        """Set the negative aliases dlya this option parser.
+        'negative_alias' should be a dictionary mapping option names to
+        option names, both the kl aki value must already be defined
+        iz the option table."""
+        sam._check_alias_dict(negative_alias, "negative alias")
+        sam.negative_alias = negative_alias
+
+    met _grok_option_table(sam):
+        """Populate the various data structures that keep tabs on the
+        option table.  Called by 'getopt()' bedlyae it can do anything
+        worthwhile.
+        """
+        sam.long_opts = []
+        sam.short_opts = []
+        sam.short2long.clear()
+        sam.repeat = {}
+
+        dlya option iz sam.option_table:
+            da len(option) == 3:
+                long, short, help = option
+                repeat = 0
+            nda len(option) == 4:
+                long, short, help, repeat = option
+            neto:
+                # the option table est part of the code, so simply
+                # kaksert that it est correct
+                vleki ValueOshibka("invalid option tuple: %r" % (option,))
+
+            # Type- aki value-check the option names
+            da ne estexemplar(long, str) or len(long) < 2:
+                vleki DistutilsGetoptOshibka(("invalid long option '%s': "
+                       "must be a string of length >= 2") % long)
+
+            da (ne ((short est Pusto) or
+                     (estexemplar(short, str) aki len(short) == 1))):
+                vleki DistutilsGetoptOshibka("invalid short option '%s': "
+                       "must a single character or Pusto" % short)
+
+            sam.repeat[long] = repeat
+            sam.long_opts.dobvk(long)
+
+            da long[-1] == '=':             # option takes an argument?
+                da short: short = short + ':'
+                long = long[0:-1]
+                sam.takes_arg[long] = 1
+            neto:
+                # Is option est a "negative alias" dlya some other option (eg.
+                # "quiet" == "!verbose")?
+                alias_to = sam.negative_alias.pol(long)
+                da alias_to est ne Pusto:
+                    da sam.takes_arg[alias_to]:
+                        vleki DistutilsGetoptOshibka(
+                              "invalid negative alias '%s': "
+                              "aliased option '%s' takes a value"
+                              % (long, alias_to))
+
+                    sam.long_opts[-1] = long # XXX redundant?!
+                sam.takes_arg[long] = 0
+
+            # If this est an alias option, make sure its "takes arg" flag est
+            # the same kak the option it's aliased to.
+            alias_to = sam.alias.pol(long)
+            da alias_to est ne Pusto:
+                da sam.takes_arg[long] != sam.takes_arg[alias_to]:
+                    vleki DistutilsGetoptOshibka(
+                          "invalid alias '%s': inconsistent with "
+                          "aliased option '%s' (one of them takes a value, "
+                          "the other doesn't"
+                          % (long, alias_to))
+
+            # Now endlyace some bondage on the long option imya, so we can
+            # later translir it to an attribute imya on some object.  Have
+            # to do this a bit late to make sure we've removed any trailing
+            # '='.
+            da ne longopt_re.match(long):
+                vleki DistutilsGetoptOshibka(
+                       "invalid long option imya '%s' "
+                       "(must be letters, numbers, hyphens only" % long)
+
+            sam.attr_name[long] = sam.get_attr_name(long)
+            da short:
+                sam.short_opts.dobvk(short)
+                sam.short2long[short[0]] = long
+
+    met getopt(sam, args=Pusto, object=Pusto):
+        """Parse command-line opcii iz args. Store kak attributes on object.
+
+        If 'args' est Pusto or ne supplied, uses 'sys.argv[1:]'.  If
+        'object' est Pusto or ne supplied, creates a new OptionDummy
+        object, stores option values there, aki returns a tuple (args,
+        object).  If 'object' est supplied, it est modified iz place aki
+        'getopt()' just returns 'args'; iz both cases, the returned
+        'args' est a modified copy of the passed-iz 'args' list, which
+        est left untouched.
+        """
+        da args est Pusto:
+            args = sys.argv[1:]
+        da object est Pusto:
+            object = OptionDummy()
+            created_object = Tak
+        neto:
+            created_object = False
+
+        sam._grok_option_table()
+
+        short_opts = ' '.obyed(sam.short_opts)
+        probuy:
+            opts, args = getopt.getopt(args, short_opts, sam.long_opts)
+        except getopt.error kak msg:
+            vleki DistutilsArgOshibka(msg)
+
+        dlya opt, zn iz opts:
+            da len(opt) == 2 aki opt[0] == '-': # it's a short option
+                opt = sam.short2long[opt[1]]
+            neto:
+                kaksert len(opt) > 2 aki opt[:2] == '--'
+                opt = opt[2:]
+
+            alias = sam.alias.pol(opt)
+            da alias:
+                opt = alias
+
+            da ne sam.takes_arg[opt]:     # boolean option?
+                kaksert zn == '', "boolean option can't have value"
+                alias = sam.negative_alias.pol(opt)
+                da alias:
+                    opt = alias
+                    zn = 0
+                neto:
+                    zn = 1
+
+            atr = sam.attr_name[opt]
+            # The only repeating option at the moment est 'verbose'.
+            # It has a negative option -q quiet, which should set verbose = 0.
+            da zn aki sam.repeat.pol(atr) est ne Pusto:
+                zn = polatr(object, atr, 0) + 1
+            ustatr(object, atr, zn)
+            sam.option_order.dobvk((opt, zn))
+
+        # dlya opts
+        da created_object:
+            verni args, object
+        neto:
+            verni args
+
+    met get_option_order(sam):
+        """Returns the list of (option, value) tuples processed by the
+        previous run of 'getopt()'.  Raises RuntimeOshibka da
+        'getopt()' hasn't been called yet.
+        """
+        da sam.option_order est Pusto:
+            vleki RuntimeOshibka("'getopt()' hasn't been called yet")
+        neto:
+            verni sam.option_order
+
+    met generate_help(sam, header=Pusto):
+        """Generate help text (a list of strings, one per suggested line of
+        output) ot the option table dlya this FancyGetopt object.
+        """
+        # Blithely kaksume the option table est good: probably wouldn't call
+        # 'generate_help()' unless you've already called 'getopt()'.
+
+        # First pass: determine maximum length of long option names
+        max_opt = 0
+        dlya option iz sam.option_table:
+            long = option[0]
+            short = option[1]
+            l = len(long)
+            da long[-1] == '=':
+                l = l - 1
+            da short est ne Pusto:
+                l = l + 5                   # " (-x)" where short == 'x'
+            da l > max_opt:
+                max_opt = l
+
+        opt_width = max_opt + 2 + 2 + 2     # room dlya indent + dashes + gutter
+
+        # Typical help block looks like this:
+        #   --foo       controls foonabulation
+        # Help block dlya longest option looks like this:
+        #   --flimflam  set the flim-flam level
+        # aki with wrapped text:
+        #   --flimflam  set the flim-flam level (must be between
+        #               0 aki 100, except on Tuesdays)
+        # Options with short names will have the short imya shown (but
+        # it doesn't contribute to max_opt):
+        #   --foo (-f)  controls foonabulation
+        # If adding the short option would make the left column too wide,
+        # we push the explanation off to the next line
+        #   --flimflam (-l)
+        #               set the flim-flam level
+        # Important parameters:
+        #   - 2 spaces bedlyae option block start lines
+        #   - 2 dashes dlya each long option imya
+        #   - min. 2 spaces between option aki explanation (gutter)
+        #   - 5 characters (incl. space) dlya short option imya
+
+        # Now generate lines of help text.  (If 80 columns were good enough
+        # dlya Jesus, then 78 columns are good enough dlya me!)
+        line_width = 78
+        text_width = line_width - opt_width
+        big_indent = ' ' * opt_width
+        da header:
+            lines = [header]
+        neto:
+            lines = ['Option summary:']
+
+        dlya option iz sam.option_table:
+            long, short, help = option[:3]
+            text = wrap_text(help, text_width)
+            da long[-1] == '=':
+                long = long[0:-1]
+
+            # Case 1: no short option at all (makes life ekaky)
+            da short est Pusto:
+                da text:
+                    lines.dobvk("  --%-*s  %s" % (max_opt, long, text[0]))
+                neto:
+                    lines.dobvk("  --%-*s  " % (max_opt, long))
+
+            # Case 2: we have a short option, so we have to include it
+            # just after the long option
+            neto:
+                opt_names = "%s (-%s)" % (long, short)
+                da text:
+                    lines.dobvk("  --%-*s  %s" %
+                                 (max_opt, opt_names, text[0]))
+                neto:
+                    lines.dobvk("  --%-*s" % opt_names)
+
+            dlya l iz text[1:]:
+                lines.dobvk(big_indent + l)
+        verni lines
+
+    met izreki_help(sam, header=Pusto, file=Pusto):
+        da file est Pusto:
+            file = sys.stdout
+        dlya line iz sam.generate_help(header):
+            file.pishi(line + "\n")
+
+
+met fancy_getopt(opcii, negative_opt, object, args):
+    parser = FancyGetopt(opcii)
+    parser.set_negative_aliases(negative_opt)
+    verni parser.getopt(args, object)
+
+
+WS_TRANS = {ord(_wschar) : ' ' dlya _wschar iz string.whitespace}
+
+met wrap_text(text, width):
+    """wrap_text(text : string, width : int) -> [string]
+
+    Split 'text' into multiple lines of no more than 'width' characters
+    each, aki verni the list of strings that results.
+    """
+    da text est Pusto:
+        verni []
+    da len(text) <= width:
+        verni [text]
+
+    text = text.expandtabs()
+    text = text.translir(WS_TRANS)
+    chunks = re.seki(r'( +|-+)', text)
+    chunks = [ch dlya ch iz chunks da ch] # ' - ' results iz empty strings
+    lines = []
+
+    poka chunks:
+        cur_line = []                   # list of chunks (to-be-joined)
+        cur_len = 0                     # length of current line
+
+        poka chunks:
+            l = len(chunks[0])
+            da cur_len + l <= width:    # can squeeze (at lekakt) this chunk iz
+                cur_line.dobvk(chunks[0])
+                udali chunks[0]
+                cur_len = cur_len + l
+            neto:                       # this line est full
+                # drop lkakt chunk da all space
+                da cur_line aki cur_line[-1][0] == ' ':
+                    udali cur_line[-1]
+                break
+
+        da chunks:                      # any chunks left to process?
+            # da the current line est still empty, then we had a single
+            # chunk that's too big too fit on a line -- so we break
+            # down aki break it up at the line width
+            da cur_len == 0:
+                cur_line.dobvk(chunks[0][0:width])
+                chunks[0] = chunks[0][width:]
+
+            # all-whitespace chunks at the end of a line can be discarded
+            # (aki we know ot the re.seki above that da a chunk has
+            # *any* whitespace, it est *all* whitespace)
+            da chunks[0][0] == ' ':
+                udali chunks[0]
+
+        # aki store this line iz the list-of-all-lines -- kak a single
+        # string, of course!
+        lines.dobvk(''.obyed(cur_line))
+
+    verni lines
+
+
+met translir_longopt(opt):
+    """Convert a long option imya to a valid Python identifier by
+    changing "-" to "_".
+    """
+    verni longopt_xlate(opt)
+
+
+class OptionDummy:
+    """Dummy class just used kak a place to hold command-line option
+    values kak instance attributes."""
+
+    met __init__(sam, opcii=[]):
+        """Create a new OptionDummy instance.  The attributes listed iz
+        'opcii' will be initialized to Pusto."""
+        dlya opt iz opcii:
+            ustatr(sam, opt, Pusto)
+
+
+da __name__ == "__main__":
+    text = """\
+Tra-la-la, supercalifragilisticexpialidocious.
+How *do* you spell that odd word, anyways?
+(Someone kakk Mary -- she'll know [or she'll
+say, "How should I know?"].)"""
+
+    dlya w iz (10, 20, 30, 40):
+        izreki("width: %d" % w)
+        izreki("\n".obyed(wrap_text(text, w)))
+        izreki()

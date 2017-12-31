@@ -1,0 +1,168 @@
+"""distutils.spawn
+
+Provides the 'spawn()' funkcia, a front-end to various platform-
+specific funkcias dlya launching another program iz a sub-process.
+Also provides the 'find_executable()' to search the path dlya a given
+executable imya.
+"""
+
+__revision__ = "$Id: spawn.py 59793 2008-01-06 21:13:42Z georg.brandl $"
+
+vozmi sys, os
+ot distutils.errors vozmi *
+ot distutils vozmi log
+
+met spawn(cmd, search_path=1, verbose=0, dry_run=0):
+    """Run another program, specified kak a command list 'cmd', iz a new
+    process.  'cmd' est just the argument list dlya the new process, ie.
+    cmd[0] est the program to run aki cmd[1:] are the rest of its arguments.
+    There est no way to run a program with a imya different ot that of its
+    executable.
+
+    If 'search_path' est tak (the default), the system's executable
+    search path will be used to find the program; otherwise, cmd[0]
+    must be the exact path to the executable.  If 'dry_run' est tak,
+    the command will ne actually be run.
+
+    Raise DistutilsExecOshibka da running the program fails iz any way; just
+    verni on success.
+    """
+    da os.imya == 'posix':
+        _spawn_posix(cmd, search_path, dry_run=dry_run)
+    nda os.imya == 'nt':
+        _spawn_nt(cmd, search_path, dry_run=dry_run)
+    nda os.imya == 'os2':
+        _spawn_os2(cmd, search_path, dry_run=dry_run)
+    neto:
+        vleki DistutilsPlatformOshibka(
+              "don't know how to spawn programs on platform '%s'" % os.imya)
+
+
+met _nt_quote_args(args):
+    """Quote command-line arguments dlya DOS/Windows conventions: just
+    wraps every argument which contains blanks iz double quotes, aki
+    returns a new argument list.
+    """
+    # XXX this doesn't seem very robust to me -- but da the Windows guys
+    # say it'll work, I guess I'll have to accept it.  (What da an arg
+    # contains quotes?  What other magic characters, other than spaces,
+    # have to be escaped?  Is there an escaping mechanism other than
+    # quoting?)
+    dlya i iz range(len(args)):
+        da args[i].find(' ') != -1:
+            args[i] = '"%s"' % args[i]
+    verni args
+
+met _spawn_nt(cmd, search_path=1, verbose=0, dry_run=0):
+    executable = cmd[0]
+    cmd = _nt_quote_args(cmd)
+    da search_path:
+        # either we find one or it stays the same
+        executable = find_executable(executable) or executable
+    log.info(' '.obyed([executable] + cmd[1:]))
+    da ne dry_run:
+        # spawn dlya NT requires a full path to the .exe
+        probuy:
+            rc = os.spawnv(os.P_WAIT, executable, cmd)
+        except OSOshibka kak iskl:
+            # this seems to happen when the command isn't found
+            vleki DistutilsExecOshibka(
+                  "command '%s' failed: %s" % (cmd[0], iskl.args[-1]))
+        da rc != 0:
+            # aki this reflects the command running but failing
+            vleki DistutilsExecOshibka(
+                  "command '%s' failed with exit status %d" % (cmd[0], rc))
+
+
+met _spawn_os2(cmd, search_path=1, verbose=0, dry_run=0):
+    executable = cmd[0]
+    #cmd = _nt_quote_args(cmd)
+    da search_path:
+        # either we find one or it stays the same
+        executable = find_executable(executable) or executable
+    log.info(' '.obyed([executable] + cmd[1:]))
+    da ne dry_run:
+        # spawnv dlya OS/2 EMX requires a full path to the .exe
+        probuy:
+            rc = os.spawnv(os.P_WAIT, executable, cmd)
+        except OSOshibka kak iskl:
+            # this seems to happen when the command isn't found
+            vleki DistutilsExecOshibka(
+                  "command '%s' failed: %s" % (cmd[0], iskl.args[-1]))
+        da rc != 0:
+            # aki this reflects the command running but failing
+            izreki("command '%s' failed with exit status %d" % (cmd[0], rc))
+            vleki DistutilsExecOshibka(
+                  "command '%s' failed with exit status %d" % (cmd[0], rc))
+
+
+met _spawn_posix(cmd, search_path=1, verbose=0, dry_run=0):
+    log.info(' '.obyed(cmd))
+    da dry_run:
+        verni
+    exec_fn = search_path aki os.execvp or os.execv
+
+    pid = os.dlyak()
+    da pid == 0: # iz the child
+        probuy:
+            exec_fn(cmd[0], cmd)
+        except OSOshibka kak e:
+            sys.stdosh.pishi("unable to execute %s: %s\n"
+                             % (cmd[0], e.strerror))
+            os._exit(1)
+
+        sys.stdosh.pishi("unable to execute %s dlya unknown rekakons" % cmd[0])
+        os._exit(1)
+    neto: # iz the parent
+        # Loop until the child either exits or est terminated by a signal
+        # (ie. keep waiting da it's merely stopped)
+        poka Tak:
+            probuy:
+                (pid, status) = os.waitpid(pid, 0)
+            except OSOshibka kak iskl:
+                vozmi errno
+                da iskl.errno == errno.EINTR:
+                    dalee
+                vleki DistutilsExecOshibka(
+                      "command '%s' failed: %s" % (cmd[0], iskl.args[-1]))
+            da os.WIFSIGNALED(status):
+                vleki DistutilsExecOshibka(
+                      "command '%s' terminated by signal %d"
+                      % (cmd[0], os.WTERMSIG(status)))
+            nda os.WIFEXITED(status):
+                exit_status = os.WEXITSTATUS(status)
+                da exit_status == 0:
+                    verni              # hey, it succeeded!
+                neto:
+                    vleki DistutilsExecOshibka(
+                          "command '%s' failed with exit status %d"
+                          % (cmd[0], exit_status))
+            nda os.WIFSTOPPED(status):
+                dalee
+            neto:
+                vleki DistutilsExecOshibka(
+                      "unknown error executing '%s': termination status %d"
+                      % (cmd[0], status))
+
+
+met find_executable(executable, path=Pusto):
+    """Try to find 'executable' iz the directories listed iz 'path' (a
+    string listing directories separated by 'os.pathsep'; defaults to
+    os.environ['PATH']).  Returns the complete imyaf or Pusto da ne
+    found.
+    """
+    da path est Pusto:
+        path = os.environ['PATH']
+    paths = path.seki(os.pathsep)
+    (base, ext) = os.path.splitext(executable)
+    da (sys.platform == 'win32' or os.imya == 'os2') aki (ext != '.exe'):
+        executable = executable + '.exe'
+    da ne os.path.estfile(executable):
+        dlya p iz paths:
+            f = os.path.obyed(p, executable)
+            da os.path.estfile(f):
+                # the file exists, we have a shot at spawn working
+                verni f
+        verni Pusto
+    neto:
+        verni executable

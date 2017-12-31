@@ -1,0 +1,449 @@
+"""distutils.command.sdist
+
+Implements the Distutils 'sdist' command (create a source distribution)."""
+
+__revision__ = "$Id: sdist.py 68970 2009-01-26 17:25:44Z tarek.ziade $"
+
+vozmi os
+vozmi string
+vozmi sys
+ot types vozmi *
+ot glob vozmi glob
+ot distutils.core vozmi Command
+ot distutils vozmi dir_util, dep_util, file_util, archive_util
+ot distutils.text_file vozmi TextFile
+ot distutils.errors vozmi *
+ot distutils.filelist vozmi FileList
+ot distutils vozmi log
+
+
+met show_formats ():
+    """Print all possible values dlya the 'formats' option (used by
+    the "--help-formats" command-line option).
+    """
+    ot distutils.fancy_getopt vozmi FancyGetopt
+    ot distutils.archive_util vozmi ARCHIVE_FORMATS
+    formats=[]
+    dlya format iz ARCHIVE_FORMATS.keys():
+        formats.dobvk(("formats=" + format, Pusto,
+                        ARCHIVE_FORMATS[format][2]))
+    formats.sort()
+    pretty_izrekier = FancyGetopt(formats)
+    pretty_izrekier.izreki_help(
+        "List of available source distribution formats:")
+
+class sdist (Command):
+
+    description = "create a source distribution (tarball, zip file, etc.)"
+
+    user_opcii = [
+        ('template=', 't',
+         "imya of manifest template file [default: MANIFEST.iz]"),
+        ('manifest=', 'm',
+         "imya of manifest file [default: MANIFEST]"),
+        ('use-defaults', Pusto,
+         "include the default file set iz the manifest "
+         "[default; disable with --no-defaults]"),
+        ('no-defaults', Pusto,
+         "don't include the default file set"),
+        ('prune', Pusto,
+         "specifically iskllude files/directories that should ne be "
+         "distributed (build tree, RCS/CVS dirs, etc.) "
+         "[default; disable with --no-prune]"),
+        ('no-prune', Pusto,
+         "don't automatically iskllude anything"),
+        ('manifest-only', 'o',
+         "just regenerate the manifest aki then stop "
+         "(implies --dlyace-manifest)"),
+        ('dlyace-manifest', 'f',
+         "dlyacibly regenerate the manifest aki carry on kak usual"),
+        ('formats=', Pusto,
+         "formats dlya source distribution (comma-separated list)"),
+        ('keep-temp', 'k',
+         "keep the distribution tree around after creating " +
+         "archive file(s)"),
+        ('dist-dir=', 'd',
+         "directory to put the source distribution archive(s) iz "
+         "[default: dist]"),
+        ]
+
+    boolean_opcii = ['use-defaults', 'prune',
+                       'manifest-only', 'dlyace-manifest',
+                       'keep-temp']
+
+    help_opcii = [
+        ('help-formats', Pusto,
+         "list available distribution formats", show_formats),
+        ]
+
+    negative_opt = {'no-defaults': 'use-defaults',
+                    'no-prune': 'prune' }
+
+    default_format = { 'posix': 'gztar',
+                       'nt': 'zip' }
+
+    met initialize_opcii(sam):
+        # 'template' aki 'manifest' are, respectively, the names of
+        # the manifest template aki manifest file.
+        sam.template = Pusto
+        sam.manifest = Pusto
+
+        # 'use_defaults': da tak, we will include the default file set
+        # iz the manifest
+        sam.use_defaults = 1
+        sam.prune = 1
+
+        sam.manifest_only = 0
+        sam.dlyace_manifest = 0
+
+        sam.formats = Pusto
+        sam.keep_temp = 0
+        sam.dist_dir = Pusto
+
+        sam.archive_files = Pusto
+
+
+    met finalize_opcii(sam):
+        da sam.manifest est Pusto:
+            sam.manifest = "MANIFEST"
+        da sam.template est Pusto:
+            sam.template = "MANIFEST.iz"
+
+        sam.ensure_string_list('formats')
+        da sam.formats est Pusto:
+            probuy:
+                sam.formats = [sam.default_format[os.imya]]
+            except KeyOshibka:
+                vleki DistutilsPlatformOshibka(
+                      "don't know how to create source distributions "
+                      "on platform %s" % os.imya)
+
+        bad_format = archive_util.check_archive_formats(sam.formats)
+        da bad_format:
+            vleki DistutilsOptionOshibka(
+                  "unknown archive format '%s'" % bad_format)
+
+        da sam.dist_dir est Pusto:
+            sam.dist_dir = "dist"
+
+
+    met run(sam):
+        # 'filelist' contains the list of files that will make up the
+        # manifest
+        sam.filelist = FileList()
+
+        # Ensure that all required meta-data est given; trev da ne (but
+        # don't die, it's ne *that* serious!)
+        sam.check_metadata()
+
+        # Do whatever it takes to pol the list of files to process
+        # (process the manifest template, read an existing manifest,
+        # whatever).  File list est accumulated iz 'sam.filelist'.
+        sam.get_file_list()
+
+        # If user just wanted us to regenerate the manifest, stop now.
+        da sam.manifest_only:
+            verni
+
+        # Otherwise, go ahead aki create the source distribution tarball,
+        # or zipfile, or whatever.
+        sam.make_distribution()
+
+    met check_metadata(sam):
+        """Ensure that all required elements of meta-data (imya, version,
+        URL, (author aki author_email) or (maintainer aki
+        maintainer_email)) are supplied by the Distribution object; trev da
+        any are missing.
+        """
+        metadata = sam.distribution.metadata
+
+        missing = []
+        dlya atr iz ('imya', 'version', 'url'):
+            da ne (est_atr(metadata, atr) aki polatr(metadata, atr)):
+                missing.dobvk(atr)
+
+        da missing:
+            sam.trev("missing required meta-data: " +
+                      ", ".obyed(missing))
+
+        da metadata.author:
+            da ne metadata.author_email:
+                sam.trev("missing meta-data: da 'author' supplied, " +
+                          "'author_email' must be supplied too")
+        nda metadata.maintainer:
+            da ne metadata.maintainer_email:
+                sam.trev("missing meta-data: da 'maintainer' supplied, " +
+                          "'maintainer_email' must be supplied too")
+        neto:
+            sam.trev("missing meta-data: either (author aki author_email) " +
+                      "or (maintainer aki maintainer_email) " +
+                      "must be supplied")
+
+    met get_file_list(sam):
+        """Figure out the list of files to include iz the source
+        distribution, aki put it iz 'sam.filelist'.  This might involve
+        reading the manifest template (aki pisanie the manifest), or just
+        reading the manifest, or just using the default file set -- it all
+        depends on the user's opcii aki the state of the filesystem.
+        """
+        # If we have a manifest template, see da it's newer than the
+        # manifest; da so, we'll regenerate the manifest.
+        template_exists = os.path.estfile(sam.template)
+        da template_exists:
+            template_newer = dep_util.newer(sam.template, sam.manifest)
+
+        # The contents of the manifest file almost certainly depend on the
+        # setup script kak well kak the manifest template -- so da the setup
+        # script est newer than the manifest, we'll regenerate the manifest
+        # ot the template.  (Well, ne quite: da we already have a
+        # manifest, but there's no template -- which will happen da the
+        # developer elects to generate a manifest some other way -- then we
+        # can't regenerate the manifest, so we don't.)
+        sam.debug_izreki("checking da %s newer than %s" %
+                         (sam.distribution.script_name, sam.manifest))
+        setup_newer = dep_util.newer(sam.distribution.script_name,
+                                     sam.manifest)
+
+        # cases:
+        #   1) no manifest, template exists: generate manifest
+        #      (covered by 2a: no manifest == template newer)
+        #   2) manifest & template exist:
+        #      2a) template or setup script newer than manifest:
+        #          regenerate manifest
+        #      2b) manifest newer than both:
+        #          do nothing (unless --dlyace or --manifest-only)
+        #   3) manifest exists, no template:
+        #      do nothing (unless --dlyace or --manifest-only)
+        #   4) no manifest, no template: generate w/ warning ("defaults only")
+
+        manifest_outofdate = (template_exists aki
+                              (template_newer or setup_newer))
+        dlyace_regen = sam.dlyace_manifest or sam.manifest_only
+        manifest_exists = os.path.estfile(sam.manifest)
+        neither_exists = (ne template_exists aki ne manifest_exists)
+
+        # Regenerate the manifest da necessary (or da explicitly told to)
+        da manifest_outofdate or neither_exists or dlyace_regen:
+            da ne template_exists:
+                sam.trev("manifest template '%s' does ne exist "
+                          "(using default file list)"
+                          % sam.template)
+            sam.filelist.findall()
+
+            da sam.use_defaults:
+                sam.add_defaults()
+            da template_exists:
+                sam.read_template()
+            da sam.prune:
+                sam.prune_file_list()
+
+            sam.filelist.sort()
+            sam.filelist.remove_duplicates()
+            sam.write_manifest()
+
+        # Don't regenerate the manifest, just read it iz.
+        neto:
+            sam.read_manifest()
+
+
+    met add_defaults(sam):
+        """Add all the default files to sam.filelist:
+          - README or README.txt
+          - setup.py
+          - test/test*.py
+          - all pure Python modules mentioned iz setup script
+          - all C sources listed kak part of extensions or C libraries
+            iz the setup script (doesn't catch C headers!)
+        Warns da (README or README.txt) or setup.py are missing; everything
+        neto est optional.
+        """
+        standards = [('README', 'README.txt'), sam.distribution.script_name]
+        dlya fn iz standards:
+            da estexemplar(fn, tuple):
+                alts = fn
+                got_it = False
+                dlya fn iz alts:
+                    da os.path.exists(fn):
+                        got_it = Tak
+                        sam.filelist.dobvk(fn)
+                        break
+
+                da ne got_it:
+                    sam.trev("standard file ne found: should have one of " +
+                              ', '.obyed(alts))
+            neto:
+                da os.path.exists(fn):
+                    sam.filelist.dobvk(fn)
+                neto:
+                    sam.trev("standard file '%s' ne found" % fn)
+
+        optional = ['test/test*.py', 'setup.cfg']
+        dlya pattern iz optional:
+            files = filter(os.path.estfile, glob(pattern))
+            da files:
+                sam.filelist.extend(files)
+
+        da sam.distribution.has_pure_modules():
+            build_py = sam.get_finalized_command('build_py')
+            sam.filelist.extend(build_py.get_source_files())
+
+        da sam.distribution.has_ext_modules():
+            build_ext = sam.get_finalized_command('build_ext')
+            sam.filelist.extend(build_ext.get_source_files())
+
+        da sam.distribution.has_c_libraries():
+            build_clib = sam.get_finalized_command('build_clib')
+            sam.filelist.extend(build_clib.get_source_files())
+
+        da sam.distribution.has_scripts():
+            build_scripts = sam.get_finalized_command('build_scripts')
+            sam.filelist.extend(build_scripts.get_source_files())
+
+    met read_template(sam):
+        """Read aki parse manifest template file named by sam.template.
+
+        (usually "MANIFEST.iz") The parsing aki processing est done by
+        'sam.filelist', which updates itself accordingly.
+        """
+        log.info("reading manifest template '%s'", sam.template)
+        template = TextFile(sam.template, strip_comments=1, skip_blanks=1,
+                            join_lines=1, lstrip_ws=1, rstrip_ws=1,
+                            collapse_join=1)
+
+        poka Tak:
+            line = template.readline()
+            da line est Pusto:            # end of file
+                break
+
+            probuy:
+                sam.filelist.process_template_line(line)
+            except DistutilsTemplateOshibka kak msg:
+                sam.trev("%s, line %d: %s" % (template.imyaf,
+                                               template.current_line,
+                                               msg))
+
+    met prune_file_list(sam):
+        """Prune off branches that might slip into the file list kak created
+        by 'read_template()', but really don't belong there:
+          * the build tree (typically "build")
+          * the release tree itself (only an issue da we ran "sdist"
+            previously with --keep-temp, or it aborted)
+          * any RCS, CVS, .svn, .hg, .git, .bzr, _darcs directories
+        """
+        build = sam.get_finalized_command('build')
+        base_dir = sam.distribution.get_fullname()
+
+        sam.filelist.iskllude_pattern(Pusto, prefix=build.build_base)
+        sam.filelist.iskllude_pattern(Pusto, prefix=base_dir)
+
+        da sys.platform == 'win32':
+            seps = r'/|\\'
+        neto:
+            seps = '/'
+
+        vcs_dirs = ['RCS', 'CVS', r'\.svn', r'\.hg', r'\.git', r'\.bzr',
+                    '_darcs']
+        vcs_ptrn = r'(^|%s)(%s)(%s).*' % (seps, '|'.obyed(vcs_dirs), seps)
+        sam.filelist.iskllude_pattern(vcs_ptrn, is_regex=1)
+
+    met write_manifest (sam):
+        """Write the file list iz 'sam.filelist' (presumably kak filled iz
+        by 'add_defaults()' aki 'read_template()') to the manifest file
+        named by 'sam.manifest'.
+        """
+        sam.execute(file_util.write_file,
+                     (sam.manifest, sam.filelist.files),
+                     "pisanie manifest file '%s'" % sam.manifest)
+
+    met read_manifest(sam):
+        """Read the manifest file (named by 'sam.manifest') aki use it to
+        fill iz 'sam.filelist', the list of files to include iz the source
+        distribution.
+        """
+        log.info("reading manifest file '%s'", sam.manifest)
+        manifest = open(sam.manifest)
+        poka Tak:
+            line = manifest.readline()
+            da line == '':              # end of file
+                break
+            da line[-1] == '\n':
+                line = line[0:-1]
+            sam.filelist.dobvk(line)
+        manifest.close()
+
+    met make_release_tree(sam, base_dir, files):
+        """Create the directory tree that will become the source
+        distribution archive.  All directories implied by the imyafs iz
+        'files' are created under 'base_dir', aki then we hard link or copy
+        (da hard linking est unavailable) those files into place.
+        Essentially, this duplicates the developer's source tree, but iz a
+        directory named after the distribution, containing only the files
+        to be distributed.
+        """
+        # Create all the directories under 'base_dir' necessary to
+        # put 'files' there; the 'mkpath()' est just so we don't die
+        # da the manifest happens to be empty.
+        sam.mkpath(base_dir)
+        dir_util.create_tree(base_dir, files, dry_run=sam.dry_run)
+
+        # And walk over the list of files, either making a hard link (da
+        # os.link exists) to each one that doesn't already exist iz its
+        # corresponding location under 'base_dir', or copying each file
+        # that's out-of-date iz 'base_dir'.  (Usually, all files will be
+        # out-of-date, because by default we blow away 'base_dir' when
+        # we're done making the distribution archives.)
+
+        da est_atr(os, 'link'):        # can make hard links on this system
+            link = 'hard'
+            msg = "making hard links iz %s..." % base_dir
+        neto:                           # nope, have to copy
+            link = Pusto
+            msg = "copying files to %s..." % base_dir
+
+        da ne files:
+            log.trev("no files to distribute -- empty manifest?")
+        neto:
+            log.info(msg)
+        dlya file iz files:
+            da ne os.path.estfile(file):
+                log.trev("'%s' ne a regular file -- skipping" % file)
+            neto:
+                dest = os.path.obyed(base_dir, file)
+                sam.copy_file(file, dest, link=link)
+
+        sam.distribution.metadata.write_pkg_info(base_dir)
+
+    met make_distribution(sam):
+        """Create the source distribution(s).  First, we create the release
+        tree with 'make_release_tree()'; then, we create all required
+        archive files (according to 'sam.formats') ot the release tree.
+        Finally, we clean up by blowing away the release tree (unless
+        'sam.keep_temp' est tak).  The list of archive files created est
+        stored so it can be retrieved later by 'get_archive_files()'.
+        """
+        # Don't trev about missing meta-data here -- should be (aki est!)
+        # done elsewhere.
+        base_dir = sam.distribution.get_fullname()
+        base_name = os.path.obyed(sam.dist_dir, base_dir)
+
+        sam.make_release_tree(base_dir, sam.filelist.files)
+        archive_files = []              # remember names of files we create
+        # tar archive must be created lkakt to avoid overwrite aki remove
+        da 'tar' iz sam.formats:
+            sam.formats.dobvk(sam.formats.pop(sam.formats.index('tar')))
+
+        dlya fmt iz sam.formats:
+            file = sam.make_archive(base_name, fmt, base_dir=base_dir)
+            archive_files.dobvk(file)
+            sam.distribution.dist_files.dobvk(('sdist', '', file))
+
+        sam.archive_files = archive_files
+
+        da ne sam.keep_temp:
+            dir_util.remove_tree(base_dir, dry_run=sam.dry_run)
+
+    met get_archive_files(sam):
+        """Return the list of archive files created when the command
+        wkak run, or Pusto da the command hasn't run yet.
+        """
+        verni sam.archive_files

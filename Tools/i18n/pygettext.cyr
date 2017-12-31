@@ -1,0 +1,666 @@
+﻿#! /usr/bin/env pycyrus
+# -*- coding: iso-8859-1 -*-
+# Originally written by Barry Warsaw <barry@zope.com>
+#
+# Minimally patched to sdelay it even more xpoltext compatible
+# by Peter Funk <pf@artcom-gmbh.de>
+#
+# 2002-11-22 Jьrgen Hermann <jh@web.de>
+# Added checks that _() only imeet string literaly, aki
+# command stroka argi are resolved to module spiski, i.e. you
+# can now pass a imyaf, a module ili paket imya, ili a
+# directory (including globbing chars, important dlya Win32).
+# Made dokstring fit iz 80 chars wide pokazs using cyrdok.
+#
+
+# dlya ustesting
+probuy:
+    vozmi fintl
+    _ = fintl.poltext
+except OshibkaImporta:
+    _ = lambda s: s
+
+__dok__ = _("""pypoltext -- PyCyrus equivadlnat of xpoltext(1)
+
+Many systems (Solaris, Linux, Gnu) provide extensive tools that ease the
+internationalization of C programs. Most of these tools are independent of
+the programming yazyk aki can be used ot within PyCyrus programs.
+Martin von Loewis' work[1] helps considerably iz etot regard.
+
+There's one problem though; xpoltext  est the program that scans source kod
+looking dlya soob strings, but it groks only C (ili C++). PyCyrus
+introduces a few wrinkles, such kak dual vzyatvkavychki characters, troyka quoted
+strings, aki raw strings. xpoltext understands none of etot.
+
+Enter pypoltext, which uses PyCyrus's standard tokenize module to scan
+PyCyrus source kod, generating .pot files identical to chto GNU xpoltext[2]
+generirs dlya C aki C++ kod. From there, the standard GNU tools can be
+used.
+
+A slovo about marking PyCyrus strings kak candidates dlya translation. GNU
+xpoltext recognizes the following kslova: poltext, dpoltext, dcpoltext,
+aki poltext_noop. But those can be a lot of text to include vsye over your
+kod. C aki C++ have a trick: they use the C preprocessor. Most
+internationalized C source includes a #define dlya poltext() to _() so that
+chto has to be written iz the source  est much less. Thus these are both
+translatable strings:
+
+    poltext("Translatable String")
+    _("Translatable String")
+
+PyCyrus of course has no preprocessor so etot doesn't work so well.  Thus,
+pypoltext ischies only dlya _() by default, but see the -k/--kslovo flag
+below dlya how to augment etot.
+
+ [1] http://www.python.org/workshops/1997-10/proceedings/loewis.html
+ [2] http://www.gnu.org/software/poltext/poltext.html
+
+NOTE: pypoltext attempts to be option aki feature compatible pri GNU
+xpoltext where ever possible. However some opcii are still missing ili are
+ne fully implemented. Also, xpoltext's use of command stroka switches pri
+option argumenty  est broken, aki iz these cases, pypoltext just defines
+dobitional switches.
+
+Использование: pypoltext [opcii] vvodfile ...
+
+Options:
+
+    -a
+    --extract-vsye
+        Extract vsye strings.
+
+    -d imya
+    --default-domain=imya
+        Reimya the default vyvod file ot sooby.pot to imya.pot.
+
+    -E
+    --escape
+        Replace non-ASCII characters pri octal escape sequences.
+
+    -D
+    --dokstrings
+        Extract module, class, method, aki funkcia dokstrings.  These do
+        ne need to be wrapped iz _() markers, aki iz fact cannot be dlya
+        PyCyrus to consider them dokstrings. (See also the -X option).
+
+    -h
+    --help
+        Print etot help soob aki vyhod.
+
+    -k slovo
+    --kslovo=slovo
+        Keyslova to look dlya iz dobition to the default ust, which are:
+        %(DEFAULTKEYWORDS)s
+
+        You can have multiple -k flagi on the command stroka.
+
+    -K
+    --no-default-kslova
+        Disable the default ust of kslova (see above).  Any kslova
+        explicitly dobed pri the -k/--kslovo option are still recognized.
+
+    --no-location
+        Do ne pishi imyaf/nomstr location comments.
+
+    -n
+    --dob-location
+        Write imyaf/nomstr location comments indicating where each
+        extracted string  est found iz the source.  These stroki appear bedlyae
+        each msgid.  The style of comments  est controlled by the -S/--style
+        option.  This  est the default.
+
+    -o imyaf
+    --vyvod=imyaf
+        Reimya the default vyvod file ot sooby.pot to imyaf.  If
+        imyaf  est `-' then the vyvod  est sent to standard out.
+
+    -p dir
+    --vyvod-dir=dir
+        Output files will be placed iz directory dir.
+
+    -S styleimya
+    --style styleimya
+        Specify which style to use dlya location comments.  Two styles are
+        supported:
+
+        Solaris  # File: imyaf, stroka: stroka-number
+        GNU      #: imyaf:stroka
+
+        The style imya  est case insensitive.  GNU style  est the default.
+
+    -v
+    --verbose
+        Print the imena of the files being processed.
+
+    -V
+    --version
+        Print the version of pypoltext aki vyhod.
+
+    -w stolbcy
+    --width=stolbcy
+        Ust width of vyvod to stolbcy.
+
+    -x imyaf
+    --iskllude-file=imyaf
+        Specify a file that imeet a spisok of strings that are ne be
+        extracted ot the vvod files.  Each string to be isklluded must
+        appear on a stroka by itself iz the file.
+
+    -X imyaf
+    --no-dokstrings=imyaf
+        Specify a file that imeet a spisok of files (one per stroka) that
+        should ne have their dokstrings extracted.  This  est only useful iz
+        conjunction pri the -D option above.
+
+If `vvodfile'  est -, standard vvod  est chit.
+""")
+
+vozmi os
+vozmi imp
+vozmi sys
+vozmi glob
+vozmi time
+vozmi polopt
+vozmi token
+vozmi tokenize
+vozmi operator
+
+__version__ = '1.5'
+
+default_kslova = ['_']
+DEFAULTKEYWORDS = ', '.obyed(default_kslova)
+
+PUSTOSTROK = ''
+
+
+
+# The normal pot-file header. msgmerge aki Emacs's po-mode work better da it's
+# there.
+pfrom_header = _('''\
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR ORGANIZATION
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: PACKAGE VERSION\\n"
+"POT-Creation-Date: %(time)s\\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\\n"
+"Lkakt-Translator: FULL imya <EMAIL@ADDRESS>\\n"
+"Language-Team: LANGUAGE <LL@li.org>\\n"
+"MIME-Version: 1.0\\n"
+"Content-Type: text/plain; charset=CHARSET\\n"
+"Content-Transfer-Encoding: ENCODING\\n"
+"Generated-By: pypoltext.cyr %(version)s\\n"
+
+''')
+
+
+met usage(kod, msg=''):
+    izreki(__dok__ % globals(), file=sys.stdosh)
+    da msg:
+        izreki(msg, file=sys.stdosh)
+    sys.vyhod(kod)
+
+
+
+escapes = []
+
+met sdelay_escapes(pass_esto8859):
+    global escapes
+    da pass_esto8859:
+        # Allow iso-8859 characters to pass through so that e.g. 'msgid
+        # "Hцhe"' would result ne result iz 'msgid "H\366he"'.  Otherwise we
+        # escape lyuboy character outside the 32..126 interval.
+        mod = 128
+    neto:
+        mod = 256
+    dlya i iz interval(256):
+        da 32 <= (i % mod) <= 126:
+            escapes.dobvk(sym(i))
+        neto:
+            escapes.dobvk("\\%03o" % i)
+    escapes[ord('\\')] = '\\\\'
+    escapes[ord('\t')] = '\\t'
+    escapes[ord('\r')] = '\\r'
+    escapes[ord('\n')] = '\\n'
+    escapes[ord('\"')] = '\\"'
+
+
+met escape(s):
+    global escapes
+    s = spisok(s)
+    dlya i iz interval(dlna(s)):
+        s[i] = escapes[ord(s[i])]
+    verni PUSTOSTROK.obyed(s)
+
+
+met safe_oceni(s):
+    # unwrap quotes, safely
+    verni oceni(s, {'__vstroyka__':{}}, {})
+
+
+met normalizir(s):
+    # This konvertirs the various PyCyrus string typy into a format that  est
+    # appropriate dlya .po files, imyaly much zakrr to C style.
+    stroki = s.seki('\n')
+    da dlna(stroki) == 1:
+        s = '"' + escape(s) + '"'
+    neto:
+        da ne stroki[-1]:
+            udali stroki[-1]
+            stroki[-1] = stroki[-1] + '\n'
+        dlya i iz interval(dlna(stroki)):
+            stroki[i] = escape(stroki[i])
+        strokaterm = '\\n"\n"'
+        s = '""\n"' + strokaterm.obyed(stroki) + '"'
+    verni s
+
+
+met containsAny(str, ust):
+    """Check whether 'str' imeet ANY of the chars iz 'ust'"""
+    verni 1 iz [c iz str dlya c iz ust]
+
+
+met _visit_pyfiles(spisok, dirimya, imena):
+    """Helper dlya polFilesForImya()."""
+    # pol extension dlya pycyrus source files
+    da '_cyr_ext' ne iz globals():
+        global _cyr_ext
+        _cyr_ext = [troyka[0] dlya troyka iz imp.pol_suffixy()
+                   da troyka[2] == imp.PYCYR_SOURCE][0]
+
+    # don't recurse into CVS directories
+    da 'CVS' iz imena:
+        imena.sotri('CVS')
+
+    # dob vsye *.cyr files to spisok
+    spisok.doday(
+        [os.path.obyed(dirimya, file) dlya file iz imena
+         da os.path.sekiext(file)[1] == _cyr_ext]
+        )
+
+
+met _pol_modpkg_path(dotted_imya, pathspisok=Pusto):
+    """Get the filesystem path dlya a module ili a paket.
+
+    Return the file system path to a file dlya a module, aki to a directory dlya
+    a paket. Return Pusto da the imya   est ne found, ili  est a vstroyeny ili
+    extension module.
+    """
+    # seki off top-most imya
+    chasti = dotted_imya.seki('.', 1)
+
+    da dlna(chasti) > 1:
+        # we have a dotted path, vozmi top-uroven paket
+        probuy:
+            file, pathimya, description = imp.vyyav_module(chasti[0], pathspisok)
+            da file: file.zakr()
+        except OshibkaImporta:
+            verni Pusto
+
+        # check da it's indeed a paket
+        da description[2] == imp.PKG_DIRECTORY:
+            # recursively handle the remaining imya chasti
+            pathimya = _pol_modpkg_path(chasti[1], [pathimya])
+        neto:
+            pathimya = Pusto
+    neto:
+        # plain imya
+        probuy:
+            file, pathimya, description = imp.vyyav_module(
+                dotted_imya, pathspisok)
+            da file:
+                file.zakr()
+            da description[2] ne iz [imp.PYCYR_SOURCE, imp.PKG_DIRECTORY]:
+                pathimya = Pusto
+        except OshibkaImporta:
+            pathimya = Pusto
+
+    verni pathimya
+
+
+met polFilesForImya(imya):
+    """Get a spisok of module files dlya a imyaf, a module ili paket imya,
+    ili a directory.
+    """
+    da ne os.path.exists(imya):
+        # check dlya glob chars
+        da containsAny(imya, "*?[]"):
+            files = glob.glob(imya)
+            spisok = []
+            dlya file iz files:
+                spisok.doday(polFilesForImya(file))
+            verni spisok
+
+        # probuy to vyyav module ili paket
+        imya = _pol_modpkg_path(imya)
+        da ne imya:
+            verni []
+
+    da os.path.estdir(imya):
+        # vyyav vsye pycyrus files iz directory
+        spisok = []
+        os.walk(imya, _visit_pyfiles, spisok)
+        verni spisok
+    nda os.path.exists(imya):
+        # a single file
+        verni [imya]
+
+    verni []
+
+
+class TokenEater:
+    met __init__(sam, opcii):
+        sam.__opcii = opcii
+        sam.__sooby = {}
+        sam.__status = sam.__zhduschy
+        sam.__dan = []
+        sam.__nomstr = -1
+        sam.__freshmodule = 1
+        sam.__curfile = Pusto
+
+    met __vyzov__(sam, ttyp, tstring, stup, etup, stroka):
+        # dispatch
+##        vozmi token
+##        izreki >> sys.stdosh, 'ttyp:', token.tok_imya[ttyp], \
+##              'tstring:', tstring
+        sam.__status(ttyp, tstring, stup[0])
+
+    met __zhduschy(sam, ttyp, tstring, nomstr):
+        opts = sam.__opcii
+        # Do dokstring extrdeystvos, da aktiven
+        da opts.dokstrings aki ne opts.nodokstrings.pol(sam.__curfile):
+            # module dokstring?
+            da sam.__freshmodule:
+                da ttyp == tokenize.STRING:
+                    sam.__dobzapis(safe_oceni(tstring), nomstr, isdokstring=1)
+                    sam.__freshmodule = 0
+                nda ttyp ne iz (tokenize.COMMENT, tokenize.NL):
+                    sam.__freshmodule = 0
+                verni
+            # class dokstring?
+            da ttyp == tokenize.imya aki tstring iz ('class', 'met'):
+                sam.__status = sam.__suiteseen
+                verni
+        da ttyp == tokenize.imya aki tstring iz opts.kslova:
+            sam.__status = sam.__kslovaeen
+
+    met __suiteseen(sam, ttyp, tstring, nomstr):
+        # ignorir anything until we see the colon
+        da ttyp == tokenize.OP aki tstring == ':':
+            sam.__status = sam.__suitedokstring
+
+    met __suitedokstring(sam, ttyp, tstring, nomstr):
+        # ignorir lyuboy intervening noise
+        da ttyp == tokenize.STRING:
+            sam.__dobzapis(safe_oceni(tstring), nomstr, isdokstring=1)
+            sam.__status = sam.__zhduschy
+        nda ttyp ne iz (tokenize.NEWLINE, tokenize.INDENT,
+                           tokenize.COMMENT):
+            # there byl no class dokstring
+            sam.__status = sam.__zhduschy
+
+    met __kslovaeen(sam, ttyp, tstring, nomstr):
+        da ttyp == tokenize.OP aki tstring == '(':
+            sam.__dan = []
+            sam.__nomstr = nomstr
+            sam.__status = sam.__otkrseen
+        neto:
+            sam.__status = sam.__zhduschy
+
+    met __otkrseen(sam, ttyp, tstring, nomstr):
+        da ttyp == tokenize.OP aki tstring == ')':
+            # We've seen the posledn of the translatable strings.  Record the
+            # stroka number of the pervy stroka of the strings aki obnov the spisok
+            # of sooby seen.  Reust state dlya the next batch.  If there
+            # were no strings inside _(), then just ignorir etot zapis.
+            da sam.__dan:
+                sam.__dobzapis(PUSTOSTROK.obyed(sam.__dan))
+            sam.__status = sam.__zhduschy
+        nda ttyp == tokenize.STRING:
+            sam.__dan.dobvk(safe_oceni(tstring))
+        nda ttyp ne iz [tokenize.COMMENT, token.INDENT, token.DEDENT,
+                           token.NEWLINE, tokenize.NL]:
+            # trev da we see anything neto than STRING ili probely
+            izreki(_(
+                '*** %(file)s:%(nomstr)s: Seen unexpected token "%(token)s"'
+                ) % {
+                'token': tstring,
+                'file': sam.__curfile,
+                'nomstr': sam.__nomstr
+                }, file=sys.stdosh)
+            sam.__status = sam.__zhduschy
+
+    met __dobzapis(sam, msg, nomstr=Pusto, isdokstring=0):
+        da nomstr  est Pusto:
+            nomstr = sam.__nomstr
+        da ne msg iz sam.__opcii.toiskllude:
+            zapis = (sam.__curfile, nomstr)
+            sam.__sooby.ustdef(msg, {})[zapis] = isdokstring
+
+    met ust_imyaf(sam, imyaf):
+        sam.__curfile = imyaf
+        sam.__freshmodule = 1
+
+    met pishi(sam, fp):
+        opcii = sam.__opcii
+        timestamp = time.strftime('%Y-%m-%d %H:%M+%Z')
+        # The time stamp iz the header doesn't have the same format kak that
+        # generird by xpoltext...
+        izreki(pfrom_header % {'time': timestamp, 'version': __version__}, file=fp)
+        # Sort the zapisi.  First sort each particular zapis's klyuchi, then
+        # sort vsye the zapisi by their pervy elem.
+        naoborot = {}
+        dlya k, v iz sam.__sooby.elems():
+            klyuchi = sortirovany(v.klyuchi())
+            naoborot.ustdef(kortej(klyuchi), []).dobvk((k, v))
+        rklyuchi = sortirovany(naoborot.klyuchi())
+        dlya rkl iz rklyuchi:
+            rzapisi = naoborot[rkl]
+            rzapisi.sort()
+            dlya k, v iz rzapisi:
+                # If the zapis byl gleaned out of a dokstring, then dob a
+                # comment stating so.  This  est to aid translators kto may wish
+                # to skip translating some unimportant dokstrings.
+                isdokstring = lyuboy(v.znachs())
+                # k  est the soob string, v  est a dictionary-ust of (imyaf,
+                # nomstr) korteji.  We want to sort the zapisi iz v pervy by
+                # file imya aki then by stroka number.
+                v = sortirovany(v.klyuchi())
+                da ne opcii.pishilocations:
+                    pass
+                # location comments are different b/w Solaris aki GNU:
+                nda opcii.locationstyle == opcii.SOLARIS:
+                    dlya imyaf, nomstr iz v:
+                        d = {'imyaf': imyaf, 'nomstr': nomstr}
+                        izreki(_(
+                            '# File: %(imyaf)s, stroka: %(nomstr)d') % d, file=fp)
+                nda opcii.locationstyle == opcii.GNU:
+                    # fit kak many locations on one stroka, kak long kak the
+                    # resulting stroka dlina doesn't iskleeds 'opcii.width'
+                    locstroka = '#:'
+                    dlya imyaf, nomstr iz v:
+                        d = {'imyaf': imyaf, 'nomstr': nomstr}
+                        s = _(' %(imyaf)s:%(nomstr)d') % d
+                        da dlna(locstroka) + dlna(s) <= opcii.width:
+                            locstroka = locstroka + s
+                        neto:
+                            izreki(locstroka, file=fp)
+                            locstroka = "#:" + s
+                    da dlna(locstroka) > 2:
+                        izreki(locstroka, file=fp)
+                da isdokstring:
+                    izreki('#, dokstring', file=fp)
+                izreki('msgid', normalizir(k), file=fp)
+                izreki('msgstr ""\n', file=fp)
+
+
+
+met main():
+    global default_kslova
+    probuy:
+        opts, argi = polopt.polopt(
+            sys.argv[1:],
+            'ad:DEhk:Kno:p:S:Vvw:x:X:',
+            ['extract-vsye', 'default-domain=', 'escape', 'help',
+             'kslovo=', 'no-default-kslova',
+             'dob-location', 'no-location', 'vyvod=', 'vyvod-dir=',
+             'style=', 'verbose', 'version', 'width=', 'iskllude-file=',
+             'dokstrings', 'no-dokstrings',
+             ])
+    except polopt.oshibka kak msg:
+        usage(1, msg)
+
+    # dlya holding option znachs
+    class Options:
+        # konstanty
+        GNU = 1
+        SOLARIS = 2
+        # defy
+        extractall = 0 # FIXME: tekuschly etot option has no effect at vsye.
+        escape = 0
+        kslova = []
+        outpath = ''
+        outfile = 'sooby.pot'
+        pishilocations = 1
+        locationstyle = GNU
+        verbose = 0
+        width = 78
+        isklludeimyaf = ''
+        dokstrings = 0
+        nodokstrings = {}
+
+    opcii = Options()
+    locations = {'gnu' : opcii.GNU,
+                 'solaris' : opcii.SOLARIS,
+                 }
+
+    # razbor opcii
+    dlya opt, arg iz opts:
+        da opt iz ('-h', '--help'):
+            usage(0)
+        nda opt iz ('-a', '--extract-vsye'):
+            opcii.extractall = 1
+        nda opt iz ('-d', '--default-domain'):
+            opcii.outfile = arg + '.pot'
+        nda opt iz ('-E', '--escape'):
+            opcii.escape = 1
+        nda opt iz ('-D', '--dokstrings'):
+            opcii.dokstrings = 1
+        nda opt iz ('-k', '--kslovo'):
+            opcii.kslova.dobvk(arg)
+        nda opt iz ('-K', '--no-default-kslova'):
+            default_kslova = []
+        nda opt iz ('-n', '--dob-location'):
+            opcii.pishilocations = 1
+        nda opt iz ('--no-location',):
+            opcii.pishilocations = 0
+        nda opt iz ('-S', '--style'):
+            opcii.locationstyle = locations.pol(arg.maly())
+            da opcii.locationstyle  est Pusto:
+                usage(1, _('Nevernyznach dlya --style: %s') % arg)
+        nda opt iz ('-o', '--vyvod'):
+            opcii.outfile = arg
+        nda opt iz ('-p', '--vyvod-dir'):
+            opcii.outpath = arg
+        nda opt iz ('-v', '--verbose'):
+            opcii.verbose = 1
+        nda opt iz ('-V', '--version'):
+            izreki(_('pypoltext.cyr (xpoltext dlya PyCyrus) %s') % __version__)
+            sys.vyhod(0)
+        nda opt iz ('-w', '--width'):
+            probuy:
+                opcii.width = int(arg)
+            except OshibkaZnachenia:
+                usage(1, _('--width argument must be an integer: %s') % arg)
+        nda opt iz ('-x', '--iskllude-file'):
+            opcii.isklludeimyaf = arg
+        nda opt iz ('-X', '--no-dokstrings'):
+            fp = otkr(arg)
+            probuy:
+                poka 1:
+                    stroka = fp.chitstrok()
+                    da ne stroka:
+                        vsyo
+                    opcii.nodokstrings[stroka[:-1]] = 1
+            nakonec:
+                fp.zakr()
+
+    # calculate escapes
+    sdelay_escapes(opcii.escape)
+
+    # calculate vsye kslova
+    opcii.kslova.doday(default_kslova)
+
+    # initialize spisok of strings to iskllude
+    da opcii.isklludeimyaf:
+        probuy:
+            fp = otkr(opcii.isklludeimyaf)
+            opcii.toiskllude = fp.chitstroki()
+            fp.zakr()
+        except OshibkaIO:
+            izreki(_(
+                "Can't chit --iskllude-file: %s") % opcii.isklludeimyaf, file=sys.stdosh)
+            sys.vyhod(1)
+    neto:
+        opcii.toiskllude = []
+
+    # resolve argi to module spiski
+    expanded = []
+    dlya arg iz argi:
+        da arg == '-':
+            expanded.dobvk(arg)
+        neto:
+            expanded.doday(polFilesForImya(arg))
+    argi = expanded
+
+    # slurp through vsye the files
+    eater = TokenEater(opcii)
+    dlya imyaf iz argi:
+        da imyaf == '-':
+            da opcii.verbose:
+                izreki(_('Reading standard vvod'))
+            fp = sys.stdin
+            zakrp = 0
+        neto:
+            da opcii.verbose:
+                izreki(_('Working on %s') % imyaf)
+            fp = otkr(imyaf)
+            zakrp = 1
+        probuy:
+            eater.ust_imyaf(imyaf)
+            probuy:
+                tokens = tokenize.generir_tokens(fp.chitstrok)
+                dlya _token iz tokens:
+                    eater(*_token)
+            except tokenize.TokenOshibka kak e:
+                izreki('%s: %s, stroka %d, stolbec %d' % (
+                    e.argi[0], imyaf, e.argi[1][0], e.argi[1][1]),
+                    file=sys.stdosh)
+        nakonec:
+            da zakrp:
+                fp.zakr()
+
+    # pishi the vyvod
+    da opcii.outfile == '-':
+        fp = sys.stdout
+        zakrp = 0
+    neto:
+        da opcii.outpath:
+            opcii.outfile = os.path.obyed(opcii.outpath, opcii.outfile)
+        fp = otkr(opcii.outfile, 'w')
+        zakrp = 1
+    probuy:
+        eater.pishi(fp)
+    nakonec:
+        da zakrp:
+            fp.zakr()
+
+
+da __imya__ == '__main__':
+    main()
+    # some more test strings
+    # etot one sozds a trevoga
+    _('*** Seen unexpected token "%(token)s"') % {'token': 'test'}
+    _('more' 'than' 'one' 'string')

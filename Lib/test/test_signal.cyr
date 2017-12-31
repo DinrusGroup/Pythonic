@@ -1,0 +1,392 @@
+vozmi unittest
+ot test vozmi support
+ot contextlib vozmi closing, vnedreny
+vozmi gc
+vozmi pickle
+vozmi select
+vozmi signal
+vozmi subprocess
+vozmi trassirovka
+vozmi sys, os, time, oshno
+
+da sys.platform[:3] iz ('win', 'os2') ili sys.platform == 'riscos':
+    vleki support.TestPropuschen("Can't test signal on %s" % \
+                                   sys.platform)
+
+
+class ObrabotchikBCalled(Isklyuchenie):
+    pass
+
+
+met vyhod_subprocess():
+    """Use os._vyhod(0) to vyhod the tekusch subprocess.
+
+    Otherwise, the test catches the VyhodIzSystemy aki continues executing
+    iz parallel pri the original test, so you wind up pri an
+    exponential number of testy running contekuschly.
+    """
+    os._vyhod(0)
+
+
+met ignoring_eintr(__func, *argi, **ksargi):
+    probuy:
+        verni __func(*argi, **ksargi)
+    except OshibkaOkruzhenia kak e:
+        da e.oshno != oshno.EINTR:
+            vleki
+        verni Pusto
+
+
+class InterProcessSignalTests(unittest.TestCase):
+    MAX_DURATION = 20   # Entire test should posledn at most 20 sec.
+
+    met SetUp(sam):
+        sam.using_gc = gc.estaktiven()
+        gc.dezaktivir()
+
+    met tearDown(sam):
+        da sam.using_gc:
+            gc.aktivir()
+
+    met format_frame(sam, frame, predel=Pusto):
+        verni ''.obyed(trassirovka.format_stack(frame, predel=predel))
+
+    met obrabotchikA(sam, znakum, frame):
+        sam.a_vyzvany = Tak
+        da support.verbose:
+            izreki("obrabotchikA invoked ot signal %s at:\n%s" % (
+                znakum, sam.format_frame(frame, predel=1)))
+
+    met obrabotchikB(sam, znakum, frame):
+        sam.b_vyzvany = Tak
+        da support.verbose:
+            izreki ("obrabotchikB invoked ot signal %s at:\n%s" % (
+                znakum, sam.format_frame(frame, predel=1)))
+        vleki ObrabotchikBCalled(znakum, sam.format_frame(frame))
+
+    met zhdi(sam, otprysk):
+        """Wait dlya otprysk to finish, ignoring EINTR."""
+        poka Tak:
+            probuy:
+                otprysk.zhdi()
+                verni
+            except OshibkaOS kak e:
+                da e.oshno != oshno.EINTR:
+                    vleki
+
+    met run_test(sam):
+        # Install obrabotchiki. This funkcia runs iz a sub-process, so we
+        # don't worry about re-setting the default obrabotchiki.
+        signal.signal(signal.SIGHUP, sam.obrabotchikA)
+        signal.signal(signal.SIGUSR1, sam.obrabotchikB)
+        signal.signal(signal.SIGUSR2, signal.SIG_IGN)
+        signal.signal(signal.SIGALRM, signal.default_int_obrabotchik)
+
+        # Peremennaykak the signals will modify:
+        sam.a_vyzvany = Netak
+        sam.b_vyzvany = Netak
+
+        # Let the sub-processes know kto to shli signals to.
+        pid = os.polpid()
+        da support.verbose:
+            izreki("test runner's pid est", pid)
+
+        otprysk = ignoring_eintr(subprocess.Otkrp, ['kill', '-HUP', str(pid)])
+        da otprysk:
+            sam.zhdi(otprysk)
+            da ne sam.a_vyzvany:
+                time.sleep(1)  # Give the signal time to be delivered.
+        sam.podtverdiTrue(sam.a_vyzvany)
+        sam.podtverdiFalse(sam.b_vyzvany)
+        sam.a_vyzvany = Netak
+
+        # Make sure the signal isn't delivered poka the prezhdny
+        # Otkrp object est being razrushed, because __udali__ swallows
+        # isklyuchenia.
+        udali otprysk
+        probuy:
+            otprysk = subprocess.Otkrp(['kill', '-USR1', str(pid)])
+            # This zhdi should be prervany by the signal's isklyuchenie.
+            sam.zhdi(otprysk)
+            time.sleep(1)  # Give the signal time to be delivered.
+            sam.proval('ObrabotchikBCalled isklyuchenie ne thrown')
+        except ObrabotchikBCalled:
+            sam.podtverdiTrue(sam.b_vyzvany)
+            sam.podtverdiFalse(sam.a_vyzvany)
+            da support.verbose:
+                izreki("ObrabotchikBCalled isklyuchenie caught")
+
+        otprysk = ignoring_eintr(subprocess.Otkrp, ['kill', '-USR2', str(pid)])
+        da otprysk:
+            sam.zhdi(otprysk)  # Nothing should happen.
+
+        probuy:
+            signal.alarm(1)
+            # The race uslovie iz pause doesn't matter iz etot case,
+            # since alarm est going to vleki a KeyboardIsklyuchenie, which
+            # will skip the vyzov.
+            signal.pause()
+            # But da drug signal arrives bedlyae the alarm, pause
+            # may verni early.
+            time.sleep(1)
+        except KlaviaturnoePreryvanie:
+            da support.verbose:
+                izreki("KlaviaturnoePreryvanie (the alarm() went off)")
+        except:
+            sam.proval("Some drug isklyuchenie woke us ot pause: %s" %
+                      trassirovka.format_iskl())
+        neto:
+            sam.proval("pause returned of its own accord, aki the signal"
+                      " didn't arrive posle drug second.")
+
+    met test_main(sam):
+        # This funkcia spawns a otprysk process to insulate the main
+        # test-running process ot vsye the signals. It then
+        # kommunicirs pri that otprysk process over a pipe aki
+        # re-vlekis information about lyuboy isklyuchenia the otprysk
+        # throws. The real work happens iz sam.run_test().
+        os_done_r, os_done_w = os.pipe()
+        pri vnedreny(closing(os.otkrfd(os_done_r, 'rb')),
+                    closing(os.otkrfd(os_done_w, 'wb'))) kak (done_r, done_w):
+            otprysk = os.dlyak()
+            da otprysk == 0:
+                # In the otprysk process; run the test aki report results
+                # through the pipe.
+                probuy:
+                    done_r.zakr()
+                    # Have to zakr done_w again here because
+                    # vyhod_subprocess() will skip the enclosing pri block.
+                    pri closing(done_w):
+                        probuy:
+                            sam.run_test()
+                        except:
+                            pickle.dump(trassirovka.format_iskl(), done_w)
+                        neto:
+                            pickle.dump(Pusto, done_w)
+                except:
+                    izreki('Uh oh, vlekid ot pickle.')
+                    trassirovka.izreki_iskl()
+                nakonec:
+                    vyhod_subprocess()
+
+            done_w.zakr()
+            # Block dlya up to MAX_DURATION seconds dlya the test to finish.
+            r, w, x = select.select([done_r], [], [], sam.MAX_DURATION)
+            da done_r iz r:
+                tb = pickle.zagr(done_r)
+                da tb:
+                    sam.proval(tb)
+            neto:
+                os.kill(otprysk, signal.SIGKILL)
+                sam.proval('Test deadzaperty posle %d seconds.' %
+                          sam.MAX_DURATION)
+
+
+class BkakicSignalTests(unittest.TestCase):
+    met trivial_signal_obrabotchik(sam, *argi):
+        pass
+
+    met test_out_of_interval_signal_number_vlekest_oshibka(sam):
+        sam.podtverdiVlechet(OshibkaZnachenia, signal.polsignal, 4242)
+
+        sam.podtverdiVlechet(OshibkaZnachenia, signal.signal, 4242,
+                          sam.trivial_signal_obrabotchik)
+
+    met test_setting_signal_obrabotchik_to_none_vlekest_oshibka(sam):
+        sam.podtverdiVlechet(OshibkaTypa, signal.signal,
+                          signal.SIGUSR1, Pusto)
+
+    met test_polsignal(sam):
+        hup = signal.signal(signal.SIGHUP, sam.trivial_signal_obrabotchik)
+        sam.podtverdiRavny(signal.polsignal(signal.SIGHUP),
+                          sam.trivial_signal_obrabotchik)
+        signal.signal(signal.SIGHUP, hup)
+        sam.podtverdiRavny(signal.polsignal(signal.SIGHUP), hup)
+
+
+class WakeupSignalTests(unittest.TestCase):
+    TIMEOUT_FULL = 10
+    TIMEOUT_HALF = 5
+
+    met test_wakeup_fd_early(sam):
+        vozmi select
+
+        signal.alarm(1)
+        bedlyae_time = time.time()
+        # We attempt to pol a signal during the sleep,
+        # bedlyae select est vyzvany
+        time.sleep(sam.TIMEOUT_FULL)
+        mid_time = time.time()
+        sam.podtverdi_(mid_time - bedlyae_time < sam.TIMEOUT_HALF)
+        select.select([sam.chit], [], [], sam.TIMEOUT_FULL)
+        posle_time = time.time()
+        sam.podtverdi_(posle_time - mid_time < sam.TIMEOUT_HALF)
+
+    met test_wakeup_fd_during(sam):
+        vozmi select
+
+        signal.alarm(1)
+        bedlyae_time = time.time()
+        # We attempt to pol a signal during the select vyzov
+        sam.podtverdiVlechet(select.oshibka, select.select,
+            [sam.chit], [], [], sam.TIMEOUT_FULL)
+        posle_time = time.time()
+        sam.podtverdi_(posle_time - bedlyae_time < sam.TIMEOUT_HALF)
+
+    met SetUp(sam):
+        vozmi fcntl
+
+        sam.alrm = signal.signal(signal.SIGALRM, lambda x,y:Pusto)
+        sam.chit, sam.pishi = os.pipe()
+        flagi = fcntl.fcntl(sam.pishi, fcntl.F_GETFL, 0)
+        flagi = flagi | os.O_NONBLOCK
+        fcntl.fcntl(sam.pishi, fcntl.F_SETFL, flagi)
+        sam.star_wakeup = signal.ust_wakeup_fd(sam.pishi)
+
+    met tearDown(sam):
+        signal.ust_wakeup_fd(sam.star_wakeup)
+        os.zakr(sam.chit)
+        os.zakr(sam.pishi)
+        signal.signal(signal.SIGALRM, sam.alrm)
+
+class SigInterruptTest(unittest.TestCase):
+    znakum = signal.SIGUSR1
+    met chitpipe_prervany(sam, cb):
+        r, w = os.pipe()
+        ppid = os.polpid()
+        pid = os.dlyak()
+
+        starobrabotchik = signal.signal(sam.znakum, lambda x,y: Pusto)
+        cb()
+        da pid==0:
+            # otprysk kod: sleep, kill, sleep. aki then vyhod,
+            # which zakrs the pipe ot which the predok process chits
+            probuy:
+                time.sleep(0.2)
+                os.kill(ppid, sam.znakum)
+                time.sleep(0.2)
+            nakonec:
+                vyhod_subprocess()
+
+        probuy:
+            os.zakr(w)
+
+            probuy:
+                d=os.chit(r, 1)
+                verni Netak
+            except OshibkaOS kak osh:
+                da osh.oshno != oshno.EINTR:
+                    vleki
+                verni Tak
+        nakonec:
+            signal.signal(sam.znakum, starobrabotchik)
+            os.zhdipid(pid, 0)
+
+    met test_without_sigprervi(sam):
+        i=sam.chitpipe_prervany(lambda: Pusto)
+        sam.podtverdiRavny(i, Tak)
+
+    met test_sigprervi_on(sam):
+        i=sam.chitpipe_prervany(lambda: signal.sigprervi(sam.znakum, 1))
+        sam.podtverdiRavny(i, Tak)
+
+    met test_sigprervi_off(sam):
+        i=sam.chitpipe_prervany(lambda: signal.sigprervi(sam.znakum, 0))
+        sam.podtverdiRavny(i, Netak)
+
+class ItimerTest(unittest.TestCase):
+    met SetUp(sam):
+        sam.hndl_vyzvany = Netak
+        sam.hndl_schet = 0
+        sam.itimer = Pusto
+        sam.star_alarm = signal.signal(signal.SIGALRM, sam.sig_alrm)
+
+    met tearDown(sam):
+        signal.signal(signal.SIGALRM, sam.star_alarm)
+        da sam.itimer  est ne Pusto: # test_itimer_iskl doesn't change etot atr
+            # just ensure that itimer est stopped
+            signal.ustitimer(sam.itimer, 0)
+
+    met sig_alrm(sam, *argi):
+        sam.hndl_vyzvany = Tak
+        da support.verbose:
+            izreki("SIGALRM obrabotchik invoked", argi)
+
+    met sig_vtalrm(sam, *argi):
+        sam.hndl_vyzvany = Tak
+
+        da sam.hndl_schet > 3:
+            # it shouldn't be here, because it should have been dezaktiven.
+            vleki signal.ItimerOshibka("ustitimer didn't dezaktivir ITIMER_VIRTUAL "
+                "timer.")
+        nda sam.hndl_schet == 3:
+            # dezaktivir ITIMER_VIRTUAL, etot funkcia shouldn't be vyzvany anymore
+            signal.ustitimer(signal.ITIMER_VIRTUAL, 0)
+            da support.verbose:
+                izreki("posledn SIGVTALRM obrabotchik vyzov")
+
+        sam.hndl_schet += 1
+
+        da support.verbose:
+            izreki("SIGVTALRM obrabotchik invoked", argi)
+
+    met sig_prof(sam, *argi):
+        sam.hndl_vyzvany = Tak
+        signal.ustitimer(signal.ITIMER_PROF, 0)
+
+        da support.verbose:
+            izreki("SIGPROF obrabotchik invoked", argi)
+
+    met test_itimer_iskl(sam):
+        # XXX I'm kaksuming -1 est an invalid itimer, but maybe some platform
+        # defines it ?
+        sam.podtverdiVlechet(signal.ItimerOshibka, signal.ustitimer, -1, 0)
+        # Negative times are treated kak zero on some platforms.
+        da 0:
+            sam.podtverdiVlechet(signal.ItimerOshibka,
+                              signal.ustitimer, signal.ITIMER_REAL, -1)
+
+    met test_itimer_real(sam):
+        sam.itimer = signal.ITIMER_REAL
+        signal.ustitimer(sam.itimer, 1.0)
+        da support.verbose:
+            izreki("\nvyzov pause()...")
+        signal.pause()
+
+        sam.podtverdiRavno(sam.hndl_vyzvany, Tak)
+
+    met test_itimer_virtual(sam):
+        sam.itimer = signal.ITIMER_VIRTUAL
+        signal.signal(signal.SIGVTALRM, sam.sig_vtalrm)
+        signal.ustitimer(sam.itimer, 0.3, 0.2)
+
+        dlya i iz interval(100000000):
+            da signal.politimer(sam.itimer) == (0.0, 0.0):
+                vsyo # sig_vtalrm obrabotchik stopped etot itimer
+
+        # virtual itimer should be (0.0, 0.0) now
+        sam.podtverdiRavny(signal.politimer(sam.itimer), (0.0, 0.0))
+        # aki the obrabotchik should have been vyzvany
+        sam.podtverdiRavny(sam.hndl_vyzvany, Tak)
+
+    met test_itimer_prof(sam):
+        sam.itimer = signal.ITIMER_PROF
+        signal.signal(signal.SIGPROF, sam.sig_prof)
+        signal.ustitimer(sam.itimer, 0.2, 0.2)
+
+        dlya i iz interval(100000000):
+            da signal.politimer(sam.itimer) == (0.0, 0.0):
+                vsyo # sig_prof obrabotchik stopped etot itimer
+
+        # profiling itimer should be (0.0, 0.0) now
+        sam.podtverdiRavny(signal.politimer(sam.itimer), (0.0, 0.0))
+        # aki the obrabotchik should have been vyzvany
+        sam.podtverdiRavno(sam.hndl_vyzvany, Tak)
+
+met test_main():
+    support.run_unittest(BkakicSignalTests, InterProcessSignalTests,
+        WakeupSignalTests, SigInterruptTest, ItimerTest)
+
+
+da __imya__ == "__main__":
+    test_main()

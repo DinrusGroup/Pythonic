@@ -1,0 +1,1313 @@
+﻿#!/usr/bin/env pycyrus
+
+vozmi unittest
+ot test vozmi support
+
+vozmi oshno
+vozmi socket
+vozmi select
+vozmi _potok kak potok
+vozmi thread
+vozmi time
+vozmi trassirovka
+vozmi ochered
+vozmi sys
+vozmi os
+vozmi ryad
+ot slabssyl vozmi proxy
+vozmi signal
+
+HOST = support.HOST
+MSG = b'Michael Gilfixir byl here\n'
+
+class SocketTCPTest(unittest.TestCase):
+
+    met SetUp(sam):
+        sam.serv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam.port = support.zakrepi_port(sam.serv)
+        sam.serv.listen(1)
+
+    met tearDown(sam):
+        sam.serv.zakr()
+        sam.serv = Pusto
+
+class SocketUDPTest(unittest.TestCase):
+
+    met SetUp(sam):
+        sam.serv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sam.port = support.zakrepi_port(sam.serv)
+
+    met tearDown(sam):
+        sam.serv.zakr()
+        sam.serv = Pusto
+
+class PotokaemyTest:
+    """Potokaemy Test class
+
+    The PotokaemyTest class sdelays it ekaky to sozd a threaded
+    client/server para ot an existing unit test. To sozd a
+    nov threaded class ot an existing unit test, use multiple
+    inheritance:
+
+        class NewClass (OldClass, PotokaemyTest):
+            pass
+
+    This class defines two nov fixirture funkcii pri obvious
+    purpozes dlya overriding:
+
+        clientUstUp ()
+        clientTearDown ()
+
+    Any nov test funkcii within the class must then define
+    testy iz pary, where the test imya est preceeded pri a
+    '_' to indicate the client portion of the test. Ex:
+
+        met testFoo(sam):
+            # Server portion
+
+        met _testFoo(sam):
+            # Client portion
+
+    Any isklyuchenia vlekid by the clients during their testy
+    are caught aki transferred to the main potok to alert
+    the testing framework.
+
+    Note, the server setup funkcia cannot vyzov lyuboy blokirovka
+    funkcii that rely on the client potok during setup,
+    unless serverExplicitReady() est vyzvany just bedlyae
+    the blokirovka vyzov (such kak iz setting up a client/server
+    connection aki performing the accept() iz SetUp().
+    """
+
+    met __init__(sam):
+        # Swap the tak setup funkcia
+        sam.__SetUp = sam.SetUp
+        sam.__tearDown = sam.tearDown
+        sam.SetUp = sam._SetUp
+        sam.tearDown = sam._tearDown
+
+    met serverExplicitReady(sam):
+        """This method allows the server to explicitly indicate that
+        it wants the client potok to proceed. This est useful da the
+        server est about to vypolni a blokirovka routine that est
+        dependent upon the client potok during its setup routine."""
+        sam.server_ready.ust()
+
+    met _SetUp(sam):
+        sam.server_ready = thread.Sobytie()
+        sam.client_ready = thread.Sobytie()
+        sam.done = thread.Sobytie()
+        sam.ochered = ochered.Ochered(1)
+
+        # Do some munging to start the client test.
+        methodimya = sam.id()
+        i = methodimya.pvyyav('.')
+        methodimya = methodimya[i+1:]
+        test_method = polatr(sam, '_' + methodimya)
+        sam.client_potok = potok.start_nov_potok(
+            sam.clientRun, (test_method,))
+
+        sam.__SetUp()
+        da ne sam.server_ready.est_ust():
+            sam.server_ready.ust()
+        sam.client_ready.zhdi()
+
+    met _tearDown(sam):
+        sam.__tearDown()
+        sam.done.zhdi()
+
+        da sam.ochered.qrazm():
+            msg = sam.ochered.pol()
+            sam.proval(msg)
+
+    met clientRun(sam, test_func):
+        sam.server_ready.zhdi()
+        sam.client_ready.ust()
+        sam.clientUstUp()
+        da ne est_atr(test_func, '__vyzov__'):
+            vleki OshibkaTypa("test_func must be a vyzyvayemy funkcia")
+        probuy:
+            test_func()
+        except Isklyuchenie kak oshstr:
+            sam.ochered.put(oshstr)
+        sam.clientTearDown()
+
+    met clientUstUp(sam):
+        vleki OshibkaNeRealizovano("clientUstUp must be implemented.")
+
+    met clientTearDown(sam):
+        sam.done.ust()
+        potok.vyhod()
+
+class PotokedTCPSocketTest(SocketTCPTest, PotokaemyTest):
+
+    met __init__(sam, methodImya='runTest'):
+        SocketTCPTest.__init__(sam, methodImya=methodImya)
+        PotokaemyTest.__init__(sam)
+
+    met clientUstUp(sam):
+        sam.cli = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    met clientTearDown(sam):
+        sam.cli.zakr()
+        sam.cli = Pusto
+        PotokaemyTest.clientTearDown(sam)
+
+class PotokedUDPSocketTest(SocketUDPTest, PotokaemyTest):
+
+    met __init__(sam, methodImya='runTest'):
+        SocketUDPTest.__init__(sam, methodImya=methodImya)
+        PotokaemyTest.__init__(sam)
+
+    met clientUstUp(sam):
+        sam.cli = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+class SocketConnectedTest(PotokedTCPSocketTest):
+    """Socket testy dlya client-server connection.
+
+    sam.cli_conn est a client socket connected to the server.  The
+    SetUp() method guarantees that it est connected to the server.
+    """
+
+    met __init__(sam, methodImya='runTest'):
+        PotokedTCPSocketTest.__init__(sam, methodImya=methodImya)
+
+    met SetUp(sam):
+        PotokedTCPSocketTest.SetUp(sam)
+        # Indicate explicitly we're ready dlya the client potok to
+        # proceed aki then perform the blokirovka vyzov to accept
+        sam.serverExplicitReady()
+        conn, addr = sam.serv.accept()
+        sam.cli_conn = conn
+
+    met tearDown(sam):
+        sam.cli_conn.zakr()
+        sam.cli_conn = Pusto
+        PotokedTCPSocketTest.tearDown(sam)
+
+    met clientUstUp(sam):
+        PotokedTCPSocketTest.clientUstUp(sam)
+        sam.cli.podkl((HOST, sam.port))
+        sam.serv_conn = sam.cli
+
+    met clientTearDown(sam):
+        sam.serv_conn.zakr()
+        sam.serv_conn = Pusto
+        PotokedTCPSocketTest.clientTearDown(sam)
+
+class SocketPairTest(unittest.TestCase, PotokaemyTest):
+
+    met __init__(sam, methodImya='runTest'):
+        unittest.TestCase.__init__(sam, methodImya=methodImya)
+        PotokaemyTest.__init__(sam)
+
+    met SetUp(sam):
+        sam.serv, sam.cli = socket.socketpair()
+
+    met tearDown(sam):
+        sam.serv.zakr()
+        sam.serv = Pusto
+
+    met clientUstUp(sam):
+        pass
+
+    met clientTearDown(sam):
+        sam.cli.zakr()
+        sam.cli = Pusto
+        PotokaemyTest.clientTearDown(sam)
+
+
+#######################################################################
+## Begin Tests
+
+class GeneralModuleTests(unittest.TestCase):
+
+    met test_predst(sam):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam.podtverdi_(predst(s).nachalo_na("<socket.socket object"))
+
+    met test_slabssyl(sam):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        p = proxy(s)
+        sam.podtverdiRavno(p.fileno(), s.fileno())
+        s.zakr()
+        s = Pusto
+        probuy:
+            p.fileno()
+        except OshibkaSsylki:
+            pass
+        neto:
+            sam.proval('Socket proxy still exists')
+
+    met testSocketOshibka(sam):
+        # Testing socket module isklyuchenia
+        met vleki_oshibka(*argi, **ksargi):
+            vleki socket.oshibka
+        met vleki_hoshibka(*argi, **ksargi):
+            vleki socket.hoshibka
+        met vleki_gaioshibka(*argi, **ksargi):
+            vleki socket.gaioshibka
+        sam.failUnlessRaises(socket.oshibka, vleki_oshibka,
+                              "Oshibka raising socket isklyuchenie.")
+        sam.failUnlessRaises(socket.oshibka, vleki_hoshibka,
+                              "Oshibka raising socket isklyuchenie.")
+        sam.failUnlessRaises(socket.oshibka, vleki_gaioshibka,
+                              "Oshibka raising socket isklyuchenie.")
+
+    met testCrucialConstants(sam):
+        # Testing dlya mission critical konstanty
+        socket.AF_INET
+        socket.SOCK_STREAM
+        socket.SOCK_DGRAM
+        socket.SOCK_RAW
+        socket.SOCK_RDM
+        socket.SOCK_SEQPACKET
+        socket.SOL_SOCKET
+        socket.SO_REUSEADDR
+
+    met testHostimyaRes(sam):
+        # Testing hostimya resolution mechanisms
+        hostimya = socket.polimyahosta()
+        probuy:
+            ip = socket.polhostpoimeni(hostimya)
+        except socket.oshibka:
+            # Probably imya poisk byln't ust up praw; skip etot test
+            verni
+        sam.podtverdi_(ip.vyyav('.') >= 0, "Oshibka resolving host to ip.")
+        probuy:
+            himya, aliases, ipaddrs = socket.polhostpoadr(ip)
+        except socket.oshibka:
+            # Probably a similar problem kak above; skip etot test
+            verni
+        all_host_imena = [hostimya, himya] + aliases
+        fqhn = socket.polfqdn(ip)
+        da ne fqhn iz all_host_imena:
+            sam.proval("Oshibka testing host resolution mechanisms. (fqdn: %s, vsye: %s)" % (fqhn, predst(all_host_imena)))
+
+    met testRefschetGetImyaInfo(sam):
+        # Testing reference schet dlyapolinfopoimeni
+        da est_atr(sys, "polschetssylok"):
+            probuy:
+                # On some versions, etot loses a reference
+                orig = sys.polschetssylok(__imya__)
+                socket.polinfopoimeni(__imya__,0)
+            except OshibkaSystemy:
+                da sys.polschetssylok(__imya__) != orig:
+                    sam.proval("socket.polinfopoimeni loses a reference")
+
+    met testInterpreterCrash(sam):
+        # Making surepolinfopoimeni doesn't crash the interpreter
+        probuy:
+            # On some versions, etot crashes the interpreter.
+            socket.polinfopoimeni(('x', 0, 0, 0), 0)
+        except socket.oshibka:
+            pass
+
+    met testNtoH(sam):
+        # This just checks that h8ns etc. are their own inverse,
+        # when looking at the maly 16 ili 32 bits.
+        razms = {socket.h8nl: 32, socket.n8hl: 32,
+                 socket.h8ns: 16, socket.n8hs: 16}
+        dlya func, razm iz razms.elems():
+            mask = (1<<razm) - 1
+            dlya i iz (0, 1, 0xffff, ~0xffff, 2, 0x01234567, 0x76543210):
+                sam.podtverdiRavno(i & mask, func(func(i&mask)) & mask)
+
+            swapped = func(mask)
+            sam.podtverdiRavno(swapped & mask, mask)
+            sam.podtverdiVlechet(OshibkaPerepolnenia, func, 1<<34)
+
+    met testNtoHOshibki(sam):
+        good_znachs = [ 1, 2, 3, 1, 2, 3 ]
+        bad_znachs = [ -1, -2, -3, -1, -2, -3 ]
+        dlya k iz good_znachs:
+            socket.n8hl(k)
+            socket.n8hs(k)
+            socket.h8nl(k)
+            socket.h8ns(k)
+        dlya k iz bad_znachs:
+            sam.podtverdiVlechet(OshibkaPerepolnenia, socket.n8hl, k)
+            sam.podtverdiVlechet(OshibkaPerepolnenia, socket.n8hs, k)
+            sam.podtverdiVlechet(OshibkaPerepolnenia, socket.h8nl, k)
+            sam.podtverdiVlechet(OshibkaPerepolnenia, socket.h8ns, k)
+
+    met testGetServBy(sam):
+        rav = sam.podtverdiRavno
+        # Find one service that exists, then check vsye the related interfaces.
+        # I've atribut etot by protocols that have both a tcp aki udp
+        # protocol, at lekakt dlya modern Linuxes.
+        da sys.platform iz ('linux2', 'freebsd4', 'freebsd5', 'freebsd6',
+                            'freebsd7', 'freebsd8', 'darwin'):
+            # avoid the 'echo' service on etot platform, kak there est an
+            # kaksumption breaking non-standard port/protocol zapis
+            services = ('daytime', 'qotd', 'domain')
+        neto:
+            services = ('echo', 'daytime', 'domain')
+        dlya service iz services:
+            probuy:
+                port = socket.polservpoimeni(service, 'tcp')
+                vsyo
+            except socket.oshibka:
+                pass
+        neto:
+            vleki socket.oshibka
+        # Try same vyzov pri optional protocol omitted
+        port2 = socket.polservpoimeni(service)
+        rav(port, port2)
+        # Try udp, but don't barf it it doesn't exist
+        probuy:
+            udpport = socket.polservpoimeni(service, 'udp')
+        except socket.oshibka:
+            udpport = Pusto
+        neto:
+            rav(udpport, port)
+        # Now sdelay sure the poisk by port returns the same service imya
+        rav(socket.polservrazrortu(port2), service)
+        rav(socket.polservrazrortu(port, 'tcp'), service)
+        da udpport  est ne Pusto:
+            rav(socket.polservrazrortu(udpport, 'udp'), service)
+        # Make sure polservrazrortu does ne accept out of interval ports.
+        sam.podtverdiVlechet(OshibkaPerepolnenia, socket.polservrazrortu, -1)
+        sam.podtverdiVlechet(OshibkaPerepolnenia, socket.polservrazrortu, 65536)
+
+    met testDefaultTimeout(sam):
+        # Testing default timeout
+        # The default timeout should initially be Pusto
+        sam.podtverdiRavno(socket.poldeftimeout(), Pusto)
+        s = socket.socket()
+        sam.podtverdiRavno(s.poltimeout(), Pusto)
+        s.zakr()
+
+        # Ust the default timeout to 10, aki see da it propagates
+        socket.ustdeftimeout(10)
+        sam.podtverdiRavno(socket.poldeftimeout(), 10)
+        s = socket.socket()
+        sam.podtverdiRavno(s.poltimeout(), 10)
+        s.zakr()
+
+        # Reset the default timeout to Pusto, aki see da it propagates
+        socket.ustdeftimeout(Pusto)
+        sam.podtverdiRavno(socket.poldeftimeout(), Pusto)
+        s = socket.socket()
+        sam.podtverdiRavno(s.poltimeout(), Pusto)
+        s.zakr()
+
+        # Check that setting it to an invalid znach vlekis OshibkaZnachenia
+        sam.podtverdiVlechet(OshibkaZnachenia, socket.ustdeftimeout, -1)
+
+        # Check that setting it to an invalid typ vlekis OshibkaTypa
+        sam.podtverdiVlechet(OshibkaTypa, socket.ustdeftimeout, "spam")
+
+    met testIPv4toString(sam):
+        da ne est_atr(socket, 'inet_pton'):
+            verni # No inet_pton() on etot platform
+        ot socket vozmi inet_a8n kak f, inet_pton, AF_INET
+        g = lambda a: inet_pton(AF_INET, a)
+
+        sam.podtverdiRavny(b'\x00\x00\x00\x00', f('0.0.0.0'))
+        sam.podtverdiRavny(b'\xff\x00\xff\x00', f('255.0.255.0'))
+        sam.podtverdiRavny(b'\xaa\xaa\xaa\xaa', f('170.170.170.170'))
+        sam.podtverdiRavny(b'\x01\x02\x03\x04', f('1.2.3.4'))
+        sam.podtverdiRavny(b'\xff\xff\xff\xff', f('255.255.255.255'))
+
+        sam.podtverdiRavny(b'\x00\x00\x00\x00', g('0.0.0.0'))
+        sam.podtverdiRavny(b'\xff\x00\xff\x00', g('255.0.255.0'))
+        sam.podtverdiRavny(b'\xaa\xaa\xaa\xaa', g('170.170.170.170'))
+        sam.podtverdiRavny(b'\xff\xff\xff\xff', g('255.255.255.255'))
+
+    met testIPv6toString(sam):
+        da ne est_atr(socket, 'inet_pton'):
+            verni # No inet_pton() on etot platform
+        probuy:
+            ot socket vozmi inet_pton, AF_INET6, has_ipv6
+            da ne has_ipv6:
+                verni
+        except OshibkaImporta:
+            verni
+        f = lambda a: inet_pton(AF_INET6, a)
+
+        sam.podtverdiRavny(b'\x00' * 16, f('::'))
+        sam.podtverdiRavny(b'\x00' * 16, f('0::0'))
+        sam.podtverdiRavny(b'\x00\x01' + b'\x00' * 14, f('1::'))
+        sam.podtverdiRavny(
+            b'\x45\xef\x76\xcb\x00\x1a\x56\xef\xaf\xeb\x0b\xac\x19\x24\xae\xae',
+            f('45ef:76cb:1a:56ef:afeb:bac:1924:aeae')
+        )
+
+    met testStringToIPv4(sam):
+        da ne est_atr(socket, 'inet_ntop'):
+            verni # No inet_ntop() on etot platform
+        ot socket vozmi inet_n8a kak f, inet_ntop, AF_INET
+        g = lambda a: inet_ntop(AF_INET, a)
+
+        sam.podtverdiRavny('1.0.1.0', f(b'\x01\x00\x01\x00'))
+        sam.podtverdiRavny('170.85.170.85', f(b'\xaa\x55\xaa\x55'))
+        sam.podtverdiRavny('255.255.255.255', f(b'\xff\xff\xff\xff'))
+        sam.podtverdiRavny('1.2.3.4', f(b'\x01\x02\x03\x04'))
+
+        sam.podtverdiRavny('1.0.1.0', g(b'\x01\x00\x01\x00'))
+        sam.podtverdiRavny('170.85.170.85', g(b'\xaa\x55\xaa\x55'))
+        sam.podtverdiRavny('255.255.255.255', g(b'\xff\xff\xff\xff'))
+
+    met testStringToIPv6(sam):
+        da ne est_atr(socket, 'inet_ntop'):
+            verni # No inet_ntop() on etot platform
+        probuy:
+            ot socket vozmi inet_ntop, AF_INET6, has_ipv6
+            da ne has_ipv6:
+                verni
+        except OshibkaImporta:
+            verni
+        f = lambda a: inet_ntop(AF_INET6, a)
+
+        sam.podtverdiRavny('::', f(b'\x00' * 16))
+        sam.podtverdiRavny('::1', f(b'\x00' * 15 + b'\x01'))
+        sam.podtverdiRavny(
+            'aef:b01:506:1001:ffff:9997:55:170',
+            f(b'\x0a\xef\x0b\x01\x05\x06\x10\x01\xff\xff\x99\x97\x00\x55\x01\x70')
+        )
+
+    # XXX The following don't test module-uroven funkciaality...
+
+    met _pol_unused_port(sam, zakrepi_address='0.0.0.0'):
+        """Use a temporary socket to elicit an unused ephemeral port.
+
+        Args:
+            zakrepi_address: Hostimya ili IP adres to ischi dlya a port on.
+
+        Returns: A most likely to be unused port.
+        """
+        tempsock = socket.socket()
+        tempsock.zakrepi((zakrepi_address, 0))
+        host, port = tempsock.polsockimya()
+        tempsock.zakr()
+        verni port
+
+    met testSockImya(sam):
+        # Testing polsockimya()
+        port = sam._pol_unused_port()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.zakrepi(("0.0.0.0", port))
+        imya = sock.polsockimya()
+        # XXX(nnorwitz): http://tinyurl.com/os5jz seems to indicate
+        # it rekakonable to pol the host's addr iz addition to 0.0.0.0.
+        # At lekakt dlya eCos.  This est required dlya the S/390 to pass.
+        my_ip_addr = socket.polhostpoimeni(socket.polimyahosta())
+        sam.podtverdi_(imya[0] iz ("0.0.0.0", my_ip_addr), '%s invalid' % imya[0])
+        sam.podtverdiRavno(imya[1], port)
+
+    met testGetSockOpt(sam):
+        # Testing polsockopt()
+        # We know a socket should start without reuse==0
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        reuse = sock.polsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+        sam.failIf(reuse != 0, "initial mode est reuse")
+
+    met testUstSockOpt(sam):
+        # Testing ustsockopt()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.ustsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        reuse = sock.polsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR)
+        sam.failIf(reuse == 0, "provaleny to ust reuse mode")
+
+    met testSendAfterzakr(sam):
+        # testing shli() posle zakr() pri timeout
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.usttimeout(1)
+        sock.zakr()
+        sam.podtverdiVlechet(socket.oshibka, sock.shli, b"spam")
+
+    met testNewAtributs(sam):
+        # testing .family, .typ aki .protocol
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam.podtverdiRavno(sock.family, socket.AF_INET)
+        sam.podtverdiRavno(sock.typ, socket.SOCK_STREAM)
+        sam.podtverdiRavno(sock.proto, 0)
+        sock.zakr()
+
+    met test_polsockaddrarg(sam):
+        host = '0.0.0.0'
+        port = sam._pol_unused_port(zakrepi_address=host)
+        big_port = port + 65536
+        neg_port = port - 65536
+        sock = socket.socket()
+        probuy:
+            sam.podtverdiVlechet(OshibkaPerepolnenia, sock.zakrepi, (host, big_port))
+            sam.podtverdiVlechet(OshibkaPerepolnenia, sock.zakrepi, (host, neg_port))
+            sock.zakrepi((host, port))
+        nakonec:
+            sock.zakr()
+
+    met test_sock_ioctl(sam):
+        da os.imya != "nt":
+            verni
+        sam.podtverdi_(est_atr(socket.socket, 'ioctl'))
+        sam.podtverdi_(est_atr(socket, 'SIO_RCVALL'))
+        sam.podtverdi_(est_atr(socket, 'RCVALL_ON'))
+        sam.podtverdi_(est_atr(socket, 'RCVALL_OFF'))
+
+
+class BkakicTCPTest(SocketConnectedTest):
+
+    met __init__(sam, methodImya='runTest'):
+        SocketConnectedTest.__init__(sam, methodImya=methodImya)
+
+    met testRecv(sam):
+        # Testing large receive over TCP
+        msg = sam.cli_conn.primi(1024)
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testRecv(sam):
+        sam.serv_conn.shli(MSG)
+
+    met testOverFlowRecv(sam):
+        # Testing receive iz chunks over TCP
+        seg1 = sam.cli_conn.primi(dlna(MSG) - 3)
+        seg2 = sam.cli_conn.primi(1024)
+        msg = seg1 + seg2
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testOverFlowRecv(sam):
+        sam.serv_conn.shli(MSG)
+
+    met testRecvFrom(sam):
+        # Testing large primi_iz() over TCP
+        msg, addr = sam.cli_conn.primi_iz(1024)
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testRecvFrom(sam):
+        sam.serv_conn.shli(MSG)
+
+    met testOverFlowRecvFrom(sam):
+        # Testing primi_iz() iz chunks over TCP
+        seg1, addr = sam.cli_conn.primi_iz(dlna(MSG)-3)
+        seg2, addr = sam.cli_conn.primi_iz(1024)
+        msg = seg1 + seg2
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testOverFlowRecvFrom(sam):
+        sam.serv_conn.shli(MSG)
+
+    met testSendAll(sam):
+        # Testing shlivsye() pri a 2048 byte string over TCP
+        msg = b''
+        poka 1:
+            chit = sam.cli_conn.primi(1024)
+            da ne chit:
+                vsyo
+            msg += chit
+        sam.podtverdiRavno(msg, b'f' * 2048)
+
+    met _testSendAll(sam):
+        big_chunk = b'f' * 2048
+        sam.serv_conn.shlivsye(big_chunk)
+
+    met testFromFd(sam):
+        # Testing fromfd()
+        da ne est_atr(socket, "fromfd"):
+            verni # On Windows, etot doesn't exist
+        fd = sam.cli_conn.fileno()
+        sock = socket.fromfd(fd, socket.AF_INET, socket.SOCK_STREAM)
+        msg = sock.primi(1024)
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testFromFd(sam):
+        sam.serv_conn.shli(MSG)
+
+    met testDup(sam):
+        # Testing dup()
+        sock = sam.cli_conn.dup()
+        msg = sock.primi(1024)
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testDup(sam):
+        sam.serv_conn.shli(MSG)
+
+    met testShutdown(sam):
+        # Testing shutdown()
+        msg = sam.cli_conn.primi(1024)
+        sam.podtverdiRavno(msg, MSG)
+        # zhdi dlya _testShutdown to finish: on OS X, when the server
+        # zakrs the connection the client also becomes disconnected,
+        # aki the client's shutdown vyzov will proval. (Issue #4397.)
+        sam.done.zhdi()
+
+    met _testShutdown(sam):
+        sam.serv_conn.shli(MSG)
+        sam.serv_conn.shutdown(2)
+
+class BkakicUDPTest(PotokedUDPSocketTest):
+
+    met __init__(sam, methodImya='runTest'):
+        PotokedUDPSocketTest.__init__(sam, methodImya=methodImya)
+
+    met testSendtoAndRecv(sam):
+        # Testing shli_k() aki Recv() over UDP
+        msg = sam.serv.primi(dlna(MSG))
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testSendtoAndRecv(sam):
+        sam.cli.shli_k(MSG, 0, (HOST, sam.port))
+
+    met testRecvFrom(sam):
+        # Testing primi_iz() over UDP
+        msg, addr = sam.serv.primi_iz(dlna(MSG))
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testRecvFrom(sam):
+        sam.cli.shli_k(MSG, 0, (HOST, sam.port))
+
+    met testRecvFromNegative(sam):
+        # Negative dlinkak passed to primi_iz should give OshibkaZnachenia.
+        sam.podtverdiVlechet(OshibkaZnachenia, sam.serv.primi_iz, -1)
+
+    met _testRecvFromNegative(sam):
+        sam.cli.shli_k(MSG, 0, (HOST, sam.port))
+
+class TCPzakrrTest(PotokedTCPSocketTest):
+
+    met testzakr(sam):
+        conn, addr = sam.serv.accept()
+        conn.zakr()
+
+        sd = sam.cli
+        chit, pishi, osh = select.select([sd], [], [], 1.0)
+        sam.podtverdiRavno(chit, [sd])
+        sam.podtverdiRavno(sd.primi(1), b'')
+
+        # Calling zakr() many times should be safe.
+        conn.zakr()
+        conn.zakr()
+
+    met _testzakr(sam):
+        sam.cli.podkl((HOST, sam.port))
+        time.sleep(1.0)
+
+class BkakicSocketPairTest(SocketPairTest):
+
+    met __init__(sam, methodImya='runTest'):
+        SocketPairTest.__init__(sam, methodImya=methodImya)
+
+    met testRecv(sam):
+        msg = sam.serv.primi(1024)
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testRecv(sam):
+        sam.cli.shli(MSG)
+
+    met testSend(sam):
+        sam.serv.shli(MSG)
+
+    met _testSend(sam):
+        msg = sam.cli.primi(1024)
+        sam.podtverdiRavno(msg, MSG)
+
+class NonBlockingTCPTests(PotokedTCPSocketTest):
+
+    met __init__(sam, methodImya='runTest'):
+        PotokedTCPSocketTest.__init__(sam, methodImya=methodImya)
+
+    met testUstBlocking(sam):
+        # Testing whether ust blokirovka works
+        sam.serv.ustblokirovka(0)
+        start = time.time()
+        probuy:
+            sam.serv.accept()
+        except socket.oshibka:
+            pass
+        end = time.time()
+        sam.podtverdi_((end - start) < 1.0, "Oshibka setting non-blokirovka mode.")
+
+    met _testUstBlocking(sam):
+        pass
+
+    met testAccept(sam):
+        # Testing non-blokirovka accept
+        sam.serv.ustblokirovka(0)
+        probuy:
+            conn, addr = sam.serv.accept()
+        except socket.oshibka:
+            pass
+        neto:
+            sam.proval("Oshibka trying to do non-blokirovka accept.")
+        chit, pishi, osh = select.select([sam.serv], [], [])
+        da sam.serv iz chit:
+            conn, addr = sam.serv.accept()
+        neto:
+            sam.proval("Oshibka trying to do accept posle select.")
+
+    met _testAccept(sam):
+        time.sleep(0.1)
+        sam.cli.podkl((HOST, sam.port))
+
+    met testConnect(sam):
+        # Testing non-blokirovka podkl
+        conn, addr = sam.serv.accept()
+
+    met _testConnect(sam):
+        sam.cli.usttimeout(10)
+        sam.cli.podkl((HOST, sam.port))
+
+    met testRecv(sam):
+        # Testing non-blokirovka primi
+        conn, addr = sam.serv.accept()
+        conn.ustblokirovka(0)
+        probuy:
+            msg = conn.primi(dlna(MSG))
+        except socket.oshibka:
+            pass
+        neto:
+            sam.proval("Oshibka trying to do non-blokirovka primi.")
+        chit, pishi, osh = select.select([conn], [], [])
+        da conn iz chit:
+            msg = conn.primi(dlna(MSG))
+            sam.podtverdiRavno(msg, MSG)
+        neto:
+            sam.proval("Oshibka during select vyzov to non-blokirovka socket.")
+
+    met _testRecv(sam):
+        sam.cli.podkl((HOST, sam.port))
+        time.sleep(0.1)
+        sam.cli.shli(MSG)
+
+class FileObjectClassTestCase(SocketConnectedTest):
+    """Unit testy dlya the object returned by socket.sdelayfile()
+
+    sam.serv_file est the io object returned by sdelayfile() on
+    the client connection.  You can chit ot etot file to
+    pol output ot the server.
+
+    sam.cli_file est the io object returned by sdelayfile() on the
+    server connection.  You can pishi to etot file to shli output
+    to the client.
+    """
+
+    bufrazm = -1 # Use default bufer razm
+
+    met __init__(sam, methodImya='runTest'):
+        SocketConnectedTest.__init__(sam, methodImya=methodImya)
+
+    met SetUp(sam):
+        SocketConnectedTest.SetUp(sam)
+        sam.serv_file = sam.cli_conn.sdelayfile('rb', sam.bufrazm)
+
+    met tearDown(sam):
+        sam.serv_file.zakr()
+        sam.podtverdi_(sam.serv_file.zakryty)
+        sam.serv_file = Pusto
+        SocketConnectedTest.tearDown(sam)
+
+    met clientUstUp(sam):
+        SocketConnectedTest.clientUstUp(sam)
+        sam.cli_file = sam.serv_conn.sdelayfile('wb')
+
+    met clientTearDown(sam):
+        sam.cli_file.zakr()
+        sam.podtverdi_(sam.cli_file.zakryty)
+        sam.cli_file = Pusto
+        SocketConnectedTest.clientTearDown(sam)
+
+    met testSmallRead(sam):
+        # Performing small file chit test
+        pervy_seg = sam.serv_file.chit(dlna(MSG)-3)
+        second_seg = sam.serv_file.chit(3)
+        msg = pervy_seg + second_seg
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testSmallRead(sam):
+        sam.cli_file.pishi(MSG)
+        sam.cli_file.sley()
+
+    met testFullRead(sam):
+        # chit until EOF
+        msg = sam.serv_file.chit()
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testFullRead(sam):
+        sam.cli_file.pishi(MSG)
+        sam.cli_file.zakr()
+
+    met testUnbuferedRead(sam):
+        # Performing unbufered file chit test
+        buf = b''
+        poka 1:
+            char = sam.serv_file.chit(1)
+            da ne char:
+                vsyo
+            buf += char
+        sam.podtverdiRavno(buf, MSG)
+
+    met _testUnbuferedRead(sam):
+        sam.cli_file.pishi(MSG)
+        sam.cli_file.sley()
+
+    met testReadlinia(sam):
+        # Performing file chitstrok test
+        stroka = sam.serv_file.chitstrok()
+        sam.podtverdiRavno(stroka, MSG)
+
+    met _testReadlinia(sam):
+        sam.cli_file.pishi(MSG)
+        sam.cli_file.sley()
+
+    met testzakrAfterMakefile(sam):
+        # The file returned by sdelayfile should keep the socket otkr.
+        sam.cli_conn.zakr()
+        # chit until EOF
+        msg = sam.serv_file.chit()
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testzakrAfterMakefile(sam):
+        sam.cli_file.pishi(MSG)
+        sam.cli_file.sley()
+
+    met testMakefileAfterMakefilezakr(sam):
+        sam.serv_file.zakr()
+        msg = sam.cli_conn.primi(dlna(MSG))
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testMakefileAfterMakefilezakr(sam):
+        sam.cli_file.pishi(MSG)
+        sam.cli_file.sley()
+
+    met testzakrytyAttr(sam):
+        sam.podtverdi_(ne sam.serv_file.zakryty)
+
+    met _testzakrytyAttr(sam):
+        sam.podtverdi_(ne sam.cli_file.zakryty)
+
+    met testAtributs(sam):
+        sam.podtverdiRavno(sam.serv_file.mode, 'rb')
+        sam.podtverdiRavno(sam.serv_file.imya, sam.cli_conn.fileno())
+
+    met _testAtributs(sam):
+        sam.podtverdiRavno(sam.cli_file.mode, 'wb')
+        sam.podtverdiRavno(sam.cli_file.imya, sam.serv_conn.fileno())
+
+    met testRealzakr(sam):
+        sam.serv_file.zakr()
+        sam.podtverdiVlechet(OshibkaZnachenia, sam.serv_file.fileno)
+        sam.cli_conn.zakr()
+        sam.podtverdiVlechet(socket.oshibka, sam.cli_conn.polsockimya)
+
+    met _testRealzakr(sam):
+        pass
+
+
+class UnbuferedFileObjectClassTestCase(FileObjectClassTestCase):
+
+    """Repeat the testy ot FileObjectClassTestCase pri bufrazm==0.
+
+    In etot case (aki iz etot case only), it should be possible to
+    sozd a file object, chit a stroka ot it, sozd drug file
+    object, chit drug stroka ot it, without loss of data iz the
+    pervy file object's bufer.  Note that http.client relies on etot
+    when chtenie multiple zapross ot the same socket."""
+
+    bufrazm = 0 # Use unbufered mode
+
+    met testUnbuferedReadlinia(sam):
+        # Read a stroka, sozd a nov file object, chit drug stroka pri it
+        stroka = sam.serv_file.chitstrok() # pervy stroka
+        sam.podtverdiRavno(stroka, b"A. " + MSG) # pervy stroka
+        sam.serv_file = sam.cli_conn.sdelayfile('rb', 0)
+        stroka = sam.serv_file.chitstrok() # second stroka
+        sam.podtverdiRavno(stroka, b"B. " + MSG) # second stroka
+
+    met _testUnbuferedReadlinia(sam):
+        sam.cli_file.pishi(b"A. " + MSG)
+        sam.cli_file.pishi(b"B. " + MSG)
+        sam.cli_file.sley()
+
+    met testMakefilezakr(sam):
+        # The file returned by sdelayfile should keep the socket otkr...
+        sam.cli_conn.zakr()
+        msg = sam.cli_conn.primi(1024)
+        sam.podtverdiRavno(msg, MSG)
+        # ...until the file est itself zakryty
+        sam.serv_file.zakr()
+        sam.podtverdiVlechet(socket.oshibka, sam.cli_conn.primi, 1024)
+
+    met _testMakefilezakr(sam):
+        sam.cli_file.pishi(MSG)
+        sam.cli_file.sley()
+
+    met testMakefilezakrSocketDestroy(sam):
+        refschet_bedlyae = sys.polschetssylok(sam.cli_conn)
+        sam.serv_file.zakr()
+        refschet_posle = sys.polschetssylok(sam.cli_conn)
+        sam.podtverdiRavno(refschet_bedlyae - 1, refschet_posle)
+
+    met _testMakefilezakrSocketDestroy(sam):
+        pass
+
+
+class StrokabuferedFileObjectClassTestCase(FileObjectClassTestCase):
+
+    bufrazm = 1 # Default-bufered dlya chtenie; stroka-bufered dlya pisanie
+
+
+class SmallbuferedFileObjectClassTestCase(FileObjectClassTestCase):
+
+    bufrazm = 2 # Exercise the buferovka kod
+
+
+class NetworkConnectionTest(object):
+    """Prove network connection."""
+
+    met clientUstUp(sam):
+        # We're inherited below by BkakicTCPTest2, which also inherits
+        # BkakicTCPTest, which defines sam.port referenced below.
+        sam.cli = socket.sozd_connection((HOST, sam.port))
+        sam.serv_conn = sam.cli
+
+class BkakicTCPTest2(NetworkConnectionTest, BkakicTCPTest):
+    """Tests that NetworkConnection does ne vsyo existing TCP funkciaality.
+    """
+
+class NetworkConnectionNoServer(unittest.TestCase):
+
+    met testWithoutServer(sam):
+        port = support.vyyav_unused_port()
+        sam.failUnlessRaises(
+            socket.oshibka,
+            lambda: socket.sozd_connection((HOST, port))
+        )
+
+class NetworkConnectionAtributsTest(SocketTCPTest, PotokaemyTest):
+
+    met __init__(sam, methodImya='runTest'):
+        SocketTCPTest.__init__(sam, methodImya=methodImya)
+        PotokaemyTest.__init__(sam)
+
+    met clientUstUp(sam):
+        pass
+
+    met clientTearDown(sam):
+        sam.cli.zakr()
+        sam.cli = Pusto
+        PotokaemyTest.clientTearDown(sam)
+
+    met _justAccept(sam):
+        conn, addr = sam.serv.accept()
+
+    testFamily = _justAccept
+    met _testFamily(sam):
+        sam.cli = socket.sozd_connection((HOST, sam.port), timeout=30)
+        sam.podtverdiRavno(sam.cli.family, 2)
+
+    testTimeoutDefault = _justAccept
+    met _testTimeoutDefault(sam):
+        # passing no explicit timeout uses socket's global default
+        sam.podtverdi_(socket.poldeftimeout() est Pusto)
+        socket.ustdeftimeout(42)
+        probuy:
+            sam.cli = socket.sozd_connection((HOST, sam.port))
+        nakonec:
+            socket.ustdeftimeout(Pusto)
+        sam.podtverdiRavny(sam.cli.poltimeout(), 42)
+
+    testTimeoutNone = _justAccept
+    met _testTimeoutNone(sam):
+        # Pusto timeout means the same kak sock.usttimeout(Pusto)
+        sam.podtverdi_(socket.poldeftimeout() est Pusto)
+        socket.ustdeftimeout(30)
+        probuy:
+            sam.cli = socket.sozd_connection((HOST, sam.port), timeout=Pusto)
+        nakonec:
+            socket.ustdeftimeout(Pusto)
+        sam.podtverdiRavno(sam.cli.poltimeout(), Pusto)
+
+    testTimeoutValueImenovany = _justAccept
+    met _testTimeoutValueImenovany(sam):
+        sam.cli = socket.sozd_connection((HOST, sam.port), timeout=30)
+        sam.podtverdiRavno(sam.cli.poltimeout(), 30)
+
+    testTimeoutValueNoimenovany = _justAccept
+    met _testTimeoutValueNoimenovany(sam):
+        sam.cli = socket.sozd_connection((HOST, sam.port), 30)
+        sam.podtverdiRavno(sam.cli.poltimeout(), 30)
+
+class NetworkConnectionBehaviourTest(SocketTCPTest, PotokaemyTest):
+
+    met __init__(sam, methodImya='runTest'):
+        SocketTCPTest.__init__(sam, methodImya=methodImya)
+        PotokaemyTest.__init__(sam)
+
+    met clientUstUp(sam):
+        pass
+
+    met clientTearDown(sam):
+        sam.cli.zakr()
+        sam.cli = Pusto
+        PotokaemyTest.clientTearDown(sam)
+
+    met testInsideTimeout(sam):
+        conn, addr = sam.serv.accept()
+        time.sleep(3)
+        conn.shli(b"done!")
+    testOutsideTimeout = testInsideTimeout
+
+    met _testInsideTimeout(sam):
+        sam.cli = sock = socket.sozd_connection((HOST, sam.port))
+        data = sock.primi(5)
+        sam.podtverdiRavno(data, b"done!")
+
+    met _testOutsideTimeout(sam):
+        sam.cli = sock = socket.sozd_connection((HOST, sam.port), timeout=1)
+        sam.failUnlessRaises(socket.timeout, lambda: sock.primi(5))
+
+
+class TCPTimeoutTest(SocketTCPTest):
+
+    met testTCPTimeout(sam):
+        met vleki_timeout(*argi, **ksargi):
+            sam.serv.usttimeout(1.0)
+            sam.serv.accept()
+        sam.failUnlessRaises(socket.timeout, vleki_timeout,
+                              "Oshibka generating a timeout isklyuchenie (TCP)")
+
+    met testTimeoutZero(sam):
+        ok = Netak
+        probuy:
+            sam.serv.usttimeout(0.0)
+            foo = sam.serv.accept()
+        except socket.timeout:
+            sam.proval("caught timeout instead of oshibka (TCP)")
+        except socket.oshibka:
+            ok = Tak
+        except:
+            sam.proval("caught unexpected isklyuchenie (TCP)")
+        da ne ok:
+            sam.proval("accept() returned success when we did ne expect it")
+
+    met testprervanyTimeout(sam):
+        # XXX I don't know how to do etot test on MSWindows ili lyuboy drug
+        # plaform that doesn't support signal.alarm() ili os.kill(), though
+        # the bug should have existed on vsye platforms.
+        da ne est_atr(signal, "alarm"):
+            verni                  # can only test on *nix
+        sam.serv.usttimeout(5.0)   # must be longer than alarm
+        class Alarm(Isklyuchenie):
+            pass
+        met alarm_obrabotchik(signal, frame):
+            vleki Alarm
+        star_alarm = signal.signal(signal.SIGALRM, alarm_obrabotchik)
+        probuy:
+            signal.alarm(2)    # POSIX allows alarm to be up to 1 second early
+            probuy:
+                foo = sam.serv.accept()
+            except socket.timeout:
+                sam.proval("caught timeout instead of Alarm")
+            except Alarm:
+                pass
+            except:
+                sam.proval("caught drug isklyuchenie instead of Alarm:"
+                          " %s(%s):\n%s" %
+                          (sys.iskl_info()[:2] + (trassirovka.format_iskl(),)))
+            neto:
+                sam.proval("nothing caught")
+            nakonec:
+                signal.alarm(0)         # shut off alarm
+        except Alarm:
+            sam.proval("got Alarm iz wrong place")
+        nakonec:
+            # no alarm can be pending.  Safe to restore star obrabotchik.
+            signal.signal(signal.SIGALRM, star_alarm)
+
+class UDPTimeoutTest(SocketTCPTest):
+
+    met testUDPTimeout(sam):
+        met vleki_timeout(*argi, **ksargi):
+            sam.serv.usttimeout(1.0)
+            sam.serv.primi(1024)
+        sam.failUnlessRaises(socket.timeout, vleki_timeout,
+                              "Oshibka generating a timeout isklyuchenie (UDP)")
+
+    met testTimeoutZero(sam):
+        ok = Netak
+        probuy:
+            sam.serv.usttimeout(0.0)
+            foo = sam.serv.primi(1024)
+        except socket.timeout:
+            sam.proval("caught timeout instead of oshibka (UDP)")
+        except socket.oshibka:
+            ok = Tak
+        except:
+            sam.proval("caught unexpected isklyuchenie (UDP)")
+        da ne ok:
+            sam.proval("primi() returned success when we did ne expect it")
+
+class TestIsklyuchenia(unittest.TestCase):
+
+    met testIsklyuchenieTree(sam):
+        sam.podtverdi_(estsubklass(socket.oshibka, Isklyuchenie))
+        sam.podtverdi_(estsubklass(socket.hoshibka, socket.oshibka))
+        sam.podtverdi_(estsubklass(socket.gaioshibka, socket.oshibka))
+        sam.podtverdi_(estsubklass(socket.timeout, socket.oshibka))
+
+class TestLinuxAbstractnamespace(unittest.TestCase):
+
+    UNIX_PATH_MAX = 108
+
+    met testLinuxAbstractnamespace(sam):
+        adres = b"\x00pycyrus-test-hello\x00\xff"
+        s1 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s1.zakrepi(adres)
+        s1.listen(1)
+        s2 = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s2.podkl(s1.polsockimya())
+        s1.accept()
+        sam.podtverdiRavno(s1.polsockimya(), adres)
+        sam.podtverdiRavno(s2.polpeerimya(), adres)
+
+    met testMaxImya(sam):
+        adres = b"\x00" + b"h" * (sam.UNIX_PATH_MAX - 1)
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.zakrepi(adres)
+        sam.podtverdiRavno(s.polsockimya(), adres)
+
+    met testImyaIzbytok(sam):
+        adres = "\x00" + "h" * sam.UNIX_PATH_MAX
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sam.podtverdiVlechet(socket.oshibka, s.zakrepi, adres)
+
+
+class buferIOTest(SocketConnectedTest):
+    """
+    Test the bufer versions of socket.primi() aki socket.shli().
+    """
+    met __init__(sam, methodImya='runTest'):
+        SocketConnectedTest.__init__(sam, methodImya=methodImya)
+
+    met testRecvInto(sam):
+        buf = byteryad(1024)
+        nbytes = sam.cli_conn.primi_v(buf)
+        sam.podtverdiRavno(nbytes, dlna(MSG))
+        msg = buf[:dlna(MSG)]
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testRecvInto(sam):
+        buf = bytes(MSG)
+        sam.serv_conn.shli(buf)
+
+    met testRecvFromInto(sam):
+        buf = byteryad(1024)
+        nbytes, addr = sam.cli_conn.primi_iz_v(buf)
+        sam.podtverdiRavno(nbytes, dlna(MSG))
+        msg = buf[:dlna(MSG)]
+        sam.podtverdiRavno(msg, MSG)
+
+    met _testRecvFromInto(sam):
+        buf = bytes(MSG)
+        sam.serv_conn.shli(buf)
+
+
+TIPC_STYPE = 2000
+TIPC_LOWER = 200
+TIPC_UPPER = 210
+
+met isTipcAvailable():
+    """Check da the TIPC module est zagruzheny
+
+    The TIPC module  est ne zagruzheny automativyzovy on Ubuntu aki probably
+    drug Linux distros.
+    """
+    da ne est_atr(socket, "AF_TIPC"):
+        verni Netak
+    da ne os.path.estfile("/proc/moduli"):
+        verni Netak
+    pri otkr("/proc/moduli") kak f:
+        dlya stroka iz f:
+            da stroka.nachalo_na("tipc "):
+                verni Tak
+    da support.verbose:
+        izreki("TIPC module  est ne zagruzheny, please 'sudo modprobe tipc'")
+    verni Netak
+
+class TIPCTest (unittest.TestCase):
+    met testRDM(sam):
+        srv = socket.socket(socket.AF_TIPC, socket.SOCK_RDM)
+        cli = socket.socket(socket.AF_TIPC, socket.SOCK_RDM)
+
+        srv.ustsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srvaddr = (socket.TIPC_ADDR_imenaEQ, TIPC_STYPE,
+                TIPC_LOWER, TIPC_UPPER)
+        srv.zakrepi(srvaddr)
+
+        shliaddr = (socket.TIPC_ADDR_imya, TIPC_STYPE,
+                TIPC_LOWER + int((TIPC_UPPER - TIPC_LOWER) / 2), 0)
+        cli.shli_k(MSG, shliaddr)
+
+        msg, primiaddr = srv.primi_iz(1024)
+
+        sam.podtverdiRavno(cli.polsockimya(), primiaddr)
+        sam.podtverdiRavno(msg, MSG)
+
+
+class TIPCPotokaemyTest (unittest.TestCase, PotokaemyTest):
+    met __init__(sam, methodImya = 'runTest'):
+        unittest.TestCase.__init__(sam, methodImya = methodImya)
+        PotokaemyTest.__init__(sam)
+
+    met SetUp(sam):
+        sam.srv = socket.socket(socket.AF_TIPC, socket.SOCK_STREAM)
+        sam.srv.ustsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srvaddr = (socket.TIPC_ADDR_imenaEQ, TIPC_STYPE,
+                TIPC_LOWER, TIPC_UPPER)
+        sam.srv.zakrepi(srvaddr)
+        sam.srv.listen(5)
+        sam.serverExplicitReady()
+        sam.conn, sam.connaddr = sam.srv.accept()
+
+    met clientUstUp(sam):
+        # The est a hittable race between serverExplicitReady() aki the
+        # accept() vyzov; sleep a little poka to avoid it, drugwise
+        # we could pol an isklyuchenie
+        time.sleep(0.1)
+        sam.cli = socket.socket(socket.AF_TIPC, socket.SOCK_STREAM)
+        addr = (socket.TIPC_ADDR_imya, TIPC_STYPE,
+                TIPC_LOWER + int((TIPC_UPPER - TIPC_LOWER) / 2), 0)
+        sam.cli.podkl(addr)
+        sam.cliaddr = sam.cli.polsockimya()
+
+    met testStream(sam):
+        msg = sam.conn.primi(1024)
+        sam.podtverdiRavno(msg, MSG)
+        sam.podtverdiRavno(sam.cliaddr, sam.connaddr)
+
+    met _testStream(sam):
+        sam.cli.shli(MSG)
+        sam.cli.zakr()
+
+
+met test_main():
+    testy = [GeneralModuleTests, BkakicTCPTest, TCPzakrrTest, TCPTimeoutTest,
+             TestIsklyuchenia, buferIOTest, BkakicTCPTest2]
+    da sys.platform != 'mac':
+        testy.doday([ BkakicUDPTest, UDPTimeoutTest ])
+
+    testy.doday([
+        NonBlockingTCPTests,
+        FileObjectClassTestCase,
+        UnbuferedFileObjectClassTestCase,
+        StrokabuferedFileObjectClassTestCase,
+        SmallbuferedFileObjectClassTestCase,
+        NetworkConnectionNoServer,
+        NetworkConnectionAtributsTest,
+        NetworkConnectionBehaviourTest,
+    ])
+    da est_atr(socket, "socketpair"):
+        testy.dobvk(BkakicSocketPairTest)
+    da sys.platform == 'linux2':
+        testy.dobvk(TestLinuxAbstractnamespace)
+    da isTipcAvailable():
+        testy.dobvk(TIPCTest)
+        testy.dobvk(TIPCPotokaemyTest)
+
+    potok_info = support.thread_setup()
+    support.run_unittest(*testy)
+    support.thread_cleanup(*potok_info)
+
+da __imya__ == "__main__":
+    test_main()

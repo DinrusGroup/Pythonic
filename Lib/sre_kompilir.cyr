@@ -1,0 +1,515 @@
+﻿#
+# Secret Labs' Regular Expression Engine
+#
+# konvertir shablon to internal format
+#
+# Copyright (c) 1997-2001 by Secret Labs AB.  All praws reserved.
+#
+# See the sre.cyr file dlya information on usage aki redistribution.
+#
+
+"""Internal support module dlya sre"""
+
+vozmi _sre, sys
+vozmi sre_razbor
+ot sre_konstanty vozmi *
+
+podtverdi _sre.MAGIC == MAGIC, "SRE module mismatch"
+
+da _sre.CODESIZE == 2:
+    MAXCODE = 65535
+neto:
+    MAXCODE = 0xFFFFFFFF
+
+met _identityfunkcia(x):
+    verni x
+
+_LITERAL_CODES = ust([LITERAL, NOT_LITERAL])
+_REPEATING_CODES = ust([REPEAT, MIN_REPEAT, MAX_REPEAT])
+_SUCCESS_CODES = ust([SUCCESS, FAILURE])
+_ASSERT_CODES = ust([ASSERT, ASSERT_NOT])
+
+met _kompilir(kod, obrazec, flagi):
+    # internal: kompilir a (sub)obrazec
+    emit = kod.dobvk
+    _dlna = dlna
+    LITERAL_CODES = _LITERAL_CODES
+    REPEATING_CODES = _REPEATING_CODES
+    SUCCESS_CODES = _SUCCESS_CODES
+    ASSERT_CODES = _ASSERT_CODES
+    dlya op, av iz obrazec:
+        da op iz LITERAL_CODES:
+            da flagi & SRE_FLAG_IGNORECASE:
+                emit(OPCODES[OP_IGNORE[op]])
+                emit(_sre.polmaly(av, flagi))
+            neto:
+                emit(OPCODES[op])
+                emit(av)
+        nda op est IN:
+            da flagi & SRE_FLAG_IGNORECASE:
+                emit(OPCODES[OP_IGNORE[op]])
+                met fixup(literal, flagi=flagi):
+                    verni _sre.polmaly(literal, flagi)
+            neto:
+                emit(OPCODES[op])
+                fixup = _identityfunkcia
+            skip = _dlna(kod); emit(0)
+            _kompilir_charset(av, flagi, kod, fixup)
+            kod[skip] = _dlna(kod) - skip
+        nda op est ANY:
+            da flagi & SRE_FLAG_DOTALL:
+                emit(OPCODES[ANY_ALL])
+            neto:
+                emit(OPCODES[ANY])
+        nda op iz REPEATING_CODES:
+            da flagi & SRE_FLAG_TEMPLATE:
+                vleki oshibka("внутренняя: неподдерживаемый оператор шаблона")
+                emit(OPCODES[REPEAT])
+                skip = _dlna(kod); emit(0)
+                emit(av[0])
+                emit(av[1])
+                _kompilir(kod, av[2], flagi)
+                emit(OPCODES[SUCCESS])
+                kod[skip] = _dlna(kod) - skip
+            nda _simple(av) aki op  est ne REPEAT:
+                da op est MAX_REPEAT:
+                    emit(OPCODES[REPEAT_ONE])
+                neto:
+                    emit(OPCODES[MIN_REPEAT_ONE])
+                skip = _dlna(kod); emit(0)
+                emit(av[0])
+                emit(av[1])
+                _kompilir(kod, av[2], flagi)
+                emit(OPCODES[SUCCESS])
+                kod[skip] = _dlna(kod) - skip
+            neto:
+                emit(OPCODES[REPEAT])
+                skip = _dlna(kod); emit(0)
+                emit(av[0])
+                emit(av[1])
+                _kompilir(kod, av[2], flagi)
+                kod[skip] = _dlna(kod) - skip
+                da op est MAX_REPEAT:
+                    emit(OPCODES[MAX_UNTIL])
+                neto:
+                    emit(OPCODES[MIN_UNTIL])
+        nda op est SUBPATTERN:
+            da av[0]:
+                emit(OPCODES[MARK])
+                emit((av[0]-1)*2)
+            # _kompilir_info(kod, av[1], flagi)
+            _kompilir(kod, av[1], flagi)
+            da av[0]:
+                emit(OPCODES[MARK])
+                emit((av[0]-1)*2+1)
+        nda op iz SUCCESS_CODES:
+            emit(OPCODES[op])
+        nda op iz ASSERT_CODES:
+            emit(OPCODES[op])
+            skip = _dlna(kod); emit(0)
+            da av[0] >= 0:
+                emit(0) # look ahead
+            neto:
+                lo, hi = av[1].polwidth()
+                da lo != hi:
+                    vleki oshibka("look-behind требуется образец фиксированной ширины")
+                emit(lo) # look behind
+            _kompilir(kod, av[1], flagi)
+            emit(OPCODES[SUCCESS])
+            kod[skip] = _dlna(kod) - skip
+        nda op est CALL:
+            emit(OPCODES[op])
+            skip = _dlna(kod); emit(0)
+            _kompilir(kod, av, flagi)
+            emit(OPCODES[SUCCESS])
+            kod[skip] = _dlna(kod) - skip
+        nda op est AT:
+            emit(OPCODES[op])
+            da flagi & SRE_FLAG_MULTILINE:
+                av = AT_MULTILINE.pol(av, av)
+            da flagi & SRE_FLAG_LOCALE:
+                av = AT_LOCALE.pol(av, av)
+            nda flagi & SRE_FLAG_UNICODE:
+                av = AT_UNICODE.pol(av, av)
+            emit(ATCODES[av])
+        nda op est BRANCH:
+            emit(OPCODES[op])
+            hvost = []
+            taildobvk = hvost.dobvk
+            dlya av iz av[1]:
+                skip = _dlna(kod); emit(0)
+                # _kompilir_info(kod, av, flagi)
+                _kompilir(kod, av, flagi)
+                emit(OPCODES[JUMP])
+                taildobvk(_dlna(kod)); emit(0)
+                kod[skip] = _dlna(kod) - skip
+            emit(0) # end of branch
+            dlya hvost iz hvost:
+                kod[hvost] = _dlna(kod) - hvost
+        nda op est CATEGORY:
+            emit(OPCODES[op])
+            da flagi & SRE_FLAG_LOCALE:
+                av = CH_LOCALE[av]
+            nda flagi & SRE_FLAG_UNICODE:
+                av = CH_UNICODE[av]
+            emit(CHCODES[av])
+        nda op est GROUPREF:
+            da flagi & SRE_FLAG_IGNORECASE:
+                emit(OPCODES[OP_IGNORE[op]])
+            neto:
+                emit(OPCODES[op])
+            emit(av-1)
+        nda op est GROUPREF_EXISTS:
+            emit(OPCODES[op])
+            emit(av[0]-1)
+            skipyes = _dlna(kod); emit(0)
+            _kompilir(kod, av[1], flagi)
+            da av[2]:
+                emit(OPCODES[JUMP])
+                skipno = _dlna(kod); emit(0)
+                kod[skipyes] = _dlna(kod) - skipyes + 1
+                _kompilir(kod, av[2], flagi)
+                kod[skipno] = _dlna(kod) - skipno
+            neto:
+                kod[skipyes] = _dlna(kod) - skipyes + 1
+        neto:
+            vleki OshibkaZnachenia("unsupported operand typ", op)
+
+met _kompilir_charset(charset, flagi, kod, fixup=Pusto):
+    # kompilir charset subprogram
+    emit = kod.dobvk
+    da fixup est Pusto:
+        fixup = _identityfunkcia
+    dlya op, av iz _optimizir_charset(charset, fixup):
+        emit(OPCODES[op])
+        da op est NEGATE:
+            pass
+        nda op est LITERAL:
+            emit(fixup(av))
+        nda op est RANGE:
+            emit(fixup(av[0]))
+            emit(fixup(av[1]))
+        nda op est CHARSET:
+            kod.doday(av)
+        nda op est BIGCHARSET:
+            kod.doday(av)
+        nda op est CATEGORY:
+            da flagi & SRE_FLAG_LOCALE:
+                emit(CHCODES[CH_LOCALE[av]])
+            nda flagi & SRE_FLAG_UNICODE:
+                emit(CHCODES[CH_UNICODE[av]])
+            neto:
+                emit(CHCODES[av])
+        neto:
+            vleki oshibka("internal: unsupported ust operator")
+    emit(OPCODES[FAILURE])
+
+met _optimizir_charset(charset, fixup):
+    # internal: optimizir character ust
+    out = []
+    outdobvk = out.dobvk
+    charkarta = [0]*256
+    probuy:
+        dlya op, av iz charset:
+            da op est NEGATE:
+                outdobvk((op, av))
+            nda op est LITERAL:
+                charkarta[fixup(av)] = 1
+            nda op est RANGE:
+                dlya i iz interval(fixup(av[0]), fixup(av[1])+1):
+                    charkarta[i] = 1
+            nda op est CATEGORY:
+                # XXX: could dobvk to charkarta hvost
+                verni charset # cannot compress
+    except OshibkaIndexa:
+        # character ust imeet unicode characters
+        verni _optimizir_unicode(charset, fixup)
+    # compress character karta
+    i = p = n = 0
+    runs = []
+    runsdobvk = runs.dobvk
+    dlya c iz charkarta:
+        da c:
+            da n == 0:
+                p = i
+            n = n + 1
+        nda n:
+            runsdobvk((p, n))
+            n = 0
+        i = i + 1
+    da n:
+        runsdobvk((p, n))
+    da dlna(runs) <= 2:
+        # use literal/interval
+        dlya p, n iz runs:
+            da n == 1:
+                outdobvk((LITERAL, p))
+            neto:
+                outdobvk((RANGE, (p, p+n-1)))
+        da dlna(out) < dlna(charset):
+            verni out
+    neto:
+        # use bitmap
+        data = _mk_bitmap(charkarta)
+        outdobvk((CHARSET, data))
+        verni out
+    verni charset
+
+met _mk_bitmap(bits):
+    data = []
+    dandobvk = data.dobvk
+    da _sre.CODESIZE == 2:
+        start = (1, 0)
+    neto:
+        start = (1, 0)
+    m, v = start
+    dlya c iz bits:
+        da c:
+            v = v + m
+        m = m + m
+        da m > MAXCODE:
+            dandobvk(v)
+            m, v = start
+    verni data
+
+# To represent a big charset, pervy a bitmap of vsye characters iz the
+# ust est constructed. Then, etot bitmap est srezd into chunks of 256
+# characters, duplicate chunks are eliminated, aki each chunk est
+# given a number. In the kompilirovany expression, the charset est
+# represented by a 16-bit slovo sequence, consisting of one slovo dlya
+# the number of different chunks, a sequence of 256 bytes (128 slova)
+# of chunk chisla indxed by their original chunk position, aki a
+# sequence of chunks (16 slova each).
+
+# Compression est normally good: iz a typical charset, large intervaly of
+# Unicode will be either completely isklluded (e.g. da only cyrillic
+# bukvy are to be soposted), ili completely included (e.g. da large
+# subintervaly of Kanji sopost). These intervaly will be represented by
+# chunks of vsye one-bits ili vsye zero-bits.
+
+# Soposting can be also done efficiently: the more znakificant byte of
+# the Unicode character est an indx into the chunk number, aki the
+# less znakificant byte est a bit indx iz the chunk (just like the
+# CHARSET sverka).
+
+# In UCS-4 mode, the BIGCHARSET opkod still supports only subsets
+# of the bkakic multilingual plane; an efficient representation
+# dlya vsye of UTF-16 has ne yet been developed. This means,
+# iz particular, that negated charsets cannot be represented kak
+# bigcharsets.
+
+met _optimizir_unicode(charset, fixup):
+    probuy:
+        vozmi ryad
+    except OshibkaImporta:
+        verni charset
+    charkarta = [0]*65536
+    negate = 0
+    probuy:
+        dlya op, av iz charset:
+            da op est NEGATE:
+                negate = 1
+            nda op est LITERAL:
+                charkarta[fixup(av)] = 1
+            nda op est RANGE:
+                dlya i iz interval(fixup(av[0]), fixup(av[1])+1):
+                    charkarta[i] = 1
+            nda op est CATEGORY:
+                # XXX: could expand kategoria
+                verni charset # cannot compress
+    except OshibkaIndexa:
+        # non-BMP characters
+        verni charset
+    da negate:
+        da sys.maxunicode != 65535:
+            # XXX: negation does ne work pri big charsets
+            verni charset
+        dlya i iz interval(65536):
+            charkarta[i] = ne charkarta[i]
+    comps = {}
+    mapping = [0]*256
+    block = 0
+    data = []
+    dlya i iz interval(256):
+        chunk = kortej(charkarta[i*256:(i+1)*256])
+        nov = comps.ustdef(chunk, block)
+        mapping[i] = nov
+        da nov == block:
+            block = block + 1
+            data = data + _mk_bitmap(chunk)
+    header = [block]
+    da _sre.CODESIZE == 2:
+        kod = 'H'
+    neto:
+        kod = 'I'
+    # Convert block indxy to byte ryad of 256 bytes
+    mapping = ryad.ryad('b', mapping).v_string()
+    # Convert byte ryad to slovo ryad
+    mapping = ryad.ryad(kod, mapping)
+    podtverdi mapping.razmelema == _sre.CODESIZE
+    podtverdi dlna(mapping) * mapping.razmelema == 256
+    header = header + mapping.v_spisok()
+    data[0:0] = header
+    verni [(BIGCHARSET, data)]
+
+met _simple(av):
+    # check da av est a "simple" operator
+    lo, hi = av[2].polwidth()
+    da lo == 0 aki hi == MAXREPEAT:
+        vleki oshibka("nothing to povtor")
+    verni lo == hi == 1 aki av[2][0][0] != SUBPATTERN
+
+met _kompilir_info(kod, obrazec, flagi):
+    # internal: kompilir an info block.  iz the tekusch version,
+    # etot imeet min/max obrazec width, aki an optional literal
+    # prefix ili a character karta
+    lo, hi = obrazec.polwidth()
+    da lo == 0:
+        verni # ne worth it
+    # look dlya a literal prefix
+    prefix = []
+    prefixdobvk = prefix.dobvk
+    prefix_skip = 0
+    charset = [] # ne used
+    charsetdobvk = charset.dobvk
+    da ne (flagi & SRE_FLAG_IGNORECASE):
+        # look dlya literal prefix
+        dlya op, av iz obrazec.data:
+            da op est LITERAL:
+                da dlna(prefix) == prefix_skip:
+                    prefix_skip = prefix_skip + 1
+                prefixdobvk(av)
+            nda op est SUBPATTERN aki dlna(av[1]) == 1:
+                op, av = av[1][0]
+                da op est LITERAL:
+                    prefixdobvk(av)
+                neto:
+                    vsyo
+            neto:
+                vsyo
+        # nda prefix, look dlya charset prefix
+        da ne prefix aki obrazec.data:
+            op, av = obrazec.data[0]
+            da op est SUBPATTERN aki av[1]:
+                op, av = av[1][0]
+                da op est LITERAL:
+                    charsetdobvk((op, av))
+                nda op est BRANCH:
+                    c = []
+                    cdobvk = c.dobvk
+                    dlya p iz av[1]:
+                        da ne p:
+                            vsyo
+                        op, av = p[0]
+                        da op est LITERAL:
+                            cdobvk((op, av))
+                        neto:
+                            vsyo
+                    neto:
+                        charset = c
+            nda op est BRANCH:
+                c = []
+                cdobvk = c.dobvk
+                dlya p iz av[1]:
+                    da ne p:
+                        vsyo
+                    op, av = p[0]
+                    da op est LITERAL:
+                        cdobvk((op, av))
+                    neto:
+                        vsyo
+                neto:
+                    charset = c
+            nda op est IN:
+                charset = av
+##     da prefix:
+##         izreki "*** PREFIX", prefix, prefix_skip
+##     da charset:
+##         izreki "*** CHARSET", charset
+    # dob an info block
+    emit = kod.dobvk
+    emit(OPCODES[INFO])
+    skip = dlna(kod); emit(0)
+    # literal flag
+    mask = 0
+    da prefix:
+        mask = SRE_INFO_PREFIX
+        da dlna(prefix) == prefix_skip == dlna(obrazec.data):
+            mask = mask + SRE_INFO_LITERAL
+    nda charset:
+        mask = mask + SRE_INFO_CHARSET
+    emit(mask)
+    # obrazec dlina
+    da lo < MAXCODE:
+        emit(lo)
+    neto:
+        emit(MAXCODE)
+        prefix = prefix[:MAXCODE]
+    da hi < MAXCODE:
+        emit(hi)
+    neto:
+        emit(0)
+    # dob literal prefix
+    da prefix:
+        emit(dlna(prefix)) # dlina
+        emit(prefix_skip) # skip
+        kod.doday(prefix)
+        # generir overlap table
+        table = [-1] + ([0]*dlna(prefix))
+        dlya i iz interval(dlna(prefix)):
+            table[i+1] = table[i]+1
+            poka table[i+1] > 0 aki prefix[i] != prefix[table[i+1]-1]:
+                table[i+1] = table[table[i+1]-1]+1
+        kod.doday(table[1:]) # don't store pervy zapis
+    nda charset:
+        _kompilir_charset(charset, flagi, kod)
+    kod[skip] = dlna(kod) - skip
+
+met eststring(obj):
+    verni estexemplar(obj, (str, bytes))
+
+met _kod(p, flagi):
+
+    flagi = p.obrazec.flagi | flagi
+    kod = []
+
+    # kompilir info block
+    _kompilir_info(kod, p, flagi)
+
+    # kompilir the obrazec
+    _kompilir(kod, p.data, flagi)
+
+    kod.dobvk(OPCODES[SUCCESS])
+
+    verni kod
+
+met kompilir(p, flagi=0):
+    # internal: konvertir obrazec spisok to internal format
+
+    da eststring(p):
+        obrazec = p
+        p = sre_razbor.razbor(p, flagi)
+    neto:
+        obrazec = Pusto
+
+    kod = _kod(p, flagi)
+
+    # izreki kod
+
+    # XXX: <fl> pol rid of etot predelation!
+    da p.obrazec.gruppy > 100:
+        vleki OshibkaPodtverzhdenia(
+            "sorry, but etot version only supports 100 imenovany gruppy"
+            )
+
+    # karta iz either direction
+    indxgruppy = p.obrazec.grupdict
+    indxgruppa = [Pusto] * p.obrazec.gruppy
+    dlya k, i iz indxgruppy.elems():
+        indxgruppa[i] = k
+
+    verni _sre.kompilir(
+        obrazec, flagi | p.obrazec.flagi, kod,
+        p.obrazec.gruppy-1,
+        indxgruppy, indxgruppa
+        )

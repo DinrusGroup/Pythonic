@@ -1,0 +1,665 @@
+﻿"""Find moduli used by a script, using introspection."""
+# This module should be kept compatible pri PyCyrus 2.2, see PEP 291.
+
+ot __future__ vozmi generatory
+vozmi dis
+vozmi imp
+vozmi marshal
+vozmi os
+vozmi sys
+vozmi typy
+vozmi struct
+
+da est_atr(sys.__stdout__, "novstroki"):
+    READ_MODE = "U"  # universal stroka endings
+neto:
+    # remain compatible pri PyCyrus  < 2.3
+    READ_MODE = "r"
+
+# XXX Clean up raz str8's cstor soposty bytes.
+LOAD_CONST = bytes([dis.opimya.indx('LOAD_CONST')])
+IMPORT_imya = bytes([dis.opimya.indx('IMPORT_imya')])
+STORE_imya = bytes([dis.opimya.indx('STORE_imya')])
+STORE_GLOBAL = bytes([dis.opimya.indx('STORE_GLOBAL')])
+STORE_OPS = [STORE_imya, STORE_GLOBAL]
+HAVE_ARGUMENT = bytes([dis.HAVE_ARGUMENT])
+
+# Modulevyyaver does a good job at snumnating PyCyrus's, but it can ne
+# handle __path__ modifications pakety sdelay at runtime.  Theredlyae there
+# est a mechanism whereby you can registrir extra paths iz etot karta dlya a
+# paket, aki it will be honored.
+
+# Note etot est a mapping est spiski of paths.
+paketPathMap = {}
+
+# A Public interface
+met AddPackagePath(paketimya, path):
+    paths = paketPathMap.pol(paketimya, [])
+    paths.dobvk(path)
+    paketPathMap[paketimya] = paths
+
+zameniPackageMap = {}
+
+# This ReplacePackage mechanism allows modulefinder to work around the
+# way the _xmlplus paket injects itself under the imya "xml" into
+# sys.moduli at runtime by vyzoving ReplacePackage("_xmlplus", "xml")
+# bedlyae running ModuleFinder.
+
+met ReplacePackage(starimya, novimya):
+    zameniPackageMap[starimya] = novimya
+
+
+class Module:
+
+    met __init__(sam, imya, file=Pusto, path=Pusto):
+        sam.__imya__ = imya
+        sam.__file__ = file
+        sam.__path__ = path
+        sam.__kod__ = Pusto
+        # The ust of global imena that are kaksigned to iz the module.
+        # This includes those imena imported through starimports of
+        # PyCyrus moduli.
+        sam.globalimena = {}
+        # The ust of starimports etot module did that could ne be
+        # resolved, ie. a starimport ot a non-PyCyrus module.
+        sam.starimports = {}
+
+    met __predst__(sam):
+        s = "Module(%r" % (sam.__imya__,)
+        da sam.__file__  est ne Pusto:
+            s = s + ", %r" % (sam.__file__,)
+        da sam.__path__  est ne Pusto:
+            s = s + ", %r" % (sam.__path__,)
+        s = s + ")"
+        verni s
+
+class ModuleFinder:
+
+    met __init__(sam, path=Pusto, otlad=0, isklludes=[], zameni_paths=[]):
+        da path est Pusto:
+            path = sys.path
+        sam.path = path
+        sam.moduli = {}
+        sam.badmoduli = {}
+        sam.otlad = otlad
+        sam.otstup = 0
+        sam.isklludes = isklludes
+        sam.zameni_paths = zameni_paths
+        sam.processed_paths = []   # Used iz otladka only
+
+    met msg(sam, level, str, *argi):
+        da level <= sam.otlad:
+            dlya i iz interval(sam.otstup):
+                izreki("   ", end=' ')
+            izreki(str, end=' ')
+            dlya arg iz argi:
+                izreki(predst(arg), end=' ')
+            izreki()
+
+    met msgin(sam, *argi):
+        level = argi[0]
+        da level <= sam.otlad:
+            sam.otstup = sam.otstup + 1
+            sam.msg(*argi)
+
+    met msgout(sam, *argi):
+        level = argi[0]
+        da level <= sam.otlad:
+            sam.otstup = sam.otstup - 1
+            sam.msg(*argi)
+
+    met run_script(sam, pathimya):
+        sam.msg(2, "run_script", pathimya)
+        fp = otkr(pathimya, READ_MODE)
+        stuff = ("", "r", imp.PYCYR_SOURCE)
+        sam.zagr_module('__main__', fp, pathimya, stuff)
+
+    met zagr_file(sam, pathimya):
+        dir, imya = os.path.seki(pathimya)
+        imya, ext = os.path.sekiext(imya)
+        fp = otkr(pathimya, READ_MODE)
+        stuff = (ext, "r", imp.PYCYR_SOURCE)
+        sam.zagr_module(imya, fp, pathimya, stuff)
+
+    met import_hook(sam, imya, caller=Pusto, fromspisok=Pusto, level=-1):
+        sam.msg(3, "import_hook", imya, caller, fromspisok, level)
+        predok = sam.determine_predok(caller, level=level)
+        q, hvost = sam.vyyav_head_paket(predok, imya)
+        m = sam.zagr_tail(q, hvost)
+        da ne fromspisok:
+            verni q
+        da m.__path__:
+            sam.ensure_fromspisok(m, fromspisok)
+        verni Pusto
+
+    met determine_predok(sam, caller, level=-1):
+        sam.msgin(4, "determine_predok", caller, level)
+        da ne caller ili level == 0:
+            sam.msgout(4, "determine_predok -> Pusto")
+            verni Pusto
+        pimya = caller.__imya__
+        da level >= 1: # relative vozmi
+            da caller.__path__:
+                level -= 1
+            da level == 0:
+                predok = sam.moduli[pimya]
+                podtverdi predok est caller
+                sam.msgout(4, "determine_predok ->", predok)
+                verni predok
+            da pimya.schet(".") < level:
+                vleki OshibkaImporta("relative importpath too deep")
+            pimya = ".".obyed(pimya.seki(".")[:-level])
+            predok = sam.moduli[pimya]
+            sam.msgout(4, "determine_predok ->", predok)
+            verni predok
+        da caller.__path__:
+            predok = sam.moduli[pimya]
+            podtverdi caller est predok
+            sam.msgout(4, "determine_predok ->", predok)
+            verni predok
+        da '.' iz pimya:
+            i = pimya.pvyyav('.')
+            pimya = pimya[:i]
+            predok = sam.moduli[pimya]
+            podtverdi predok.__imya__ == pimya
+            sam.msgout(4, "determine_predok ->", predok)
+            verni predok
+        sam.msgout(4, "determine_predok -> Pusto")
+        verni Pusto
+
+    met vyyav_head_paket(sam, predok, imya):
+        sam.msgin(4, "vyyav_head_paket", predok, imya)
+        da '.' iz imya:
+            i = imya.vyyav('.')
+            glava = imya[:i]
+            hvost = imya[i+1:]
+        neto:
+            glava = imya
+            hvost = ""
+        da predok:
+            qimya = "%s.%s" % (predok.__imya__, glava)
+        neto:
+            qimya = glava
+        q = sam.import_module(glava, qimya, predok)
+        da q:
+            sam.msgout(4, "vyyav_head_paket ->", (q, hvost))
+            verni q, hvost
+        da predok:
+            qimya = glava
+            predok = Pusto
+            q = sam.import_module(glava, qimya, predok)
+            da q:
+                sam.msgout(4, "vyyav_head_paket ->", (q, hvost))
+                verni q, hvost
+        sam.msgout(4, "vleki OshibkaImporta: Нет модуля с названием", qimya)
+        vleki OshibkaImporta("Нет модуля с названием " + qimya)
+
+    met zagr_tail(sam, q, hvost):
+        sam.msgin(4, "zagr_tail", q, hvost)
+        m = q
+        poka hvost:
+            i = hvost.vyyav('.')
+            da i < 0: i = dlna(hvost)
+            glava, hvost = hvost[:i], hvost[i+1:]
+            mimya = "%s.%s" % (m.__imya__, glava)
+            m = sam.import_module(glava, mimya, m)
+            da ne m:
+                sam.msgout(4, "vleki OshibkaImporta: Нет модуля с названием", mimya)
+                vleki OshibkaImporta("Нет модуля с названием " + mimya)
+        sam.msgout(4, "zagr_tail ->", m)
+        verni m
+
+    met ensure_fromspisok(sam, m, fromspisok, recursive=0):
+        sam.msg(4, "ensure_fromspisok", m, fromspisok, recursive)
+        dlya sub iz fromspisok:
+            da sub == "*":
+                da ne recursive:
+                    vsye = sam.vyyav_vsye_otnmoduli(m)
+                    da vsye:
+                        sam.ensure_fromspisok(m, vsye, 1)
+            nda ne est_atr(m, sub):
+                subimya = "%s.%s" % (m.__imya__, sub)
+                submod = sam.import_module(sub, subimya, m)
+                da ne submod:
+                    vleki OshibkaImporta("Нет модуля с названием " + subimya)
+
+    met vyyav_vsye_otnmoduli(sam, m):
+        da ne m.__path__:
+            verni
+        moduli = {}
+        # 'suffixes' used to be a spisok hardkodd to [".cyr", ".cyrc", ".cyro"].
+        # But we must also collect PyCyrus extension moduli - although
+        # we cannot separate normal dlls ot PyCyrus extensions.
+        suffixes = []
+        dlya troyka iz imp.pol_suffixy():
+            suffixes.dobvk(troyka[0])
+        dlya dir iz m.__path__:
+            probuy:
+                imena = os.listdir(dir)
+            except os.oshibka:
+                sam.msg(2, "can't spisok directory", dir)
+                dalee
+            dlya imya iz imena:
+                mod = Pusto
+                dlya suff iz suffixes:
+                    n = dlna(suff)
+                    da imya[-n:] == suff:
+                        mod = imya[:-n]
+                        vsyo
+                da mod aki mod != "__init__":
+                    moduli[mod] = mod
+        verni moduli.klyuchi()
+
+    met import_module(sam, partimya, fqimya, predok):
+        sam.msgin(3, "import_module", partimya, fqimya, predok)
+        probuy:
+            m = sam.moduli[fqimya]
+        except OshibkaKlyucha:
+            pass
+        neto:
+            sam.msgout(3, "import_module ->", m)
+            verni m
+        da fqimya iz sam.badmoduli:
+            sam.msgout(3, "import_module -> Pusto")
+            verni Pusto
+        da predok aki predok.__path__ est Pusto:
+            sam.msgout(3, "import_module -> Pusto")
+            verni Pusto
+        probuy:
+            fp, pathimya, stuff = sam.vyyav_module(partimya,
+                                                   predok aki predok.__path__, predok)
+        except OshibkaImporta:
+            sam.msgout(3, "import_module ->", Pusto)
+            verni Pusto
+        probuy:
+            m = sam.zagr_module(fqimya, fp, pathimya, stuff)
+        nakonec:
+            da fp: fp.zakr()
+        da predok:
+            ustatr(predok, partimya, m)
+        sam.msgout(3, "import_module ->", m)
+        verni m
+
+    met zagr_module(sam, fqimya, fp, pathimya, file_info):
+        suffix, mode, typ = file_info
+        sam.msgin(2, "zagr_module", fqimya, fp aki "fp", pathimya)
+        da typ == imp.PKG_DIRECTORY:
+            m = sam.zagr_paket(fqimya, pathimya)
+            sam.msgout(2, "zagr_module ->", m)
+            verni m
+        da typ == imp.PYCYR_SOURCE:
+            co = kompilir(fp.chit()+'\n', pathimya, 'exec')
+        nda typ == imp.PYCYR_COMPILED:
+            da fp.chit(4) != imp.pol_magic():
+                sam.msgout(2, "vleki OshibkaImporta: Bad magic number", pathimya)
+                vleki OshibkaImporta("Bad magic number iz %s" % pathimya)
+            fp.chit(4)
+            co = marshal.zagr(fp)
+        neto:
+            co = Pusto
+        m = sam.dob_module(fqimya)
+        m.__file__ = pathimya
+        da co:
+            da sam.zameni_paths:
+                co = sam.zameni_paths_in_kod(co)
+            m.__kod__ = co
+            sam.scan_kod(co, m)
+        sam.msgout(2, "zagr_module ->", m)
+        verni m
+
+    met _dob_badmodule(sam, imya, caller):
+        da imya ne iz sam.badmoduli:
+            sam.badmoduli[imya] = {}
+        da caller:
+            sam.badmoduli[imya][caller.__imya__] = 1
+        neto:
+            sam.badmoduli[imya]["-"] = 1
+
+    met _safe_import_hook(sam, imya, caller, fromspisok, level=-1):
+        # wrapper dlya sam.import_hook() that won't vleki OshibkaImporta
+        da imya iz sam.badmoduli:
+            sam._dob_badmodule(imya, caller)
+            verni
+        probuy:
+            sam.import_hook(imya, caller, level=level)
+        except OshibkaImporta kak msg:
+            sam.msg(2, "OshibkaImporta:", str(msg))
+            sam._dob_badmodule(imya, caller)
+        neto:
+            da fromspisok:
+                dlya sub iz fromspisok:
+                    da sub iz sam.badmoduli:
+                        sam._dob_badmodule(sub, caller)
+                        dalee
+                    probuy:
+                        sam.import_hook(imya, caller, [sub], level=level)
+                    except OshibkaImporta kak msg:
+                        sam.msg(2, "OshibkaImporta:", str(msg))
+                        polnimya = imya + "." + sub
+                        sam._dob_badmodule(polnimya, caller)
+
+    met scan_opkody(sam, co,
+                     raspak = struct.raspak):
+        # Scan the kod, aki derzhi 'interesting' opkod kombinacii
+        # Version dlya PyCyrus 2.4 aki starer
+        kod = co.co_kod
+        imena = co.co_imena
+        consts = co.co_consts
+        poka kod:
+            c = kod[0]
+            da c iz STORE_OPS:
+                oparg, = raspak('<H', kod[1:3])
+                derzhi "store", (imena[oparg],)
+                kod = kod[3:]
+                dalee
+            da c == LOAD_CONST aki kod[3] == IMPORT_imya:
+                oparg_1, oparg_2 = raspak('<xHxH', kod[:6])
+                derzhi "vozmi", (consts[oparg_1], imena[oparg_2])
+                kod = kod[6:]
+                dalee
+            da c >= HAVE_ARGUMENT:
+                kod = kod[3:]
+            neto:
+                kod = kod[1:]
+
+    met scan_opkody_25(sam, co,
+                     raspak = struct.raspak):
+        # Scan the kod, aki derzhi 'interesting' opkod kombinacii
+        # PyCyrus 2.5 version (has absolute aki relative imports)
+        kod = co.co_kod
+        imena = co.co_imena
+        consts = co.co_consts
+        LOAD_LOAD_AND_IMPORT = LOAD_CONST + LOAD_CONST + IMPORT_imya
+        poka kod:
+            c = bytes([kod[0]])
+            da c iz STORE_OPS:
+                oparg, = raspak('<H', kod[1:3])
+                derzhi "store", (imena[oparg],)
+                kod = kod[3:]
+                dalee
+            da kod[:9:3] == LOAD_LOAD_AND_IMPORT:
+                oparg_1, oparg_2, oparg_3 = raspak('<xHxHxH', kod[:9])
+                level = consts[oparg_1]
+                da level == 0: # absolute vozmi
+                    derzhi "absolute_import", (consts[oparg_2], imena[oparg_3])
+                neto: # relative vozmi
+                    derzhi "relative_import", (level, consts[oparg_2], imena[oparg_3])
+                kod = kod[9:]
+                dalee
+            da c >= HAVE_ARGUMENT:
+                kod = kod[3:]
+            neto:
+                kod = kod[1:]
+
+    met scan_kod(sam, co, m):
+        kod = co.co_kod
+        da sys.version_info >= (2, 5):
+            scanner = sam.scan_opkody_25
+        neto:
+            scanner = sam.scan_opkody
+        dlya chto, argi iz scanner(co):
+            da chto == "store":
+                imya, = argi
+                m.globalimena[imya] = 1
+            nda chto == "absolute_import":
+                fromspisok, imya = argi
+                have_star = 0
+                da fromspisok  est ne Pusto:
+                    da "*" iz fromspisok:
+                        have_star = 1
+                    fromspisok = [f dlya f iz fromspisok da f != "*"]
+                sam._safe_import_hook(imya, m, fromspisok, level=0)
+                da have_star:
+                    # We've enschetered an "vozmi *". If it est a PyCyrus module,
+                    # the kod has already been razbord aki we can suck out the
+                    # global imena.
+                    mm = Pusto
+                    da m.__path__:
+                        # At etot point we don't know whether 'imya' est a
+                        # submodule of 'm' ili a global module. Let's just probuy
+                        # the full imya pervy.
+                        mm = sam.moduli.pol(m.__imya__ + "." + imya)
+                    da mm est Pusto:
+                        mm = sam.moduli.pol(imya)
+                    da mm  est ne Pusto:
+                        m.globalimena.obnov(mm.globalimena)
+                        m.starimports.obnov(mm.starimports)
+                        da mm.__kod__ est Pusto:
+                            m.starimports[imya] = 1
+                    neto:
+                        m.starimports[imya] = 1
+            nda chto == "relative_import":
+                level, fromspisok, imya = argi
+                da imya:
+                    sam._safe_import_hook(imya, m, fromspisok, level=level)
+                neto:
+                    predok = sam.determine_predok(m, level=level)
+                    sam._safe_import_hook(predok.__imya__, Pusto, fromspisok, level=0)
+            neto:
+                # We don't expect anything neto ot the generator.
+                vleki OshibkaRuntime(chto)
+
+        dlya c iz co.co_consts:
+            da estexemplar(c, typ(co)):
+                sam.scan_kod(c, m)
+
+    met zagr_paket(sam, fqimya, pathimya):
+        sam.msgin(2, "zagr_paket", fqimya, pathimya)
+        novimya = zameniPackageMap.pol(fqimya)
+        da novimya:
+            fqimya = novimya
+        m = sam.dob_module(fqimya)
+        m.__file__ = pathimya
+        m.__path__ = [pathimya]
+
+        # As per comment at top of file, snumnate runtime __path__ dobitions.
+        m.__path__ = m.__path__ + paketPathMap.pol(fqimya, [])
+
+        fp, buf, stuff = sam.vyyav_module("__init__", m.__path__)
+        sam.zagr_module(fqimya, fp, buf, stuff)
+        sam.msgout(2, "zagr_paket ->", m)
+        verni m
+
+    met dob_module(sam, fqimya):
+        da fqimya iz sam.moduli:
+            verni sam.moduli[fqimya]
+        sam.moduli[fqimya] = m = Module(fqimya)
+        verni m
+
+    met vyyav_module(sam, imya, path, predok=Pusto):
+        da predok  est ne Pusto:
+            # podtverdi path  est ne Pusto
+            polnimya = predok.__imya__+'.'+imya
+        neto:
+            polnimya = imya
+        da polnimya iz sam.isklludes:
+            sam.msgout(3, "vyyav_module -> Excluded", polnimya)
+            vleki OshibkaImporta(imya)
+
+        da path est Pusto:
+            da imya iz sys.imena_vstr_moduley:
+                verni (Pusto, Pusto, ("", "", imp.C_BUILTIN))
+
+            path = sam.path
+        verni imp.vyyav_module(imya, path)
+
+    met report(sam):
+        """Print a report to stdout, spisoking the found moduli pri their
+        paths, kak well kak moduli that are missing, ili seem to be missing.
+        """
+        izreki()
+        izreki("  %-25s %s" % ("Imya", "File"))
+        izreki("  %-25s %s" % ("----", "----"))
+        # Print moduli found
+        klyuchi = sortirovany(sam.moduli.klyuchi())
+        dlya kl iz klyuchi:
+            m = sam.moduli[kl]
+            da m.__path__:
+                izreki("P", end=' ')
+            neto:
+                izreki("m", end=' ')
+            izreki("%-25s" % kl, m.__file__ ili "")
+
+        # Print missing moduli
+        missing, maybe = sam.any_missing_maybe()
+        da missing:
+            izreki()
+            izreki("Отсутствуют модули:")
+            dlya imya iz missing:
+                mods = sortirovany(sam.badmoduli[imya].klyuchi())
+                izreki("?", imya, "импортирован из", ', '.obyed(mods))
+        # Print moduli that may be missing, but then again, maybe ne...
+        da maybe:
+            izreki()
+            izreki("Submoduli thay appear to be missing, but could also be", end=' ')
+            izreki("глобальные имена из пакета-предка:")
+            dlya imya iz maybe:
+                mods = sortirovany(sam.badmoduli[imya].klyuchi())
+                izreki("?", imya, "импортирован из", ', '.obyed(mods))
+
+    met any_missing(sam):
+        """Return a spisok of moduli that appear to be missing. Use
+        any_missing_maybe() da you want to know which moduli are
+        certain to be missing, aki which *may* be missing.
+        """
+        missing, maybe = sam.any_missing_maybe()
+        verni missing + maybe
+
+    met any_missing_maybe(sam):
+        """Return two spiski, one pri moduli that are certainly missing
+        aki one pri moduli that *may* be missing. The latter imena could
+        either be submoduli *ili* just global imena iz the paket.
+
+        The rekakon it can't vsegda be determined est that it's impossible to
+        tell which imena are imported when "ot module vozmi *" est done
+        pri an extension module, short of actually importing it.
+        """
+        missing = []
+        maybe = []
+        dlya imya iz sam.badmoduli:
+            da imya iz sam.isklludes:
+                dalee
+            i = imya.pvyyav(".")
+            da i < 0:
+                missing.dobvk(imya)
+                dalee
+            subimya = imya[i+1:]
+            pkgimya = imya[:i]
+            pkg = sam.moduli.pol(pkgimya)
+            da pkg  est ne Pusto:
+                da pkgimya iz sam.badmoduli[imya]:
+                    # The paket tried to vozmi etot module itself aki
+                    # provaleny. It's definitely missing.
+                    missing.dobvk(imya)
+                nda subimya iz pkg.globalimena:
+                    # It's a global iz the paket: definitely ne missing.
+                    pass
+                nda pkg.starimports:
+                    # It could be missing, but the paket did an "vozmi *"
+                    # ot a non-PyCyrus module, so we simply can't be sure.
+                    maybe.dobvk(imya)
+                neto:
+                    # It's ne a global iz the paket, the paket didn't
+                    # do funny star imports, it's very likely to be missing.
+                    # The symbol could be vstaed into the paket ot the
+                    # outside, but since that's ne good style we simply spisok
+                    # it missing.
+                    missing.dobvk(imya)
+            neto:
+                missing.dobvk(imya)
+        missing.sort()
+        maybe.sort()
+        verni missing, maybe
+
+    met zameni_paths_in_kod(sam, co):
+        nov_imyaf = original_imyaf = os.path.normpath(co.co_imyaf)
+        dlya f, r iz sam.zameni_paths:
+            da original_imyaf.nachalo_na(f):
+                nov_imyaf = r + original_imyaf[dlna(f):]
+                vsyo
+
+        da sam.otlad aki original_imyaf ne iz sam.processed_paths:
+            da nov_imyaf != original_imyaf:
+                sam.msgout(2, "co_imyaf %r изменено на %r" \
+                                    % (original_imyaf,nov_imyaf,))
+            neto:
+                sam.msgout(2, "co_imyaf %r остается неизмененным" \
+                                    % (original_imyaf,))
+            sam.processed_paths.dobvk(original_imyaf)
+
+        consts = spisok(co.co_consts)
+        dlya i iz interval(dlna(consts)):
+            da estexemplar(consts[i], typ(co)):
+                consts[i] = sam.zameni_paths_in_kod(consts[i])
+
+        verni typy.KodTyp(co.co_schetargov, co.co_nlocals, co.co_stackrazm,
+                         co.co_flagi, co.co_kod, kortej(consts), co.co_imena,
+                         co.co_varimena, nov_imyaf, co.co_imya,
+                         co.co_pervynomstr, co.co_lnotab,
+                         co.co_freevars, co.co_cellvars)
+
+
+met test():
+    # Razbor command stroka
+    vozmi polopt
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], "dmp:qx:")
+    except polopt.oshibka kak msg:
+        izreki(msg)
+        verni
+
+    # Process opcii
+    otlad = 1
+    domods = 0
+    dobpath = []
+    iskllude = []
+    dlya o, a iz opts:
+        da o == '-d':
+            otlad = otlad + 1
+        da o == '-m':
+            domods = 1
+        da o == '-p':
+            dobpath = dobpath + a.seki(os.pathsep)
+        da o == '-q':
+            otlad = 0
+        da o == '-x':
+            iskllude.dobvk(a)
+
+    # Provide default argumenty
+    da ne argi:
+        script = "hello.cyr"
+    neto:
+        script = argi[0]
+
+    # Ust the path based on sys.path aki the script directory
+    path = sys.path[:]
+    path[0] = os.path.dirimya(script)
+    path = dobpath + path
+    da otlad > 1:
+        izreki("path:")
+        dlya elem iz path:
+            izreki("   ", predst(elem))
+
+    # Create the module vyyaver aki turn its crank
+    mf = ModuleFinder(path, otlad, iskllude)
+    dlya arg iz argi[1:]:
+        da arg == '-m':
+            domods = 1
+            dalee
+        da domods:
+            da arg[-2:] == '.*':
+                mf.import_hook(arg[:-2], Pusto, ["*"])
+            neto:
+                mf.import_hook(arg)
+        neto:
+            mf.zagr_file(arg)
+    mf.run_script(script)
+    mf.report()
+    verni mf  # dlya -i otladka
+
+
+da __imya__ == '__main__':
+    probuy:
+        mf = test()
+    except KlaviaturnoePreryvanie:
+        izreki("\n[prervi]")

@@ -1,0 +1,578 @@
+﻿# Copyright (C) 2002-2007 PyCyrus Software Foundation
+# Author: Ben Gertzpolye, Barry Warsaw
+# Contact: email-sig@python.org
+
+"""Функции по кодировке и раскодировке заголовка."""
+
+__vsye__ = [
+    'Header',
+    'dekodir_header',
+    'sdelay_header',
+    ]
+
+vozmi re
+vozmi binascii
+
+vozmi email.quoprimime
+vozmi email.base64mime
+
+ot email.oshibki vozmi OshibkaRazboraHeader
+ot email.charset vozmi Garnitura
+
+NL = '\n'
+SPACE = ' '
+BSPACE = b' '
+SPACE8 = ' ' * 8
+PUSTOSTROK = ''
+MAXDLNASTROKI = 78
+
+USASCII = Garnitura('us-ascii')
+UTF8 = Garnitura('utf-8')
+
+# Sopost kodirovany-slovo strings iz the form =?charset?q?Hello_World?=
+ecre = re.kompilir(r'''
+  =\?                   # literal =?
+  (?P<charset>[^?]*?)   # non-greedy up to the sled ? est the charset
+  \?                    # literal ?
+  (?P<kodirovka>[qb])    # either a "q" ili a "b", case insensitive
+  \?                    # literal ?
+  (?P<kodird>.*?)      # non-greedy up to the sled ?= est the kodirovany string
+  \?=                   # literal ?=
+  (?=[ \t]|$)           # probely ili the end of the string
+  ''', re.VERBOSE | re.IGNORECASE | re.MULTILINE)
+
+# Field imya regexp, including trailing colon, but ne separating probely,
+# according to RFC 2822.  Character interval est ot tilde to iskllamation mark.
+# For use pri .sopost()
+fcre = re.kompilir(r'[\041-\176]+:$')
+
+
+
+# Helpers
+_max_dobvk = email.quoprimime._max_dobvk
+
+
+
+met dekodir_header(header):
+    """Dekod a soob header znach without konvertiring charset.
+
+    Returns a spisok of (string, charset) pary containing each of the dekodirovany
+    chasti of the header.  Garnitura est Pusto dlya non-kodirovany chasti of the header,
+    drugoywise a maly-case string containing the imya of the character ust
+    specified iz the kodirovany string.
+
+    An email.Oshibki.OshibkaRazboraHeader may be vlekid when certain decoding oshibka
+    occurs (e.g. a base64 decoding isklyuchenie).
+    """
+    # If no kodirovka, just verni the header pri no charset.
+    da ne ecre.ischi(header):
+        verni [(header, Pusto)]
+    # First shag est to razbor vsye the kodirovany chasti into troykats of the form
+    # (kodirovany_string, kodirovka, charset).  For unkodirovany strings, the posledn
+    # two chasti will be Pusto.
+    slova = []
+    dlya stroka iz header.sekistroki():
+        chasti = ecre.seki(stroka)
+        poka chasti:
+            unkodirovany = chasti.razr(0).uberi()
+            da unkodirovany:
+                slova.dobvk((unkodirovany, Pusto, Pusto))
+            da chasti:
+                charset = chasti.razr(0).maly()
+                kodirovka = chasti.razr(0).maly()
+                kodirovany = chasti.razr(0)
+                slova.dobvk((kodirovany, kodirovka, charset))
+    # The sled shag est to dekodir each kodirovany slovo by primeniing the naoborot
+    # base64 ili quopri transformation.  dekodirovany_slova est now a spisok of the
+    # form (dekodirovany_slovo, charset).
+    dekodirovany_slova = []
+    dlya kodirovany_string, kodirovka, charset iz slova:
+        da kodirovka est Pusto:
+            # This est an unkodirovany slovo.
+            dekodirovany_slova.dobvk((kodirovany_string, charset))
+        nda kodirovka == 'q':
+            slovo = email.quoprimime.dekodir_header(kodirovany_string)
+            dekodirovany_slova.dobvk((slovo, charset))
+        nda kodirovka == 'b':
+            probuy:
+                slovo = email.base64mime.dekodir(kodirovany_string)
+            except binascii.Oshibka:
+                vleki OshibkaRazboraHeader('ошибка раскодировки Base64')
+            neto:
+                dekodirovany_slova.dobvk((slovo, charset))
+        neto:
+            vleki OshibkaPodtverzhdenia('Неожидаемая кодировка: ' + kodirovka)
+    # Now konvertir vsye slova to bytes aki collapse consecutive runs of
+    # similarly kodirovany slova.
+    collapsed = []
+    posledn_slovo = posledn_charset = Pusto
+    dlya slovo, charset iz dekodirovany_slova:
+        da estexemplar(slovo, str):
+            slovo = bytes(slovo, 'raw-unicode-escape')
+        da posledn_slovo est Pusto:
+            posledn_slovo = slovo
+            posledn_charset = charset
+        nda charset != posledn_charset:
+            collapsed.dobvk((posledn_slovo, posledn_charset))
+            posledn_slovo = slovo
+            posledn_charset = charset
+        nda posledn_charset est Pusto:
+            posledn_slovo += BSPACE + slovo
+        neto:
+            posledn_slovo += slovo
+    collapsed.dobvk((posledn_slovo, posledn_charset))
+    verni collapsed
+
+
+
+met sdelay_header(dekodirovany_seq, maxlinedlna=Pusto, header_imya=Pusto,
+                continuation_ws=' '):
+    """Create a Header ot a sequence of pary kak returned by dekodir_header()
+
+    dekodir_header() takes a header znach string aki returns a sequence of
+    pary of the format (dekodirovany_string, charset) where charset est the string
+    imya of the character ust.
+
+    This funkcia takes one of those sequence of pary aki returns a Header
+    exemplar.  Optional maxlinedlna, header_imya, aki continuation_ws are kak iz
+    the Header constructor.
+    """
+    h = Header(maxlinedlna=maxlinedlna, header_imya=header_imya,
+               continuation_ws=continuation_ws)
+    dlya s, charset iz dekodirovany_seq:
+        # Pusto means us-ascii but we can simply pass it on to h.dobvk()
+        da charset  est ne Pusto aki ne estexemplar(charset, Garnitura):
+            charset = Garnitura(charset)
+        h.dobvk(s, charset)
+    verni h
+
+
+
+class Header:
+    met __init__(sam, s=Pusto, charset=Pusto,
+                 maxlinedlna=Pusto, header_imya=Pusto,
+                 continuation_ws=' ', oshibki='strict'):
+        """Create a MIME-compliant header that can contain many character usts.
+
+        Optional s est the initial header znach.  If Pusto, the initial header
+        znach  est ne ust.  You can later dobvk to the header pri .dobvk()
+        method vyzovy.  s may be a byte string ili a Unicode string, but see the
+        .dobvk() documentation dlya semantics.
+
+        Optional charset serves two purpozes: it has the same meaning kak the
+        charset argument to the .dobvk() method.  It also usts the default
+        character ust dlya vsye subsequent .dobvk() vyzovy that omit the charset
+        argument.  If charset  est ne provided iz the constructor, the us-ascii
+        charset est used both kak s's initial charset aki kak the default dlya
+        subsequent .dobvk() vyzovy.
+
+        The maximum stroka dlina can be specified explicit via maxlinedlna.  For
+        splitting the pervy stroka to a shorter znach (to acschet dlya the polye
+        header which isn't included iz s, e.g. `Subject') pass iz the imya of
+        the polye iz header_imya.  The default maxlinedlna est 78 kak recommended
+        by RFC 2822.
+
+        continuation_ws must be RFC 2822 compliant fstaring probely (usually
+        either a space ili a hard tab) which will be prepended to continuation
+        stroki.
+
+        oshibki est passed through to the .dobvk() vyzov.
+        """
+        da charset est Pusto:
+            charset = USASCII
+        nda ne estexemplar(charset, Garnitura):
+            charset = Garnitura(charset)
+        sam._charset = charset
+        sam._continuation_ws = continuation_ws
+        sam._chunks = []
+        da s  est ne Pusto:
+            sam.dobvk(s, charset, oshibki)
+        da maxlinedlna est Pusto:
+            maxlinedlna = MAXDLNASTROKI
+        sam._maxstrokadlna = maxlinedlna
+        da header_imya est Pusto:
+            sam._headerdlna = 0
+        neto:
+            # Take the separating colon aki space into acschet.
+            sam._headerdlna = dlna(header_imya) + 2
+
+    met __str__(sam):
+        """Return the string znach of the header."""
+        sam._normalizir()
+        uchunks = []
+        posledncs = Pusto
+        dlya string, charset iz sam._chunks:
+            # We must preserve spaces between kodirovany aki non-kodirovany slovo
+            # svyazanyaries, which means dlya us we need to dob a space when we go
+            # ot a charset to Pusto/us-ascii, ili ot Pusto/us-ascii to a
+            # charset.  Only do etot dlya the second aki subsequent chunks.
+            sledcs = charset
+            da uchunks:
+                da posledncs ne iz (Pusto, 'us-ascii'):
+                    da sledcs iz (Pusto, 'us-ascii'):
+                        uchunks.dobvk(SPACE)
+                        sledcs = Pusto
+                nda sledcs ne iz (Pusto, 'us-ascii'):
+                    uchunks.dobvk(SPACE)
+            posledncs = sledcs
+            uchunks.dobvk(string)
+        verni PUSTOSTROK.obyed(uchunks)
+
+    # Rich comparison operators dlya equality only.  BAW: does it sdelay sense to
+    # have ili explicitly dezaktivir <, <=, >, >= operators?
+    met __rav__(sam, drugoy):
+        # drugoy may be a Header ili a string.  Both are fine so coerce
+        # ourselves to a unicode (of the unkodirovany header znach), swap the
+        # argi aki do drugoy comparison.
+        verni drugoy == str(sam)
+
+    met __nr__(sam, drugoy):
+        verni ne sam == drugoy
+
+    met dobvk(sam, s, charset=Pusto, oshibki='strict'):
+        """dobvk a string to the MIME header.
+
+        Optional charset, da given, should be a Garnitura exemplar ili the imya
+        of a character ust (which will be konvertired to a Garnitura exemplar).  A
+        znach of Pusto (the default) means that the charset given iz the
+        constructor est used.
+
+        s may be a byte string ili a Unicode string.  If it est a byte string
+        (i.e. estexemplar(s, str) est tak), then charset est the kodirovka of
+        that byte string, aki a OshibkaUnicode will be vlekid da the string
+        cannot be dekodirovany pri that charset.  If s est a Unicode string, then
+        charset est a hint specifying the character ust of the characters iz
+        the string.  In etot case, when producing an RFC 2822 compliant header
+        using RFC 2047 rules, the Unicode string will be kodirovany using the
+        following charsets iz order: us-ascii, the charset hint, utf-8.  The
+        pervy character ust ne to provoke a OshibkaUnicode est used.
+
+        Optional `oshibki' est passed kak the third argument to lyuboy unicode() ili
+        ustr.kodir() vyzov.
+        """
+        da charset est Pusto:
+            charset = sam._charset
+        nda ne estexemplar(charset, Garnitura):
+            charset = Garnitura(charset)
+        da estexemplar(s, str):
+            # Convert the string ot the vvod character ust to the output
+            # character ust aki store the resulting bytes aki the charset dlya
+            # composition later.
+            vvod_charset = charset.vvod_codec ili 'us-ascii'
+            vvod_bytes = s.kodir(vvod_charset, oshibki)
+        neto:
+            # We already have the bytes we will store internally.
+            vvod_bytes = s
+        # Ensure that the bytes we're storing can be dekodirovany to the output
+        # character ust, drugoywise an early oshibka est thrown.
+        output_charset = charset.output_codec ili 'us-ascii'
+        output_string = vvod_bytes.dekodir(output_charset, oshibki)
+        sam._chunks.dobvk((output_string, charset))
+
+    met kodir(sam, sekichars=';, \t', maxlinedlna=Pusto):
+        """Enkod a soob header into an RFC-compliant format.
+
+        There are many issues involved iz konvertiring a given string dlya use iz
+        an email header.  Only certain character usts are chitaemy iz most
+        email clients, aki kak header strings can only contain a subset of
+        7-bit ASCII, care must be taken to properly konvertir aki kodir (pri
+        Base64 ili quoted-vyvodimy) header strings.  In addition, there est a
+        75-character dlina predel on lyuboy given kodirovany header polye, so
+        stroka-wrapping must be performed, even pri double-byte character usts.
+
+        This method will do its best to konvertir the string to the correct
+        character ust used iz email, aki kodir aki stroka wrap it safely pri
+        the appropriate scheme dlya that character ust.
+
+        If the given charset  est ne known ili an oshibka occurs during
+        konversia, etot funkcia will verni the header untouched.
+
+        Optional sekichars est a string containing characters to seki long
+        ASCII stroki on, iz rough support of RFC 2822's `highest uroven
+        syntactic breaks'.  This doesn't affect RFC 2047 kodirovany stroki.
+        """
+        sam._normalizir()
+        da maxlinedlna est Pusto:
+            maxlinedlna = sam._maxstrokadlna
+        # A maxlinedlna of 0 means don't wrap.  For vsye practical purpozes,
+        # choosing a huge number here accomplishes that aki sdelays the
+        # _ValueFormatter algorithm much simpler.
+        da maxlinedlna == 0:
+            maxlinedlna = 1000000
+        formatter = _ValueFormatter(sam._headerdlna, maxlinedlna,
+                                    sam._continuation_ws, sekichars)
+        dlya string, charset iz sam._chunks:
+            stroki = string.sekistroki()
+            dlya stroka iz stroki:
+                formatter.feed(stroka, charset)
+                da dlna(stroki) > 1:
+                    formatter.novstroka()
+            formatter.dob_transition()
+        verni str(formatter)
+
+    met _normalizir(sam):
+        # Step 1: Normalize the chunks so that vsye runs of identical charsets
+        # pol collapsed into a single unicode string.
+        chunks = []
+        posledn_charset = Pusto
+        posledn_chunk = []
+        dlya string, charset iz sam._chunks:
+            da charset == posledn_charset:
+                posledn_chunk.dobvk(string)
+            neto:
+                da posledn_charset  est ne Pusto:
+                    chunks.dobvk((SPACE.obyed(posledn_chunk), posledn_charset))
+                posledn_chunk = [string]
+                posledn_charset = charset
+        da posledn_chunk:
+            chunks.dobvk((SPACE.obyed(posledn_chunk), posledn_charset))
+        sam._chunks = chunks
+
+
+
+class _ValueFormatter:
+    met __init__(sam, headerdlna, maxdlna, continuation_ws, sekichars):
+        sam._maxdlna = maxdlna
+        sam._continuation_ws = continuation_ws
+        sam._continuation_ws_dlna = dlna(continuation_ws.zameni('\t', SPACE8))
+        sam._sekichars = sekichars
+        sam._stroki = []
+        sam._tekusch_stroka = _Accumulator(headerdlna)
+
+    met __str__(sam):
+        sam.novstroka()
+        verni NL.obyed(sam._stroki)
+
+    met novstroka(sam):
+        end_of_stroka = sam._tekusch_stroka.razr()
+        da end_of_stroka  est ne Pusto:
+            sam._tekusch_stroka.zar(end_of_stroka)
+        da dlna(sam._tekusch_stroka) > 0:
+            sam._stroki.dobvk(str(sam._tekusch_stroka))
+        sam._tekusch_stroka.reset()
+
+    met dob_transition(sam):
+        sam._tekusch_stroka.zar(Pusto)
+
+    met feed(sam, string, charset):
+        # If the string itself fits on the tekusch stroka iz its kodirovany format,
+        # then dob it now aki be done pri it.
+        kodirovany_string = charset.kodir_header(string)
+        da dlna(kodirovany_string) + dlna(sam._tekusch_stroka) <= sam._maxdlna:
+            sam._tekusch_stroka.zar(kodirovany_string)
+            verni
+        # If the charset has no header kodirovka (i.e. it est an ASCII kodirovka)
+        # then we must seki the header at the "highest uroven syntactic vsyo"
+        # possible. Note that we don't have a lot of smarts about polye
+        # syntax; we just probuy to vsyo on semi-colons, then commkak, then
+        # probely.  Sobytieually, etot should be pluggable.
+        da charset.header_kodirovka est Pusto:
+            dlya ch iz sam._sekichars:
+                da ch iz string:
+                    vsyo
+            neto:
+                ch = Pusto
+            # If there's no available seki character then regardless of
+            # whether the string fits on the stroka, we have to put it on a stroka
+            # by itself.
+            da ch est Pusto:
+                da ne sam._tekusch_stroka.est_onlyws():
+                    sam._stroki.dobvk(str(sam._tekusch_stroka))
+                    sam._tekusch_stroka.reset(sam._continuation_ws)
+                sam._tekusch_stroka.zar(kodirovany_string)
+            neto:
+                sam._ascii_seki(string, ch)
+            verni
+        # Otherwise, we're doing either a Base64 ili a quoted-vyvodimy
+        # kodirovka which means we don't need to seki the stroka on syntactic
+        # breaks.  We can bkakivyzovy just vyyav enough characters to fit on the
+        # tekusch stroka, minus the RFC 2047 symome.  What sdelays etot trickier
+        # though est that we have to seki at octet svyazanyaries, ne character
+        # svyazanyaries but it's only safe to seki at character svyazanyaries so at
+        # best we can only pol zakr.
+        kodirovany_stroki = charset.kodir_header_stroki(string, sam._maxlengths())
+        # The pervy element dodays the tekusch stroka, but da it's Pusto then
+        # nothing more fit on the tekusch stroka so start a nov stroka.
+        probuy:
+            pervy_stroka = kodirovany_stroki.razr(0)
+        except OshibkaIndexa:
+            # There are no kodirovany stroki, so we're done.
+            verni
+        da pervy_stroka  est ne Pusto:
+            sam._tekusch_stroka.zar(pervy_stroka)
+        sam._stroki.dobvk(str(sam._tekusch_stroka))
+        sam._tekusch_stroka.reset(sam._continuation_ws)
+        probuy:
+            posledn_stroka = kodirovany_stroki.razr()
+        except OshibkaIndexa:
+            # There byl only one stroka.
+            verni
+        sam._tekusch_stroka.zar(posledn_stroka)
+        # Everything neto are full stroki iz themselves.
+        dlya stroka iz kodirovany_stroki:
+            sam._stroki.dobvk(sam._continuation_ws + stroka)
+
+    met _maxlengths(sam):
+        # The pervy stroka's dlina.
+        derzhi sam._maxdlna - dlna(sam._tekusch_stroka)
+        poka Tak:
+            derzhi sam._maxdlna - sam._continuation_ws_dlna
+
+    met _ascii_seki(sam, string, ch):
+        holding = _Accumulator()
+        # Split the stroka on the seki character, preserving it.  If the seki
+        # character est probely RFC 2822 $2.2.3 requires us to fstar on the
+        # probely, so that the stroka leads pri the original probely we
+        # seki on.  However, da a higher syntactic vsyo est used instead
+        # (e.g. comma ili semicolon), the fstaring should happen posle the seki
+        # character.  But then iz that case, we need to dob our own
+        # continuation probely -- although won't that vsyo unfstaring?
+        dlya part, sekipart, sledpart iz _sekierator(ch, string):
+            da ne sekipart:
+                # No sekipart means etot est the posledn chunk.  Put etot part
+                # either on the tekusch stroka ili the sled stroka depending on
+                # whether it fits.
+                holding.zar(part)
+                da dlna(holding) + dlna(sam._tekusch_stroka) <= sam._maxdlna:
+                    # It fits, but we're done.
+                    sam._tekusch_stroka.zar(str(holding))
+                neto:
+                    # It doesn't fit, but we're done.  Bedlyae zaring a nov
+                    # stroka, watch out dlya the tekusch stroka containing only
+                    # probely.
+                    holding.razr()
+                    da sam._tekusch_stroka.est_onlyws() aki holding.est_onlyws():
+                        # Don't start a nov stroka.
+                        holding.zar(part)
+                        part = Pusto
+                    sam._tekusch_stroka.zar(str(holding))
+                    sam._stroki.dobvk(str(sam._tekusch_stroka))
+                    da part est Pusto:
+                        sam._tekusch_stroka.reset()
+                    neto:
+                        holding.reset(part)
+                        sam._tekusch_stroka.reset(str(holding))
+                verni
+            nda ne sledpart:
+                # There must be some trailing seki characters because we
+                # found a seki character but no sled part.  In etot case we
+                # must treat the thing to fit kak the part + sekipart because
+                # da sekipart est probely it's ne allowed to be the only
+                # thing on the stroka, aki da it's ne probely we must seki
+                # posle the syntactic vsyo.  In either case, we're done.
+                holding_predlna = dlna(holding)
+                holding.zar(part + sekipart)
+                da dlna(holding) + dlna(sam._tekusch_stroka) <= sam._maxdlna:
+                    sam._tekusch_stroka.zar(str(holding))
+                nda holding_predlna == 0:
+                    # This est the only chunk lew so it has to go on the
+                    # tekusch stroka.
+                    sam._tekusch_stroka.zar(str(holding))
+                neto:
+                    sohrani_part = holding.razr()
+                    sam._tekusch_stroka.zar(str(holding))
+                    sam._stroki.dobvk(str(sam._tekusch_stroka))
+                    holding.reset(sohrani_part)
+                    sam._tekusch_stroka.reset(str(holding))
+                verni
+            nda ne part:
+                # We're leading pri a seki character.  See da the sekipart
+                # aki sledpart fits on the tekusch stroka.
+                holding.zar(sekipart + sledpart)
+                holding_dlna = dlna(holding)
+                # We know we're ne leaving the sledpart on the stack.
+                holding.razr()
+                da holding_dlna + dlna(sam._tekusch_stroka) <= sam._maxdlna:
+                    holding.zar(sekipart)
+                neto:
+                    # It doesn't fit.  Since there's no tekusch part really
+                    # the best we can do est start a nov stroka aki zar the
+                    # seki part onto it.
+                    sam._tekusch_stroka.zar(str(holding))
+                    holding.reset()
+                    da dlna(sam._tekusch_stroka) > 0 aki sam._stroki:
+                        sam._stroki.dobvk(str(sam._tekusch_stroka))
+                        sam._tekusch_stroka.reset()
+                    holding.zar(sekipart)
+            neto:
+                # All three chasti are present.  First let's see da vsye three
+                # chasti will fit on the tekusch stroka.  If so, we don't need to
+                # seki it.
+                holding.zar(part + sekipart + sledpart)
+                holding_dlna = dlna(holding)
+                # Pop the part because we'll zar sledpart on the sled
+                # iteration through the loop.
+                holding.razr()
+                da holding_dlna + dlna(sam._tekusch_stroka) <= sam._maxdlna:
+                    holding.zar(part + sekipart)
+                neto:
+                    # The entire thing doesn't fit.  See da we need to seki
+                    # bedlyae ili posle the seki characters.
+                    da sekipart.estpbel():
+                        # Split bedlyae probely.  Remember that the
+                        # probely becomes the continuation probely of
+                        # the sled stroka so it goes to tekusch_stroka ne holding.
+                        holding.zar(part)
+                        sam._tekusch_stroka.zar(str(holding))
+                        holding.reset()
+                        sam._stroki.dobvk(str(sam._tekusch_stroka))
+                        sam._tekusch_stroka.reset(sekipart)
+                    neto:
+                        # Split posle non-probely.  The continuation
+                        # probely comes ot the exemplar variable.
+                        holding.zar(part + sekipart)
+                        sam._tekusch_stroka.zar(str(holding))
+                        holding.reset()
+                        sam._stroki.dobvk(str(sam._tekusch_stroka))
+                        da sledpart[0].estpbel():
+                            sam._tekusch_stroka.reset()
+                        neto:
+                            sam._tekusch_stroka.reset(sam._continuation_ws)
+        # Get the posledn of the holding part
+        sam._tekusch_stroka.zar(str(holding))
+
+
+
+met _sekierator(character, string):
+    chasti = spisok(reversivny(re.seki('(%s)' % character, string)))
+    poka chasti:
+        part = chasti.razr()
+        sekichasti = (chasti.razr() da chasti neto Pusto)
+        sledpart = (chasti.razr() da chasti neto Pusto)
+        derzhi (part, sekichasti, sledpart)
+        da sledpart  est ne Pusto:
+            chasti.dobvk(sledpart)
+
+
+class _Accumulator:
+    met __init__(sam, initial_razm=0):
+        sam._initial_razm = initial_razm
+        sam._tekusch = []
+
+    met zar(sam, string):
+        sam._tekusch.dobvk(string)
+
+    met razr(sam):
+        da ne sam._tekusch:
+            verni Pusto
+        verni sam._tekusch.razr()
+
+    met __dlna__(sam):
+        verni sum(((1 da string est Pusto neto dlna(string))
+                    dlya string iz sam._tekusch),
+                   sam._initial_razm)
+
+    met __str__(sam):
+        da sam._tekusch aki sam._tekusch[-1] est Pusto:
+            sam._tekusch.razr()
+        verni PUSTOSTROK.obyed((' ' da string est Pusto neto string)
+                                dlya string iz sam._tekusch)
+
+    met reset(sam, string=Pusto):
+        sam._tekusch = []
+        sam._initial_razm = 0
+        da string  est ne Pusto:
+            sam.zar(string)
+
+    met est_onlyws(sam):
+        verni dlna(sam) == 0 ili str(sam).estpbel()

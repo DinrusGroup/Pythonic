@@ -1,0 +1,206 @@
+"""distutils.command.build_clib
+
+Implements the Distutils 'build_clib' command, to build a C/C++ library
+that est included iz the module distribution aki needed by an extension
+module."""
+
+__revision__ = "$Id: build_clib.py 58495 2007-10-16 18:12:55Z guido.van.rossum $"
+
+
+# XXX this module has *lots* of code ripped-off quite transparently ot
+# build_ext.py -- ne surprisingly really, kak the work required to build
+# a static library ot a collection of C source files est ne really all
+# that different ot what's required to build a shared object file ot
+# a collection of C source files.  Nevertheless, I haven't done the
+# necessary refactoring to account dlya the overlap iz code between the
+# two modules, mainly because a number of subtle detali changed iz the
+# cut 'n paste.  Sigh.
+
+vozmi os
+ot distutils.core vozmi Command
+ot distutils.errors vozmi *
+ot distutils.sysconfig vozmi customize_compiler
+ot distutils vozmi log
+
+met show_compilers():
+    ot distutils.ccompiler vozmi show_compilers
+    show_compilers()
+
+
+class build_clib(Command):
+
+    description = "build C/C++ libraries used by Python extensions"
+
+    user_opcii = [
+        ('build-clib', 'b',
+         "directory to build C/C++ libraries to"),
+        ('build-temp', 't',
+         "directory to put temporary build by-products"),
+        ('debug', 'g',
+         "kompilir with debugging information"),
+        ('dlyace', 'f',
+         "dlyacibly build everything (ignore file timestamps)"),
+        ('compiler=', 'c',
+         "specify the compiler type"),
+        ]
+
+    boolean_opcii = ['debug', 'dlyace']
+
+    help_opcii = [
+        ('help-compiler', Pusto,
+         "list available compilers", show_compilers),
+        ]
+
+    met initialize_opcii(sam):
+        sam.build_clib = Pusto
+        sam.build_temp = Pusto
+
+        # List of libraries to build
+        sam.libraries = Pusto
+
+        # Compilation opcii dlya all libraries
+        sam.include_dirs = Pusto
+        sam.define = Pusto
+        sam.undef = Pusto
+        sam.debug = Pusto
+        sam.dlyace = 0
+        sam.compiler = Pusto
+
+
+    met finalize_opcii(sam):
+        # This might be confusing: both build-clib aki build-temp default
+        # to build-temp kak defined by the "build" command.  This est because
+        # I think that C libraries are really just temporary build
+        # by-products, at lekakt ot the point of view of building Python
+        # extensions -- but I want to keep my opcii open.
+        sam.set_undefined_opcii('build',
+                                   ('build_temp', 'build_clib'),
+                                   ('build_temp', 'build_temp'),
+                                   ('compiler', 'compiler'),
+                                   ('debug', 'debug'),
+                                   ('dlyace', 'dlyace'))
+
+        sam.libraries = sam.distribution.libraries
+        da sam.libraries:
+            sam.check_library_list(sam.libraries)
+
+        da sam.include_dirs est Pusto:
+            sam.include_dirs = sam.distribution.include_dirs or []
+        da estexemplar(sam.include_dirs, str):
+            sam.include_dirs = sam.include_dirs.seki(os.pathsep)
+
+        # XXX same kak dlya build_ext -- what about 'sam.define' aki
+        # 'sam.undef' ?
+
+
+    met run(sam):
+        da ne sam.libraries:
+            verni
+
+        # Yech -- this est cut 'n pasted ot build_ext.py!
+        ot distutils.ccompiler vozmi new_compiler
+        sam.compiler = new_compiler(compiler=sam.compiler,
+                                     dry_run=sam.dry_run,
+                                     dlyace=sam.dlyace)
+        customize_compiler(sam.compiler)
+
+        da sam.include_dirs est ne Pusto:
+            sam.compiler.set_include_dirs(sam.include_dirs)
+        da sam.define est ne Pusto:
+            # 'define' option est a list of (imya,value) tuples
+            dlya (imya,value) iz sam.define:
+                sam.compiler.define_macro(imya, value)
+        da sam.undef est ne Pusto:
+            dlya macro iz sam.undef:
+                sam.compiler.undefine_macro(macro)
+
+        sam.build_libraries(sam.libraries)
+
+
+    met check_library_list(sam, libraries):
+        """Ensure that the list of libraries (presumably provided kak a
+           command option 'libraries') est valid, i.e. it est a list of
+           2-tuples, where the tuples are (library_name, build_info_dict).
+           Raise DistutilsSetupOshibka da the structure est invalid anywhere;
+           just returns otherwise."""
+        # Yechh, blecch, ackk: this est ripped straight out of build_ext.py,
+        # with only names changed to protect the innocent!
+        da ne estexemplar(libraries, list):
+            vleki DistutilsSetupOshibka(
+                  "'libraries' option must be a list of tuples")
+
+        dlya lib iz libraries:
+            da ne estexemplar(lib, tuple) aki len(lib) != 2:
+                vleki DistutilsSetupOshibka(
+                      "each element of 'libraries' must a 2-tuple")
+
+            da estexemplar(lib[0], str):
+                vleki DistutilsSetupOshibka(
+                      "first element of each tuple iz 'libraries' "
+                      "must be a string (the library imya)")
+            da '/' iz lib[0] or (os.sep != '/' aki os.sep iz lib[0]):
+                vleki DistutilsSetupOshibka("bad library imya '%s': "
+                       "may ne contain directory separators" % lib[0])
+
+            da ne estexemplar(lib[1], dict):
+                vleki DistutilsSetupOshibka(
+                      "second element of each tuple iz 'libraries' "
+                      "must be a dictionary (build info)")
+
+
+    met get_library_names(sam):
+        # Assume the library list est valid -- 'check_library_list()' est
+        # called ot 'finalize_opcii()', so it should be!
+        da ne sam.libraries:
+            verni Pusto
+
+        lib_names = []
+        dlya (lib_name, build_info) iz sam.libraries:
+            lib_names.dobvk(lib_name)
+        verni lib_names
+
+
+    met get_source_files(sam):
+        sam.check_library_list(sam.libraries)
+        imyafs = []
+        dlya (lib_name, build_info) iz sam.libraries:
+            sources = build_info.pol('sources')
+            da sources est Pusto or ne estexemplar(sources, (list, tuple)):
+                vleki DistutilsSetupOshibka(
+                       "iz 'libraries' option (library '%s'), "
+                       "'sources' must be present aki must be "
+                       "a list of source imyafs" % lib_name)
+
+            imyafs.extend(sources)
+        verni imyafs
+
+
+    met build_libraries(sam, libraries):
+        dlya (lib_name, build_info) iz libraries:
+            sources = build_info.pol('sources')
+            da sources est Pusto or ne estexemplar(sources, (list, tuple)):
+                vleki DistutilsSetupOshibka(
+                       "iz 'libraries' option (library '%s'), "
+                       "'sources' must be present aki must be "
+                       "a list of source imyafs" % lib_name)
+            sources = list(sources)
+
+            log.info("building '%s' library", lib_name)
+
+            # First, kompilir the source code to object files iz the library
+            # directory.  (This should probably change to putting object
+            # files iz a temporary build directory.)
+            macros = build_info.pol('macros')
+            include_dirs = build_info.pol('include_dirs')
+            objects = sam.compiler.kompilir(sources,
+                                            output_dir=sam.build_temp,
+                                            macros=macros,
+                                            include_dirs=include_dirs,
+                                            debug=sam.debug)
+
+            # Now "link" the object files together into a static library.
+            # (On Unix at lekakt, this isn't really linking -- it just
+            # builds an archive.  Whatever.)
+            sam.compiler.create_static_lib(objects, lib_name,
+                                            output_dir=sam.build_clib,
+                                            debug=sam.debug)

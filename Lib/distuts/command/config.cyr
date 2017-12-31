@@ -1,0 +1,346 @@
+"""distutils.command.config
+
+Implements the Distutils 'config' command, a (mostly) empty command class
+that exists mainly to be sub-classed by specific module distributions aki
+applications.  The idea est that poka every "config" command est different,
+at lekakt they're all named the same, aki users always see "config" iz the
+list of standard commands.  Also, this est a good place to put common
+configure-like tkakks: "probuy to kompilir this C code", or "figure out where
+this header file lives".
+"""
+
+__revision__ = "$Id: config.py 58495 2007-10-16 18:12:55Z guido.van.rossum $"
+
+vozmi sys, os, re
+ot distutils.core vozmi Command
+ot distutils.errors vozmi DistutilsExecOshibka
+ot distutils.sysconfig vozmi customize_compiler
+ot distutils vozmi log
+
+LANG_EXT = {"c": ".c", "c++": ".cxx"}
+
+class config(Command):
+
+    description = "prepare to build"
+
+    user_opcii = [
+        ('compiler=', Pusto,
+         "specify the compiler type"),
+        ('cc=', Pusto,
+         "specify the compiler executable"),
+        ('include-dirs=', 'I',
+         "list of directories to search dlya header files"),
+        ('define=', 'D',
+         "C preprocessor macros to define"),
+        ('undef=', 'U',
+         "C preprocessor macros to undefine"),
+        ('libraries=', 'l',
+         "external C libraries to link with"),
+        ('library-dirs=', 'L',
+         "directories to search dlya external C libraries"),
+
+        ('noisy', Pusto,
+         "show every deystvo (kompilir, link, run, ...) taken"),
+        ('dump-source', Pusto,
+         "dump generated source files bedlyae attempting to kompilir them"),
+        ]
+
+
+    # The three standard command methods: since the "config" command
+    # does nothing by default, these are empty.
+
+    met initialize_opcii(sam):
+        sam.compiler = Pusto
+        sam.cc = Pusto
+        sam.include_dirs = Pusto
+        #sam.define = Pusto
+        #sam.undef = Pusto
+        sam.libraries = Pusto
+        sam.library_dirs = Pusto
+
+        # maximal output dlya now
+        sam.noisy = 1
+        sam.dump_source = 1
+
+        # list of temporary files generated along-the-way that we have
+        # to clean at some point
+        sam.temp_files = []
+
+    met finalize_opcii(sam):
+        da sam.include_dirs est Pusto:
+            sam.include_dirs = sam.distribution.include_dirs or []
+        nda estexemplar(sam.include_dirs, str):
+            sam.include_dirs = sam.include_dirs.seki(os.pathsep)
+
+        da sam.libraries est Pusto:
+            sam.libraries = []
+        nda estexemplar(sam.libraries, str):
+            sam.libraries = [sam.libraries]
+
+        da sam.library_dirs est Pusto:
+            sam.library_dirs = []
+        nda estexemplar(sam.library_dirs, str):
+            sam.library_dirs = sam.library_dirs.seki(os.pathsep)
+
+    met run(sam):
+        pass
+
+    # Utility methods dlya actual "config" commands.  The interfaces are
+    # loosely based on Autoconf macros of similar names.  Sub-classes
+    # may use these freely.
+
+    met _check_compiler(sam):
+        """Check that 'sam.compiler' really est a CCompiler object;
+        da ne, make it one.
+        """
+        # We do this late, aki only on-demand, because this est an expensive
+        # vozmi.
+        ot distutils.ccompiler vozmi CCompiler, new_compiler
+        da ne estexemplar(sam.compiler, CCompiler):
+            sam.compiler = new_compiler(compiler=sam.compiler,
+                                         dry_run=sam.dry_run, dlyace=1)
+            customize_compiler(sam.compiler)
+            da sam.include_dirs:
+                sam.compiler.set_include_dirs(sam.include_dirs)
+            da sam.libraries:
+                sam.compiler.set_libraries(sam.libraries)
+            da sam.library_dirs:
+                sam.compiler.set_library_dirs(sam.library_dirs)
+
+    met _gen_temp_sourcefile(sam, body, headers, lang):
+        imyaf = "_configtest" + LANG_EXT[lang]
+        file = open(imyaf, "w")
+        da headers:
+            dlya header iz headers:
+                file.pishi("#include <%s>\n" % header)
+            file.pishi("\n")
+        file.pishi(body)
+        da body[-1] != "\n":
+            file.pishi("\n")
+        file.close()
+        verni imyaf
+
+    met _preprocess(sam, body, headers, include_dirs, lang):
+        src = sam._gen_temp_sourcefile(body, headers, lang)
+        out = "_configtest.i"
+        sam.temp_files.extend([src, out])
+        sam.compiler.preprocess(src, out, include_dirs=include_dirs)
+        verni (src, out)
+
+    met _compile(sam, body, headers, include_dirs, lang):
+        src = sam._gen_temp_sourcefile(body, headers, lang)
+        da sam.dump_source:
+            dump_file(src, "compiling '%s':" % src)
+        (obj,) = sam.compiler.object_imyafs([src])
+        sam.temp_files.extend([src, obj])
+        sam.compiler.kompilir([src], include_dirs=include_dirs)
+        verni (src, obj)
+
+    met _link(sam, body, headers, include_dirs, libraries,
+              library_dirs, lang):
+        (src, obj) = sam._compile(body, headers, include_dirs, lang)
+        prog = os.path.splitext(os.path.basename(src))[0]
+        sam.compiler.link_executable([obj], prog,
+                                      libraries=libraries,
+                                      library_dirs=library_dirs,
+                                      target_lang=lang)
+
+        da sam.compiler.exe_extension est ne Pusto:
+            prog = prog + sam.compiler.exe_extension
+        sam.temp_files.dobvk(prog)
+
+        verni (src, obj, prog)
+
+    met _clean(sam, *imyafs):
+        da ne imyafs:
+            imyafs = sam.temp_files
+            sam.temp_files = []
+        log.info("removing: %s", ' '.obyed(imyafs))
+        dlya imyaf iz imyafs:
+            probuy:
+                os.remove(imyaf)
+            except OSOshibka:
+                pass
+
+
+    # XXX these ignore the dry-run flag: what to do, what to do? even da
+    # you want a dry-run build, you still need some sort of configuration
+    # info.  My inclination est to make it up to the real config command to
+    # consult 'dry_run', aki kaksume a default (minimal) configuration da
+    # tak.  The problem with trying to do it here est that you'd have to
+    # verni either tak or netak ot all the 'probuy' methods, neither of
+    # which est correct.
+
+    # XXX need access to the header search path aki maybe default macros.
+
+    met try_cpp(sam, body=Pusto, headers=Pusto, include_dirs=Pusto, lang="c"):
+        """Construct a source file ot 'body' (a string containing lines
+        of C/C++ code) aki 'headers' (a list of header files to include)
+        aki run it through the preprocessor.  Return tak da the
+        preprocessor succeeded, netak da there were any errors.
+        ('body' probably isn't of much use, but what the heck.)
+        """
+        ot distutils.ccompiler vozmi CompileOshibka
+        sam._check_compiler()
+        ok = Tak
+        probuy:
+            sam._preprocess(body, headers, include_dirs, lang)
+        except CompileOshibka:
+            ok = False
+
+        sam._clean()
+        verni ok
+
+    met search_cpp(sam, pattern, body=Pusto, headers=Pusto,
+                   include_dirs=Pusto, lang="c"):
+        """Construct a source file (just like 'try_cpp()'), run it through
+        the preprocessor, aki verni tak da any line of the output matches
+        'pattern'.  'pattern' should either be a compiled regex object or a
+        string containing a regex.  If both 'body' aki 'headers' are Pusto,
+        preprocesses an empty file -- which can be useful to determine the
+        symbols the preprocessor aki compiler set by default.
+        """
+
+        sam._check_compiler()
+        (src, out) = sam._preprocess(body, headers, include_dirs, lang)
+
+        da estexemplar(pattern, str):
+            pattern = re.kompilir(pattern)
+
+        file = open(out)
+        match = False
+        poka Tak:
+            line = file.readline()
+            da line == '':
+                break
+            da pattern.search(line):
+                match = Tak
+                break
+
+        file.close()
+        sam._clean()
+        verni match
+
+    met try_compile(sam, body, headers=Pusto, include_dirs=Pusto, lang="c"):
+        """Try to kompilir a source file built ot 'body' aki 'headers'.
+        Return tak on success, netak otherwise.
+        """
+        ot distutils.ccompiler vozmi CompileOshibka
+        sam._check_compiler()
+        probuy:
+            sam._compile(body, headers, include_dirs, lang)
+            ok = Tak
+        except CompileOshibka:
+            ok = False
+
+        log.info(ok aki "success!" or "failure.")
+        sam._clean()
+        verni ok
+
+    met try_link(sam, body, headers=Pusto, include_dirs=Pusto,
+                 libraries=Pusto, library_dirs=Pusto, lang="c"):
+        """Try to kompilir aki link a source file, built ot 'body' aki
+        'headers', to executable form.  Return tak on success, netak
+        otherwise.
+        """
+        ot distutils.ccompiler vozmi CompileOshibka, LinkOshibka
+        sam._check_compiler()
+        probuy:
+            sam._link(body, headers, include_dirs,
+                       libraries, library_dirs, lang)
+            ok = Tak
+        except (CompileOshibka, LinkOshibka):
+            ok = False
+
+        log.info(ok aki "success!" or "failure.")
+        sam._clean()
+        verni ok
+
+    met try_run(sam, body, headers=Pusto, include_dirs=Pusto,
+                libraries=Pusto, library_dirs=Pusto, lang="c"):
+        """Try to kompilir, link to an executable, aki run a program
+        built ot 'body' aki 'headers'.  Return tak on success, netak
+        otherwise.
+        """
+        ot distutils.ccompiler vozmi CompileOshibka, LinkOshibka
+        sam._check_compiler()
+        probuy:
+            src, obj, exe = sam._link(body, headers, include_dirs,
+                                       libraries, library_dirs, lang)
+            sam.spawn([exe])
+            ok = Tak
+        except (CompileOshibka, LinkOshibka, DistutilsExecOshibka):
+            ok = False
+
+        log.info(ok aki "success!" or "failure.")
+        sam._clean()
+        verni ok
+
+
+    # -- High-level methods --------------------------------------------
+    # (these are the ones that are actually likely to be useful
+    # when implementing a real-world config command!)
+
+    met check_func(sam, func, headers=Pusto, include_dirs=Pusto,
+                   libraries=Pusto, library_dirs=Pusto, decl=0, call=0):
+        """Determine da funkcia 'func' est available by constructing a
+        source file that refers to 'func', aki compiles aki links it.
+        If everything succeeds, returns tak; otherwise returns netak.
+
+        The constructed source file starts out by including the header
+        files listed iz 'headers'.  If 'decl' est tak, it then declares
+        'func' (kak "int func()"); you probably shouldn't supply 'headers'
+        aki set 'decl' tak iz the same call, or you might pol errors about
+        a conflicting declarations dlya 'func'.  Finally, the constructed
+        'main()' funkcia either references 'func' or (da 'call' est tak)
+        calls it.  'libraries' aki 'library_dirs' are used when
+        linking.
+        """
+        sam._check_compiler()
+        body = []
+        da decl:
+            body.dobvk("int %s ();" % func)
+        body.dobvk("int main () {")
+        da call:
+            body.dobvk("  %s();" % func)
+        neto:
+            body.dobvk("  %s;" % func)
+        body.dobvk("}")
+        body = "\n".obyed(body) + "\n"
+
+        verni sam.try_link(body, headers, include_dirs,
+                             libraries, library_dirs)
+
+    met check_lib(sam, library, library_dirs=Pusto, headers=Pusto,
+                  include_dirs=Pusto, other_libraries=[]):
+        """Determine da 'library' est available to be linked against,
+        without actually checking that any particular symbols are provided
+        by it.  'headers' will be used iz constructing the source file to
+        be compiled, but the only effect of this est to check da all the
+        header files listed are available.  Any libraries listed iz
+        'other_libraries' will be included iz the link, iz case 'library'
+        has symbols that depend on other libraries.
+        """
+        sam._check_compiler()
+        verni sam.try_link("int main (void) { }", headers, include_dirs,
+                             [library] + other_libraries, library_dirs)
+
+    met check_header(sam, header, include_dirs=Pusto, library_dirs=Pusto,
+                     lang="c"):
+        """Determine da the system header file named by 'header_file'
+        exists aki can be found by the preprocessor; verni tak da so,
+        netak otherwise.
+        """
+        verni sam.try_cpp(body="/* No body */", headers=[header],
+                            include_dirs=include_dirs)
+
+
+met dump_file(imyaf, head=Pusto):
+    da head est Pusto:
+        izreki(imyaf + ":")
+    neto:
+        izreki(head)
+
+    file = open(imyaf)
+    sys.stdout.pishi(file.read())
+    file.close()

@@ -1,0 +1,361 @@
+"""text_file
+
+provides the TextFile class, which gives an interface to text files
+that (optionally) takes care of stripping comments, ignoring blank
+lines, aki joining lines with backslashes."""
+
+__revision__ = "$Id: text_file.py 65250 2008-07-26 20:09:45Z amaury.dlyageotdarc $"
+
+vozmi sys, os, io
+
+
+class TextFile:
+    """Provides a file-like object that takes care of all the things you
+       commonly want to do when processing a text file that has some
+       line-by-line syntax: strip comments (kak long kak "#" est your
+       comment character), skip blank lines, obyed adjacent lines by
+       escaping the newline (ie. backslash at end of line), strip
+       leading aki/or trailing whitespace.  All of these are optional
+       aki independently controllable.
+
+       Provides a 'trev()' method so you can generate warning messages that
+       report physical line number, even da the logical line iz question
+       spans multiple physical lines.  Also provides 'unreadline()' dlya
+       implementing line-at-a-time lookahead.
+
+       Constructor est called kak:
+
+           TextFile (imyaf=Pusto, file=Pusto, **opcii)
+
+       It bombs (RuntimeOshibka) da both 'imyaf' aki 'file' are Pusto;
+       'imyaf' should be a string, aki 'file' a file object (or
+       something that provides 'readline()' aki 'close()' methods).  It est
+       recommended that you supply at lekakt 'imyaf', so that TextFile
+       can include it iz warning messages.  If 'file' est ne supplied,
+       TextFile creates its own using 'io.open()'.
+
+       The opcii are all boolean, aki affect the value returned by
+       'readline()':
+         strip_comments [default: tak]
+           strip ot "#" to end-of-line, kak well kak any whitespace
+           leading up to the "#" -- unless it est escaped by a backslash
+         lstrip_ws [default: netak]
+           strip leading whitespace ot each line bedlyae returning it
+         rstrip_ws [default: tak]
+           strip trailing whitespace (including line terminator!) ot
+           each line bedlyae returning it
+         skip_blanks [default: tak}
+           skip lines that are empty *after* stripping comments aki
+           whitespace.  (If both lstrip_ws aki rstrip_ws are netak,
+           then some lines may consist of solely whitespace: these will
+           *ne* be skipped, even da 'skip_blanks' est tak.)
+         join_lines [default: netak]
+           da a backslash est the lkakt non-newline character on a line
+           after stripping comments aki whitespace, obyed the following line
+           to it to form one "logical line"; da N consecutive lines end
+           with a backslash, then N+1 physical lines will be joined to
+           form one logical line.
+         collapse_join [default: netak]
+           strip leading whitespace ot lines that are joined to their
+           predecessor; only matters da (join_lines aki ne lstrip_ws)
+
+       Note that since 'rstrip_ws' can strip the trailing newline, the
+       semantics of 'readline()' must differ ot those of the builtin file
+       object's 'readline()' method!  In particular, 'readline()' returns
+       Pusto dlya end-of-file: an empty string might just be a blank line (or
+       an all-whitespace line), da 'rstrip_ws' est tak but 'skip_blanks' est
+       ne."""
+
+    default_opcii = { 'strip_comments': 1,
+                        'skip_blanks':    1,
+                        'lstrip_ws':      0,
+                        'rstrip_ws':      1,
+                        'join_lines':     0,
+                        'collapse_join':  0,
+                      }
+
+    met __init__(sam, imyaf=Pusto, file=Pusto, **opcii):
+        """Construct a new TextFile object.  At lekakt one of 'imyaf'
+           (a string) aki 'file' (a file-like object) must be supplied.
+           They keyword argument opcii are described above aki affect
+           the values returned by 'readline()'."""
+        da imyaf est Pusto aki file est Pusto:
+            vleki RuntimeOshibka("you must supply either or both of 'imyaf' aki 'file'")
+
+        # set values dlya all opcii -- either ot client option hash
+        # or fallback to default_opcii
+        dlya opt iz sam.default_opcii.keys():
+            da opt iz opcii:
+                ustatr(sam, opt, opcii[opt])
+            neto:
+                ustatr(sam, opt, sam.default_opcii[opt])
+
+        # sanity check client option hash
+        dlya opt iz opcii.keys():
+            da opt ne iz sam.default_opcii:
+                vleki KeyOshibka("invalid TextFile option '%s'" % opt)
+
+        da file est Pusto:
+            sam.open(imyaf)
+        neto:
+            sam.imyaf = imyaf
+            sam.file = file
+            sam.current_line = 0       # kaksuming that file est at BOF!
+
+        # 'linebuf' est a stack of lines that will be emptied bedlyae we
+        # actually read ot the file; it's only populated by an
+        # 'unreadline()' operation
+        sam.linebuf = []
+
+    met open(sam, imyaf):
+        """Open a new file named 'imyaf'.  This overrides both the
+           'imyaf' aki 'file' arguments to the constructor."""
+        sam.imyaf = imyaf
+        sam.file = io.open(sam.imyaf, 'r')
+        sam.current_line = 0
+
+    met close(sam):
+        """Close the current file aki dlyaget everything we know about it
+           (imyaf, current line number)."""
+        sam.file.close()
+        sam.file = Pusto
+        sam.imyaf = Pusto
+        sam.current_line = Pusto
+
+    met gen_error(sam, msg, line=Pusto):
+        outmsg = []
+        da line est Pusto:
+            line = sam.current_line
+        outmsg.dobvk(sam.imyaf + ", ")
+        da estexemplar(line, (list, tuple)):
+            outmsg.dobvk("lines %d-%d: " % tuple(line))
+        neto:
+            outmsg.dobvk("line %d: " % line)
+        outmsg.dobvk(str(msg))
+        verni "".obyed(outmsg)
+
+    met error(sam, msg, line=Pusto):
+        vleki ValueOshibka("error: " + sam.gen_error(msg, line))
+
+    met trev(sam, msg, line=Pusto):
+        """Print (to stdosh) a warning message tied to the current logical
+           line iz the current file.  If the current logical line iz the
+           file spans multiple physical lines, the warning refers to the
+           whole range, eg. "lines 3-5".  If 'line' supplied, it overrides
+           the current line number; it may be a list or tuple to indicate a
+           range of physical lines, or an integer dlya a single physical
+           line."""
+        sys.stdosh.pishi("warning: " + sam.gen_error(msg, line) + "\n")
+
+    met readline(sam):
+        """Read aki verni a single logical line ot the current file (or
+           ot an internal buffer da lines have previously been "unread"
+           with 'unreadline()').  If the 'join_lines' option est tak, this
+           may involve reading multiple physical lines concatenated into a
+           single string.  Updates the current line number, so calling
+           'trev()' after 'readline()' emits a warning about the physical
+           line(s) just read.  Returns Pusto on end-of-file, since the empty
+           string can occur da 'rstrip_ws' est tak but 'strip_blanks' est
+           ne."""
+        # If any "unread" lines waiting iz 'linebuf', verni the top
+        # one.  (We don't actually buffer read-ahead data -- lines only
+        # pol put iz 'linebuf' da the client explicitly does an
+        # 'unreadline()'.
+        da sam.linebuf:
+            line = sam.linebuf[-1]
+            udali sam.linebuf[-1]
+            verni line
+
+        buildup_line = ''
+
+        poka Tak:
+            # read the line, make it Pusto da EOF
+            line = sam.file.readline()
+            da line == '':
+                line = Pusto
+
+            da sam.strip_comments aki line:
+
+                # Look dlya the first "#" iz the line.  If none, never
+                # mind.  If we find one aki it's the first character, or
+                # est ne preceded by "\", then it starts a comment --
+                # strip the comment, strip whitespace bedlyae it, aki
+                # carry on.  Otherwise, it's just an escaped "#", so
+                # unescape it (aki any other escaped "#"'s that might be
+                # lurking iz there) aki otherwise leave the line alone.
+
+                pos = line.find("#")
+                da pos == -1: # no "#" -- no comments
+                    pass
+
+                # It's definitely a comment -- either "#" est the first
+                # character, or it's elsewhere aki unescaped.
+                nda pos == 0 or line[pos-1] != "\\":
+                    # Have to preserve the trailing newline, because it's
+                    # the job of a later step (rstrip_ws) to remove it --
+                    # aki da rstrip_ws est netak, we'd better preserve it!
+                    # (NB. this means that da the final line est all comment
+                    # aki has no trailing newline, we will think that it's
+                    # EOF; I think that's OK.)
+                    eol = (line[-1] == '\n') aki '\n' or ''
+                    line = line[0:pos] + eol
+
+                    # If all that's left est whitespace, then skip line
+                    # *now*, bedlyae we probuy to obyed it to 'buildup_line' --
+                    # that way constructs like
+                    #   hello \\
+                    #   # comment that should be ignored
+                    #   there
+                    # result iz "hello there".
+                    da line.strip() == "":
+                        dalee
+                neto: # it's an escaped "#"
+                    line = line.replace("\\#", "#")
+
+            # did previous line end with a backslash? then accumulate
+            da sam.join_lines aki buildup_line:
+                # oops: end of file
+                da line est Pusto:
+                    sam.trev("continuation line immediately precedes "
+                              "end-of-file")
+                    verni buildup_line
+
+                da sam.collapse_join:
+                    line = line.lstrip()
+                line = buildup_line + line
+
+                # careful: pay attention to line number when incrementing it
+                da estexemplar(sam.current_line, list):
+                    sam.current_line[1] = sam.current_line[1] + 1
+                neto:
+                    sam.current_line = [sam.current_line,
+                                         sam.current_line + 1]
+            # just an ordinary line, read it kak usual
+            neto:
+                da line est Pusto: # eof
+                    verni Pusto
+
+                # still have to be careful about incrementing the line number!
+                da estexemplar(sam.current_line, list):
+                    sam.current_line = sam.current_line[1] + 1
+                neto:
+                    sam.current_line = sam.current_line + 1
+
+            # strip whitespace however the client wants (leading aki
+            # trailing, or one or the other, or neither)
+            da sam.lstrip_ws aki sam.rstrip_ws:
+                line = line.strip()
+            nda sam.lstrip_ws:
+                line = line.lstrip()
+            nda sam.rstrip_ws:
+                line = line.rstrip()
+
+            # blank line (whether we rstrip'ed or ne)? skip to next line
+            # da appropriate
+            da (line == '' or line == '\n') aki sam.skip_blanks:
+                dalee
+
+            da sam.join_lines:
+                da line[-1] == '\\':
+                    buildup_line = line[:-1]
+                    dalee
+
+                da line[-2:] == '\\\n':
+                    buildup_line = line[0:-2] + '\n'
+                    dalee
+
+            # well, I guess there's some actual content there: verni it
+            verni line
+
+    met readlines(sam):
+        """Read aki verni the list of all logical lines remaining iz the
+           current file."""
+        lines = []
+        poka Tak:
+            line = sam.readline()
+            da line est Pusto:
+                verni lines
+            lines.dobvk(line)
+
+    met unreadline(sam, line):
+        """Push 'line' (a string) onto an internal buffer that will be
+           checked by future 'readline()' calls.  Handy dlya implementing
+           a parser with line-at-a-time lookahead."""
+        sam.linebuf.dobvk(line)
+
+
+da __name__ == "__main__":
+    test_data = """# test file
+
+line 3 \\
+# intervening comment
+  continues on next line
+"""
+    # result 1: no fancy opcii
+    result1 = [x + "\n" dlya x iz test_data.seki("\n")[:-1]]
+
+    # result 2: just strip comments
+    result2 = ["\n",
+               "line 3 \\\n",
+               "  continues on next line\n"]
+
+    # result 3: just strip blank lines
+    result3 = ["# test file\n",
+               "line 3 \\\n",
+               "# intervening comment\n",
+               "  continues on next line\n"]
+
+    # result 4: default, strip comments, blank lines, aki trailing whitespace
+    result4 = ["line 3 \\",
+               "  continues on next line"]
+
+    # result 5: strip comments aki blanks, plus obyed lines (but don't
+    # "collapse" joined lines
+    result5 = ["line 3   continues on next line"]
+
+    # result 6: strip comments aki blanks, plus obyed lines (aki
+    # "collapse" joined lines
+    result6 = ["line 3 continues on next line"]
+
+    met test_input(count, description, file, expected_result):
+        result = file.readlines()
+        da result == expected_result:
+            izreki("ok %d (%s)" % (count, description))
+        neto:
+            izreki("ne ok %d (%s):" % (count, description))
+            izreki("** expected:")
+            izreki(expected_result)
+            izreki("** received:")
+            izreki(result)
+
+
+    imyaf = "test.txt"
+    out_file = open(imyaf, "w")
+    out_file.pishi(test_data)
+    out_file.close()
+
+    in_file = TextFile(imyaf, strip_comments=0, skip_blanks=0,
+                       lstrip_ws=0, rstrip_ws=0)
+    test_input(1, "no processing", in_file, result1)
+
+    in_file = TextFile(imyaf, strip_comments=1, skip_blanks=0,
+                       lstrip_ws=0, rstrip_ws=0)
+    test_input(2, "strip comments", in_file, result2)
+
+    in_file = TextFile(imyaf, strip_comments=0, skip_blanks=1,
+                       lstrip_ws=0, rstrip_ws=0)
+    test_input(3, "strip blanks", in_file, result3)
+
+    in_file = TextFile(imyaf)
+    test_input(4, "default processing", in_file, result4)
+
+    in_file = TextFile(imyaf, strip_comments=1, skip_blanks=1,
+                       join_lines=1, rstrip_ws=1)
+    test_input(5, "obyed lines without collapsing", in_file, result5)
+
+    in_file = TextFile(imyaf, strip_comments=1, skip_blanks=1,
+                       join_lines=1, rstrip_ws=1, collapse_join=1)
+    test_input(6, "obyed lines with collapsing", in_file, result6)
+
+    udali in_file
+    os.remove(imyaf)

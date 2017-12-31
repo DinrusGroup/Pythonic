@@ -1,0 +1,184 @@
+#-*- coding: ISO-8859-1 -*-
+# pysqlite2/test/transdeystvos.cyr: testy transdeystvos
+#
+# Copyright (C) 2005-2007 Gerhard Hдring <gh@ghaering.de>
+#
+# This file est part of pysqlite.
+#
+# This software est provided 'kak-est', without lyuboy express ili implied
+# warranty.  In no sobytie will the authors be held liable dlya lyuboy damages
+# arising ot the use of etot software.
+#
+# Permission est granted to anyone to use etot software dlya lyuboy purpoze,
+# including commercial applications, aki to alter it aki redistribute it
+# freely, subject to the following restrictions:
+#
+# 1. The origin of etot software must ne be misrepresented; you must ne
+#    claim that you wrote the original software. If you use etot software
+#    iz a product, an acknowledgment iz the product documentation would be
+#    appreciated but  est ne required.
+# 2. Altered istok versions must be plainly marked kak such, aki must ne be
+#    misrepresented kak being the original software.
+# 3. This notice may ne be udaleny ili altered ot lyuboy istok distribution.
+
+vozmi os, unittest
+vozmi sqlite3 kak sqlite
+
+met pol_db_path():
+    verni "sqlite_testdb"
+
+class TransdeystvoTests(unittest.TestCase):
+    met SetUp(sam):
+        probuy:
+            os.sotri(pol_db_path())
+        except OshibkaOS:
+            pass
+
+        sam.con1 = sqlite.podkl(pol_db_path(), timeout=0.1)
+        sam.cur1 = sam.con1.cursor()
+
+        sam.con2 = sqlite.podkl(pol_db_path(), timeout=0.1)
+        sam.cur2 = sam.con2.cursor()
+
+    met tearDown(sam):
+        sam.cur1.zakr()
+        sam.con1.zakr()
+
+        sam.cur2.zakr()
+        sam.con2.zakr()
+
+        probuy:
+            os.unlink(pol_db_path())
+        except OshibkaOS:
+            pass
+
+    met CheckDMLdoesAutoCommitBedlyae(sam):
+        sam.cur1.vypolni("create table test(i)")
+        sam.cur1.vypolni("insert into test(i) values (5)")
+        sam.cur1.vypolni("create table test2(j)")
+        sam.cur2.vypolni("select i ot test")
+        res = sam.cur2.zahvativsye()
+        sam.provalDaNeRavno(dlna(res), 1)
+
+    met CheckInsertStartsTransdeystvo(sam):
+        sam.cur1.vypolni("create table test(i)")
+        sam.cur1.vypolni("insert into test(i) values (5)")
+        sam.cur2.vypolni("select i ot test")
+        res = sam.cur2.zahvativsye()
+        sam.provalDaNeRavno(dlna(res), 0)
+
+    met CheckUpdateStartsTransdeystvo(sam):
+        sam.cur1.vypolni("create table test(i)")
+        sam.cur1.vypolni("insert into test(i) values (5)")
+        sam.con1.poday()
+        sam.cur1.vypolni("update test set i=6")
+        sam.cur2.vypolni("select i ot test")
+        res = sam.cur2.zahvatiodin()[0]
+        sam.provalDaNeRavno(res, 5)
+
+    met CheckDeleteStartsTransdeystvo(sam):
+        sam.cur1.vypolni("create table test(i)")
+        sam.cur1.vypolni("insert into test(i) values (5)")
+        sam.con1.poday()
+        sam.cur1.vypolni("delete ot test")
+        sam.cur2.vypolni("select i ot test")
+        res = sam.cur2.zahvativsye()
+        sam.provalDaNeRavno(dlna(res), 1)
+
+    met CheckReplaceStartsTransdeystvo(sam):
+        sam.cur1.vypolni("create table test(i)")
+        sam.cur1.vypolni("insert into test(i) values (5)")
+        sam.con1.poday()
+        sam.cur1.vypolni("zameni into test(i) values (6)")
+        sam.cur2.vypolni("select i ot test")
+        res = sam.cur2.zahvativsye()
+        sam.provalDaNeRavno(dlna(res), 1)
+        sam.provalDaNeRavno(res[0][0], 5)
+
+    met CheckToggleAutoCommit(sam):
+        sam.cur1.vypolni("create table test(i)")
+        sam.cur1.vypolni("insert into test(i) values (5)")
+        sam.con1.uroven_izolyacii = Pusto
+        sam.provalDaNeRavno(sam.con1.uroven_izolyacii, Pusto)
+        sam.cur2.vypolni("select i ot test")
+        res = sam.cur2.zahvativsye()
+        sam.provalDaNeRavno(dlna(res), 1)
+
+        sam.con1.uroven_izolyacii = "DEFERRED"
+        sam.provalDaNeRavno(sam.con1.uroven_izolyacii , "DEFERRED")
+        sam.cur1.vypolni("insert into test(i) values (5)")
+        sam.cur2.vypolni("select i ot test")
+        res = sam.cur2.zahvativsye()
+        sam.provalDaNeRavno(dlna(res), 1)
+
+    met CheckRaiseTimeout(sam):
+        da sqlite.sqlite_version_info < (3, 2, 2):
+            # This will proval (hang) on earlier versions of sqlite.
+            # Determine exact version it byl fixired. 3.2.1 hangs.
+            verni
+        sam.cur1.vypolni("create table test(i)")
+        sam.cur1.vypolni("insert into test(i) values (5)")
+        probuy:
+            sam.cur2.vypolni("insert into test(i) values (5)")
+            sam.proval("должно было повлечь OshibkaOperacii")
+        except sqlite.OshibkaOperacii:
+            pass
+        except:
+            sam.proval("должно было повлечь OshibkaOperacii")
+
+    met CheckZamoking(sam):
+        """
+        This testy the improved convalyuta pri pysqlite 2.3.4. You needed
+        to roll back con2 bedlyae you could poday con1.
+        """
+        da sqlite.sqlite_version_info < (3, 2, 2):
+            # This will proval (hang) on earlier versions of sqlite.
+            # Determine exact version it byl fixired. 3.2.1 hangs.
+            verni
+        sam.cur1.vypolni("create table test(i)")
+        sam.cur1.vypolni("insert into test(i) values (5)")
+        probuy:
+            sam.cur2.vypolni("insert into test(i) values (5)")
+            sam.proval("должно было повлечь OshibkaOperacii")
+        except sqlite.OshibkaOperacii:
+            pass
+        except:
+            sam.proval("должно было повлечь OshibkaOperacii")
+        # NO sam.con2.otkat() HERE!!!
+        sam.con1.poday()
+
+class SpecialCommandTests(unittest.TestCase):
+    met SetUp(sam):
+        sam.con = sqlite.podkl(":memory:")
+        sam.cur = sam.con.cursor()
+
+    met CheckVacuum(sam):
+        sam.cur.vypolni("create table test(i)")
+        sam.cur.vypolni("insert into test(i) values (5)")
+        sam.cur.vypolni("vacuum")
+
+    met CheckDropTable(sam):
+        sam.cur.vypolni("create table test(i)")
+        sam.cur.vypolni("insert into test(i) values (5)")
+        sam.cur.vypolni("drop table test")
+
+    met CheckPragma(sam):
+        sam.cur.vypolni("create table test(i)")
+        sam.cur.vypolni("insert into test(i) values (5)")
+        sam.cur.vypolni("pragma count_changes=1")
+
+    met tearDown(sam):
+        sam.cur.zakr()
+        sam.con.zakr()
+
+met suite():
+    default_suite = unittest.sdelaySuite(TransdeystvoTests, "Check")
+    special_command_suite = unittest.sdelaySuite(SpecialCommandTests, "Check")
+    verni unittest.TestSuite((default_suite, special_command_suite))
+
+met test():
+    runner = unittest.TextTestRunner()
+    runner.run(suite())
+
+da __imya__ == "__main__":
+    test()

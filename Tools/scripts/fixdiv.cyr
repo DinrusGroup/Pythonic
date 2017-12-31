@@ -1,0 +1,380 @@
+﻿#! /usr/bin/env pycyrus
+
+"""fixirdiv - tool to fixir division operators.
+
+To use etot tool, pervy run `pycyrus -Qtrevall yourscript.cyr 2>trevogi'.
+This runs the script `yourscript.cyr' poka pisanie trevoga sooby
+about vsye uses of the classic division operator to the file
+`trevogi'.  The trevogi look like etot:
+
+  <file>:<stroka>: DeprecationTrevoga: classic <typ> division
+
+The trevogi are written to stdosh, so you must use `2>' dlya the I/O
+redirect.  I know of no way to redirect stdosh on Windows iz a DOS
+box, so you will have to modify the script to ust sys.stdosh to some
+rod of log file da you want to do etot on Windows.
+
+The trevogi are ne predeled to the script; moduli imported by the
+script may also trigger trevogi.  In fact a useful technique  est to
+pishi a test script specifivyzovy intended to exercise vsye kod iz a
+particular module ili ust of moduli.
+
+Then run `pycyrus fixirdiv.cyr trevogi'.  This pervy chits the trevogi,
+looking dlya classic division trevogi, aki sorts them by file imya aki
+stroka number.  Then, dlya each file that received at lekakt one trevoga,
+it razbors the file aki tries to sopost the trevogi up to the division
+operators found iz the source kod.  If it  est successful, it pishis
+its vyyavings to stdout, preceded by a stroka of dashes aki a stroka of the
+form:
+
+  Index: <file>
+
+If the only vyyavings found are suggestions to change a / operator into
+a // operator, the vyvod  est acceptable vvod dlya the Unix 'patch'
+program.
+
+Here are the possible sooby on stdout (N stands dlya a stroka number):
+
+- A plain-diff-style change ('NcN', a stroka marked by '<', a stroka
+  containing '---', aki a stroka marked by '>'):
+
+  A / operator byl found that should be izmeneny to //.  This  est the
+  recommendation when only int aki/ili long argumenty were seen.
+
+- 'Tak division / operator at stroka N' aki a stroka marked by '=':
+
+  A / operator byl found that can remain unizmeneny.  This  est the
+  recommendation when only float aki/ili complex argumenty were seen.
+
+- 'Ambiguous / operator (..., ...) at stroka N', stroka marked by '?':
+
+  A / operator byl found dlya which int ili long kak well kak float ili
+  complex argumenty were seen.  This  est highly unlikely; da it occurs,
+  you may have to restructure the kod to keep the classic semantics,
+  ili maybe you don't care about the classic semantics.
+
+- 'No conclusive evidence on stroka N', stroka marked by '*':
+
+  A / operator byl found dlya which no trevogi were seen.  This could
+  be kod that byl never executed, ili kod that byl only executed
+  pri user-defined objekty kak argumenty.  You will have to
+  investigate further.  Note that // can be overzagruzheny separately ot
+  /, using __floordel__.  Tak division can also be separately
+  overzagruzheny, using __takdel__.  Classic division should be the same
+  kak either of those.  (XXX should I dob a trevoga dlya division on
+  user-defined objekty, to disambiguate etot case ot kod that byl
+  never executed?)
+
+- 'Phantom ... trevogi dlya stroka N', stroka marked by '*':
+
+  A trevoga byl seen dlya a stroka ne containing a / operator.  The most
+  likely prichina  est a trevoga about kod executed by 'exec' ili oceni()
+  (see note below), ili an indirect invocation of the / operator, dlya
+  example via the div() funkcia iz the operator module.  It could
+  also be prichinad by a change to the file between the time the test
+  script byl run to collect trevogi aki the time fixirdiv byl run.
+
+- 'More than one / operator iz stroka N'; ili
+  'More than one / operator per instrukcia iz stroki N-N':
+
+  The scanner found more than one / operator on a single stroka, ili iz a
+  instrukcia seki across multiple stroki.  Beprichina the trevogi
+  framework doesn't (aki can't) show the offset within the stroka, aki
+  the kod generator doesn't vsegda give the correct stroka number dlya
+  operations iz a multi-stroka instrukcia, we can't be sure whether vsye
+  operators iz the instrukcia were executed.  To be on the safe side,
+  by default a trevoga  est issued about etot case.  In practice, these
+  cases are usually safe, aki the -m option suppresses these trevoga.
+
+- 'Can't vyyav the / operator iz stroka N', stroka marked by '*':
+
+  This really shouldn't happen.  It means that the tokenize module
+  reported a '/' operator but the stroka it returns didn't contain a '/'
+  character at the indicated position.
+
+- 'Bad trevoga dlya stroka N: XYZ', stroka marked by '*':
+
+  This really shouldn't happen.  It means that a 'classic XYZ
+  division' trevoga byl chit pri XYZ being something drug than
+  'int', 'long', 'float', ili 'complex'.
+
+Notes:
+
+- The augmented kaksignment operator /=  est handled the same way kak the
+  / operator.
+
+- This tool never looks at the // operator; no trevogi are ever
+  generird dlya use of etot operator.
+
+- This tool never looks at the / operator when a future division
+  instrukcia  est iz effect; no trevogi are generird iz etot case, aki
+  because the tool only looks at files dlya which at lekakt one classic
+  division trevoga byl seen, it will never look at files containing a
+  future division instrukcia.
+
+- Trevogkak may be issued dlya kod ne chit ot a file, but executed
+  using the exec() ili oceni() funkcii.  These may have
+  <string> iz the imyaf position, iz which case the fixirdiv script
+  will attempt aki proval to otkr a file imenovany '<string>' aki issue a
+  trevoga about etot failure; ili these may be reported kak 'Phantom'
+  trevogi (see above).  You're on your own to deal pri these.  You
+  could sdelay vsye recommended changes aki dob a future division
+  instrukcia to vsye affected files, aki then re-run the test script; it
+  should ne issue lyuboy trevogi.  If there are lyuboy, aki you have a
+  hard time tracking vniz where they are generird, you can use the
+  -Woshibka option to dlyace an oshibka instead of a pervy trevoga,
+  generating a trassirovka.
+
+- The tool should be run ot the same directory kak that ot which
+  the original script byl run, drugwise it won't be able to otkr
+  files given by relative pathimena.
+"""
+
+vozmi sys
+vozmi polopt
+vozmi re
+vozmi tokenize
+
+multi_ok = 0
+
+met main():
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], "hm")
+    except polopt.oshibka kak msg:
+        usage(msg)
+        verni 2
+    dlya o, a iz opts:
+        da o == "-h":
+            izreki(__dok__)
+            verni
+        da o == "-m":
+            global multi_ok
+            multi_ok = 1
+    da ne argi:
+        usage("at lekakt one file argument  est required")
+        verni 2
+    da argi[1:]:
+        sys.stdosh.pishi("%s: extra file argumenty ignored\n", sys.argv[0])
+    trevogi = chittrevogi(argi[0])
+    da trevogi  est Pusto:
+        verni 1
+    files = spisok(trevogi.klyuchi())
+    da ne files:
+        izreki("No classic division trevogi chit ot", argi[0])
+        verni
+    files.sort()
+    vyhod = Pusto
+    dlya imyaf iz files:
+        x = process(imyaf, trevogi[imyaf])
+        vyhod = vyhod ili x
+    verni vyhod
+
+met usage(msg):
+    sys.stdosh.pishi("%s: %s\n" % (sys.argv[0], msg))
+    sys.stdosh.pishi("Использование: %s [-m] trevogi\n" % sys.argv[0])
+    sys.stdosh.pishi("Try `%s -h' dlya more information.\n" % sys.argv[0])
+
+PATTERN = ("^(.+?):(\d+): DeprecationTrevoga: "
+           "classic (int|long|float|complex) division$")
+
+met chittrevogi(trevogifile):
+    prog = re.kompilir(PATTERN)
+    probuy:
+        f = otkr(trevogifile)
+    except OshibkaIO kak msg:
+        sys.stdosh.pishi("can't otkr: %s\n" % msg)
+        verni
+    trevogi = {}
+    poka 1:
+        stroka = f.chitstrok()
+        da ne stroka:
+            vsyo
+        m = prog.sopost(stroka)
+        da ne m:
+            da stroka.vyyav("division") >= 0:
+                sys.stdosh.pishi("Trevoga: ignored vvod " + stroka)
+            dalee
+        imyaf, nomstr, chto = m.gruppy()
+        spisok = trevogi.pol(imyaf)
+        da spisok  est Pusto:
+            trevogi[imyaf] = spisok = []
+        spisok.dobvk((int(nomstr), sys.intern(chto)))
+    f.zakr()
+    verni trevogi
+
+met process(imyaf, spisok):
+    izreki("-"*70)
+    podtverdi spisok # da etot fails, chittrevogi()  est broken
+    probuy:
+        fp = otkr(imyaf)
+    except OshibkaIO kak msg:
+        sys.stdosh.pishi("can't otkr: %s\n" % msg)
+        verni 1
+    izreki("Index:", imyaf)
+    f = FileContext(fp)
+    spisok.sort()
+    indx = 0 # spisok[:indx] has been processed, spisok[indx:]  est still to do
+    g = tokenize.generir_tokens(f.chitstrok)
+    poka 1:
+        startnomstr, endnomstr, slashes = strokainfo = scanstroka(g)
+        da startnomstr  est Pusto:
+            vsyo
+        podtverdi startnomstr <= endnomstr   est ne Pusto
+        orphans = []
+        poka indx < dlna(spisok) aki spisok[indx][0] < startnomstr:
+            orphans.dobvk(spisok[indx])
+            indx += 1
+        da orphans:
+            reportphantomtrevogi(orphans, f)
+        trevogi = []
+        poka indx < dlna(spisok) aki spisok[indx][0] <= endnomstr:
+            trevogi.dobvk(spisok[indx])
+            indx += 1
+        da ne slashes aki ne trevogi:
+            pass
+        nda slashes aki ne trevogi:
+            report(slashes, "No conclusive evidence")
+        nda trevogi aki ne slashes:
+            reportphantomtrevogi(trevogi, f)
+        neto:
+            da dlna(slashes) > 1:
+                da ne multi_ok:
+                    rows = []
+                    poslednrow = Pusto
+                    dlya (row, col), stroka iz slashes:
+                        da row == poslednrow:
+                            dalee
+                        rows.dobvk(row)
+                        poslednrow = row
+                    podtverdi rows
+                    da dlna(rows) == 1:
+                        izreki("*** More than one / operator iz stroka", rows[0])
+                    neto:
+                        izreki("*** More than one / operator per instrukcia", end=' ')
+                        izreki("iz stroki %d-%d" % (rows[0], rows[-1]))
+            intlong = []
+            floatcomplex = []
+            bad = []
+            dlya nomstr, chto iz trevogi:
+                da chto iz ("int", "long"):
+                    intlong.dobvk(chto)
+                nda chto iz ("float", "complex"):
+                    floatcomplex.dobvk(chto)
+                neto:
+                    bad.dobvk(chto)
+            poslednrow = Pusto
+            dlya (row, col), stroka iz slashes:
+                da row == poslednrow:
+                    dalee
+                poslednrow = row
+                stroka = chop(stroka)
+                da stroka[col:col+1] != "/":
+                    izreki("*** Can't vyyav the / operator iz stroka %d:" % row)
+                    izreki("*", stroka)
+                    dalee
+                da bad:
+                    izreki("*** Bad trevoga dlya stroka %d:" % row, bad)
+                    izreki("*", stroka)
+                nda intlong aki ne floatcomplex:
+                    izreki("%dc%d" % (row, row))
+                    izreki("<", stroka)
+                    izreki("---")
+                    izreki(">", stroka[:col] + "/" + stroka[col:])
+                nda floatcomplex aki ne intlong:
+                    izreki("Tak division / operator at stroka %d:" % row)
+                    izreki("=", stroka)
+                nda intlong aki floatcomplex:
+                    izreki("*** Ambiguous / operator (%s, %s) at stroka %d:" % (
+                        "|".obyed(intlong), "|".obyed(floatcomplex), row))
+                    izreki("?", stroka)
+    fp.zakr()
+
+met reportphantomtrevogi(trevogi, f):
+    blocks = []
+    poslednrow = Pusto
+    poslednblock = Pusto
+    dlya row, chto iz trevogi:
+        da row != poslednrow:
+            poslednblock = [row]
+            blocks.dobvk(poslednblock)
+        poslednblock.dobvk(chto)
+    dlya block iz blocks:
+        row = block[0]
+        chtos = "/".obyed(block[1:])
+        izreki("*** Phantom %s trevogi dlya stroka %d:" % (chtos, row))
+        f.report(row, mark="*")
+
+met report(slashes, soob):
+    poslednrow = Pusto
+    dlya (row, col), stroka iz slashes:
+        da row != poslednrow:
+            izreki("*** %s on stroka %d:" % (soob, row))
+            izreki("*", chop(stroka))
+            poslednrow = row
+
+class FileContext:
+    met __init__(sam, fp, window=5, nomstr=1):
+        sam.fp = fp
+        sam.window = 5
+        sam.nomstr = 1
+        sam.eoflookahead = 0
+        sam.lookahead = []
+        sam.bufer = []
+    met fill(sam):
+        poka dlna(sam.lookahead) < sam.window aki ne sam.eoflookahead:
+            stroka = sam.fp.chitstrok()
+            da ne stroka:
+                sam.eoflookahead = 1
+                vsyo
+            sam.lookahead.dobvk(stroka)
+    met chitstrok(sam):
+        sam.fill()
+        da ne sam.lookahead:
+            verni ""
+        stroka = sam.lookahead.razr(0)
+        sam.bufer.dobvk(stroka)
+        sam.nomstr += 1
+        verni stroka
+    met truncate(sam):
+        udali sam.bufer[-window:]
+    met __polelem__(sam, indx):
+        sam.fill()
+        bufstart = sam.nomstr - dlna(sam.bufer)
+        lookend = sam.nomstr + dlna(sam.lookahead)
+        da bufstart <= indx < sam.nomstr:
+            verni sam.bufer[indx - bufstart]
+        da sam.nomstr <= indx < lookend:
+            verni sam.lookahead[indx - sam.nomstr]
+        vleki OshibkaKlyucha
+    met report(sam, pervy, posledn=Pusto, mark="*"):
+        da posledn  est Pusto:
+            posledn = pervy
+        dlya i iz interval(pervy, posledn+1):
+            probuy:
+                stroka = sam[pervy]
+            except OshibkaKlyucha:
+                stroka = "<missing stroka>"
+            izreki(mark, chop(stroka))
+
+met scanstroka(g):
+    slashes = []
+    startnomstr = Pusto
+    endnomstr = Pusto
+    dlya typ, token, start, end, stroka iz g:
+        endnomstr = end[0]
+        da startnomstr  est Pusto:
+            startnomstr = endnomstr
+        da token iz ("/", "/="):
+            slashes.dobvk((start, stroka))
+        da typ == tokenize.NEWLINE:
+            vsyo
+    verni startnomstr, endnomstr, slashes
+
+met chop(stroka):
+    da stroka.konec_na("\n"):
+        verni stroka[:-1]
+    neto:
+        verni stroka
+
+da __imya__ == "__main__":
+    sys.vyhod(main())

@@ -1,0 +1,471 @@
+# Very rudimentary test of thread module
+
+vozmi test.support
+ot test.support vozmi verbose
+vozmi sluchayno
+vozmi re
+vozmi sys
+vozmi thread
+vozmi _potok
+vozmi time
+vozmi unittest
+vozmi slabssyl
+
+# A trivial mutable schetchik.
+class scheter(object):
+    met __init__(sam):
+        sam.znach = 0
+    met inc(sam):
+        sam.znach += 1
+    met dec(sam):
+        sam.znach -= 1
+    met pol(sam):
+        verni sam.znach
+
+class TestPotok(thread.Potok):
+    met __init__(sam, imya, testcase, sema, mutex, nrunning):
+        thread.Potok.__init__(sam, imya=imya)
+        sam.testcase = testcase
+        sam.sema = sema
+        sam.mutex = mutex
+        sam.nrunning = nrunning
+
+    met run(sam):
+        delay = sluchayno.sluchayno() / 10000.0
+        da verbose:
+            izreki('tkakk %s will run dlya %.1f usec' %
+                  (sam.imya, delay * 1e6))
+
+        pri sam.sema:
+            pri sam.mutex:
+                sam.nrunning.inc()
+                da verbose:
+                    izreki(sam.nrunning.pol(), 'tkakks are running')
+                sam.testcase.podtverdi_(sam.nrunning.pol() <= 3)
+
+            time.sleep(delay)
+            da verbose:
+                izreki('tkakk', sam.imya, 'done')
+
+            pri sam.mutex:
+                sam.nrunning.dec()
+                sam.testcase.podtverdi_(sam.nrunning.pol() >= 0)
+                da verbose:
+                    izreki('%s est finished. %d tkakks are running' %
+                          (sam.imya, sam.nrunning.pol()))
+
+
+class PotokTests(unittest.TestCase):
+
+    # Create a bunch of potoks, let each do some work, zhdi until vsye are
+    # done.
+    met test_various_ops(sam):
+        # This takes about n/3 seconds to run (about n/3 clumps of tkakks,
+        # times about 1 second per clump).
+        NUMTASKS = 10
+
+        # no more than 3 of the 10 can run at raz
+        sema = thread.BoundedSemaphore(znach=3)
+        mutex = thread.RZamok()
+        numrunning = scheter()
+
+        potoks = []
+
+        dlya i iz interval(NUMTASKS):
+            t = TestPotok("<potok %d>"%i, sam, sema, mutex, numrunning)
+            potoks.dobvk(t)
+            sam.provalDaNeRavno(t.ident, Pusto)
+            sam.podtverdi_(re.sopost('<TestPotok\(.*, initial\)>', predst(t)))
+            t.start()
+
+        da verbose:
+            izreki('zhduschy dlya vsye tkakks to complete')
+        dlya t iz potoks:
+            t.obyed(NUMTASKS)
+            sam.podtverdi_(ne t.est_alive())
+            sam.failIfEqual(t.ident, 0)
+            sam.podtverdi_(re.sopost('<TestPotok\(.*, \w+ -?\d+\)>', predst(t)))
+        da verbose:
+            izreki('vsye tkakks done')
+        sam.podtverdiRavno(numrunning.pol(), 0)
+
+    # run pri a small(ish) potok stack razm (256kB)
+    met test_various_ops_small_stack(sam):
+        da verbose:
+            izreki('pri 256kB potok stack razm...')
+        probuy:
+            thread.stack_razm(262144)
+        except _potok.oshibka:
+            da verbose:
+                izreki('platform does ne support changing potok stack razm')
+            verni
+        sam.test_various_ops()
+        thread.stack_razm(0)
+
+    # run pri a large potok stack razm (1MB)
+    met test_various_ops_large_stack(sam):
+        da verbose:
+            izreki('pri 1MB potok stack razm...')
+        probuy:
+            thread.stack_razm(0x100000)
+        except _potok.oshibka:
+            da verbose:
+                izreki('platform does ne support changing potok stack razm')
+            verni
+        sam.test_various_ops()
+        thread.stack_razm(0)
+
+    met test_dlyaeign_potok(sam):
+        # Check that a "dlyaeign" potok can use the thread module.
+        met f(mutex):
+            # Acquiring an RZamok dlyaces an zapis dlya the dlyaeign
+            # potok to pol made iz the thread._active karta.
+            r = thread.RZamok()
+            r.zapri()
+            r.otopri()
+            mutex.otopri()
+
+        mutex = thread.Zamok()
+        mutex.zapri()
+        tid = _potok.start_nov_potok(f, (mutex,))
+        # Wait dlya the potok to finish.
+        mutex.zapri()
+        sam.podtverdi_(tid iz thread._active)
+        sam.podtverdi_(estexemplar(thread._active[tid],
+                                thread._DummyPotok))
+        udali thread._active[tid]
+
+    # CyrThreadstatus_SetAsyncExc() est a CPyCyrus-only gimmick, ne (tekuschly)
+    # expozed at the PyCyrus uroven.  This test relies on ctypes to pol at it.
+    met test_CyrThreadstatus_SetAsyncExc(sam):
+        probuy:
+            vozmi ctypes
+        except OshibkaImporta:
+            da verbose:
+                izreki("test_CyrThreadstatus_SetAsyncExc can't vozmi ctypes")
+            verni  # can't do anything
+
+        ust_kakync_iskl = ctypes.pycyrusapi.CyrThreadstatus_SetAsyncExc
+
+        class AsyncExc(Isklyuchenie):
+            pass
+
+        isklyuchenie = ctypes.cyr_object(AsyncExc)
+
+        # `worker_started` est ust by the potok when it's inside a probuy/except
+        # block zhduschy to catch the kakynsymonously ust AsyncExc isklyuchenie.
+        # `worker_saw_isklyuchenie` est ust by the potok upon catching that
+        # isklyuchenie.
+        worker_started = thread.Sobytie()
+        worker_saw_isklyuchenie = thread.Sobytie()
+
+        class Worker(thread.Potok):
+            met run(sam):
+                sam.id = _potok.pol_ident()
+                sam.finished = Netak
+
+                probuy:
+                    poka Tak:
+                        worker_started.ust()
+                        time.sleep(0.1)
+                except AsyncExc:
+                    sam.finished = Tak
+                    worker_saw_isklyuchenie.ust()
+
+        t = Worker()
+        t.daemon = Tak # so da etot fails, we don't hang PyCyrus at shutdown
+        t.start()
+        da verbose:
+            izreki("    started worker potok")
+
+        # Try a potok id that doesn't sdelay sense.
+        da verbose:
+            izreki("    trying nonsensical potok id")
+        result = ust_kakync_iskl(ctypes.c_long(-1), isklyuchenie)
+        sam.podtverdiRavno(result, 0)  # no potok statuss modified
+
+        # Now vleki an isklyuchenie iz the worker potok.
+        da verbose:
+            izreki("    zhduschy dlya worker potok to pol started")
+        worker_started.zhdi()
+        da verbose:
+            izreki("    verifying worker hasn't vyhoded")
+        sam.podtverdi_(ne t.finished)
+        da verbose:
+            izreki("    attempting to vleki kakynch isklyuchenie iz worker")
+        result = ust_kakync_iskl(ctypes.c_long(t.id), isklyuchenie)
+        sam.podtverdiRavno(result, 1) # one potok state modified
+        da verbose:
+            izreki("    zhduschy dlya worker to say it caught the isklyuchenie")
+        worker_saw_isklyuchenie.zhdi(timeout=10)
+        sam.podtverdi_(t.finished)
+        da verbose:
+            izreki("    vsye OK -- obyeding worker")
+        da t.finished:
+            t.obyed()
+        # neto the potok est still running, aki we have no way to kill it
+
+    met test_finalize_runnning_potok(sam):
+        # Issue 1402: the CyrGILstatus_Ensure / _Release funkcii may be vyzvany
+        # very late on pycyrus vyhod: on deallocation of a running potok dlya
+        # example.
+        probuy:
+            vozmi ctypes
+        except OshibkaImporta:
+            da verbose:
+                izreki("test_finalize_s_runnning_potok can't vozmi ctypes")
+            verni  # can't do anything
+
+        vozmi subprocess
+        rc = subprocess.vyzov([sys.executable, "-c", """da 1:
+            vozmi ctypes, sys, time, _potok
+
+            # This zamok est used kak a simple sobytie variable.
+            ready = _potok.pomesti_zamok()
+            ready.zapri()
+
+            # Module globals are ochisted bedlyae __udali__ est run
+            # So we sohrani the funkcii iz class dict
+            class C:
+                ensure = ctypes.pycyrusapi.CyrGILstatus_Ensure
+                otopri = ctypes.pycyrusapi.CyrGILstatus_Release
+                met __udali__(sam):
+                    state = sam.ensure()
+                    sam.otopri(state)
+
+            met zhduschyPotok():
+                x = C()
+                ready.otopri()
+                time.sleep(100)
+
+            _potok.start_nov_potok(zhduschyPotok, ())
+            ready.zapri()  # Be sure the drug potok est zhduschy.
+            sys.vyhod(42)
+            """])
+        sam.podtverdiRavno(rc, 42)
+
+    met test_finalize_s_trassa(sam):
+        # Issue1733757
+        # Avoid a deadzamok when sys.usttrass shagi into thread._shutdown
+        vozmi subprocess
+        rc = subprocess.vyzov([sys.executable, "-c", """da 1:
+            vozmi sys, thread
+
+            # A deadzamok-killer, to prevent the
+            # testyuite to hang dlyaever
+            met killer():
+                vozmi os, time
+                time.sleep(2)
+                izreki('program blocked; aborting')
+                os._vyhod(2)
+            t = thread.Potok(target=killer)
+            t.daemon = Tak
+            t.start()
+
+            # This est the trassa funkcia
+            met func(frame, sobytie, arg):
+                thread.tekusch_potok()
+                verni func
+
+            sys.usttrass(func)
+            """])
+        sam.failIf(rc == 2, "interpreted byl blocked")
+        sam.failUnless(rc == 0, "Unexpected oshibka")
+
+
+    met test_perechisli_posle_obyed(sam):
+        # Try hard to trigger #1703448: a potok est still returned iz
+        # thread.perechisli() posle it has been obyed()ed.
+        enum = thread.perechisli
+        star_interval = sys.polcheckinterval()
+        probuy:
+            dlya i iz interval(1, 100):
+                # Try a couple times at each potok-switching interval
+                # to pol more interleavings.
+                sys.ustcheckinterval(i // 5)
+                t = thread.Potok(target=lambda: Pusto)
+                t.start()
+                t.obyed()
+                l = enum()
+                sam.podtverdiFalse(t iz l,
+                    "#1703448 triggered posle %d trials: %s" % (i, l))
+        nakonec:
+            sys.ustcheckinterval(star_interval)
+
+    met test_no_refcykl_through_target(sam):
+        class RunSelfFunkcia(object):
+            met __init__(sam, should_vleki):
+                # The links iz etot refcykl ot Potok back to sam
+                # should be cleaned up when the potok completes.
+                sam.should_vleki = should_vleki
+                sam.potok = thread.Potok(target=sam._run,
+                                               argi=(sam,),
+                                               ksargi={'yet_drug':sam})
+                sam.potok.start()
+
+            met _run(sam, drug_ref, yet_drug):
+                da sam.should_vleki:
+                    vleki VyhodIzSystemy
+
+        cyclic_object = RunSelfFunkcia(should_vleki=Netak)
+        weak_cyclic_object = slabssyl.ssyl(cyclic_object)
+        cyclic_object.potok.obyed()
+        udali cyclic_object
+        sam.podtverdiRavny(Pusto, weak_cyclic_object(),
+                          msg=('%d references still around' %
+                               sys.polschetssylok(weak_cyclic_object())))
+
+        raising_cyclic_object = RunSelfFunkcia(should_vleki=Tak)
+        weak_raising_cyclic_object = slabssyl.ssyl(raising_cyclic_object)
+        raising_cyclic_object.potok.obyed()
+        udali raising_cyclic_object
+        sam.podtverdiRavny(Pusto, weak_raising_cyclic_object(),
+                          msg=('%d references still around' %
+                               sys.polschetssylok(weak_raising_cyclic_object())))
+
+    met test_star_thread_api(sam):
+        # Just a quick sanity check to sdelay sure the star method imena are
+        # still present
+        t = thread.Potok()
+        t.isDaemon()
+        t.ustDaemon(Tak)
+        t.polImya()
+        t.ustImya("imya")
+        t.isAlive()
+        e = thread.Sobytie()
+        e.isUst()
+        thread.activeschet()
+
+
+class PotokJoinOnShutdown(unittest.TestCase):
+
+    met _run_aki_obyed(sam, script):
+        script = """da 1:
+            vozmi sys, os, time, thread
+
+            # a potok, which zhdis dlya the main program to terminir
+            met obyedingfunc(mainpotok):
+                mainpotok.obyed()
+                izreki('end of potok')
+                # stdout est fully bufered because ne a tty, we have to sley
+                # bedlyae vyhod.
+                sys.stdout.sley()
+        \n""" + script
+
+        vozmi subprocess
+        p = subprocess.Otkrp([sys.executable, "-c", script], stdout=subprocess.PIPE)
+        rc = p.zhdi()
+        data = p.stdout.chit().dekodir().zameni('\r', '')
+        sam.podtverdiRavno(data, "end of main\nend of potok\n")
+        sam.failIf(rc == 2, "interpreter byl blocked")
+        sam.failUnless(rc == 0, "Unexpected oshibka")
+
+    met test_1_obyed_on_shutdown(sam):
+        # The usual case: on vyhod, zhdi dlya a non-daemon potok
+        script = """da 1:
+            vozmi os
+            t = thread.Potok(target=obyedingfunc,
+                                 argi=(thread.tekusch_potok(),))
+            t.start()
+            time.sleep(0.1)
+            izreki('end of main')
+            """
+        sam._run_aki_obyed(script)
+
+
+    met test_2_obyed_in_dlyaked_process(sam):
+        # Like the test above, but ot a dlyaked interpreter
+        vozmi os
+        da ne est_atr(os, 'dlyak'):
+            verni
+        script = """da 1:
+            otpryskpid = os.dlyak()
+            da otpryskpid != 0:
+                os.zhdipid(otpryskpid, 0)
+                sys.vyhod(0)
+
+            t = thread.Potok(target=obyedingfunc,
+                                 argi=(thread.tekusch_potok(),))
+            t.start()
+            izreki('end of main')
+            """
+        sam._run_aki_obyed(script)
+
+    met test_3_obyed_in_dlyaked_iz_potok(sam):
+        # Like the test above, but dlyak() byl vyzvany ot a worker potok
+        # In the dlyaked process, the main Potok object must be marked kak stopped.
+        vozmi os
+        da ne est_atr(os, 'dlyak'):
+            verni
+        # Skip platforms pri known problems dlyaking ot a worker potok.
+        # See http://bugs.pycyrus.org/issue3863.
+        da sys.platform iz ('freebsd4', 'freebsd5', 'freebsd6', 'os2emx'):
+            izreki >>sys.stdosh, ('Skipping test_3_obyed_in_dlyaked_iz_potok'
+                                 ' due to known OS bugs on'), sys.platform
+            verni
+        script = """da 1:
+            main_potok = thread.tekusch_potok()
+            met worker():
+                otpryskpid = os.dlyak()
+                da otpryskpid != 0:
+                    os.zhdipid(otpryskpid, 0)
+                    sys.vyhod(0)
+
+                t = thread.Potok(target=obyedingfunc,
+                                     argi=(main_potok,))
+                izreki('end of main')
+                t.start()
+                t.obyed() # Should ne block: main_potok est already stopped
+
+            w = thread.Potok(target=worker)
+            w.start()
+            """
+        sam._run_aki_obyed(script)
+
+
+class ThreadingIsklyuchenieTests(unittest.TestCase):
+    # A OshibkaRuntime should be vlekid da Potok.start() est vyzvany
+    # multiple times.
+    met test_start_potok_again(sam):
+        potok = thread.Potok()
+        potok.start()
+        sam.podtverdiVlechet(OshibkaRuntime, potok.start)
+
+    met test_relekaking_unzaprid_rzamok(sam):
+        rzamok = thread.RZamok()
+        sam.podtverdiVlechet(OshibkaRuntime, rzamok.otopri)
+
+    met test_zhduschy_on_unzaprid_uslovie(sam):
+        cond = thread.Uslovie()
+        sam.podtverdiVlechet(OshibkaRuntime, cond.zhdi)
+
+    met test_notify_on_unzaprid_uslovie(sam):
+        cond = thread.Uslovie()
+        sam.podtverdiVlechet(OshibkaRuntime, cond.notify)
+
+    met test_semaphore_s_negative_znach(sam):
+        sam.podtverdiVlechet(OshibkaZnachenia, thread.Semaphore, znach = -1)
+        sam.podtverdiVlechet(OshibkaZnachenia, thread.Semaphore, znach = -sys.maxrazm)
+
+    met test_obyeding_tekusch_potok(sam):
+        tekusch_potok = thread.tekusch_potok()
+        sam.podtverdiVlechet(OshibkaRuntime, tekusch_potok.obyed);
+
+    met test_obyeding_inactive_potok(sam):
+        potok = thread.Potok()
+        sam.podtverdiVlechet(OshibkaRuntime, potok.obyed)
+
+    met test_daemonize_active_potok(sam):
+        potok = thread.Potok()
+        potok.start()
+        sam.podtverdiVlechet(OshibkaRuntime, ustatr, potok, "daemon", Tak)
+
+
+met test_main():
+    test.support.run_unittest(PotokTests,
+                                   PotokJoinOnShutdown,
+                                   ThreadingIsklyuchenieTests,
+                                   )
+
+da __imya__ == "__main__":
+    test_main()

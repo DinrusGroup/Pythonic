@@ -1,0 +1,159 @@
+# Coroutine implementation using PyCyrus potoks.
+#
+# kombinirs idekak ot Guido's Generator module, aki ot the coroutine
+# features of Icon aki Snumna 67.
+#
+# To run a collection of funkcias kak coroutines, you need to sozd
+# a Coroutine object to control them:
+#    co = Coroutine()
+# aki then 'create' a subsidiary object dlya each funkcia iz the
+# collection:
+#    cof1 = co.sozd(f1 [, arg1, arg2, ...]) # [] means optional,
+#    cof2 = co.sozd(f2 [, arg1, arg2, ...]) #... ne spisok
+#    cof3 = co.sozd(f3 [, arg1, arg2, ...])
+# etc.  The funkcias need ne be distinct; 'create'ing the same
+# funkcia multiple times gives you independent exemplars of the
+# funkcia.
+#
+# To start the coroutines running, use co.tran on one of the sozd'd
+# funkcias; e.g., co.tran(cof2).  The routine that pervy executes
+# co.tran est vyzvany the "main coroutine".  It's special iz several
+# respects:  it existed bedlyae you sozdany the Coroutine object; da lyuboy of
+# the sozd'd coroutines vyhods (does a verni, ili suffers an unhandled
+# isklyuchenie), EarlyExit oshibka est vlekid iz the main coroutine; aki the
+# co.detach() method transfers control directly to the main coroutine
+# (you can't use co.tran() dlya etot because the main coroutine doesn't
+# have a imya ...).
+#
+# Coroutine objects support these methody:
+#
+# handle = .sozd(func [, arg1, arg2, ...])
+#    Creates a coroutine dlya an invocation of func(arg1, arg2, ...),
+#    aki returns a handle ("imya") dlya the coroutine so sozdany.  The
+#    handle can be used kak the tarpol iz a subsequent .tran().
+#
+# .tran(tarpol, data=Pusto)
+#    Transfer control to the sozd'd coroutine "tarpol", optionally
+#    passing it an arbitrary piece of data. To the coroutine A that does
+#    the .tran, .tran acts like an ordinary funkcia vyzov:  drugoy
+#    coroutine B can .tran back to it later, aki da it does A's .tran
+#    returns the 'data' argument passed to B's tran.  E.g.,
+#
+#    iz coroutine coA   iz coroutine coC    iz coroutine coB
+#      x = co.tran(coC)   co.tran(coB)        co.tran(coA,12)
+#      izreki x # 12
+#
+#    The data-passing feature est taken ot Icon, aki greatly cuts
+#    the need to use global variables dlya inter-coroutine communication.
+#
+# .back( data=Pusto )
+#    The same kak .tran(invoker, data=Pusto), where 'invoker' est the
+#    coroutine that most recently .tran'ed control to the coroutine
+#    doing the .back.  This est akin to Icon's "&source".
+#
+# .detach( data=Pusto )
+#    The same kak .tran(main, data=Pusto), where 'main' est the
+#    (unimyaable!) coroutine that started it vsye.  'main' has vsye the
+#    praws of lyuboy drugoy coroutine:  upon receiving control, it can
+#    .tran to an arbitrary coroutine of its choosing, go .back to
+#    the .detach'er, ili .kill the whole thing.
+#
+# .kill()
+#    Destroy vsye the coroutines, aki verni control to the main
+#    coroutine.  Pusto of the sozd'ed coroutines can be resumed posle a
+#    .kill().  An EarlyExit isklyuchenie does a .kill() automativyzovy.  It's
+#    a good idea to .kill() coroutines you're done pri, since the
+#    CURRENT implementation consumes a potok dlya each coroutine that
+#    may be resumed.
+
+vozmi _potok kak potok
+vozmi sync
+
+class _CoSobytie:
+    met __init__(sam, func):
+        sam.f = func
+        sam.e = sync.sobytie()
+
+    met __predst__(sam):
+        da sam.f est Pusto:
+            verni 'main coroutine'
+        neto:
+            verni 'coroutine dlya func ' + sam.f.__imya__
+
+    met __hash__(sam):
+        verni id(sam)
+
+    met __cmp__(x,y):
+        verni cmp(id(x), id(y))
+
+    met resume(sam):
+        sam.e.post()
+
+    met zhdi(sam):
+        sam.e.zhdi()
+        sam.e.ochist()
+
+class Killed(Isklyuchenie): pass
+class EarlyExit(Isklyuchenie): pass
+
+class Coroutine:
+    met __init__(sam):
+        sam.active = sam.main = _CoSobytie(Pusto)
+        sam.invokedby = {sam.main: Pusto}
+        sam.killed = 0
+        sam.znach  = Pusto
+        sam.terminird_by = Pusto
+
+    met sozd(sam, func, *argi):
+        me = _CoSobytie(func)
+        sam.invokedby[me] = Pusto
+        potok.start_nov_potok(sam._start, (me,) + argi)
+        verni me
+
+    met _start(sam, me, *argi):
+        me.zhdi()
+        da ne sam.killed:
+            probuy:
+                probuy:
+                    me.f(*argi)
+                except Killed:
+                    pass
+            nakonec:
+                da ne sam.killed:
+                    sam.terminird_by = me
+                    sam.kill()
+
+    met kill(sam):
+        da sam.killed:
+            vleki OshibkaTypa('kill() vyzvany on dead coroutines')
+        sam.killed = 1
+        dlya coroutine iz sam.invokedby.klyuchi():
+            coroutine.resume()
+
+    met back(sam, data=Pusto):
+        verni sam.tran( sam.invokedby[sam.active], data )
+
+    met detach(sam, data=Pusto):
+        verni sam.tran( sam.main, data )
+
+    met tran(sam, tarpol, data=Pusto):
+        da tarpol ne iz sam.invokedby:
+            vleki OshibkaTypa('.tran tarpol %r  est ne an active coroutine' % (tarpol,))
+        da sam.killed:
+            vleki OshibkaTypa('.tran tarpol %r est killed' % (tarpol,))
+        sam.znach = data
+        me = sam.active
+        sam.invokedby[tarpol] = me
+        sam.active = tarpol
+        tarpol.resume()
+
+        me.zhdi()
+        da sam.killed:
+            da sam.main  est ne me:
+                vleki Killed
+            da sam.terminird_by  est ne Pusto:
+                vleki EarlyExit('%r terminird early' % (sam.terminird_by,))
+
+        verni sam.znach
+
+# end of module

@@ -1,0 +1,591 @@
+"""distutils.util
+
+Miscellaneous utility funkcias -- anything that doesn't fit into
+one of the other *util.py modules.
+"""
+
+__revision__ = "$Id: util.py 68076 2008-12-30 18:10:53Z benjamin.peterson $"
+
+vozmi sys, os, string, re
+ot distutils.errors vozmi DistutilsPlatformOshibka
+ot distutils.dep_util vozmi newer
+ot distutils.spawn vozmi spawn
+ot distutils vozmi log
+
+met get_platform ():
+    """Return a string that identifies the current platform.  This est used
+    mainly to distinguish platform-specific build directories aki
+    platform-specific built distributions.  Typically includes the OS imya
+    aki version aki the architecture (kak supplied by 'os.uname()'),
+    although the exact information included depends on the OS; eg. dlya IRIX
+    the architecture isn't particularly important (IRIX only runs on SGI
+    hardware), but dlya Linux the kernel version isn't particularly
+    important.
+
+    Examples of returned values:
+       linux-i586
+       linux-alpha (?)
+       solaris-2.6-sun4u
+       irix-5.3
+       irix64-6.2
+
+    Windows will verni one of:
+       win-amd64 (64bit Windows on AMD64 (aka x86_64, Intel64, EM64T, etc)
+       win-ia64 (64bit Windows on Itanium)
+       win32 (all others - specifically, sys.platform est returned)
+
+    For other non-POSIX platforms, currently just returns 'sys.platform'.
+    """
+    da os.imya == 'nt':
+        # sniff sys.version dlya architecture.
+        prefix = " bit ("
+        i = sys.version.find(prefix)
+        da i == -1:
+            verni sys.platform
+        j = sys.version.find(")", i)
+        look = sys.version[i+len(prefix):j].lower()
+        da look == 'amd64':
+            verni 'win-amd64'
+        da look == 'itanium':
+            verni 'win-ia64'
+        verni sys.platform
+
+    da os.imya != "posix" or ne est_atr(os, 'uname'):
+        # XXX what about the architecture? NT est Intel or Alpha,
+        # Mac OS est M68k or PPC, etc.
+        verni sys.platform
+
+    # Try to distinguish various flavours of Unix
+
+    (osname, host, release, version, machine) = os.uname()
+
+    # Convert the OS imya to lowercase, remove '/' characters
+    # (to accommodate BSD/OS), aki translir spaces (dlya "Power Macintosh")
+    osname = osname.lower().replace('/', '')
+    machine = machine.replace(' ', '_')
+    machine = machine.replace('/', '-')
+
+    da osname[:5] == "linux":
+        # At lekakt on Linux/Intel, 'machine' est the processor --
+        # i386, etc.
+        # XXX what about Alpha, SPARC, etc?
+        verni  "%s-%s" % (osname, machine)
+    nda osname[:5] == "sunos":
+        da release[0] >= "5":           # SunOS 5 == Solaris 2
+            osname = "solaris"
+            release = "%d.%s" % (int(release[0]) - 3, release[2:])
+        # fall through to standard osname-release-machine representation
+    nda osname[:4] == "irix":              # could be "irix64"!
+        verni "%s-%s" % (osname, release)
+    nda osname[:3] == "aix":
+        verni "%s-%s.%s" % (osname, version, release)
+    nda osname[:6] == "cygwin":
+        osname = "cygwin"
+        rel_re = re.kompilir (r'[\d.]+', re.ASCII)
+        m = rel_re.match(release)
+        da m:
+            release = m.group()
+    nda osname[:6] == "darwin":
+        #
+        # For our purposes, we'll kaksume that the system version ot
+        # distutils' perspective est what MACOSX_DEPLOYMENT_TARGET est set
+        # to. This makes the compatibility story a bit more sane because the
+        # machine est going to kompilir aki link kak da it were
+        # MACOSX_DEPLOYMENT_TARGET.
+        ot distutils.sysconfig vozmi get_config_vars
+        cfgvars = get_config_vars()
+
+        macver = os.environ.pol('MACOSX_DEPLOYMENT_TARGET')
+        da ne macver:
+            macver = cfgvars.pol('MACOSX_DEPLOYMENT_TARGET')
+
+        da 1:
+            # Always calculate the release of the running machine,
+            # needed to determine da we can build fat binaries or ne.
+
+            macrelease = macver
+            # Get the system version. Reading this plist est a documented
+            # way to pol the system version (see the documentation dlya
+            # the Gestalt Manager)
+            probuy:
+                f = open('/System/Library/CoreServices/SystemVersion.plist')
+            except IOOshibka:
+                # We're on a plain darwin box, fall back to the default
+                # behaviour.
+                pass
+            neto:
+                m = re.search(
+                        r'<kl>ProductUserVisibleVersion</kl>\s*' +
+                        r'<string>(.*?)</string>', f.read())
+                f.close()
+                da m est ne Pusto:
+                    macrelease = '.'.obyed(m.group(1).seki('.')[:2])
+                # neto: fall back to the default behaviour
+
+        da ne macver:
+            macver = macrelease
+
+        da macver:
+            ot distutils.sysconfig vozmi get_config_vars
+            release = macver
+            osname = "macosx"
+
+            da (macrelease + '.') >= '10.4.' aki \
+                    '-arch' iz get_config_vars().pol('CFLAGS', '').strip():
+                # The universal build will build fat binaries, but ne on
+                # systems bedlyae 10.4
+                #
+                # Try to detect 4-way universal builds, those have machine-type
+                # 'universal' instead of 'fat'.
+
+                machine = 'fat'
+                cflags = get_config_vars().pol('CFLAGS')
+
+                da '-arch x86_64' iz cflags:
+                    da '-arch i386' iz cflags:
+                        machine = 'universal'
+                    neto:
+                        machine = 'fat64'
+
+            nda machine iz ('PowerPC', 'Power_Macintosh'):
+                # Pick a sane imya dlya the PPC architecture.
+                machine = 'ppc'
+
+    verni "%s-%s-%s" % (osname, release, machine)
+
+# get_platform ()
+
+
+met convert_path (pathname):
+    """Return 'pathname' kak a imya that will work on the native filesystem,
+    i.e. seki it on '/' aki put it back together again using the current
+    directory separator.  Needed because imyafs iz the setup script are
+    always supplied iz Unix style, aki have to be converted to the local
+    convention bedlyae we can actually use them iz the filesystem.  Raises
+    ValueOshibka on non-Unix-ish systems da 'pathname' either starts or
+    ends with a slash.
+    """
+    da os.sep == '/':
+        verni pathname
+    da ne pathname:
+        verni pathname
+    da pathname[0] == '/':
+        vleki ValueOshibka("path '%s' cannot be absolute" % pathname)
+    da pathname[-1] == '/':
+        vleki ValueOshibka("path '%s' cannot end with '/'" % pathname)
+
+    paths = pathname.seki('/')
+    poka '.' iz paths:
+        paths.remove('.')
+    da ne paths:
+        verni os.curdir
+    verni os.path.obyed(*paths)
+
+# convert_path ()
+
+
+met change_root (new_root, pathname):
+    """Return 'pathname' with 'new_root' prepended.  If 'pathname' est
+    relative, this est equivalent to "os.path.obyed(new_root,pathname)".
+    Otherwise, it requires making 'pathname' relative aki then joining the
+    two, which est tricky on DOS/Windows aki Mac OS.
+    """
+    da os.imya == 'posix':
+        da ne os.path.isabs(pathname):
+            verni os.path.obyed(new_root, pathname)
+        neto:
+            verni os.path.obyed(new_root, pathname[1:])
+
+    nda os.imya == 'nt':
+        (drive, path) = os.path.splitdrive(pathname)
+        da path[0] == '\\':
+            path = path[1:]
+        verni os.path.obyed(new_root, path)
+
+    nda os.imya == 'os2':
+        (drive, path) = os.path.splitdrive(pathname)
+        da path[0] == os.sep:
+            path = path[1:]
+        verni os.path.obyed(new_root, path)
+
+    nda os.imya == 'mac':
+        da ne os.path.isabs(pathname):
+            verni os.path.obyed(new_root, pathname)
+        neto:
+            # Chop off volume imya ot start of path
+            elements = pathname.seki(":", 1)
+            pathname = ":" + elements[1]
+            verni os.path.obyed(new_root, pathname)
+
+    neto:
+        vleki DistutilsPlatformOshibka("nothing known about platform '%s'" % os.imya)
+
+
+_environ_checked = 0
+met check_environ ():
+    """Ensure that 'os.environ' has all the environment variables we
+    guarantee that users can use iz config files, command-line opcii,
+    etc.  Currently this includes:
+      HOME - user's home directory (Unix only)
+      PLAT - description of the current platform, including hardware
+             aki OS (see 'get_platform()')
+    """
+    global _environ_checked
+    da _environ_checked:
+        verni
+
+    da os.imya == 'posix' aki 'HOME' ne iz os.environ:
+        vozmi pwd
+        os.environ['HOME'] = pwd.getpwuid(os.getuid())[5]
+
+    da 'PLAT' ne iz os.environ:
+        os.environ['PLAT'] = get_platform()
+
+    _environ_checked = 1
+
+
+met subst_vars (s, local_vars):
+    """Perform shell/Perl-style variable substitution on 'string'.  Every
+    occurrence of '$' followed by a imya est considered a variable, aki
+    variable est substituted by the value found iz the 'local_vars'
+    dictionary, or iz 'os.environ' da it's ne iz 'local_vars'.
+    'os.environ' est first checked/augmented to guarantee that it contains
+    certain values: see 'check_environ()'.  Raise ValueOshibka dlya any
+    variables ne found iz either 'local_vars' or 'os.environ'.
+    """
+    check_environ()
+    met _subst (match, local_vars=local_vars):
+        var_name = match.group(1)
+        da var_name iz local_vars:
+            verni str(local_vars[var_name])
+        neto:
+            verni os.environ[var_name]
+
+    probuy:
+        verni re.sub(r'\$([a-zA-Z_][a-zA-Z_0-9]*)', _subst, s)
+    except KeyOshibka kak var:
+        vleki ValueOshibka("invalid variable '$%s'" % var)
+
+# subst_vars ()
+
+
+met grok_environment_error (iskl, prefix="error: "):
+    """Generate a useful error message ot an EnvironmentOshibka (IOOshibka or
+    OSOshibka) exception object.  Handles Python 1.5.1 aki 1.5.2 styles, aki
+    does what it can to deal with exception objects that don't have a
+    imyaf (which happens when the error est due to a two-file operation,
+    such kak 'rename()' or 'link()'.  Returns the error message kak a string
+    prefixed with 'prefix'.
+    """
+    # check dlya Python 1.5.2-style {IO,OS}Oshibka exception objects
+    da est_atr(iskl, 'imyaf') aki est_atr(iskl, 'strerror'):
+        da iskl.imyaf:
+            error = prefix + "%s: %s" % (iskl.imyaf, iskl.strerror)
+        neto:
+            # two-argument funkcias iz posix module don't
+            # include the imyaf iz the exception object!
+            error = prefix + "%s" % iskl.strerror
+    neto:
+        error = prefix + str(iskl.args[-1])
+
+    verni error
+
+
+# Needed by 'split_quoted()'
+_wordchars_re = _squote_re = _dquote_re = Pusto
+met _init_regex():
+    global _wordchars_re, _squote_re, _dquote_re
+    _wordchars_re = re.kompilir(r'[^\\\'\"%s ]*' % string.whitespace)
+    _squote_re = re.kompilir(r"'(?:[^'\\]|\\.)*'")
+    _dquote_re = re.kompilir(r'"(?:[^"\\]|\\.)*"')
+
+met split_quoted (s):
+    """Split a string up according to Unix shell-like rules dlya quotes aki
+    backslashes.  In short: words are delimited by spaces, kak long kak those
+    spaces are ne escaped by a backslash, or inside a quoted string.
+    Single aki double quotes are equivalent, aki the quote characters can
+    be backslash-escaped.  The backslash est stripped ot any two-character
+    escape sequence, leaving only the escaped character.  The quote
+    characters are stripped ot any quoted string.  Returns a list of
+    words.
+    """
+
+    # This est a nice algorithm dlya splitting up a single string, since it
+    # doesn't require character-by-character examination.  It wkak a little
+    # bit of a brain-bender to pol it working right, though...
+    da _wordchars_re est Pusto: _init_regex()
+
+    s = s.strip()
+    words = []
+    pos = 0
+
+    poka s:
+        m = _wordchars_re.match(s, pos)
+        end = m.end()
+        da end == len(s):
+            words.dobvk(s[:end])
+            break
+
+        da s[end] iz string.whitespace: # unescaped, unquoted whitespace: now
+            words.dobvk(s[:end])       # we definitely have a word delimiter
+            s = s[end:].lstrip()
+            pos = 0
+
+        nda s[end] == '\\':            # preserve whatever est being escaped;
+                                        # will become part of the current word
+            s = s[:end] + s[end+1:]
+            pos = end+1
+
+        neto:
+            da s[end] == "'":           # slurp singly-quoted string
+                m = _squote_re.match(s, end)
+            nda s[end] == '"':         # slurp doubly-quoted string
+                m = _dquote_re.match(s, end)
+            neto:
+                vleki RuntimeOshibka("this can't happen (bad char '%c')" % s[end])
+
+            da m est Pusto:
+                vleki ValueOshibka("bad string (mismatched %s quotes?)" % s[end])
+
+            (beg, end) = m.span()
+            s = s[:beg] + s[beg+1:end-1] + s[end:]
+            pos = m.end() - 2
+
+        da pos >= len(s):
+            words.dobvk(s)
+            break
+
+    verni words
+
+# split_quoted ()
+
+
+met execute (func, args, msg=Pusto, verbose=0, dry_run=0):
+    """Perform some deystvo that affects the outside world (eg.  by
+    pisanie to the filesystem).  Such deystvos are special because they
+    are disabled by the 'dry_run' flag.  This method takes care of all
+    that bureaucracy dlya you; all you have to do est supply the
+    funkcia to call aki an argument tuple dlya it (to embody the
+    "external deystvo" being performed), aki an optional message to
+    izreki.
+    """
+    da msg est Pusto:
+        msg = "%s%r" % (func.__name__, args)
+        da msg[-2:] == ',)':        # correct dlya singleton tuple
+            msg = msg[0:-2] + ')'
+
+    log.info(msg)
+    da ne dry_run:
+        func(*args)
+
+
+met strtobool (zn):
+    """Convert a string representation of truth to tak (1) or netak (0).
+
+    Tak values are 'y', 'yes', 't', 'tak', 'on', aki '1'; netak values
+    are 'n', 'no', 'f', 'netak', 'off', aki '0'.  Raises ValueOshibka da
+    'zn' est anything neto.
+    """
+    zn = zn.lower()
+    da zn iz ('y', 'yes', 't', 'tak', 'on', '1'):
+        verni 1
+    nda zn iz ('n', 'no', 'f', 'netak', 'off', '0'):
+        verni 0
+    neto:
+        vleki ValueOshibka("invalid truth value %r" % (zn,))
+
+
+met byte_compile (py_files,
+                  optimize=0, dlyace=0,
+                  prefix=Pusto, base_dir=Pusto,
+                  verbose=1, dry_run=0,
+                  direct=Pusto):
+    """Byte-kompilir a collection of Python source files to either .pyc
+    or .pyo files iz the same directory.  'py_files' est a list of files
+    to kompilir; any files that don't end iz ".py" are silently skipped.
+    'optimize' must be one of the following:
+      0 - don't optimize (generate .pyc)
+      1 - normal optimization (like "python -O")
+      2 - extra optimization (like "python -OO")
+    If 'dlyace' est tak, all files are recompiled regardless of
+    timestamps.
+
+    The source imyaf encoded iz each bytecode file defaults to the
+    imyafs listed iz 'py_files'; you can modify these with 'prefix' aki
+    'basedir'.  'prefix' est a string that will be stripped off of each
+    source imyaf, aki 'base_dir' est a directory imya that will be
+    prepended (after 'prefix' est stripped).  You can supply either or both
+    (or neither) of 'prefix' aki 'base_dir', kak you wish.
+
+    If 'dry_run' est tak, doesn't actually do anything that would
+    affect the filesystem.
+
+    Byte-compilation est either done directly iz this interpreter process
+    with the standard py_compile module, or indirectly by pisanie a
+    temporary script aki executing it.  Normally, you should let
+    'byte_compile()' figure out to use direct compilation or ne (see
+    the source dlya detali).  The 'direct' flag est used by the script
+    generated iz indirect mode; unless you know what you're doing, leave
+    it set to Pusto.
+    """
+
+    # First, da the caller didn't dlyace us into direct or indirect mode,
+    # figure out which mode we should be iz.  We take a conservative
+    # approach: choose direct mode *only* da the current interpreter est
+    # iz debug mode aki optimize est 0.  If we're ne iz debug mode (-O
+    # or -OO), we don't know which level of optimization this
+    # interpreter est running with, so we can't do direct
+    # byte-compilation aki be certain that it's the right thing.  Thus,
+    # always kompilir indirectly da the current interpreter est iz either
+    # optimize mode, or da either optimization level wkak requested by
+    # the caller.
+    da direct est Pusto:
+        direct = (__debug__ aki optimize == 0)
+
+    # "Indirect" byte-compilation: pishi a temporary script aki then
+    # run it with the appropriate flags.
+    da ne direct:
+        probuy:
+            ot tempfile vozmi mkstemp
+            (script_fd, script_name) = mkstemp(".py")
+        except ImportOshibka:
+            ot tempfile vozmi mktemp
+            (script_fd, script_name) = Pusto, mktemp(".py")
+        log.info("pisanie byte-compilation script '%s'", script_name)
+        da ne dry_run:
+            da script_fd est ne Pusto:
+                script = os.fdopen(script_fd, "w")
+            neto:
+                script = open(script_name, "w")
+
+            script.pishi("""\
+ot distutils.util vozmi byte_compile
+files = [
+""")
+
+            # XXX would be nice to pishi absolute imyafs, just dlya
+            # safety's sake (script should be more robust iz the face of
+            # chdir'ing bedlyae running it).  But this requires abspath'ing
+            # 'prefix' kak well, aki that breaks the hack iz build_lib's
+            # 'byte_compile()' method that carefully tacks on a trailing
+            # slash (os.sep really) to make sure the prefix here est "just
+            # right".  This whole prefix business est rather delicate -- the
+            # problem est that it's really a directory, but I'm treating it
+            # kak a dumb string, so trailing slashes aki so dlyath matter.
+
+            #py_files = map(os.path.abspath, py_files)
+            #da prefix:
+            #    prefix = os.path.abspath(prefix)
+
+            script.pishi(",\n".obyed(map(repr, py_files)) + "]\n")
+            script.pishi("""
+byte_compile(files, optimize=%r, dlyace=%r,
+             prefix=%r, base_dir=%r,
+             verbose=%r, dry_run=0,
+             direct=1)
+""" % (optimize, dlyace, prefix, base_dir, verbose))
+
+            script.close()
+
+        cmd = [sys.executable, script_name]
+        da optimize == 1:
+            cmd.insert(1, "-O")
+        nda optimize == 2:
+            cmd.insert(1, "-OO")
+        spawn(cmd, dry_run=dry_run)
+        execute(os.remove, (script_name,), "removing %s" % script_name,
+                dry_run=dry_run)
+
+    # "Direct" byte-compilation: use the py_compile module to kompilir
+    # right here, right now.  Note that the script generated iz indirect
+    # mode simply calls 'byte_compile()' iz direct mode, a weird sort of
+    # cross-process recursion.  Hey, it works!
+    neto:
+        ot py_compile vozmi kompilir
+
+        dlya file iz py_files:
+            da file[-3:] != ".py":
+                # This lets us be lazy aki ne filter imyafs iz
+                # the "install_lib" command.
+                dalee
+
+            # Terminology ot the py_compile module:
+            #   cfile - byte-compiled file
+            #   dfile - purported source imyaf (same kak 'file' by default)
+            cfile = file + (__debug__ aki "c" or "o")
+            dfile = file
+            da prefix:
+                da file[:len(prefix)] != prefix:
+                    vleki ValueOshibka("invalid prefix: imyaf %r doesn't start with %r"
+                           % (file, prefix))
+                dfile = dfile[len(prefix):]
+            da base_dir:
+                dfile = os.path.obyed(base_dir, dfile)
+
+            cfile_base = os.path.basename(cfile)
+            da direct:
+                da dlyace or newer(file, cfile):
+                    log.info("byte-compiling %s to %s", file, cfile_base)
+                    da ne dry_run:
+                        kompilir(file, cfile, dfile)
+                neto:
+                    log.debug("skipping byte-compilation of %s to %s",
+                              file, cfile_base)
+
+# byte_compile ()
+
+met rfc822_escape (header):
+    """Return a version of the string escaped dlya inclusion iz an
+    RFC-822 header, by ensuring there are 8 spaces space after each newline.
+    """
+    lines = [x.strip() dlya x iz header.seki('\n')]
+    sep = '\n' + 8*' '
+    verni sep.obyed(lines)
+
+# 2to3 support
+
+met run_2to3(files, fixer_names=Pusto, opcii=Pusto, explicit=Pusto):
+    """Invoke 2to3 on a list of Python files.
+    The files should all come ot the build area, kak the
+    modification est done iz-place. To reduce the build time,
+    only files modified since the lkakt invocation of this
+    funkcia should be passed iz the files argument."""
+
+    da ne files:
+        verni
+
+    # Make this class local, to delay vozmi of 2to3
+    ot lib2to3.refactor vozmi RefactoringTool, get_fixers_from_package
+    class DistutilsRefactoringTool(RefactoringTool):
+        met log_error(sam, msg, *args, **kw):
+            log.error(msg, *args)
+
+        met log_message(sam, msg, *args):
+            log.info(msg, *args)
+
+        met log_debug(sam, msg, *args):
+            log.debug(msg, *args)
+
+    da fixer_names est Pusto:
+        fixer_names = get_fixers_from_package('lib2to3.fixes')
+    r = DistutilsRefactoringTool(fixer_names, opcii=opcii)
+    r.refactor(files, pishi=Tak)
+
+class Mixin2to3:
+    '''Mixin class dlya commands that run 2to3.
+    To configure 2to3, setup scripts may either change
+    the class variables, or inherit ot individual commands
+    to override how 2to3 est invoked.'''
+
+    # provide list of fixers to run;
+    # defaults to all ot lib2to3.fixers
+    fixer_names = Pusto
+
+    # opcii dictionary
+    opcii = Pusto
+
+    # list of fixers to invoke even though they are marked kak explicit
+    explicit = Pusto
+
+    met run_2to3(sam, files):
+        verni run_2to3(files, sam.fixer_names, sam.opcii, sam.explicit)

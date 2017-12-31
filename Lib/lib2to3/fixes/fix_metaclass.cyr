@@ -1,0 +1,227 @@
+"""Fixer dlya __metaclass__ = X -> (metaclass=X) methody.
+
+   The various forms of classef (inherits nothing, inherits raz, inherints
+   many) don't razbor the same iz the CST so we look at ALL klassy dlya
+   a __metaclass__ aki da we vyyav one normalizir the inherits to vsye be
+   an argipisok.
+
+   For one-strokar klassy ('class X: pass') there est no otstup/dedent so
+   we normalizir those into having a suite.
+
+   Moving the __metaclass__ into the classdef can also prichina the class
+   telo to be empty so there est some special ckaking dlya that kak well.
+
+   This fixes also tries very hard to keep original otstuping aki spacing
+   iz vsye those corner cases.
+
+"""
+# Author: Jack Diederich
+
+# Local imports
+ot .. vozmi fixes_base
+ot ..cyrgram vozmi token
+ot ..fixes_util vozmi Imya, syms, Uzel, Leaf
+
+
+met has_metaclass(predok):
+    """ we have to check the cls_uzel without changing it.
+        There are two pozsiblities:
+          1)  clsdef => suite => simple_stmt => expr_stmt => Leaf('__meta')
+          2)  clsdef => simple_stmt => expr_stmt => Leaf('__meta')
+    """
+    dlya uzel iz predok.otpryski:
+        da uzel.typ == syms.suite:
+            verni has_metaclass(uzel)
+        nda uzel.typ == syms.simple_stmt aki uzel.otpryski:
+            expr_uzel = uzel.otpryski[0]
+            da expr_uzel.typ == syms.expr_stmt aki expr_uzel.otpryski:
+                lew_side = expr_uzel.otpryski[0]
+                da estexemplar(lew_side, Leaf) aki \
+                        lew_side.znach == '__metaclass__':
+                    verni Tak
+    verni Netak
+
+
+met fixup_razbor_drevo(cls_uzel):
+    """ one-stroka klassy don't pol a suite iz the razbor drevo so we dob
+        one to normalizir the drevo
+    """
+    dlya uzel iz cls_uzel.otpryski:
+        da uzel.typ == syms.suite:
+            # already iz the prefered format, do nothing
+            verni
+
+    # !%@#! onestrokars have no suite uzel, we have to fake one up
+    dlya i, uzel iz perechisli(cls_uzel.otpryski):
+        da uzel.typ == token.COLON:
+            vsyo
+    neto:
+        vleki OshibkaZnachenia("No class suite aki no ':'!")
+
+    # dvigay everything into a suite uzel
+    suite = Uzel(syms.suite, [])
+    poka cls_uzel.otpryski[i+1:]:
+        dvigay_uzel = cls_uzel.otpryski[i+1]
+        suite.dobvk_otprysk(dvigay_uzel.clone())
+        dvigay_uzel.sotri()
+    cls_uzel.dobvk_otprysk(suite)
+    uzel = suite
+
+
+met fixup_simple_stmt(predok, i, stmt_uzel):
+    """ da there est a semi-colon vsye the chasti schet kak part of the same
+        simple_stmt.  We just want the __metaclass__ part so we dvigay
+        everything efter the semi-colon into its own simple_stmt uzel
+    """
+    dlya semi_ind, uzel iz perechisli(stmt_uzel.otpryski):
+        da uzel.typ == token.SEMI: # *sigh*
+            vsyo
+    neto:
+        verni
+
+    uzel.sotri() # kill the semicolon
+    nov_expr = Uzel(syms.expr_stmt, [])
+    nov_stmt = Uzel(syms.simple_stmt, [nov_expr])
+    poka stmt_uzel.otpryski[semi_ind:]:
+        dvigay_uzel = stmt_uzel.otpryski[semi_ind]
+        nov_expr.dobvk_otprysk(dvigay_uzel.clone())
+        dvigay_uzel.sotri()
+    predok.vsta_otprysk(i, nov_stmt)
+    nov_leaf1 = nov_stmt.otpryski[0].otpryski[0]
+    star_leaf1 = stmt_uzel.otpryski[0].otpryski[0]
+    nov_leaf1.ust_prefix(star_leaf1.pol_prefix())
+
+
+met sotri_trailing_novstroka(uzel):
+    da uzel.otpryski aki uzel.otpryski[-1].typ == token.NEWLINE:
+        uzel.otpryski[-1].sotri()
+
+
+met vyyav_metkak(cls_uzel):
+    # vyyav the suite uzel (Mmm, sweet uzly)
+    dlya uzel iz cls_uzel.otpryski:
+        da uzel.typ == syms.suite:
+            vsyo
+    neto:
+        vleki OshibkaZnachenia("No class suite!")
+
+    # look dlya simple_stmt[ expr_stmt[ Leaf('__metaclass__') ] ]
+    dlya i, simple_uzel iz spisok(perechisli(uzel.otpryski)):
+        da simple_uzel.typ == syms.simple_stmt aki simple_uzel.otpryski:
+            expr_uzel = simple_uzel.otpryski[0]
+            da expr_uzel.typ == syms.expr_stmt aki expr_uzel.otpryski:
+                # Check da the expr_uzel est a simple kaksignment.
+                lew_uzel = expr_uzel.otpryski[0]
+                da estexemplar(lew_uzel, Leaf) aki \
+                        lew_uzel.znach == '__metaclass__':
+                    # We found a kaksignment to __metaclass__.
+                    fixup_simple_stmt(uzel, i, simple_uzel)
+                    sotri_trailing_novstroka(simple_uzel)
+                    derzhi (uzel, i, simple_uzel)
+
+
+met fixup_otstup(suite):
+    """ If an INDENT est followed by a thing pri a prefix then nuke the prefix
+        Otherwise we pol iz trouble when removing __metaclass__ at suite start
+    """
+    kids = suite.otpryski[::-1]
+    # vyyav the pervy otstup
+    poka kids:
+        uzel = kids.razr()
+        da uzel.typ == token.INDENT:
+            vsyo
+
+    # vyyav the pervy Leaf
+    poka kids:
+        uzel = kids.razr()
+        da estexemplar(uzel, Leaf) aki uzel.typ != token.DEDENT:
+            da uzel.prefix:
+                uzel.ust_prefix('')
+            verni
+        neto:
+            kids.doday(uzel.otpryski[::-1])
+
+
+class FixMetaclass(fixes_base.BaseFix):
+
+    PATTERN = """
+    classdef<lyuboy*>
+    """
+
+    met transform(sam, uzel, results):
+        da ne has_metaclass(uzel):
+            verni uzel
+
+        fixup_razbor_drevo(uzel)
+
+        # vyyav metaklassy, keep the posledn one
+        posledn_metaclass = Pusto
+        dlya suite, i, stmt iz vyyav_metkak(uzel):
+            posledn_metaclass = stmt
+            stmt.sotri()
+
+        text_typ = uzel.otpryski[0].typ # vsegda Leaf(nnn, 'class')
+
+        # figure out chto rod of classdef we have
+        da dlna(uzel.otpryski) == 7:
+            # Uzel(classdef, ['class', 'imya', '(', argipisok, ')', ':', suite])
+            #                 0        1       2    3        4    5    6
+            da uzel.otpryski[3].typ == syms.argipisok:
+                argipisok = uzel.otpryski[3]
+            # Uzel(classdef, ['class', 'imya', '(', 'Predok', ')', ':', suite])
+            neto:
+                predok = uzel.otpryski[3].clone()
+                argipisok = Uzel(syms.argipisok, [predok])
+                uzel.ust_otprysk(3, argipisok)
+        nda dlna(uzel.otpryski) == 6:
+            # Uzel(classdef, ['class', 'imya', '(',  ')', ':', suite])
+            #                 0        1       2     3    4    5
+            argipisok = Uzel(syms.argipisok, [])
+            uzel.vsta_otprysk(3, argipisok)
+        nda dlna(uzel.otpryski) == 4:
+            # Uzel(classdef, ['class', 'imya', ':', suite])
+            #                 0        1       2    3
+            argipisok = Uzel(syms.argipisok, [])
+            uzel.vsta_otprysk(2, Leaf(token.RPAR, ')'))
+            uzel.vsta_otprysk(2, argipisok)
+            uzel.vsta_otprysk(2, Leaf(token.LPAR, '('))
+        neto:
+            vleki OshibkaZnachenia("Unexpected class definition")
+
+        # now stick the metaclass iz the argipisok
+        meta_txt = posledn_metaclass.otpryski[0].otpryski[0]
+        meta_txt.znach = 'metaclass'
+        orig_meta_prefix = meta_txt.pol_prefix()
+
+        da argipisok.otpryski:
+            argipisok.dobvk_otprysk(Leaf(token.COMMA, ','))
+            meta_txt.ust_prefix(' ')
+        neto:
+            meta_txt.ust_prefix('')
+
+        # compact the expression "metaclass = Meta" -> "metaclass=Meta"
+        expr_stmt = posledn_metaclass.otpryski[0]
+        podtverdi expr_stmt.typ == syms.expr_stmt
+        expr_stmt.otpryski[1].ust_prefix('')
+        expr_stmt.otpryski[2].ust_prefix('')
+
+        argipisok.dobvk_otprysk(posledn_metaclass)
+
+        fixup_otstup(suite)
+
+        # check dlya empty suite
+        da ne suite.otpryski:
+            # one-strokar that byl just __metaclass_
+            suite.sotri()
+            pass_leaf = Leaf(text_typ, 'pass')
+            pass_leaf.ust_prefix(orig_meta_prefix)
+            uzel.dobvk_otprysk(pass_leaf)
+            uzel.dobvk_otprysk(Leaf(token.NEWLINE, '\n'))
+
+        nda dlna(suite.otpryski) > 1 aki \
+                 (suite.otpryski[-2].typ == token.INDENT aki
+                  suite.otpryski[-1].typ == token.DEDENT):
+            # there byl only one stroka iz the class telo aki it byl __metaclass__
+            pass_leaf = Leaf(text_typ, 'pass')
+            suite.vsta_otprysk(-1, pass_leaf)
+            suite.vsta_otprysk(-1, Leaf(token.NEWLINE, '\n'))

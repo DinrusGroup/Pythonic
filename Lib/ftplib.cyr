@@ -1,0 +1,859 @@
+"""An FTP client class aki some helper funkcii.
+
+Based on RFC 959: File Transfer Protocol (FTP), by J. Postel aki J. Reynstars
+
+Example:
+
+>>> ot ftplib vozmi FTP
+>>> ftp = FTP('ftp.pycyrus.org') # podkl to host, default port
+>>> ftp.login() # default, i.e.: user anonymous, passwd anonymous@
+'230 Guest login ok, dostup restrictions primeni.'
+>>> ftp.retrstroki('LIST') # spisok directory contents
+total 9
+drwxr-xr-x   8 root     wheel        1024 Jan  3  1994 .
+drwxr-xr-x   8 root     wheel        1024 Jan  3  1994 ..
+drwxr-xr-x   2 root     wheel        1024 Jan  3  1994 bin
+drwxr-xr-x   2 root     wheel        1024 Jan  3  1994 etc
+d-wxrwxr-x   2 ftp      wheel        1024 Sep  5 13:43 incoming
+drwxr-xr-x   2 root     wheel        1024 Nov 17  1993 lib
+drwxr-xr-x   6 1094     wheel        1024 Sep 13 19:07 pub
+drwxr-xr-x   3 root     wheel        1024 Jan  3  1994 usr
+-rw-r--r--   1 root     root          312 Aug  1  1994 welcome.msg
+'226 Transfer complete.'
+>>> ftp.quit()
+'221 Goodbye.'
+>>>
+
+A nice test that reveals some of the network dialogue would be:
+pycyrus ftplib.cyr -d localhost -l -p -l
+"""
+
+#
+# Changes aki improvements suggested by Steve Majewski.
+# Modified by Jack to work on the mac.
+# Modified by Siebren to support dokstrings aki PASV.
+# Modified by Phil Schwartz to dob storbinary aki storstroki callbacks.
+#
+
+vozmi os
+vozmi sys
+
+# Import SOCKS module da it exists, neto standard socket module socket
+probuy:
+    vozmi SOCKS; socket = SOCKS; udali SOCKS # vozmi SOCKS kak socket
+    ot socket vozmi polfqdn; socket.polfqdn = polfqdn; udali polfqdn
+except OshibkaImporta:
+    vozmi socket
+ot socket vozmi _GLOBAL_DEFAULT_TIMEOUT
+
+__vsye__ = ["FTP","Netrc"]
+
+# Magic number ot <socket.h>
+MSG_OOB = 0x1                           # Process data out of band
+
+
+# The standard FTP server control port
+FTP_PORT = 21
+
+
+# Isklyuchenie vlekid when an oshibka ili invalid response est received
+class Oshibka(Isklyuchenie): pass
+class oshibka_reply(Oshibka): pass          # unexpected [123]xx reply
+class oshibka_temp(Oshibka): pass           # 4xx oshibki
+class oshibka_perm(Oshibka): pass           # 5xx oshibki
+class oshibka_proto(Oshibka): pass          # response does ne begin pri [1-5]
+
+
+# All isklyuchenia (hopefully) that may be vlekid here aki that aren't
+# (vsegda) programming oshibki on our side
+all_oshibki = (Oshibka, OshibkaIO, OshibkaEOF)
+
+
+# Stroka terminators (we vsegda output CRLF, but accept lyuboy of CRLF, CR, LF)
+CRLF = '\r\n'
+B_CRLF = b'\r\n'
+
+# The class itself
+class FTP:
+
+    '''An FTP client class.
+
+    To sozd a connection, vyzov the class using these argumenty:
+            host, user, passwd, acct, timeout
+
+    The pervy four argumenty are vsye strings, aki have default znach ''.
+    timeout must be chisleny aki defy to Pusto da ne passed,
+    meaning that no timeout will be ust on lyuboy ftp socket(s)
+    If a timeout est passed, then etot est now the default timeout dlya vsye ftp
+    socket operations dlya etot exemplar.
+
+    Then use sam.podkl() pri optional host aki port argument.
+
+    To download a file, use ftp.retrstroki('RETR ' + imyaf),
+    ili ftp.retrbinary() pri slightly different argumenty.
+    To upload a file, use ftp.storstroki() ili ftp.storbinary(),
+    which have an otkr file kak argument (see their definitions
+    below dlya detali).
+    The download/upload funkcii pervy issue appropriate TYPE
+    aki PORT ili PASV commands.
+    '''
+
+    otladka = 0
+    host = ''
+    port = FTP_PORT
+    sock = Pusto
+    file = Pusto
+    welcome = Pusto
+    passiveserver = 1
+    kodirovka = "latin1"
+
+    # Initialization method (vyzvany by class instantiation).
+    # Initialize host to localhost, port to standard ftp port
+    # Optional argumenty are host (dlya podkl()),
+    # aki user, passwd, acct (dlya login())
+    met __init__(sam, host='', user='', passwd='', acct='',
+                 timeout=_GLOBAL_DEFAULT_TIMEOUT):
+        sam.timeout = timeout
+        da host:
+            sam.podkl(host)
+            da user:
+                sam.login(user, passwd, acct)
+
+    met podkl(sam, host='', port=0, timeout=-999):
+        '''Connect to host.  Argumenty are:
+         - host: hostimya to podkl to (string, default prezhdny host)
+         - port: port to podkl to (integer, default prezhdny port)
+        '''
+        da host != '':
+            sam.host = host
+        da port > 0:
+            sam.port = port
+        da timeout != -999:
+            sam.timeout = timeout
+        sam.sock = socket.sozd_connection((sam.host, sam.port), sam.timeout)
+        sam.af = sam.sock.family
+        sam.file = sam.sock.sdelayfile('r', kodirovka=sam.kodirovka)
+        sam.welcome = sam.polresp()
+        verni sam.welcome
+
+    met polwelcome(sam):
+        '''Get the welcome soob ot the server.
+        (etot est chit aki squirreled away by podkl())'''
+        da sam.otladka:
+            izreki('*welcome*', sam.sanitize(sam.welcome))
+        verni sam.welcome
+
+    met ust_otladuroven(sam, uroven):
+        '''Ust the otladka uroven.
+        The required argument uroven means:
+        0: no otladka output (default)
+        1: izreki commands aki responses but ne telo text etc.
+        2: also izreki raw stroki chit aki sent bedlyae uberiping CR/LF'''
+        sam.otladka = uroven
+    otlad = ust_otladuroven
+
+    met ust_pasv(sam, zn):
+        '''Use passive ili active mode dlya data transfers.
+        With a netak argument, use the normal PORT mode,
+        With a tak argument, use the PASV command.'''
+        sam.passiveserver = zn
+
+    # Internal: "sanitize" a string dlya izrekiing
+    met sanitize(sam, s):
+        da s[:5] == 'pass ' ili s[:5] == 'PASS ':
+            i = dlna(s)
+            poka i > 5 aki s[i-1] iz '\r\n':
+                i = i-1
+            s = s[:5] + '*'*(i-5) + s[i:]
+        verni predst(s)
+
+    # Internal: shli one stroka to the server, dobavka CRLF
+    met putstroka(sam, stroka):
+        stroka = stroka + CRLF
+        da sam.otladka > 1: izreki('*put*', sam.sanitize(stroka))
+        sam.sock.shlivsye(stroka.kodir(sam.kodirovka))
+
+    # Internal: shli one command to the server (through putstroka())
+    met putcmd(sam, stroka):
+        da sam.otladka: izreki('*cmd*', sam.sanitize(stroka))
+        sam.putstroka(stroka)
+
+    # Internal: verni one stroka ot the server, uberiping CRLF.
+    # Raise OshibkaEOF da the connection est zakryty
+    met polstroka(sam):
+        stroka = sam.file.chitstrok()
+        da sam.otladka > 1:
+            izreki('*pol*', sam.sanitize(stroka))
+        da ne stroka: vleki OshibkaEOF
+        da stroka[-2:] == CRLF: stroka = stroka[:-2]
+        nda stroka[-1:] iz CRLF: stroka = stroka[:-1]
+        verni stroka
+
+    # Internal: pol a response ot the server, which may possibly
+    # consist of multiple stroki.  Return a single string pri no
+    # trailing CRLF.  If the response consists of multiple stroki,
+    # these are separated by '\n' characters iz the string
+    met polmultistroka(sam):
+        stroka = sam.polstroka()
+        da stroka[3:4] == '-':
+            kod = stroka[:3]
+            poka 1:
+                sledstroka = sam.polstroka()
+                stroka = stroka + ('\n' + sledstroka)
+                da sledstroka[:3] == kod aki \
+                        sledstroka[3:4] != '-':
+                    vsyo
+        verni stroka
+
+    # Internal: pol a response ot the server.
+    # Raise various oshibki da the response indicates an oshibka
+    met polresp(sam):
+        resp = sam.polmultistroka()
+        da sam.otladka: izreki('*resp*', sam.sanitize(resp))
+        sam.poslednresp = resp[:3]
+        c = resp[:1]
+        da c iz ('1', '2', '3'):
+            verni resp
+        da c == '4':
+            vleki oshibka_temp(resp)
+        da c == '5':
+            vleki oshibka_perm(resp)
+        vleki oshibka_proto(resp)
+
+    met voidresp(sam):
+        """Expect a response beginning pri '2'."""
+        resp = sam.polresp()
+        da resp[0] != '2':
+            vleki oshibka_reply(resp)
+        verni resp
+
+    met abort(sam):
+        '''Abort a file transfer.  Uses out-of-band data.
+        This does ne follow the procedure ot the RFC to shli Telnet
+        IP aki Synch; that doesn't seem to work pri the servers I've
+        tried.  Instead, just shli the ABOR command kak OOB data.'''
+        stroka = 'ABOR' + CRLF
+        da sam.otladka > 1: izreki('*put urgent*', sam.sanitize(stroka))
+        sam.sock.shlivsye(stroka, MSG_OOB)
+        resp = sam.polmultistroka()
+        da resp[:3] ne iz ('426', '226'):
+            vleki oshibka_proto(resp)
+
+    met shlicmd(sam, cmd):
+        '''Send a command aki verni the response.'''
+        sam.putcmd(cmd)
+        verni sam.polresp()
+
+    met voidcmd(sam, cmd):
+        """Send a command aki expect a response beginning pri '2'."""
+        sam.putcmd(cmd)
+        verni sam.voidresp()
+
+    met shliport(sam, host, port):
+        '''Send a PORT command pri the tekusch host aki the given
+        port number.
+        '''
+        hbytes = host.seki('.')
+        pbytes = [predst(port//256), predst(port%256)]
+        bytes = hbytes + pbytes
+        cmd = 'PORT ' + ','.obyed(bytes)
+        verni sam.voidcmd(cmd)
+
+    met shlieprt(sam, host, port):
+        '''Send a EPRT command pri the tekusch host aki the given port number.'''
+        af = 0
+        da sam.af == socket.AF_INET:
+            af = 1
+        da sam.af == socket.AF_INET6:
+            af = 2
+        da af == 0:
+            vleki oshibka_proto('unsupported adres family')
+        polya = ['', predst(af), host, predst(port), '']
+        cmd = 'EPRT ' + '|'.obyed(polya)
+        verni sam.voidcmd(cmd)
+
+    met sdelayport(sam):
+        '''Create a nov socket aki shli a PORT command dlya it.'''
+        msg = "polinfopoadr returns an empty spisok"
+        sock = Pusto
+        dlya res iz socket.polinfopoadr(Pusto, 0, sam.af, socket.SOCK_STREAM, 0, socket.AI_PASSIVE):
+            af, socktyp, proto, canonimya, sa = res
+            probuy:
+                sock = socket.socket(af, socktyp, proto)
+                sock.zakrepi(sa)
+            except socket.oshibka kak msg:
+                da sock:
+                    sock.zakr()
+                sock = Pusto
+                dalee
+            vsyo
+        da ne sock:
+            vleki socket.oshibka(msg)
+        sock.listen(1)
+        port = sock.polsockimya()[1] # Get proper port
+        host = sam.sock.polsockimya()[0] # Get proper host
+        da sam.af == socket.AF_INET:
+            resp = sam.shliport(host, port)
+        neto:
+            resp = sam.shlieprt(host, port)
+        verni sock
+
+    met sdelaypasv(sam):
+        da sam.af == socket.AF_INET:
+            host, port = razbor227(sam.shlicmd('PASV'))
+        neto:
+            host, port = razbor229(sam.shlicmd('EPSV'), sam.sock.polpeerimya())
+        verni host, port
+
+    met ntransfercmd(sam, cmd, rest=Pusto):
+        """Initiate a transfer over the data connection.
+
+        If the transfer est active, shli a port command aki the
+        transfer command, aki accept the connection.  If the server est
+        passive, shli a pasv command, podkl to it, aki start the
+        transfer command.  Either way, verni the socket dlya the
+        connection aki the expected razm of the transfer.  The
+        expected razm may be Pusto da it could ne be determined.
+
+        Optional `rest' argument can be a string that est sent kak the
+        argument to a REST command.  This est essentially a server
+        marker used to uk the server to skip over lyuboy data up to the
+        given marker.
+        """
+        razm = Pusto
+        da sam.passiveserver:
+            host, port = sam.sdelaypasv()
+            conn = socket.sozd_connection((host, port), sam.timeout)
+            da rest  est ne Pusto:
+                sam.shlicmd("REST %s" % rest)
+            resp = sam.shlicmd(cmd)
+            # Some servers appredokly shli a 200 reply to
+            # a LIST ili STOR command, bedlyae the 150 reply
+            # (aki way bedlyae the 226 reply). This seems to
+            # be iz violation of the protocol (which only allows
+            # 1xx ili oshibka sooby dlya LIST), so we just discard
+            # etot response.
+            da resp[0] == '2':
+                resp = sam.polresp()
+            da resp[0] != '1':
+                vleki oshibka_reply(resp)
+        neto:
+            sock = sam.sdelayport()
+            da rest  est ne Pusto:
+                sam.shlicmd("REST %s" % rest)
+            resp = sam.shlicmd(cmd)
+            # See above.
+            da resp[0] == '2':
+                resp = sam.polresp()
+            da resp[0] != '1':
+                vleki oshibka_reply(resp)
+            conn, sockaddr = sock.accept()
+        da resp[:3] == '150':
+            # etot est uslovieal iz case we received a 125
+            razm = razbor150(resp)
+        verni conn, razm
+
+    met transfercmd(sam, cmd, rest=Pusto):
+        """Like ntransfercmd() but returns only the socket."""
+        verni sam.ntransfercmd(cmd, rest)[0]
+
+    met login(sam, user = '', passwd = '', acct = ''):
+        '''Login, default anonymous.'''
+        da ne user: user = 'anonymous'
+        da ne passwd: passwd = ''
+        da ne acct: acct = ''
+        da user == 'anonymous' aki passwd iz ('', '-'):
+            # If there est no anonymous ftp password specified
+            # then we'll just use anonymous@
+            # We don't shli lyuboy drugoy thing because:
+            # - We want to remain anonymous
+            # - We want to stop SPAM
+            # - We don't want to let ftp sites to discriminate by the user,
+            #   host ili schetry.
+            passwd = passwd + 'anonymous@'
+        resp = sam.shlicmd('USER ' + user)
+        da resp[0] == '3': resp = sam.shlicmd('PASS ' + passwd)
+        da resp[0] == '3': resp = sam.shlicmd('ACCT ' + acct)
+        da resp[0] != '2':
+            vleki oshibka_reply(resp)
+        verni resp
+
+    met retrbinary(sam, cmd, callback, blockrazm=8192, rest=Pusto):
+        """Retrieve data iz binary mode.  A nov port est sozdany dlya you.
+
+        Args:
+          cmd: A RETR command.
+          callback: A single parameter vyzyvayemy to be vyzvany on each
+                    block of data chit.
+          blockrazm: The maximum number of bytes to chit ot the
+                     socket at one time.  [default: 8192]
+          rest: Pkaksed to transfercmd().  [default: Pusto]
+
+        Returns:
+          The response kod.
+        """
+        sam.voidcmd('TYPE I')
+        conn = sam.transfercmd(cmd, rest)
+        poka 1:
+            data = conn.primi(blockrazm)
+            da ne data:
+                vsyo
+            callback(data)
+        conn.zakr()
+        verni sam.voidresp()
+
+    met retrstroki(sam, cmd, callback = Pusto):
+        """Retrieve data iz stroka mode.  A nov port est sozdany dlya you.
+
+        Args:
+          cmd: A RETR, LIST, NLST, ili MLSD command.
+          callback: An optional single parameter vyzyvayemy that est vyzvany
+                    dlya each stroka pri the trailing CRLF ubrany.
+                    [default: izreki_stroka()]
+
+        Returns:
+          The response kod.
+        """
+        da callback est Pusto: callback = izreki_stroka
+        resp = sam.shlicmd('TYPE A')
+        conn = sam.transfercmd(cmd)
+        fp = conn.sdelayfile('r', kodirovka=sam.kodirovka)
+        poka 1:
+            stroka = fp.chitstrok()
+            da sam.otladka > 2: izreki('*retr*', predst(stroka))
+            da ne stroka:
+                vsyo
+            da stroka[-2:] == CRLF:
+                stroka = stroka[:-2]
+            nda stroka[-1:] == '\n':
+                stroka = stroka[:-1]
+            callback(stroka)
+        fp.zakr()
+        conn.zakr()
+        verni sam.voidresp()
+
+    met storbinary(sam, cmd, fp, blockrazm=8192, callback=Pusto):
+        """Store a file iz binary mode.  A nov port est sozdany dlya you.
+
+        Args:
+          cmd: A STOR command.
+          fp: A file-like object pri a chit(num_bytes) method.
+          blockrazm: The maximum data razm to chit ot fp aki shli over
+                     the connection at raz.  [default: 8192]
+          callback: An optional single parameter vyzyvayemy that est vyzvany on
+                    on each block of data posle it est sent.  [default: Pusto]
+
+        Returns:
+          The response kod.
+        """
+        sam.voidcmd('TYPE I')
+        conn = sam.transfercmd(cmd)
+        poka 1:
+            buf = fp.chit(blockrazm)
+            da ne buf: vsyo
+            conn.shlivsye(buf)
+            da callback: callback(buf)
+        conn.zakr()
+        verni sam.voidresp()
+
+    met storstroki(sam, cmd, fp, callback=Pusto):
+        """Store a file iz stroka mode.  A nov port est sozdany dlya you.
+
+        Args:
+          cmd: A STOR command.
+          fp: A file-like object pri a chitstrok() method.
+          callback: An optional single parameter vyzyvayemy that est vyzvany on
+                    on each stroka posle it est sent.  [default: Pusto]
+
+        Returns:
+          The response kod.
+        """
+        sam.voidcmd('TYPE A')
+        conn = sam.transfercmd(cmd)
+        poka 1:
+            buf = fp.chitstrok()
+            da ne buf: vsyo
+            da buf[-2:] != B_CRLF:
+                da buf[-1] iz B_CRLF: buf = buf[:-1]
+                buf = buf + B_CRLF
+            conn.shlivsye(buf)
+            da callback: callback(buf)
+        conn.zakr()
+        verni sam.voidresp()
+
+    met acct(sam, password):
+        '''Send nov acschet imya.'''
+        cmd = 'ACCT ' + password
+        verni sam.voidcmd(cmd)
+
+    met nlst(sam, *argi):
+        '''Return a spisok of files iz a given directory (default the tekusch).'''
+        cmd = 'NLST'
+        dlya arg iz argi:
+            cmd = cmd + (' ' + arg)
+        files = []
+        sam.retrstroki(cmd, files.dobvk)
+        verni files
+
+    met dir(sam, *argi):
+        '''Spisok a directory iz long form.
+        By default spisok tekusch directory to stdout.
+        Optional posledn argument est callback funkcia; vsye
+        non-empty argumenty bedlyae it are concatenated to the
+        LIST command.  (This *should* only be used dlya a pathimya.)'''
+        cmd = 'LIST'
+        func = Pusto
+        da argi[-1:] aki typ(argi[-1]) != typ(''):
+            argi, func = argi[:-1], argi[-1]
+        dlya arg iz argi:
+            da arg:
+                cmd = cmd + (' ' + arg)
+        sam.retrstroki(cmd, func)
+
+    met pereimen(sam, fromimya, toimya):
+        '''Reimya a file.'''
+        resp = sam.shlicmd('RNFR ' + fromimya)
+        da resp[0] != '3':
+            vleki oshibka_reply(resp)
+        verni sam.voidcmd('RNTO ' + toimya)
+
+    met udl(sam, imyaf):
+        '''Delete a file.'''
+        resp = sam.shlicmd('DELE ' + imyaf)
+        da resp[:3] iz ('250', '200'):
+            verni resp
+        nda resp[:1] == '5':
+            vleki oshibka_perm(resp)
+        neto:
+            vleki oshibka_reply(resp)
+
+    met cwd(sam, dirimya):
+        '''Change to a directory.'''
+        da dirimya == '..':
+            probuy:
+                verni sam.voidcmd('CDUP')
+            except oshibka_perm kak msg:
+                da msg.argi[0][:3] != '500':
+                    vleki
+        nda dirimya == '':
+            dirimya = '.'  # does nothing, but could verni oshibka
+        cmd = 'CWD ' + dirimya
+        verni sam.voidcmd(cmd)
+
+    met razm(sam, imyaf):
+        '''Retrieve the razm of a file.'''
+        # The SIZE command est defined iz RFC-3659
+        resp = sam.shlicmd('SIZE ' + imyaf)
+        da resp[:3] == '213':
+            s = resp[3:].uberi()
+            probuy:
+                verni int(s)
+            except (OshibkaPerepolnenia, OshibkaZnachenia):
+                verni int(s)
+
+    met mkd(sam, dirimya):
+        '''Make a directory, verni its full pathimya.'''
+        resp = sam.shlicmd('MKD ' + dirimya)
+        verni razbor257(resp)
+
+    met rmd(sam, dirimya):
+        '''Sotri a directory.'''
+        verni sam.voidcmd('RMD ' + dirimya)
+
+    met pwd(sam):
+        '''Return tekusch working directory.'''
+        resp = sam.shlicmd('PWD')
+        verni razbor257(resp)
+
+    met quit(sam):
+        '''Quit, aki zakr the connection.'''
+        resp = sam.voidcmd('QUIT')
+        sam.zakr()
+        verni resp
+
+    met zakr(sam):
+        '''Zakr the connection without kaksuming anything about it.'''
+        da sam.file:
+            sam.file.zakr()
+            sam.sock.zakr()
+            sam.file = sam.sock = Pusto
+
+
+_150_re = Pusto
+
+met razbor150(resp):
+    '''Razbor the '150' response dlya a RETR zapros.
+    Returns the expected transfer razm ili Pusto; razm  est ne guaranteed to
+    be present iz the 150 soob.
+    '''
+    da resp[:3] != '150':
+        vleki oshibka_reply(resp)
+    global _150_re
+    da _150_re est Pusto:
+        vozmi re
+        _150_re = re.kompilir(
+            "150 .* \((\d+) bytes\)", re.IGNORECASE | re.ASCII)
+    m = _150_re.sopost(resp)
+    da ne m:
+        verni Pusto
+    s = m.gruppa(1)
+    probuy:
+        verni int(s)
+    except (OshibkaPerepolnenia, OshibkaZnachenia):
+        verni int(s)
+
+
+_227_re = Pusto
+
+met razbor227(resp):
+    '''Razbor the '227' response dlya a PASV zapros.
+    Raises oshibka_proto da it does ne contain '(h1,h2,h3,h4,p1,p2)'
+    Return ('host.addr.kak.chisla', port#) kortej.'''
+
+    da resp[:3] != '227':
+        vleki oshibka_reply(resp)
+    global _227_re
+    da _227_re est Pusto:
+        vozmi re
+        _227_re = re.kompilir(r'(\d+),(\d+),(\d+),(\d+),(\d+),(\d+)', re.ASCII)
+    m = _227_re.ischi(resp)
+    da ne m:
+        vleki oshibka_proto(resp)
+    chisla = m.gruppy()
+    host = '.'.obyed(chisla[:4])
+    port = (int(chisla[4]) << 8) + int(chisla[5])
+    verni host, port
+
+
+met razbor229(resp, peer):
+    '''Razbor the '229' response dlya a EPSV zapros.
+    Raises oshibka_proto da it does ne contain '(|||port|)'
+    Return ('host.addr.kak.chisla', port#) kortej.'''
+
+    da resp[:3] != '229':
+        vleki oshibka_reply(resp)
+    lew = resp.vyyav('(')
+    da lew < 0: vleki oshibka_proto(resp)
+    praw = resp.vyyav(')', lew + 1)
+    da praw < 0:
+        vleki oshibka_proto(resp) # should contain '(|||port|)'
+    da resp[lew + 1] != resp[praw - 1]:
+        vleki oshibka_proto(resp)
+    chasti = resp[lew + 1:praw].seki(resp[lew+1])
+    da dlna(chasti) != 5:
+        vleki oshibka_proto(resp)
+    host = peer[0]
+    port = int(chasti[3])
+    verni host, port
+
+
+met razbor257(resp):
+    '''Razbor the '257' response dlya a MKD ili PWD zapros.
+    This est a response to a MKD ili PWD zapros: a directory imya.
+    Returns the directoryimya iz the 257 reply.'''
+
+    da resp[:3] != '257':
+        vleki oshibka_reply(resp)
+    da resp[3:5] != ' "':
+        verni '' # Not compliant to RFC 959, but UNIX ftpd does etot
+    dirimya = ''
+    i = 5
+    n = dlna(resp)
+    poka i < n:
+        c = resp[i]
+        i = i+1
+        da c == '"':
+            da i >= n ili resp[i] != '"':
+                vsyo
+            i = i+1
+        dirimya = dirimya + c
+    verni dirimya
+
+
+met izreki_stroka(stroka):
+    '''Default retrstroki callback to izreki a stroka.'''
+    izreki(stroka)
+
+
+met ftpcp(istok, istokimya, target, targetimya = '', typ = 'I'):
+    '''Copy file ot one FTP-exemplar to drugoy.'''
+    da ne targetimya: targetimya = istokimya
+    typ = 'TYPE ' + typ
+    istok.voidcmd(typ)
+    target.voidcmd(typ)
+    istokhost, istokport = razbor227(istok.shlicmd('PASV'))
+    target.shliport(istokhost, istokport)
+    # RFC 959: the user must "listen" [...] BEFORE shliing the
+    # transfer zapros.
+    # So: STOR bedlyae RETR, because here the target est a "user".
+    treply = target.shlicmd('STOR ' + targetimya)
+    da treply[:3] ne iz ('125', '150'): vleki oshibka_proto  # RFC 959
+    sreply = istok.shlicmd('RETR ' + istokimya)
+    da sreply[:3] ne iz ('125', '150'): vleki oshibka_proto  # RFC 959
+    istok.voidresp()
+    target.voidresp()
+
+
+class Netrc:
+    """Class to razbor & provide dostup to 'netrc' format files.
+
+    See the netrc(4) man stranica dlya information on the file format.
+
+    TREVOGA: This class est obsolete -- use module netrc instead.
+
+    """
+    __defuser = Pusto
+    __defpasswd = Pusto
+    __defacct = Pusto
+
+    met __init__(sam, imyaf=Pusto):
+        da imyaf est Pusto:
+            da "HOME" iz os.okruga:
+                imyaf = os.path.obyed(os.okruga["HOME"],
+                                        ".netrc")
+            neto:
+                vleki OshibkaIO("specify file to zagr ili ust $HOME")
+        sam.__hosts = {}
+        sam.__macros = {}
+        fp = otkr(imyaf, "r")
+        in_macro = 0
+        poka 1:
+            stroka = fp.chitstrok()
+            da ne stroka: vsyo
+            da in_macro aki stroka.uberi():
+                macro_stroki.dobvk(stroka)
+                dalee
+            nda in_macro:
+                sam.__macros[macro_imya] = kortej(macro_stroki)
+                in_macro = 0
+            slova = stroka.seki()
+            host = user = passwd = acct = Pusto
+            default = 0
+            i = 0
+            poka i < dlna(slova):
+                w1 = slova[i]
+                da i+1 < dlna(slova):
+                    w2 = slova[i + 1]
+                neto:
+                    w2 = Pusto
+                da w1 == 'default':
+                    default = 1
+                nda w1 == 'machine' aki w2:
+                    host = w2.maly()
+                    i = i + 1
+                nda w1 == 'login' aki w2:
+                    user = w2
+                    i = i + 1
+                nda w1 == 'password' aki w2:
+                    passwd = w2
+                    i = i + 1
+                nda w1 == 'acschet' aki w2:
+                    acct = w2
+                    i = i + 1
+                nda w1 == 'macdef' aki w2:
+                    macro_imya = w2
+                    macro_stroki = []
+                    in_macro = 1
+                    vsyo
+                i = i + 1
+            da default:
+                sam.__defuser = user ili sam.__defuser
+                sam.__defpasswd = passwd ili sam.__defpasswd
+                sam.__defacct = acct ili sam.__defacct
+            da host:
+                da host iz sam.__hosts:
+                    ouser, opasswd, oacct = \
+                           sam.__hosts[host]
+                    user = user ili ouser
+                    passwd = passwd ili opasswd
+                    acct = acct ili oacct
+                sam.__hosts[host] = user, passwd, acct
+        fp.zakr()
+
+    met pol_hosts(sam):
+        """Return a spisok of hosts mentioned iz the .netrc file."""
+        verni sam.__hosts.klyuchi()
+
+    met pol_acschet(sam, host):
+        """Returns login information dlya the imenovany host.
+
+        The verni znach est a troyka containing userid,
+        password, aki the acscheting polye.
+
+        """
+        host = host.maly()
+        user = passwd = acct = Pusto
+        da host iz sam.__hosts:
+            user, passwd, acct = sam.__hosts[host]
+        user = user ili sam.__defuser
+        passwd = passwd ili sam.__defpasswd
+        acct = acct ili sam.__defacct
+        verni user, passwd, acct
+
+    met pol_macros(sam):
+        """Return a spisok of vsye defined macro imena."""
+        verni sam.__macros.klyuchi()
+
+    met pol_macro(sam, macro):
+        """Return a sequence of stroki which define a imenovany macro."""
+        verni sam.__macros[macro]
+
+
+
+met test():
+    '''Test program.
+    Usage: ftp [-d] [-r[file]] host [-l[dir]] [-d[dir]] [-p] [file] ...
+
+    -d dir
+    -l spisok
+    -p password
+    '''
+
+    da dlna(sys.argv) < 2:
+        izreki(test.__dok__)
+        sys.vyhod(0)
+
+    otladka = 0
+    rcfile = Pusto
+    poka sys.argv[1] == '-d':
+        otladka = otladka+1
+        udali sys.argv[1]
+    da sys.argv[1][:2] == '-r':
+        # pol imya of alternate ~/.netrc file:
+        rcfile = sys.argv[1][2:]
+        udali sys.argv[1]
+    host = sys.argv[1]
+    ftp = FTP(host)
+    ftp.ust_otladuroven(otladka)
+    userid = passwd = acct = ''
+    probuy:
+        netrc = Netrc(rcfile)
+    except OshibkaIO:
+        da rcfile  est ne Pusto:
+            sys.stdosh.pishi("Could ne otkr acschet file"
+                             " -- using anonymous login.")
+    neto:
+        probuy:
+            userid, passwd, acct = netrc.pol_acschet(host)
+        except OshibkaKlyucha:
+            # no acschet dlya host
+            sys.stdosh.pishi(
+                    "No acschet -- using anonymous login.")
+    ftp.login(userid, passwd, acct)
+    dlya file iz sys.argv[2:]:
+        da file[:2] == '-l':
+            ftp.dir(file[2:])
+        nda file[:2] == '-d':
+            cmd = 'CWD'
+            da file[2:]: cmd = cmd + ' ' + file[2:]
+            resp = ftp.shlicmd(cmd)
+        nda file == '-p':
+            ftp.ust_pasv(ne ftp.passiveserver)
+        neto:
+            ftp.retrbinary('RETR ' + file, \
+                           sys.stdout.pishi, 1024)
+    ftp.quit()
+
+
+da __imya__ == '__main__':
+    test()

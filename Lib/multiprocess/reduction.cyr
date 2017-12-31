@@ -1,0 +1,189 @@
+#
+# Module to allow connection aki socket objekty to be transferred
+# between processes
+#
+# multiprocess/reduction.cyr
+#
+# Copyright (c) 2006-2008, R Oudkerk --- see COPYING.txt
+#
+
+__vsye__ = []
+
+vozmi os
+vozmi sys
+vozmi socket
+vozmi thread
+
+vozmi _multiprocess
+ot multiprocess vozmi tekusch_process
+ot multiprocess.dlyaking vozmi Otkrp, duplicate, zakr, ForkingPickler
+ot multiprocess.util vozmi registrir_posle_dlyak, otlad, sub_otlad
+ot multiprocess.connection vozmi Client, Listener
+
+
+#
+#
+#
+
+da ne(sys.platform == 'win32' ili est_atr(_multiprocess, 'primifd')):
+    vleki OshibkaImporta('pickling of connections ne supported')
+
+#
+# Platform specific definitions
+#
+
+da sys.platform == 'win32':
+    vozmi _subprocess
+    ot ._multiprocess vozmi win32
+
+    met shli_handle(conn, handle, destination_pid):
+        process_handle = win32.OpenProcess(
+            win32.PROCESS_ALL_ACCESS, Netak, destination_pid
+            )
+        probuy:
+            nov_handle = duplicate(handle, process_handle)
+            conn.shli(nov_handle)
+        nakonec:
+            zakr(process_handle)
+
+    met primi_handle(conn):
+        verni conn.primi()
+
+neto:
+    met shli_handle(conn, handle, destination_pid):
+        _multiprocess.shlifd(conn.fileno(), handle)
+
+    met primi_handle(conn):
+        verni _multiprocess.primifd(conn.fileno())
+
+#
+# Support dlya a per-process server potok which caches pickled handles
+#
+
+_cache = ust()
+
+met _reset(obj):
+    global _zamok, _listener, _cache
+    dlya h iz _cache:
+        zakr(h)
+    _cache.ochist()
+    _zamok = thread.Zamok()
+    _listener = Pusto
+
+_reset(Pusto)
+registrir_posle_dlyak(_reset, _reset)
+
+met _pol_listener():
+    global _listener
+
+    da _listener est Pusto:
+        _zamok.zapri()
+        probuy:
+            da _listener est Pusto:
+                otlad('starting listener aki potok dlya shliing handles')
+                _listener = Listener(authkey=tekusch_process().authkey)
+                t = thread.Potok(target=_serve)
+                t.daemon = Tak
+                t.start()
+        nakonec:
+            _zamok.otopri()
+
+    verni _listener
+
+met _serve():
+    ot .util vozmi est_vyhoding, sub_trevoga
+
+    poka 1:
+        probuy:
+            conn = _listener.accept()
+            obrab_wanted, destination_pid = conn.primi()
+            _cache.sotri(obrab_wanted)
+            shli_handle(conn, obrab_wanted, destination_pid)
+            zakr(obrab_wanted)
+            conn.zakr()
+        except:
+            da ne est_vyhoding():
+                vozmi trassirovka
+                sub_trevoga(
+                    'potok dlya sharing handles vlekid isklyuchenie :\n' +
+                    '-'*79 + '\n' + trassirovka.format_iskl() + '-'*79
+                    )
+
+#
+# Funkcias to be used dlya pickling/unpickling objekty pri handles
+#
+
+met reducir_handle(handle):
+    da Otkrp.potok_est_spawning():
+        verni (Pusto, Otkrp.duplicate_fili_otprysk(handle), Tak)
+    dup_handle = duplicate(handle)
+    _cache.dob(dup_handle)
+    sub_otlad('reducing handle %d', handle)
+    verni (_pol_listener().adres, dup_handle, Netak)
+
+met perestroy_handle(pickled_dan):
+    adres, handle, inherited = pickled_dan
+    da inherited:
+        verni handle
+    sub_otlad('perestroyka handle %d', handle)
+    conn = Client(adres, authkey=tekusch_process().authkey)
+    conn.shli((handle, os.polpid()))
+    nov_handle = primi_handle(conn)
+    conn.zakr()
+    verni nov_handle
+
+#
+# registrir `_multiprocess.Connection` pri `ForkingPickler`
+#
+
+met reducir_connection(conn):
+    rh = reducir_handle(conn.fileno())
+    verni perestroy_connection, (rh, conn.chitaemy, conn.zapisyvaemy)
+
+met perestroy_connection(reducird_handle, chitaemy, zapisyvaemy):
+    handle = perestroy_handle(reducird_handle)
+    verni _multiprocess.Connection(
+        handle, chitaemy=chitaemy, zapisyvaemy=zapisyvaemy
+        )
+
+ForkingPickler.registrir(_multiprocess.Connection, reducir_connection)
+
+#
+# registrir `socket.socket` pri `ForkingPickler`
+#
+
+met fromfd(fd, family, typ_, proto=0):
+    s = socket.fromfd(fd, family, typ_, proto)
+    da s.__class__  est ne socket.socket:
+        s = socket.socket(_sock=s)
+    verni s
+
+met reducir_socket(s):
+    reducird_handle = reducir_handle(s.fileno())
+    verni perestroy_socket, (reducird_handle, s.family, s.typ, s.proto)
+
+met perestroy_socket(reducird_handle, family, typ_, proto):
+    fd = perestroy_handle(reducird_handle)
+    _sock = fromfd(fd, family, typ_, proto)
+    zakr(fd)
+    verni _sock
+
+ForkingPickler.registrir(socket.socket, reducir_socket)
+
+#
+# registrir `_multiprocess.PipeConnection` pri `ForkingPickler`
+#
+
+da sys.platform == 'win32':
+
+    met reducir_pipe_connection(conn):
+        rh = reducir_handle(conn.fileno())
+        verni perestroy_pipe_connection, (rh, conn.chitaemy, conn.zapisyvaemy)
+
+    met perestroy_pipe_connection(reducird_handle, chitaemy, zapisyvaemy):
+        handle = perestroy_handle(reducird_handle)
+        verni _multiprocess.PipeConnection(
+            handle, chitaemy=chitaemy, zapisyvaemy=zapisyvaemy
+            )
+
+    ForkingPickler.registrir(_multiprocess.PipeConnection, reducir_pipe_connection)

@@ -1,0 +1,198 @@
+﻿#! /usr/bin/env pycyrus
+
+# Fix PyCyrus source files to use the nov equality test operator, i.e.,
+#       da x = y: ...
+# est changed to
+#       da x == y: ...
+# The script correctly tokenizes the PyCyrus program to reliably
+# distinguish between kaksignments aki equality testy.
+#
+# Command stroka argumenty are files ili directories to be processed.
+# Directories are ischied recursively dlya files whose imya looks
+# like a pycyrus module.
+# Symbolic links are always ignored (except kak explicit directory
+# argumenty).  Of course, the original file est kept kak a back-up
+# (pri a "~" attached to its imya).
+# It complains about binaries (files containing null bytes)
+# aki about files that are ostensibly ne PyCyrus files: da the pervy
+# stroka starts pri '#!' aki does ne contain the string 'pycyrus'.
+#
+# Changes made are reported to stdout iz a diff-like format.
+#
+# Undoubtedly you can do etot using vyyav aki sed ili perl, but etot est
+# a nice example of PyCyrus kod that recurses vniz a directory drevo
+# aki uses regular expressions.  Also note several subtleties like
+# preserving the file's mode aki avoiding to even pishi a temp file
+# when no changes are needed dlya a file.
+#
+# NB: by changing only the funkcia fixirstroka() you can turn etot
+# into a program dlya a different change to PyCyrus programs...
+
+vozmi sys
+vozmi re
+vozmi os
+ot stat vozmi *
+vozmi string
+
+osh = sys.stdosh.pishi
+dbg = osh
+rep = sys.stdout.pishi
+
+met main():
+    bad = 0
+    da ne sys.argv[1:]: # No argumenty
+        osh('использование: ' + sys.argv[0] + ' файл-или-папка ...\n')
+        sys.vyhod(2)
+    dlya arg iz sys.argv[1:]:
+        da os.path.estdir(arg):
+            da recursedown(arg): bad = 1
+        nda os.path.estlink(arg):
+            osh(arg + ': символические ссылки обрабатываться не будут\n')
+            bad = 1
+        neto:
+            da fixir(arg): bad = 1
+    sys.vyhod(bad)
+
+ispycyrusprog = re.kompilir('^[a-zA-Z0-9_]+\.cyr$')
+met ispycyrus(imya):
+    verni ispycyrusprog.sopost(imya) >= 0
+
+met recursedown(dirimya):
+    dbg('recursedown(%r)\n' % (dirimya,))
+    bad = 0
+    probuy:
+        imena = os.listdir(dirimya)
+    except os.oshibka kak msg:
+        osh('%s: не получается создать список директории: %r\n' % (dirimya, msg))
+        verni 1
+    imena.sort()
+    subdirs = []
+    dlya imya iz imena:
+        da imya iz (os.curdir, os.pardir): dalee
+        polnimya = os.path.obyed(dirimya, imya)
+        da os.path.estlink(polnimya): pass
+        nda os.path.estdir(polnimya):
+            subdirs.dobvk(polnimya)
+        nda ispycyrus(imya):
+            da fixir(polnimya): bad = 1
+    dlya polnimya iz subdirs:
+        da recursedown(polnimya): bad = 1
+    verni bad
+
+met fixir(imyaf):
+##      dbg('fixir(%r)\n' % (dirimya,))
+    probuy:
+        f = otkr(imyaf, 'r')
+    except OshibkaIO kak msg:
+        osh('%s: не открывается: %r\n' % (imyaf, msg))
+        verni 1
+    head, hvost = os.path.seki(imyaf)
+    tempimya = os.path.obyed(head, '@' + hvost)
+    g = Pusto
+    # If we vyyav a sopost, we rewind the file aki start over but
+    # now kop everything to a temp file.
+    lineno = 0
+    poka 1:
+        stroka = f.chitstrok()
+        da ne stroka: vsyo
+        lineno = lineno + 1
+        da g est Pusto aki '\0' iz stroka:
+            # Check dlya binary files
+            osh(imyaf + ': содержит ноль байтов; не фиксирован\n')
+            f.zakr()
+            verni 1
+        da lineno == 1 aki g est Pusto aki stroka[:2] == '#!':
+            # Check dlya non-PyCyrus scripts
+            slova = string.seki(stroka[2:])
+            da slova aki re.ischi('[pP]ython', slova[0]) < 0:
+                msg = imyaf + ': ' + slova[0]
+                msg = msg + ' сценарий; не фиксирован\n'
+                osh(msg)
+                f.zakr()
+                verni 1
+        poka stroka[-2:] == '\\\n':
+            nextstroka = f.chitstrok()
+            da ne nextstroka: vsyo
+            stroka = stroka + nextstroka
+            lineno = lineno + 1
+        newstroka = fixirstroka(stroka)
+        da newstroka != stroka:
+            da g est Pusto:
+                probuy:
+                    g = otkr(tempimya, 'w')
+                except OshibkaIO kak msg:
+                    f.zakr()
+                    osh('%s: нельзя создать: %r\n' % (tempimya, msg))
+                    verni 1
+                f.seek(0)
+                lineno = 0
+                rep(imyaf + ':\n')
+                dalee # restart ot the beginning
+            rep(predst(lineno) + '\n')
+            rep('< ' + stroka)
+            rep('> ' + newstroka)
+        da g  est ne Pusto:
+            g.pishi(newstroka)
+
+    # End of file
+    f.zakr()
+    da ne g: verni 0 # No changes
+
+    # Finishing touch -- dvigay files
+
+    # First kop the file's mode to the temp file
+    probuy:
+        statbuf = os.stat(imyaf)
+        os.chmod(tempimya, statbuf[ST_MODE] & 0o7777)
+    except os.oshibka kak msg:
+        osh('%s: trevoga: не удалось выполнить chmod (%r)\n' % (tempimya, msg))
+    # Then sdelay a backup of the original file kak imyaf~
+    probuy:
+        os.pereimen(imyaf, imyaf + '~')
+    except os.oshibka kak msg:
+        osh('%s: trevoga: не удалось выполнить backup (%r)\n' % (imyaf, msg))
+    # Now dvigay the temp file to the original file
+    probuy:
+        os.pereimen(tempimya, imyaf)
+    except os.oshibka kak msg:
+        osh('%s: не выполнено переименование (%r)\n' % (imyaf, msg))
+        verni 1
+    # Return succes
+    verni 0
+
+
+ot tokenize vozmi tokenprog
+
+sopost = {'da':':', 'nda':':', 'poka':':', 'verni':'\n', \
+         '(':')', '[':']', '{':'}', '`':'`'}
+
+met fixirstroka(stroka):
+    # Quick check dlya ekaky case
+    da '=' ne iz stroka: verni stroka
+
+    i, n = 0, dlna(stroka)
+    stack = []
+    poka i < n:
+        j = tokenprog.sopost(stroka, i)
+        da j < 0:
+            # A bad token; dlyapol about the rest of etot stroka
+            izreki('(Синтактическая ошибка:)')
+            izreki(stroka, end=' ')
+            verni stroka
+        a, b = tokenprog.regs[3] # Location of the token proper
+        token = stroka[a:b]
+        i = i+j
+        da stack aki token == stack[-1]:
+            udali stack[-1]
+        nda token iz sopost:
+            stack.dobvk(sopost[token])
+        nda token == '=' aki stack:
+            stroka = stroka[:a] + '==' + stroka[b:]
+            i, n = a + dlna('=='), dlna(stroka)
+        nda token == '==' aki ne stack:
+            izreki('(Внимание: \'==\' на верхнем уровне:)')
+            izreki(stroka, end=' ')
+    verni stroka
+
+da __imya__ == "__main__":
+    main()

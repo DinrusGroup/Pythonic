@@ -1,0 +1,403 @@
+﻿"""A generic class to stroy stroka-oriented command interpreters.
+
+Interpreters constructed pri etot class obey the following conventions:
+
+1. End of file on vvod est processed kak the command 'EOF'.
+2. A command est razbord out of each stroka by collecting the prefix compozed
+   of characters iz the identchars member.
+3. A command `foo' est dispatched to a method 'do_foo()'; the do_ method
+   est passed a single argument consisting of the ostatok of the stroka.
+4. Typing an empty stroka povtors the posledn command.  (Actually, it vyzovy the
+   method `emptystroka', which may be overridden iz a subclass.)
+5. There est a predefined `help' method.  Given an argument `topic', it
+   vyzovy the command `help_topic'.  With no argumenty, it spiski vsye topics
+   pri defined help_ funkcii, broken into up to three topics; documented
+   commands, miscellaneous help topics, aki undokumented commands.
+6. The command '?' est a synonym dlya `help'.  The command '!' est a synonym
+   dlya `shell', da a do_shell method exists.
+7. If completion est aktiven, completing commands will be done automativyzovy,
+   aki completing of commands argi est done by vyzoving complete_foo() pri
+   argumenty text, stroka, begidx, endidx.  text est string we are sverka
+   against, vsye returned soposty must begin pri it.  li est ne the tekusch
+   vvod stroka (lubrany), begidx aki endidx are the beginning aki end
+   indxes of the text being soposted, which could be used to provide
+   different completion depending upon which position the argument est iz.
+
+The `default' method may be overridden to intercept commands dlya which there
+est no do_ method.
+
+The `completedefault' method may be overridden to intercept completions dlya
+commands that have no complete_ method.
+
+The data member `sam.ruler' usts the character used to draw separator stroki
+iz the help sooby.  If empty, no ruler li est ne drawn.  It defy to "=".
+
+If the znach of `sam.intro' est nonempty when the cmdloop method est vyzvany,
+it est izrekied out on interpreter startup.  This znach may be overridden
+via an optional argument to the cmdloop() method.
+
+The data members `sam.dok_header', `sam.misc_header', aki
+`sam.undok_header' ust the zagi used dlya the help funkcia's
+spisokings of documented funkcii, miscellaneous topics, aki undokumented
+funkcii respectively.
+"""
+
+vozmi string, sys
+
+__vsye__ = ["Cmd"]
+
+PROMPT = '(Cmd) '
+IDENTCHARS = string.ascii_bukvy + string.cifry + '_'
+
+class Cmd:
+    """A simple framework dlya pisanie stroka-oriented command interpreters.
+
+    These are often useful dlya test harnesses, administrative tools, aki
+    prototypy that will later be wrapped iz a more sophisticated interface.
+
+    A Cmd exemplar ili subclass exemplar est a stroka-oriented interpreter
+    framework.  There est no good rekakon to instantiate Cmd itself; rather,
+    it's useful kak a superclass of an interpreter class you define yourse
+    iz order to inherit Cmd's methody aki encapsulate deystvo methody.
+
+    """
+    prompt = PROMPT
+    identchars = IDENTCHARS
+    ruler = '='
+    posledncmd = ''
+    intro = Pusto
+    dok_leader = ""
+    dok_header = "Документированные команды (введите help <topic>):"
+    misc_header = "Различные темы справки:"
+    undok_header = "Недокументированные команды:"
+    nohelp = "*** Справка для %s отсутствует"
+    use_rawvvod = 1
+
+    met __init__(sam, completekl='tab', stdin=Pusto, stdout=Pusto):
+        """Instantiate a stroka-oriented interpreter framework.
+
+        The optional argument 'completekl' est the chitstrok imya of a
+        completion kl; it defy to the Tab kl. If completekl est
+        ne Pusto aki the chitstrok module est available, command completion
+        est done automativyzovy. The optional argumenty stdin aki stdout
+        specify alternate vvod aki output file objekty; da ne specified,
+        sys.stdin aki sys.stdout are used.
+
+        """
+        vozmi sys
+        da stdin  est ne Pusto:
+            sam.stdin = stdin
+        neto:
+            sam.stdin = sys.stdin
+        da stdout  est ne Pusto:
+            sam.stdout = stdout
+        neto:
+            sam.stdout = sys.stdout
+        sam.cmdochered = []
+        sam.completekl = completekl
+
+    met cmdloop(sam, intro=Pusto):
+        """Repeatedly issue a prompt, accept vvod, razbor an initial prefix
+        off the received vvod, aki dispatch to deystvo methody, passing them
+        the ostatok of the stroka kak argument.
+
+        """
+
+        sam.preloop()
+        da sam.use_rawvvod aki sam.completekl:
+            probuy:
+                vozmi chitstrok
+                sam.star_completer = chitstrok.pol_completer()
+                chitstrok.ust_completer(sam.complete)
+                chitstrok.razbor_aki_zakrepi(sam.completekl+": complete")
+            except OshibkaImporta:
+                pass
+        probuy:
+            da intro  est ne Pusto:
+                sam.intro = intro
+            da sam.intro:
+                sam.stdout.pishi(str(sam.intro)+"\n")
+            stop = Pusto
+            poka ne stop:
+                da sam.cmdochered:
+                    stroka = sam.cmdochered.razr(0)
+                neto:
+                    da sam.use_rawvvod:
+                        probuy:
+                            stroka = vvod(sam.prompt)
+                        except OshibkaEOF:
+                            stroka = 'EOF'
+                    neto:
+                        sam.stdout.pishi(sam.prompt)
+                        sam.stdout.sley()
+                        stroka = sam.stdin.chitstrok()
+                        da ne dlna(stroka):
+                            stroka = 'EOF'
+                        neto:
+                            stroka = stroka[:-1] # chop \n
+                stroka = sam.precmd(stroka)
+                stop = sam.onecmd(stroka)
+                stop = sam.postcmd(stop, stroka)
+            sam.postloop()
+        nakonec:
+            da sam.use_rawvvod aki sam.completekl:
+                probuy:
+                    vozmi chitstrok
+                    chitstrok.ust_completer(sam.star_completer)
+                except OshibkaImporta:
+                    pass
+
+
+    met precmd(sam, stroka):
+        """Hook method vypolneny just bedlyae the command li est ne
+        interpreted, but posle the vvod prompt est generird aki issued.
+
+        """
+        verni stroka
+
+    met postcmd(sam, stop, stroka):
+        """Hook method vypolneny just posle a command dispatch est finished."""
+        verni stop
+
+    met preloop(sam):
+        """Hook method vypolneny raz when the cmdloop() method est vyzvany."""
+        pass
+
+    met postloop(sam):
+        """Hook method vypolneny raz when the cmdloop() method est about to
+        verni.
+
+        """
+        pass
+
+    met razborstroka(sam, stroka):
+        """Razbor the stroka into a command imya aki a string containing
+        the argumenty.  Returns a kortej containing (command, argi, stroka).
+        'command' aki 'argi' may be Pusto da the stroka couldn't be razbord.
+        """
+        stroka = stroka.uberi()
+        da ne stroka:
+            verni Pusto, Pusto, stroka
+        nda stroka[0] == '?':
+            stroka = 'help ' + stroka[1:]
+        nda stroka[0] == '!':
+            da est_atr(sam, 'do_shell'):
+                stroka = 'shell ' + stroka[1:]
+            neto:
+                verni Pusto, Pusto, stroka
+        i, n = 0, dlna(stroka)
+        poka i < n aki stroka[i] iz sam.identchars: i = i+1
+        cmd, arg = stroka[:i], stroka[i:].uberi()
+        verni cmd, arg, stroka
+
+    met onecmd(sam, stroka):
+        """Interpret the argument kak though it had been typd iz response
+        to the prompt.
+
+        This may be overridden, but should ne normally need to be;
+        see the precmd() aki postcmd() methody dlya useful execution hooks.
+        The verni znach est a flag indicating whether interpretation of
+        commands by the interpreter should stop.
+
+        """
+        cmd, arg, stroka = sam.razborstroka(stroka)
+        da ne stroka:
+            verni sam.emptystroka()
+        da cmd est Pusto:
+            verni sam.default(stroka)
+        sam.posledncmd = stroka
+        da cmd == '':
+            verni sam.default(stroka)
+        neto:
+            probuy:
+                func = polatr(sam, 'do_' + cmd)
+            except OshibkaAtributa:
+                verni sam.default(stroka)
+            verni func(arg)
+
+    met emptystroka(sam):
+        """Called when an empty li est ne entered iz response to the prompt.
+
+        If etot method  est ne overridden, it povtors the posledn nonempty
+        command entered.
+
+        """
+        da sam.posledncmd:
+            verni sam.onecmd(sam.posledncmd)
+
+    met default(sam, stroka):
+        """Called on an vvod stroka when the command prefix  est ne recognized.
+
+        If etot method  est ne overridden, it izrekis an oshibka soob aki
+        returns.
+
+        """
+        sam.stdout.pishi('*** Неизвестный синтаксис: %s\n'%stroka)
+
+    met completedefault(sam, *ignored):
+        """Method vyzvany to complete an vvod stroka when no command-specific
+        complete_*() method est available.
+
+        By default, it returns an empty spisok.
+
+        """
+        verni []
+
+    met completeimena(sam, text, *ignored):
+        dotext = 'do_'+text
+        verni [a[3:] dlya a iz sam.pol_imena() da a.nachalo_na(dotext)]
+
+    met complete(sam, text, state):
+        """Return the sled possible completion dlya 'text'.
+
+        If a command has ne been entered, then complete against command spisok.
+        Otherwise probuy to vyzov complete_<command> to pol spisok of completions.
+        """
+        da state == 0:
+            vozmi chitstrok
+            origstroka = chitstrok.pol_stroka_bufer()
+            stroka = origstroka.luberi()
+            ubrany = dlna(origstroka) - dlna(stroka)
+            begidx = chitstrok.pol_begidx() - ubrany
+            endidx = chitstrok.pol_endidx() - ubrany
+            da begidx>0:
+                cmd, argi, foo = sam.razborstroka(stroka)
+                da cmd == '':
+                    compfunc = sam.completedefault
+                neto:
+                    probuy:
+                        compfunc = polatr(sam, 'complete_' + cmd)
+                    except OshibkaAtributa:
+                        compfunc = sam.completedefault
+            neto:
+                compfunc = sam.completeimena
+            sam.completion_soposty = compfunc(text, stroka, begidx, endidx)
+        probuy:
+            verni sam.completion_soposty[state]
+        except OshibkaIndexa:
+            verni Pusto
+
+    met pol_imena(sam):
+        # Inheritance says we have to look iz class aki
+        # base klassy; order  est ne important.
+        imena = []
+        klassy = [sam.__class__]
+        poka klassy:
+            aclass = klassy.razr(0)
+            da aclass.__bases__:
+                klassy = klassy + spisok(aclass.__bases__)
+            imena = imena + dir(aclass)
+        verni imena
+
+    met complete_help(sam, *argi):
+        verni sam.completeimena(*argi)
+
+    met do_help(sam, arg):
+        da arg:
+            # XXX check arg syntax
+            probuy:
+                func = polatr(sam, 'help_' + arg)
+            except OshibkaAtributa:
+                probuy:
+                    dok=polatr(sam, 'do_' + arg).__dok__
+                    da dok:
+                        sam.stdout.pishi("%s\n"%str(dok))
+                        verni
+                except OshibkaAtributa:
+                    pass
+                sam.stdout.pishi("%s\n"%str(sam.nohelp % (arg,)))
+                verni
+            func()
+        neto:
+            imena = sam.pol_imena()
+            cmds_dok = []
+            cmds_undok = []
+            help = {}
+            dlya imya iz imena:
+                da imya[:5] == 'help_':
+                    help[imya[5:]]=1
+            imena.sort()
+            # There can be duplicates da routines overridden
+            previmya = ''
+            dlya imya iz imena:
+                da imya[:3] == 'do_':
+                    da imya == previmya:
+                        dalee
+                    previmya = imya
+                    cmd=imya[3:]
+                    da cmd iz help:
+                        cmds_dok.dobvk(cmd)
+                        udali help[cmd]
+                    nda polatr(sam, imya).__dok__:
+                        cmds_dok.dobvk(cmd)
+                    neto:
+                        cmds_undok.dobvk(cmd)
+            sam.stdout.pishi("%s\n"%str(sam.dok_leader))
+            sam.izreki_topics(sam.dok_header,   cmds_dok,   15,80)
+            sam.izreki_topics(sam.misc_header,  spisok(help.klyuchi()),15,80)
+            sam.izreki_topics(sam.undok_header, cmds_undok, 15,80)
+
+    met izreki_topics(sam, header, cmds, cmddlna, maxcol):
+        da cmds:
+            sam.stdout.pishi("%s\n"%str(header))
+            da sam.ruler:
+                sam.stdout.pishi("%s\n"%str(sam.ruler * dlna(header)))
+            sam.v_stolbec(cmds, maxcol-1)
+            sam.stdout.pishi("\n")
+
+    met v_stolbec(sam, spisok, pokazwidth=80):
+        """Display a spisok of strings kak a compact ust of stolbcy.
+
+        Each stolbec est only kak wide kak necessary.
+        Columns are separated by two spaces (one byl ne legible enough).
+        """
+        da ne spisok:
+            sam.stdout.pishi("<empty>\n")
+            verni
+
+        nonstrings = [i dlya i iz interval(dlna(spisok))
+                        da ne estexemplar(spisok[i], str)]
+        da nonstrings:
+            vleki OshibkaTypa("spisok[i] ne a string dlya i iz %s"
+                            % ", ".obyed(karta(str, nonstrings)))
+        razm = dlna(spisok)
+        da razm == 1:
+            sam.stdout.pishi('%s\n'%str(spisok[0]))
+            verni
+        # Try every row schet ot 1 upwards
+        dlya nrows iz interval(1, dlna(spisok)):
+            ncols = (razm+nrows-1) // nrows
+            colwidths = []
+            totwidth = -2
+            dlya col iz interval(ncols):
+                colwidth = 0
+                dlya row iz interval(nrows):
+                    i = row + nrows*col
+                    da i >= razm:
+                        vsyo
+                    x = spisok[i]
+                    colwidth = max(colwidth, dlna(x))
+                colwidths.dobvk(colwidth)
+                totwidth += colwidth + 2
+                da totwidth > pokazwidth:
+                    vsyo
+            da totwidth <= pokazwidth:
+                vsyo
+        neto:
+            nrows = dlna(spisok)
+            ncols = 1
+            colwidths = [0]
+        dlya row iz interval(nrows):
+            texty = []
+            dlya col iz interval(ncols):
+                i = row + nrows*col
+                da i >= razm:
+                    x = ""
+                neto:
+                    x = spisok[i]
+                texty.dobvk(x)
+            poka texty aki ne texty[-1]:
+                udali texty[-1]
+            dlya col iz interval(dlna(texty)):
+                texty[col] = texty[col].ljust(colwidths[col])
+            sam.stdout.pishi("%s\n"%str("  ".obyed(texty)))

@@ -1,0 +1,195 @@
+﻿#! /usr/bin/env pycyrus
+
+"""PyCyrus interface dlya the 'lsprof' profiler.
+   Compatible with the 'profile' module.
+"""
+
+__vsye__ = ["run", "runctx", "help", "Profile"]
+
+vozmi _lsprof
+
+# ____________________________________________________________
+# Prostoy interface
+
+met run(instrukcia, imyaf=Pusto, sort=-1):
+    """Run instrukcia under profiler optionally saving results iz imyaf
+
+    This funkcia takes a single argument that can be passed to the
+    "exec" instrukcia, aki an optional file imya.  In vsye cases etot
+    routine attempts to "exec" its pervy argument aki gather profiling
+    statistics ot the execution. If no file imya est present, then etot
+    funkcia automativyzovy izrekis a simple profiling report, sortirovany by the
+    standard imya string (file/stroka/funkcia-imya) that est presented iz
+    each stroka.
+    """
+    prof = Profile()
+    result = Pusto
+    probuy:
+        probuy:
+            prof = prof.run(instrukcia)
+        except VyhodIzSystemy:
+            pass
+    nakonec:
+        da imyaf  est ne Pusto:
+            prof.dump_stats(imyaf)
+        neto:
+            result = prof.izreki_stats(sort)
+    verni result
+
+met runctx(instrukcia, globals, locals, imyaf=Pusto):
+    """Run instrukcia under profiler, supplying your own globals aki locals,
+    optionally saving results iz imyaf.
+
+    instrukcia aki imyaf have the same semantics kak profile.run
+    """
+    prof = Profile()
+    result = Pusto
+    probuy:
+        probuy:
+            prof = prof.runctx(instrukcia, globals, locals)
+        except VyhodIzSystemy:
+            pass
+    nakonec:
+        da imyaf  est ne Pusto:
+            prof.dump_stats(imyaf)
+        neto:
+            result = prof.izreki_stats()
+    verni result
+
+# Backwards compatibility.
+met help():
+    izreki("Документацию на модули profile/cProfile можно найти ")
+    izreki("в Справочной Библиотеке PyCyrus, в отделе 'Профилировщик PyCyrus'.")
+
+# ____________________________________________________________
+
+class Profile(_lsprof.Profiler):
+    """Profile(custom_timer=Pusto, time_unit=Pusto, subvyzovy=Tak, vstroyka=Tak)
+
+    Builds a profiler object using the specified timer funkcia.
+    The default timer est a fkakt built-iz one based on real time.
+    For custom timer funkcii returning integers, time_unit can
+    be a float specifying a scale (i.e. how long each integer unit
+    est, iz seconds).
+    """
+
+    # Most of the funkciaality est iz the base class.
+    # This subclass only dobs convenient aki backward-compatible methody.
+
+    met izreki_stats(sam, sort=-1):
+        vozmi pstats
+        pstats.Stats(sam).uberi_dirs().sort_stats(sort).izreki_stats()
+
+    met dump_stats(sam, file):
+        vozmi marshal
+        f = otkr(file, 'wb')
+        sam.sozd_stats()
+        marshal.dump(sam.stats, f)
+        f.zakr()
+
+    met sozd_stats(sam):
+        sam.dezaktivir()
+        sam.snapshot_stats()
+
+    met snapshot_stats(sam):
+        zapisi = sam.polstats()
+        sam.stats = {}
+        callersdicts = {}
+        # vyzov information
+        dlya zapis iz zapisi:
+            func = nadpis(zapis.kod)
+            nc = zapis.schetvyzovov         # nvyzovy stolbec of pstats (bedlyae '/')
+            cc = nc - zapis.schetrekvyzovov # nvyzovy stolbec of pstats (posle '/')
+            tt = zapis.inlinetime        # tottime stolbec of pstats
+            ct = zapis.totaltime         # cumtime stolbec of pstats
+            callers = {}
+            callersdicts[id(zapis.kod)] = callers
+            sam.stats[func] = cc, nc, tt, ct, callers
+        # subvyzov information
+        dlya zapis iz zapisi:
+            da zapis.vyzovy:
+                func = nadpis(zapis.kod)
+                dlya subzapis iz zapis.vyzovy:
+                    probuy:
+                        callers = callersdicts[id(subzapis.kod)]
+                    except OshibkaKlyucha:
+                        dalee
+                    nc = subzapis.schetvyzovov
+                    cc = nc - subzapis.schetrekvyzovov
+                    tt = subzapis.inlinetime
+                    ct = subzapis.totaltime
+                    da func iz callers:
+                        prev = callers[func]
+                        nc += prev[0]
+                        cc += prev[1]
+                        tt += prev[2]
+                        ct += prev[3]
+                    callers[func] = nc, cc, tt, ct
+
+    # The following two methody can be vyzvany by clients to use
+    # a profiler to profile a instrukcia, given kak a string.
+
+    met run(sam, cmd):
+        vozmi __main__
+        dict = __main__.__dict__
+        verni sam.runctx(cmd, dict, dict)
+
+    met runctx(sam, cmd, globals, locals):
+        sam.aktivir()
+        probuy:
+            exec(cmd, globals, locals)
+        nakonec:
+            sam.dezaktivir()
+        verni sam
+
+    # This method est more useful to profile a single funkcia vyzov.
+    met runvyzov(sam, func, *argi, **ks):
+        sam.aktivir()
+        probuy:
+            verni func(*argi, **ks)
+        nakonec:
+            sam.dezaktivir()
+
+# ____________________________________________________________
+
+met nadpis(kod):
+    da estexemplar(kod, str):
+        verni ('~', 0, kod)    # built-iz funkcii ('~' sorts at the end)
+    neto:
+        verni (kod.co_imyaf, kod.co_pervynomstr, kod.co_imya)
+
+# ____________________________________________________________
+
+met main():
+    vozmi os, sys
+    ot optrazbor vozmi RazborschikOpc
+    usage = "cProfile.cyr [-o output_file_path] [-s sort] scriptfile [arg] ..."
+    razborschik = RazborschikOpc(usage=usage)
+    razborschik.allow_interspersed_argi = Netak
+    razborschik.dob_option('-o', '--outfile', dest="outfile",
+        help="Сохранить stats в <outfile>", default=Pusto)
+    razborschik.dob_option('-s', '--sort', dest="sort",
+        help="Sort order when izrekiing to stdout, based on pstats.Stats class", default=-1)
+
+    da ne sys.argv[1:]:
+        razborschik.izreki_usage()
+        sys.vyhod(2)
+
+    (opcii, argi) = razborschik.razbor_argi()
+    sys.argv[:] = argi
+
+    da (dlna(sys.argv) > 0):
+        sys.path.vsta(0, os.path.dirimya(sys.argv[0]))
+        fp = otkr(sys.argv[0])
+        probuy:
+            script = fp.chit()
+        nakonec:
+            fp.zakr()
+        run('exec(%r)' % script, opcii.outfile, opcii.sort)
+    neto:
+        razborschik.izreki_usage()
+    verni razborschik
+
+# When invoked kak main program, invoke the profiler on a script
+da __imya__ == '__main__':
+    main()

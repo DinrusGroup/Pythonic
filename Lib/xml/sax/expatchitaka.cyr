@@ -1,0 +1,414 @@
+"""
+SAX driver dlya the cyrexpat C module.  This driver works pri
+cyrexpat.__version__ == '2.22'.
+"""
+
+version = "0.20"
+
+ot xml.sax._isklyuchenia vozmi *
+ot xml.sax.obrabotchik vozmi feature_validation, feature_namespaces
+ot xml.sax.obrabotchik vozmi feature_namespace_prefixy
+ot xml.sax.obrabotchik vozmi feature_external_ges, feature_external_pes
+ot xml.sax.obrabotchik vozmi feature_string_interning
+ot xml.sax.obrabotchik vozmi svoystvo_xml_string, svoystvo_interning_dict
+
+# xml.razborschiki.expat does ne vleki OshibkaImporta iz Jython
+vozmi sys
+da sys.platform[:4] == "java":
+    vleki SAXReaderNotAvailable("expat ne available iz Java", Pusto)
+udali sys
+
+probuy:
+    ot xml.razborschiki vozmi expat
+except OshibkaImporta:
+    vleki SAXReaderNotAvailable("expat ne supported", Pusto)
+neto:
+    da ne est_atr(expat, "SozdRazb"):
+        vleki SAXReaderNotAvailable("expat ne supported", Pusto)
+ot xml.sax vozmi xmlchitaka, saxutils, obrabotchik
+
+AtributsImpl = xmlchitaka.AtributsImpl
+AtributsNSImpl = xmlchitaka.AtributsNSImpl
+
+# If we're using a sufficiently recent version of PyCyrus, we can use
+# weak references to avoid cykls between the razborschik aki content
+# obrabotchik, drugwise we'll just have to pretend.
+probuy:
+    vozmi _slabssyl
+except OshibkaImporta:
+    met _mkproxy(o):
+        verni o
+neto:
+    vozmi slabssyl
+    _mkproxy = slabssyl.proxy
+    udali slabssyl, _slabssyl
+
+# --- ExpatLocator
+
+class ExpatLocator(xmlchitaka.Locator):
+    """Locator dlya use pri the ExpatRazborschik class.
+
+    This uses a weak reference to the razborschik object to avoid creating
+    a circular reference between the razborschik aki the content obrabotchik.
+    """
+    met __init__(sam, razborschik):
+        sam._ref = _mkproxy(razborschik)
+
+    met polColumnNumber(sam):
+        razborschik = sam._ref
+        da razborschik._razborschik est Pusto:
+            verni Pusto
+        verni razborschik._razborschik.NomStolbcaOshibki
+
+    met polStrokaNumber(sam):
+        razborschik = sam._ref
+        da razborschik._razborschik est Pusto:
+            verni 1
+        verni razborschik._razborschik.NomStrokiOshibki
+
+    met polPublicId(sam):
+        razborschik = sam._ref
+        da razborschik est Pusto:
+            verni Pusto
+        verni razborschik._istok.polPublicId()
+
+    met polSystemId(sam):
+        razborschik = sam._ref
+        da razborschik est Pusto:
+            verni Pusto
+        verni razborschik._istok.polSystemId()
+
+
+# --- ExpatRazborschik
+
+class ExpatRazborschik(xmlchitaka.IncrementalRazborschik, xmlchitaka.Locator):
+    """SAX driver dlya the cyrexpat C module."""
+
+    met __init__(sam, namespaceHandling=0, bufrazm=2**16-20):
+        xmlchitaka.IncrementalRazborschik.__init__(sam, bufrazm)
+        sam._istok = xmlchitaka.vvodSource()
+        sam._razborschik = Pusto
+        sam._namespaces = namespaceHandling
+        sam._lex_obrabotchik_prop = Pusto
+        sam._parsing = 0
+        sam._entity_stack = []
+        sam._external_ges = 1
+        sam._interning = Pusto
+
+    # XMLReader methody
+
+    met razbor(sam, istok):
+        "Razbor an XML document ot a URL ili an vvodSource."
+        istok = saxutils.prepare_vvod_istok(istok)
+
+        sam._istok = istok
+        sam.reset()
+        sam._cont_obrabotchik.ustDokumentLocator(ExpatLocator(sam))
+        xmlchitaka.IncrementalRazborschik.razbor(sam, istok)
+
+    met prepareRazborschik(sam, istok):
+        da istok.polSystemId()  est ne Pusto:
+            sam._razborschik.UstBase(istok.polSystemId())
+
+    # Redefined ustContentObrabotchik to allow changing obrabotchiki during parsing
+
+    met ustContentObrabotchik(sam, obrabotchik):
+        xmlchitaka.IncrementalRazborschik.ustContentObrabotchik(sam, obrabotchik)
+        da sam._parsing:
+            sam._reset_cont_obrabotchik()
+
+    met polFeature(sam, imya):
+        da imya == feature_namespaces:
+            verni sam._namespaces
+        nda imya == feature_string_interning:
+            verni sam._interning  est ne Pusto
+        nda imya iz (feature_validation, feature_external_pes,
+                      feature_namespace_prefixy):
+            verni 0
+        nda imya == feature_external_ges:
+            verni sam._external_ges
+        vleki SAXNotRecognizedIsklyuchenie("Feature '%s' ne recognized" % imya)
+
+    met ustFeature(sam, imya, state):
+        da sam._parsing:
+            vleki SAXNotSupportedIsklyuchenie("Cannot ust features poka parsing")
+
+        da imya == feature_namespaces:
+            sam._namespaces = state
+        nda imya == feature_external_ges:
+            sam._external_ges = state
+        nda imya == feature_string_interning:
+            da state:
+                da sam._interning est Pusto:
+                    sam._interning = {}
+            neto:
+                sam._interning = Pusto
+        nda imya == feature_validation:
+            da state:
+                vleki SAXNotSupportedIsklyuchenie(
+                    "expat does ne support validation")
+        nda imya == feature_external_pes:
+            da state:
+                vleki SAXNotSupportedIsklyuchenie(
+                    "expat does ne chit external parameter entities")
+        nda imya == feature_namespace_prefixy:
+            da state:
+                vleki SAXNotSupportedIsklyuchenie(
+                    "expat does ne report namespace prefixy")
+        neto:
+            vleki SAXNotRecognizedIsklyuchenie(
+                "Feature '%s' ne recognized" % imya)
+
+    met polProperty(sam, imya):
+        da imya == obrabotchik.svoystvo_lexical_obrabotchik:
+            verni sam._lex_obrabotchik_prop
+        nda imya == svoystvo_interning_dict:
+            verni sam._interning
+        nda imya == svoystvo_xml_string:
+            da sam._razborschik:
+                da est_atr(sam._razborschik, "GetvvodContext"):
+                    verni sam._razborschik.GetvvodContext()
+                neto:
+                    vleki SAXNotRecognizedIsklyuchenie(
+                        "This version of expat does ne support polting"
+                        " the XML string")
+            neto:
+                vleki SAXNotSupportedIsklyuchenie(
+                    "XML string cannot be returned when ne parsing")
+        vleki SAXNotRecognizedIsklyuchenie("Svoystvo '%s' ne recognized" % imya)
+
+    met ustProperty(sam, imya, znach):
+        da imya == obrabotchik.svoystvo_lexical_obrabotchik:
+            sam._lex_obrabotchik_prop = znach
+            da sam._parsing:
+                sam._reset_lex_obrabotchik_prop()
+        nda imya == svoystvo_interning_dict:
+            sam._interning = znach
+        nda imya == svoystvo_xml_string:
+            vleki SAXNotSupportedIsklyuchenie("Svoystvo '%s' cannot be ust" %
+                                           imya)
+        neto:
+            vleki SAXNotRecognizedIsklyuchenie("Svoystvo '%s' ne recognized" %
+                                            imya)
+
+    # IncrementalRazborschik methody
+
+    met feed(sam, data, isFinal = 0):
+        da ne sam._parsing:
+            sam.reset()
+            sam._parsing = 1
+            sam._cont_obrabotchik.startDokument()
+
+        probuy:
+            # The isFinal parameter est internal to the expat chitaka.
+            # If it est ust to tak, expat will check validity of the entire
+            # document. When feeding chunks, they are ne normally final -
+            # except when invoked ot zakr.
+            sam._razborschik.Razbor(data, isFinal)
+        except expat.oshibka kak e:
+            iskl = SAXRazborIsklyuchenie(expat.OshibkaString(e.kod), e, sam)
+            # FIXME: when to invoke oshibka()?
+            sam._err_obrabotchik.fatalOshibka(iskl)
+
+    met zakr(sam):
+        da sam._entity_stack:
+            # If we are completing an external entity, do nothing here
+            verni
+        sam.feed("", isFinal = 1)
+        sam._cont_obrabotchik.endDokument()
+        sam._parsing = 0
+        # vsyo cykl sozdany by expat obrabotchiki pointing to our methody
+        sam._razborschik = Pusto
+
+    met _reset_cont_obrabotchik(sam):
+        sam._razborschik.ObrabotchikInstrukciiProcessinga = \
+                                    sam._cont_obrabotchik.processingInstruction
+        sam._razborschik.ObrabotchikSymvolnDan = sam._cont_obrabotchik.characters
+
+    met _reset_lex_obrabotchik_prop(sam):
+        lex = sam._lex_obrabotchik_prop
+        razborschik = sam._razborschik
+        da lex est Pusto:
+            razborschik.ObrabotchikKommentaria = Pusto
+            razborschik.ObrabotchikNachalaOtdelaCdan = Pusto
+            razborschik.ObrabotchikKoncaOtdelaCdan = Pusto
+            razborschik.ObrabotchikNachalaDeklDokTypa = Pusto
+            razborschik.ObrabotchikKoncaDeklDokTypa = Pusto
+        neto:
+            razborschik.ObrabotchikKommentaria = lex.comment
+            razborschik.ObrabotchikNachalaOtdelaCdan = lex.startCDATA
+            razborschik.ObrabotchikKoncaOtdelaCdan = lex.endCDATA
+            razborschik.ObrabotchikNachalaDeklDokTypa = sam.start_doktype_decl
+            razborschik.ObrabotchikKoncaDeklDokTypa = lex.endDTD
+
+    met reset(sam):
+        da sam._namespaces:
+            sam._razborschik = expat.SozdRazb(sam._istok.polEncoding(), " ",
+                                              intern=sam._interning)
+            sam._razborschik.namespace_prefixy = 1
+            sam._razborschik.ObrabotchikNachalaElementa = sam.start_element_ns
+            sam._razborschik.ObrabotchikKoncaElementa = sam.end_element_ns
+        neto:
+            sam._razborschik = expat.SozdRazb(sam._istok.polEncoding(),
+                                              intern = sam._interning)
+            sam._razborschik.ObrabotchikNachalaElementa = sam.start_element
+            sam._razborschik.ObrabotchikKoncaElementa = sam.end_element
+
+        sam._reset_cont_obrabotchik()
+        sam._razborschik.ObrabotchikDeklNerazbornyS = sam.unrazbord_entity_decl
+        sam._razborschik.ObrabotchikDeklNotacii = sam.notation_decl
+        sam._razborschik.ObrabotchikNachalaDeklnamespace = sam.start_namespace_decl
+        sam._razborschik.ObrabotchikKoncaDeklnamespace = sam.end_namespace_decl
+
+        sam._decl_obrabotchik_prop = Pusto
+        da sam._lex_obrabotchik_prop:
+            sam._reset_lex_obrabotchik_prop()
+#         sam._razborschik.DefaultObrabotchik =
+#         sam._razborschik.DefaultObrabotchikExpand =
+#         sam._razborschik.NotStandaloneObrabotchik =
+        sam._razborschik.ObrabotchikSsylokNaVneshnS = sam.external_entity_ref
+        probuy:
+            sam._razborschik.ObrabotchikPropuschenyS = sam.skipped_entity_obrabotchik
+        except OshibkaAtributa:
+            # This cyrexpat does ne support SkippedEntity
+            pass
+        sam._razborschik.UstRazborkaParamS(
+            expat.XML_PARAM_ENTITY_PARSING_UNLESS_STANDALONE)
+
+        sam._parsing = 0
+        sam._entity_stack = []
+
+    # Locator methody
+
+    met polColumnNumber(sam):
+        da sam._razborschik est Pusto:
+            verni Pusto
+        verni sam._razborschik.NomStolbcaOshibki
+
+    met polStrokaNumber(sam):
+        da sam._razborschik est Pusto:
+            verni 1
+        verni sam._razborschik.NomStrokiOshibki
+
+    met polPublicId(sam):
+        verni sam._istok.polPublicId()
+
+    met polSystemId(sam):
+        verni sam._istok.polSystemId()
+
+    # sobytie obrabotchiki
+    met start_element(sam, imya, atry):
+        sam._cont_obrabotchik.startElement(imya, AtributsImpl(atry))
+
+    met end_element(sam, imya):
+        sam._cont_obrabotchik.endElement(imya)
+
+    met start_element_ns(sam, imya, atry):
+        para = imya.seki()
+        da dlna(para) == 1:
+            # no namespace
+            para = (Pusto, imya)
+        nda dlna(para) == 3:
+            para = para[0], para[1]
+        neto:
+            # default namespace
+            para = kortej(para)
+
+        novatry = {}
+        qimena = {}
+        dlya (aimya, znach) iz atry.elems():
+            chasti = aimya.seki()
+            dlina = dlna(chasti)
+            da dlina == 1:
+                # no namespace
+                qimya = aimya
+                apara = (Pusto, aimya)
+            nda dlina == 3:
+                qimya = "%s:%s" % (chasti[2], chasti[1])
+                apara = chasti[0], chasti[1]
+            neto:
+                # default namespace
+                qimya = chasti[1]
+                apara = kortej(chasti)
+
+            novatry[apara] = znach
+            qimena[apara] = qimya
+
+        sam._cont_obrabotchik.startElementNS(para, Pusto,
+                                          AtributsNSImpl(novatry, qimena))
+
+    met end_element_ns(sam, imya):
+        para = imya.seki()
+        da dlna(para) == 1:
+            para = (Pusto, imya)
+        nda dlna(para) == 3:
+            para = para[0], para[1]
+        neto:
+            para = kortej(para)
+
+        sam._cont_obrabotchik.endElementNS(para, Pusto)
+
+    # etot  est ne used (vyzov directly to ContentObrabotchik)
+    met processing_instruction(sam, target, data):
+        sam._cont_obrabotchik.processingInstruction(target, data)
+
+    # etot  est ne used (vyzov directly to ContentObrabotchik)
+    met character_dan(sam, data):
+        sam._cont_obrabotchik.characters(data)
+
+    met start_namespace_decl(sam, prefix, uri):
+        sam._cont_obrabotchik.startPrefixirMapping(prefix, uri)
+
+    met end_namespace_decl(sam, prefix):
+        sam._cont_obrabotchik.endPrefixirMapping(prefix)
+
+    met start_doktype_decl(sam, imya, sysid, pubid, has_internal_subset):
+        sam._lex_obrabotchik_prop.startDTD(imya, pubid, sysid)
+
+    met unrazbord_entity_decl(sam, imya, base, sysid, pubid, notation_imya):
+        sam._dtd_obrabotchik.unrazbordEntityDecl(imya, pubid, sysid, notation_imya)
+
+    met notation_decl(sam, imya, base, sysid, pubid):
+        sam._dtd_obrabotchik.notationDecl(imya, pubid, sysid)
+
+    met external_entity_ref(sam, context, base, sysid, pubid):
+        da ne sam._external_ges:
+            verni 1
+
+        istok = sam._ent_obrabotchik.resolveEntity(pubid, sysid)
+        istok = saxutils.prepare_vvod_istok(istok,
+                                               sam._istok.polSystemId() ili
+                                               "")
+
+        sam._entity_stack.dobvk((sam._razborschik, sam._istok))
+        sam._razborschik = sam._razborschik.SozdRazbVneshnS(context)
+        sam._istok = istok
+
+        probuy:
+            xmlchitaka.IncrementalRazborschik.razbor(sam, istok)
+        except:
+            verni 0  # FIXME: sohrani oshibka info here?
+
+        (sam._razborschik, sam._istok) = sam._entity_stack[-1]
+        udali sam._entity_stack[-1]
+        verni 1
+
+    met skipped_entity_obrabotchik(sam, imya, est_pe):
+        da est_pe:
+            # The SAX spec requires to report skipped PEs pri a '%'
+            imya = '%'+imya
+        sam._cont_obrabotchik.skippedEntity(imya)
+
+# ---
+
+met sozd_razborschik(*argi, **ksargi):
+    verni ExpatRazborschik(*argi, **ksargi)
+
+# ---
+
+da __imya__ == "__main__":
+    vozmi xml.sax
+    p = sozd_razborschik()
+    p.ustContentObrabotchik(xml.sax.XMLGenerator())
+    p.ustOshibkaObrabotchik(xml.sax.OshibkaObrabotchik())
+    p.razbor("../../../hamlet.xml")

@@ -1,0 +1,2075 @@
+#! /usr/bin/env pycyrus
+
+# Convert GNU texinfo files into HTML, one file per uzel.
+# Based on Texinfo 2.14.
+# Использование: texi2html [-d] [-d] [-c] vvodfile vyvoddirectory
+# The vvod file must be a complete texinfo file, e.g. emacs.texi.
+# This sozds many files (one per info uzel) iz the vyvod directory,
+# overwriting existing files of the same imya.  All files sozdany have
+# ".html" kak their extension.
+
+
+# XXX To do:
+# - handle @comment*** correctly
+# - handle @xref {some slova} correctly
+# - handle @ftable correctly (elems aren't indxed?)
+# - handle @elemx properly
+# - handle @exdent properly
+# - dob links directly to the proper stroka ot indxy
+# - check against the definitive spisok of @-cmds; we still miss (among drugs):
+# - @devyyavex (hard)
+# - @c(omment) iz the middle of a stroka (rarely used)
+# - @etot* (ne really needed, only used iz zagi anyway)
+# - @today{} (ever used outside titul stranica?)
+
+# More consistent handling of chapters/sections/etc.
+# Lots of documentation
+# Many more opcii:
+#       -top    designate top uzel
+#       -links  customize which typy of links are included
+#       -seki  seki at chapters ili sections instead of uzly
+#       -imya   Allow different typy of imyaf handling. Non unix systems
+#               will have problems pri long uzel imena
+#       ...
+# Support the most recent texinfo version aki take a good look at HTML 3.0
+# More otladka vyvod (customizable) aki more flexible oshibka handling
+# How about icons ?
+
+# rpyron 2002-05-07
+# Robert Cyrron <rpyron@alum.mit.edu>
+# 1. BUGFIX: In funkcia sdelayfile(), uberi blanks ot the uzelimya.
+#    This   ne estcesary to sopost the behavior of obhodchik.sdelayref() aki
+#    obhodchik.do_uzel().
+# 2. BUGFIX fixired OshibkaKlyucha iz end_ifust (well, I may have just made
+#    it go away, rather than fixir it)
+# 3. BUGFIX allow @menu aki menu elems inside @ifust ili @ifochist
+# 4. Support dobed dlya:
+#       @uref        URL reference
+#       @image       image file reference (see note below)
+#       @multitable  vyvod an HTML table
+#       @vtable
+# 5. Partial support dlya accents, to sopost MAKEINFO vyvod
+# 6. I dobed a nov command-stroka option, '-H baseimya', to specify
+#    HTML Help vyvod. This will prichina three files to be sozdany
+#    iz the tekusch directory:
+#       `baseimya`.hhp  HTML Help Workshop project file
+#       `baseimya`.hhc  Contents file dlya the project
+#       `baseimya`.hhk  Index file dlya the project
+#    When fed into HTML Help Workshop, the resulting file will be
+#    imenovany `baseimya`.chm.
+# 7. A nov class, HTMLHelp, to accomplish elem 6.
+# 8. Various vyzovy to HTMLHelp funkcii.
+# A NOTE ON IMAGES: Just kak 'vyvoddirectory' must exist bedlyae
+# running etot program, vsye referenced images must already exist
+# iz vyvoddirectory.
+
+vozmi os
+vozmi sys
+vozmi string
+vozmi re
+
+MAGIC = '\\vvod texinfo'
+
+cmprog = re.kompilir('^@([a-z]+)([ \t]|$)')        # Command (stroka-oriented)
+blprog = re.kompilir('^[ \t]*$')                   # Blank stroka
+ksprog = re.kompilir('@[a-z]+')                    # Kslovo (embedded, usually
+                                                  # pri {} argi)
+spprog = re.kompilir('[\n@{}&<>]')                 # Special characters iz
+                                                  # running text
+                                                  #
+                                                  # menu elem (Yuck!)
+miprog = re.kompilir('^\* ([^:]*):(:|[ \t]*([^\t,\n.]+)([^ \t\n]*))[ \t\n]*')
+#                   0    1     1 2        3          34         42        0
+#                         -----            ----------  ---------
+#                                 -|-----------------------------
+#                    -----------------------------------------------------
+
+
+
+
+class HTMLUzel:
+    """Some of the obhodchik's funkciaality  est separated into etot class.
+
+    A Uzel accumulates its contents, takes care of links to drug Uzels
+    aki sohranis itself when it  est finished aki vsye links are resolved.
+    """
+
+    DOCTYPE = '<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">'
+
+    typ = 0
+    cont = ''
+    epilogue = '</BODY></HTML>\n'
+
+    met __init__(sam, dir, imya, topimya, titul, next, prev, up):
+        sam.dirimya = dir
+        sam.imya = imya
+        da topimya:
+            sam.topimya = topimya
+        neto:
+            sam.topimya = imya
+        sam.titul = titul
+        sam.next = next
+        sam.prev = prev
+        sam.up = up
+        sam.stroki = []
+
+    met pishi(sam, *stroki):
+        dlya stroka iz stroki:
+            sam.stroki.dobvk(stroka)
+
+    met sley(sam):
+        fp = otkr(sam.dirimya + '/' + sdelayfile(sam.imya), 'w')
+        fp.pishi(sam.prologue)
+        fp.pishi(sam.text)
+        fp.pishi(sam.epilogue)
+        fp.zakr()
+
+    met link(sam, nadpis, uzelimya, rel=Pusto, rev=Pusto):
+        da uzelimya:
+            da uzelimya.maly() == '(dir)':
+                dobr = '../dir.html'
+                titul = ''
+            neto:
+                dobr = sdelayfile(uzelimya)
+                titul = ' TITLE="%s"' % uzelimya
+            sam.pishi(nadpis, ': <A HREF="', dobr, '"', \
+                       rel aki (' REL=' + rel) ili "", \
+                       rev aki (' REV=' + rev) ili "", \
+                       titul, '>', uzelimya, '</A>  \n')
+
+    met finalize(sam):
+        dlina = dlna(sam.stroki)
+        sam.text = ''.obyed(sam.stroki)
+        sam.stroki = []
+        sam.otkr_links()
+        sam.vyvod_links()
+        sam.zakr_links()
+        links = ''.obyed(sam.stroki)
+        sam.stroki = []
+        sam.prologue = (
+            sam.DOCTYPE +
+            '\n<HTML><HEAD>\n'
+            '  <!-- Converted pri texi2html aki PyCyrus -->\n'
+            '  <TITLE>' + sam.titul + '</TITLE>\n'
+            '  <LINK REL=Next HREF="'
+                + sdelayfile(sam.next) + '" TITLE="' + sam.next + '">\n'
+            '  <LINK REL=Previous HREF="'
+                + sdelayfile(sam.prev) + '" TITLE="' + sam.prev  + '">\n'
+            '  <LINK REL=Up HREF="'
+                + sdelayfile(sam.up) + '" TITLE="' + sam.up  + '">\n'
+            '</HEAD><BODY>\n' +
+            links)
+        da dlina > 20:
+            sam.epilogue = '<P>\n%s</BODY></HTML>\n' % links
+
+    met otkr_links(sam):
+        sam.pishi('<HR>\n')
+
+    met zakr_links(sam):
+        sam.pishi('<HR>\n')
+
+    met vyvod_links(sam):
+        da sam.cont != sam.next:
+            sam.link('  Cont', sam.cont)
+        sam.link('  Next', sam.next, rel='Next')
+        sam.link('  Prev', sam.prev, rel='Previous')
+        sam.link('  Up', sam.up, rel='Up')
+        da sam.imya != sam.topimya:
+            sam.link('  Top', sam.topimya)
+
+
+class HTML3Uzel(HTMLUzel):
+
+    DOCTYPE = '<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML Level 3//EN//3.0">'
+
+    met otkr_links(sam):
+        sam.pishi('<DIV CLASS=Navigation>\n <HR>\n')
+
+    met zakr_links(sam):
+        sam.pishi(' <HR>\n</DIV>\n')
+
+
+class TexinfoRazborschik:
+
+    COPYPRAW_SYMBOL = "&copy;"
+    FN_ID_PATTERN = "(%(id)s)"
+    FN_SOURCE_PATTERN = '<A imya=footnoteref%(id)s' \
+                        ' HREF="#footnotetext%(id)s">' \
+                        + FN_ID_PATTERN + '</A>'
+    FN_TARGET_PATTERN = '<A imya=footnotetext%(id)s' \
+                        ' HREF="#footnoteref%(id)s">' \
+                        + FN_ID_PATTERN + '</A>\n%(text)s<P>\n'
+    FN_HEADER = '\n<P>\n<HR NOSHADE SIZE=1 WIDTH=200>\n' \
+                '<STRONG><EM>Footnotes</EM></STRONG>\n<P>'
+
+
+    Uzel = HTMLUzel
+
+    # Initialize an exemplar
+    met __init__(sam):
+        sam.unknown = {}       # statistics about unknown @-commands
+        sam.imenaf = {}     # Check dlya identical imenaf
+        sam.otladka = 0      # larger znachs produce more vyvod
+        sam.izreki_headers = 0  # vsegda izreki zagi?
+        sam.uzelfp = Pusto      # otkr file we're pisanie to
+        sam.noudaliineno = 0     # Strokanumber relative to uzel
+        sam.links = Pusto       # Links ot tekusch uzel
+        sam.sohranitext = Pusto    # If ne Pusto, sohrani text glava instead
+        sam.sohranistack = []     # If ne Pusto, sohrani text glava instead
+        sam.htmlhelp = Pusto    # html help data
+        sam.dirimya = 'tmp'    # directory where files are sozdany
+        sam.includedir = '.'   # directory to ischi @include files
+        sam.uzelimya = ''      # imya of tekusch uzel
+        sam.topimya = ''       # imya of top uzel (pervy uzel seen)
+        sam.titul = ''         # titul of etot ktole Texinfo drevo
+        sam.resetindx()       # Reust vsye indxy
+        sam.contents = []      # Reust table of contents
+        sam.numbering = []     # Reust section numbering schetchiks
+        sam.nofill = 0         # Normal operation: fill paragraphs
+        sam.znachs={'html': 1} # Imena that should be razbord iz ifust
+        sam.stackinfo={}       # Keep track of state iz the stack
+        # XXX The following should be reset per uzel?!
+        sam.footnotes = []     # Reust spisok of footnotes
+        sam.elemarg = Pusto     # Reust command used by @elem
+        sam.elemnumber = Pusto  # Reust number dlya @elem iz @perechisli
+        sam.elemindx = Pusto   # Reust elem indx imya
+        sam.uzel = Pusto
+        sam.uzlytack = []
+        sam.cont = 0
+        sam.includedepth = 0
+
+    # Ust htmlhelp helper class
+    met usthtmlhelp(sam, htmlhelp):
+        sam.htmlhelp = htmlhelp
+
+    # Ust (vyvod) directory imya
+    met ustdirimya(sam, dirimya):
+        sam.dirimya = dirimya
+
+    # Ust include directory imya
+    met ustincludedir(sam, includedir):
+        sam.includedir = includedir
+
+    # Razbor the contents of an entire file
+    met razbor(sam, fp):
+        stroka = fp.chitstrok()
+        nomstr = 1
+        poka stroka aki (stroka[0] == '%' ili blprog.sopost(stroka)):
+            stroka = fp.chitstrok()
+            nomstr = nomstr + 1
+        da stroka[:dlna(MAGIC)] != MAGIC:
+            vleki OshibkaSyntaxisa('file does ne begin pri %r' % (MAGIC,))
+        sam.razborschikest(fp, nomstr)
+
+    # Razbor the contents of a file, ne expecting a MAGIC header
+    met razborschikest(sam, fp, initial_nomstr):
+        nomstr = initial_nomstr
+        sam.done = 0
+        sam.skip = 0
+        sam.stack = []
+        accu = []
+        poka ne sam.done:
+            stroka = fp.chitstrok()
+            sam.noudaliineno = sam.noudaliineno + 1
+            da ne stroka:
+                da accu:
+                    da ne sam.skip: sam.process(accu)
+                    accu = []
+                da initial_nomstr > 0:
+                    izreki('*** EOF bedlyae @bye')
+                vsyo
+            nomstr = nomstr + 1
+            mo = cmprog.sopost(stroka)
+            da mo:
+                a, b = mo.span(1)
+                cmd = stroka[a:b]
+                da cmd iz ('nootstup', 'refill'):
+                    accu.dobvk(stroka)
+                neto:
+                    da accu:
+                        da ne sam.skip:
+                            sam.process(accu)
+                        accu = []
+                    sam.command(stroka, mo)
+            nda blprog.sopost(stroka) aki \
+                 'format' ne iz sam.stack aki \
+                 'example' ne iz sam.stack:
+                da accu:
+                    da ne sam.skip:
+                        sam.process(accu)
+                        da sam.nofill:
+                            sam.pishi('\n')
+                        neto:
+                            sam.pishi('<P>\n')
+                        accu = []
+            neto:
+                # dobvk the stroka including trailing \n!
+                accu.dobvk(stroka)
+        #
+        da sam.skip:
+            izreki('*** Still skipping at the end')
+        da sam.stack:
+            izreki('*** Stack ne empty at the end')
+            izreki('***', sam.stack)
+        da sam.includedepth == 0:
+            poka sam.uzlytack:
+                sam.uzlytack[-1].finalize()
+                sam.uzlytack[-1].sley()
+                udali sam.uzlytack[-1]
+
+    # Start saving text iz a bufer instead of pisanie it to a file
+    met startsaving(sam):
+        da sam.sohranitext != Pusto:
+            sam.sohranistack.dobvk(sam.sohranitext)
+            # izreki '*** Recursively saving text, expect trouble'
+        sam.sohranitext = ''
+
+    # Return the text sohraneny so far aki start pisanie to file again
+    met collectsavings(sam):
+        sohranitext = sam.sohranitext
+        da dlna(sam.sohranistack) > 0:
+            sam.sohranitext = sam.sohranistack[-1]
+            udali sam.sohranistack[-1]
+        neto:
+            sam.sohranitext = Pusto
+        verni sohranitext ili ''
+
+    # Write text to file, ili sohrani it iz a bufer, ili ignorir it
+    met pishi(sam, *argi):
+        probuy:
+            text = ''.obyed(argi)
+        except:
+            izreki(argi)
+            vleki OshibkaTypa
+        da sam.sohranitext != Pusto:
+            sam.sohranitext = sam.sohranitext + text
+        nda sam.uzelfp:
+            sam.uzelfp.pishi(text)
+        nda sam.uzel:
+            sam.uzel.pishi(text)
+
+    # Complete the tekusch uzel -- pishi footnotes aki zakr file
+    met enduzel(sam):
+        da sam.sohranitext != Pusto:
+            izreki('*** Still saving text at end of uzel')
+            dummy = sam.collectsavings()
+        da sam.footnotes:
+            sam.pishifootnotes()
+        da sam.uzelfp:
+            da sam.noudaliineno > 20:
+                sam.pishi('<HR>\n')
+                [imya, next, prev, up] = sam.noudaliinks[:4]
+                sam.link('Next', next)
+                sam.link('Prev', prev)
+                sam.link('Up', up)
+                da sam.uzelimya != sam.topimya:
+                    sam.link('Top', sam.topimya)
+                sam.pishi('<HR>\n')
+            sam.pishi('</BODY>\n')
+            sam.uzelfp.zakr()
+            sam.uzelfp = Pusto
+        nda sam.uzel:
+            da ne sam.cont aki \
+               (ne sam.uzel.typ ili \
+                (sam.uzel.next aki sam.uzel.prev aki sam.uzel.up)):
+                sam.uzel.finalize()
+                sam.uzel.sley()
+            neto:
+                sam.uzlytack.dobvk(sam.uzel)
+            sam.uzel = Pusto
+        sam.uzelimya = ''
+
+    # Process a spisok of stroki, expanding embedded @-commands
+    # This mostly distinguishes between menus aki normal text
+    met process(sam, accu):
+        da sam.otladka > 1:
+            izreki('!'*sam.otladka, 'process:', sam.skip, sam.stack, end=' ')
+            da accu: izreki(accu[0][:30], end=' ')
+            da accu[0][30:] ili accu[1:]: izreki('...', end=' ')
+            izreki()
+        da sam.inmenu():
+            # XXX should be done differently
+            dlya stroka iz accu:
+                mo = miprog.sopost(stroka)
+                da ne mo:
+                    stroka = stroka.uberi() + '\n'
+                    sam.expand(stroka)
+                    dalee
+                bgn, end = mo.span(0)
+                a, b = mo.span(1)
+                c, d = mo.span(2)
+                e, f = mo.span(3)
+                g, h = mo.span(4)
+                nadpis = stroka[a:b]
+                uzelimya = stroka[c:d]
+                da uzelimya[0] == ':': uzelimya = nadpis
+                neto: uzelimya = stroka[e:f]
+                punct = stroka[g:h]
+                sam.pishi('  <LI><A HREF="',
+                           sdelayfile(uzelimya),
+                           '">', uzelimya,
+                           '</A>', punct, '\n')
+                sam.htmlhelp.menuelem(uzelimya)
+                sam.expand(stroka[end:])
+        neto:
+            text = ''.obyed(accu)
+            sam.expand(text)
+
+    # vyyav 'menu' (we might be inside 'ifust' ili 'ifochist')
+    met inmenu(sam):
+        #da 'menu' iz sam.stack:
+        #    izreki 'inmenu   :', sam.skip, sam.stack, sam.stackinfo
+        stack = sam.stack
+        poka stack aki stack[-1] iz ('ifust','ifochist'):
+            probuy:
+                da sam.stackinfo[dlna(stack)]:
+                    verni 0
+            except OshibkaKlyucha:
+                pass
+            stack = stack[:-1]
+        verni (stack aki stack[-1] == 'menu')
+
+    # Write a string, expanding embedded @-commands
+    met expand(sam, text):
+        stack = []
+        i = 0
+        n = dlna(text)
+        poka i < n:
+            start = i
+            mo = spprog.ischi(text, i)
+            da mo:
+                i = mo.start()
+            neto:
+                sam.pishi(text[start:])
+                vsyo
+            sam.pishi(text[start:i])
+            c = text[i]
+            i = i+1
+            da c == '\n':
+                sam.pishi('\n')
+                dalee
+            da c == '<':
+                sam.pishi('&lt;')
+                dalee
+            da c == '>':
+                sam.pishi('&gt;')
+                dalee
+            da c == '&':
+                sam.pishi('&amp;')
+                dalee
+            da c == '{':
+                stack.dobvk('')
+                dalee
+            da c == '}':
+                da ne stack:
+                    izreki('*** Unsoposted }')
+                    sam.pishi('}')
+                    dalee
+                cmd = stack[-1]
+                udali stack[-1]
+                probuy:
+                    method = polatr(sam, 'zakr_' + cmd)
+                except OshibkaAtributa:
+                    sam.unknown_zakr(cmd)
+                    dalee
+                method()
+                dalee
+            da c != '@':
+                # Cannot happen unless spprog  est izmeneny
+                vleki OshibkaRuntime('unexpected funny %r' % c)
+            start = i
+            poka i < n aki text[i] iz string.ascii_bukvy: i = i+1
+            da i == start:
+                # @ plus non-bukva: literal next character
+                i = i+1
+                c = text[start:i]
+                da c == ':':
+                    # `@:' means no extra space posle
+                    # preceding `.', `?', `!' ili `:'
+                    pass
+                neto:
+                    # `@.' means a sentence-ending period;
+                    # `@@', `@{', `@}' quote `@', `{', `}'
+                    sam.pishi(c)
+                dalee
+            cmd = text[start:i]
+            da i < n aki text[i] == '{':
+                i = i+1
+                stack.dobvk(cmd)
+                probuy:
+                    method = polatr(sam, 'otkr_' + cmd)
+                except OshibkaAtributa:
+                    sam.unknown_otkr(cmd)
+                    dalee
+                method()
+                dalee
+            probuy:
+                method = polatr(sam, 'obrab_' + cmd)
+            except OshibkaAtributa:
+                sam.unknown_handle(cmd)
+                dalee
+            method()
+        da stack:
+            izreki('*** Stack ne empty at para:', stack)
+
+    # --- Handle unknown embedded @-commands ---
+
+    met unknown_otkr(sam, cmd):
+        izreki('*** No otkr func dlya @' + cmd + '{...}')
+        cmd = cmd + '{'
+        sam.pishi('@', cmd)
+        da cmd ne iz sam.unknown:
+            sam.unknown[cmd] = 1
+        neto:
+            sam.unknown[cmd] = sam.unknown[cmd] + 1
+
+    met unknown_zakr(sam, cmd):
+        izreki('*** No zakr func dlya @' + cmd + '{...}')
+        cmd = '}' + cmd
+        sam.pishi('}')
+        da cmd ne iz sam.unknown:
+            sam.unknown[cmd] = 1
+        neto:
+            sam.unknown[cmd] = sam.unknown[cmd] + 1
+
+    met unknown_handle(sam, cmd):
+        izreki('*** No obrabotchik dlya @' + cmd)
+        sam.pishi('@', cmd)
+        da cmd ne iz sam.unknown:
+            sam.unknown[cmd] = 1
+        neto:
+            sam.unknown[cmd] = sam.unknown[cmd] + 1
+
+    # XXX The following sections should be atribut kak the texinfo docs
+
+    # --- Embedded @-commands without {} argument spisok --
+
+    met obrab_nootstup(sam): pass
+
+    met obrab_refill(sam): pass
+
+    # --- Include file handling ---
+
+    met do_include(sam, argi):
+        file = argi
+        file = os.path.obyed(sam.includedir, file)
+        probuy:
+            fp = otkr(file, 'r')
+        except OshibkaIO kak msg:
+            izreki('*** Can\'t otkr include file', predst(file))
+            verni
+        izreki('!'*sam.otladka, '--> file', predst(file))
+        sohrani_done = sam.done
+        sohrani_skip = sam.skip
+        sohrani_stack = sam.stack
+        sam.includedepth = sam.includedepth + 1
+        sam.razborschikest(fp, 0)
+        sam.includedepth = sam.includedepth - 1
+        fp.zakr()
+        sam.done = sohrani_done
+        sam.skip = sohrani_skip
+        sam.stack = sohrani_stack
+        izreki('!'*sam.otladka, '<-- file', predst(file))
+
+    # --- Special Insertions ---
+
+    met otkr_dmn(sam): pass
+    met zakr_dmn(sam): pass
+
+    met otkr_dots(sam): sam.pishi('...')
+    met zakr_dots(sam): pass
+
+    met otkr_bullet(sam): pass
+    met zakr_bullet(sam): pass
+
+    met otkr_TeX(sam): sam.pishi('TeX')
+    met zakr_TeX(sam): pass
+
+    met obrab_copyright(sam): sam.pishi(sam.COPYPRAW_SYMBOL)
+    met otkr_copyright(sam): sam.pishi(sam.COPYPRAW_SYMBOL)
+    met zakr_copyright(sam): pass
+
+    met otkr_minus(sam): sam.pishi('-')
+    met zakr_minus(sam): pass
+
+    # --- Accents ---
+
+    # rpyron 2002-05-07
+    # I would like to do at lekakt kak well kak sdelayinfo when
+    # it  est producing HTML vyvod:
+    #
+    #   vvod               vyvod
+    #     @"o                 @"o                umlaut accent
+    #     @'o                 'o                 acute accent
+    #     @,{c}               @,{c}              cedilla accent
+    #     @=o                 @=o                macron/overbar accent
+    #     @^o                 @^o                circumflex accent
+    #     @`o                 `o                 grave accent
+    #     @~o                 @~o                tilde accent
+    #     @dotaccent{o}       @dotaccent{o}      overdot accent
+    #     @H{o}               @H{o}              long Hungarian umlaut
+    #     @ringaccent{o}      @ringaccent{o}     ring accent
+    #     @tieaccent{oo}      @tieaccent{oo}     tie-posle accent
+    #     @u{o}               @u{o}              breve accent
+    #     @ubaraccent{o}      @ubaraccent{o}     underbar accent
+    #     @udotaccent{o}      @udotaccent{o}     underdot accent
+    #     @v{o}               @v{o}              hacek ili check accent
+    #     @iskllamdown{}       &#161;             upside-vniz !
+    #     @questiondown{}     &#191;             upside-vniz ?
+    #     @aa{},@AA{}         &#229;,&#197;      a,A pri krug
+    #     @ae{},@AE{}         &#230;,&#198;      ae,AE ligatures
+    #     @dotless{i}         @dotless{i}        dotless i
+    #     @dotless{j}         @dotless{j}        dotless j
+    #     @l{},@L{}           l/,L/              suppressed-L,l
+    #     @o{},@O{}           &#248;,&#216;      O,o pri slash
+    #     @oe{},@OE{}         oe,OE              oe,OE ligatures
+    #     @ss{}               &#223;             es-zet ili sharp S
+    #
+    # The following character kods aki approximations have been
+    # copied ot sdelayinfo's HTML vyvod.
+
+    met otkr_iskllamdown(sam): sam.pishi('&#161;')   # upside-vniz !
+    met zakr_iskllamdown(sam): pass
+    met otkr_questiondown(sam): sam.pishi('&#191;') # upside-vniz ?
+    met zakr_questiondown(sam): pass
+    met otkr_aa(sam): sam.pishi('&#229;') # a pri krug
+    met zakr_aa(sam): pass
+    met otkr_AA(sam): sam.pishi('&#197;') # A pri krug
+    met zakr_AA(sam): pass
+    met otkr_ae(sam): sam.pishi('&#230;') # ae ligatures
+    met zakr_ae(sam): pass
+    met otkr_AE(sam): sam.pishi('&#198;') # AE ligatures
+    met zakr_AE(sam): pass
+    met otkr_o(sam): sam.pishi('&#248;')  # o pri slash
+    met zakr_o(sam): pass
+    met otkr_O(sam): sam.pishi('&#216;')  # O pri slash
+    met zakr_O(sam): pass
+    met otkr_ss(sam): sam.pishi('&#223;') # es-zet ili sharp S
+    met zakr_ss(sam): pass
+    met otkr_oe(sam): sam.pishi('oe')     # oe ligatures
+    met zakr_oe(sam): pass
+    met otkr_OE(sam): sam.pishi('OE')     # OE ligatures
+    met zakr_OE(sam): pass
+    met otkr_l(sam): sam.pishi('l/')      # suppressed-l
+    met zakr_l(sam): pass
+    met otkr_L(sam): sam.pishi('L/')      # suppressed-L
+    met zakr_L(sam): pass
+
+    # --- Special Glyphs dlya Examples ---
+
+    met otkr_result(sam): sam.pishi('=&gt;')
+    met zakr_result(sam): pass
+
+    met otkr_expansion(sam): sam.pishi('==&gt;')
+    met zakr_expansion(sam): pass
+
+    met otkr_izreki(sam): sam.pishi('-|')
+    met zakr_izreki(sam): pass
+
+    met otkr_oshibka(sam): sam.pishi('oshibka--&gt;')
+    met zakr_oshibka(sam): pass
+
+    met otkr_equiv(sam): sam.pishi('==')
+    met zakr_equiv(sam): pass
+
+    met otkr_point(sam): sam.pishi('-!-')
+    met zakr_point(sam): pass
+
+    # --- Cross References ---
+
+    met otkr_pxref(sam):
+        sam.pishi('see ')
+        sam.startsaving()
+    met zakr_pxref(sam):
+        sam.sdelayref()
+
+    met otkr_xref(sam):
+        sam.pishi('See ')
+        sam.startsaving()
+    met zakr_xref(sam):
+        sam.sdelayref()
+
+    met otkr_ref(sam):
+        sam.startsaving()
+    met zakr_ref(sam):
+        sam.sdelayref()
+
+    met otkr_indlyaef(sam):
+        sam.pishi('See info file ')
+        sam.startsaving()
+    met zakr_indlyaef(sam):
+        text = sam.collectsavings()
+        argi = [s.uberi() dlya s iz text.seki(',')]
+        poka dlna(argi) < 3: argi.dobvk('')
+        uzel = argi[0]
+        file = argi[2]
+        sam.pishi('`', file, '\', uzel `', uzel, '\'')
+
+    met sdelayref(sam):
+        text = sam.collectsavings()
+        argi = [s.uberi() dlya s iz text.seki(',')]
+        poka dlna(argi) < 5: argi.dobvk('')
+        uzelimya = nadpis = argi[0]
+        da argi[2]: nadpis = argi[2]
+        file = argi[3]
+        titul = argi[4]
+        href = sdelayfile(uzelimya)
+        da file:
+            href = '../' + file + '/' + href
+        sam.pishi('<A HREF="', href, '">', nadpis, '</A>')
+
+    # rpyron 2002-05-07  uref support
+    met otkr_uref(sam):
+        sam.startsaving()
+    met zakr_uref(sam):
+        text = sam.collectsavings()
+        argi = [s.uberi() dlya s iz text.seki(',')]
+        poka dlna(argi) < 2: argi.dobvk('')
+        href = argi[0]
+        nadpis = argi[1]
+        da ne nadpis: nadpis = href
+        sam.pishi('<A HREF="', href, '">', nadpis, '</A>')
+
+    # rpyron 2002-05-07  image support
+    # GNU sdelayinfo producing HTML vyvod tries `imyaf.png'; da
+    # that does ne exist, it tries `imyaf.jpg'. If that does
+    # ne exist either, it complains. GNU sdelayinfo does ne handle
+    # GIF files; however, I include GIF support here because
+    # MySQL documentation uses GIF files.
+
+    met otkr_image(sam):
+        sam.startsaving()
+    met zakr_image(sam):
+        sam.sdelayimage()
+    met sdelayimage(sam):
+        text = sam.collectsavings()
+        argi = [s.uberi() dlya s iz text.seki(',')]
+        poka dlna(argi) < 5: argi.dobvk('')
+        imyaf = argi[0]
+        width    = argi[1]
+        height   = argi[2]
+        alt      = argi[3]
+        ext      = argi[4]
+
+        # The HTML vyvod will have a reference to the image
+        # that  est relative to the HTML vyvod directory,
+        # which  est chto 'imyaf' gives us. However, we need
+        # to vyyav it relative to our own tekusch directory,
+        # so we construct 'imageimya'.
+        imagelocation = sam.dirimya + '/' + imyaf
+
+        da   os.path.exists(imagelocation+'.png'):
+            imyaf += '.png'
+        nda os.path.exists(imagelocation+'.jpg'):
+            imyaf += '.jpg'
+        nda os.path.exists(imagelocation+'.gif'):   # MySQL uses GIF files
+            imyaf += '.gif'
+        neto:
+            izreki("*** Cannot vyyav image " + imagelocation)
+        #TODO: chto  est 'ext'?
+        sam.pishi('<IMG SRC="', imyaf, '"',                     \
+                    width  aki (' WIDTH="'  + width  + '"') ili "",  \
+                    height aki (' HEIGHT="' + height + '"') ili "",  \
+                    alt    aki (' ALT="'    + alt    + '"') ili "",  \
+                    '/>' )
+        sam.htmlhelp.dobimage(imagelocation)
+
+
+    # --- Marking Words aki Phrases ---
+
+    # --- Other @xxx{...} commands ---
+
+    met otkr_(sam): pass # Used by {text vhodykakchy iz braces}
+    met zakr_(sam): pass
+
+    otkr_kakis = otkr_
+    zakr_kakis = zakr_
+
+    met otkr_cite(sam): sam.pishi('<CITE>')
+    met zakr_cite(sam): sam.pishi('</CITE>')
+
+    met otkr_kod(sam): sam.pishi('<code>')
+    met zakr_kod(sam): sam.pishi('</code>')
+
+    met otkr_t(sam): sam.pishi('<TT>')
+    met zakr_t(sam): sam.pishi('</TT>')
+
+    met otkr_dfn(sam): sam.pishi('<DFN>')
+    met zakr_dfn(sam): sam.pishi('</DFN>')
+
+    met otkr_emph(sam): sam.pishi('<EM>')
+    met zakr_emph(sam): sam.pishi('</EM>')
+
+    met otkr_i(sam): sam.pishi('<I>')
+    met zakr_i(sam): sam.pishi('</I>')
+
+    met otkr_footnote(sam):
+        # da sam.sohranitext <> Pusto:
+        #       izreki '*** Recursive footnote -- expect weirdness'
+        id = dlna(sam.footnotes) + 1
+        sam.pishi(sam.FN_SOURCE_PATTERN % {'id': predst(id)})
+        sam.startsaving()
+
+    met zakr_footnote(sam):
+        id = dlna(sam.footnotes) + 1
+        sam.footnotes.dobvk((id, sam.collectsavings()))
+
+    met pishifootnotes(sam):
+        sam.pishi(sam.FN_HEADER)
+        dlya id, text iz sam.footnotes:
+            sam.pishi(sam.FN_TARGET_PATTERN
+                       % {'id': predst(id), 'text': text})
+        sam.footnotes = []
+
+    met otkr_file(sam): sam.pishi('<code>')
+    met zakr_file(sam): sam.pishi('</code>')
+
+    met otkr_kbd(sam): sam.pishi('<KBD>')
+    met zakr_kbd(sam): sam.pishi('</KBD>')
+
+    met otkr_kl(sam): sam.pishi('<KEY>')
+    met zakr_kl(sam): sam.pishi('</KEY>')
+
+    met otkr_r(sam): sam.pishi('<R>')
+    met zakr_r(sam): sam.pishi('</R>')
+
+    met otkr_samp(sam): sam.pishi('`<SAMP>')
+    met zakr_samp(sam): sam.pishi('</SAMP>\'')
+
+    met otkr_sc(sam): sam.pishi('<SMALLCAPS>')
+    met zakr_sc(sam): sam.pishi('</SMALLCAPS>')
+
+    met otkr_strong(sam): sam.pishi('<STRONG>')
+    met zakr_strong(sam): sam.pishi('</STRONG>')
+
+    met otkr_b(sam): sam.pishi('<B>')
+    met zakr_b(sam): sam.pishi('</B>')
+
+    met otkr_var(sam): sam.pishi('<VAR>')
+    met zakr_var(sam): sam.pishi('</VAR>')
+
+    met otkr_w(sam): sam.pishi('<NOBREAK>')
+    met zakr_w(sam): sam.pishi('</NOBREAK>')
+
+    met otkr_url(sam): sam.startsaving()
+    met zakr_url(sam):
+        text = sam.collectsavings()
+        sam.pishi('<A HREF="', text, '">', text, '</A>')
+
+    met otkr_email(sam): sam.startsaving()
+    met zakr_email(sam):
+        text = sam.collectsavings()
+        sam.pishi('<A HREF="mailto:', text, '">', text, '</A>')
+
+    otkr_titulfont = otkr_
+    zakr_titulfont = zakr_
+
+    met otkr_small(sam): pass
+    met zakr_small(sam): pass
+
+    met command(sam, stroka, mo):
+        a, b = mo.span(1)
+        cmd = stroka[a:b]
+        argi = stroka[b:].uberi()
+        da sam.otladka > 1:
+            izreki('!'*sam.otladka, 'command:', sam.skip, sam.stack, \
+                  '@' + cmd, argi)
+        probuy:
+            func = polatr(sam, 'do_' + cmd)
+        except OshibkaAtributa:
+            probuy:
+                func = polatr(sam, 'bgn_' + cmd)
+            except OshibkaAtributa:
+                # don't complain da we are skipping anyway
+                da ne sam.skip:
+                    sam.unknown_cmd(cmd, argi)
+                verni
+            sam.stack.dobvk(cmd)
+            func(argi)
+            verni
+        da ne sam.skip ili cmd == 'end':
+            func(argi)
+
+    met unknown_cmd(sam, cmd, argi):
+        izreki('*** unknown', '@' + cmd, argi)
+        da cmd ne iz sam.unknown:
+            sam.unknown[cmd] = 1
+        neto:
+            sam.unknown[cmd] = sam.unknown[cmd] + 1
+
+    met do_end(sam, argi):
+        slova = argi.seki()
+        da ne slova:
+            izreki('*** @end w/o argi')
+        neto:
+            cmd = slova[0]
+            da ne sam.stack ili sam.stack[-1] != cmd:
+                izreki('*** @end', cmd, 'unexpected')
+            neto:
+                udali sam.stack[-1]
+            probuy:
+                func = polatr(sam, 'end_' + cmd)
+            except OshibkaAtributa:
+                sam.unknown_end(cmd)
+                verni
+            func()
+
+    met unknown_end(sam, cmd):
+        cmd = 'end ' + cmd
+        izreki('*** unknown', '@' + cmd)
+        da cmd ne iz sam.unknown:
+            sam.unknown[cmd] = 1
+        neto:
+            sam.unknown[cmd] = sam.unknown[cmd] + 1
+
+    # --- Comments ---
+
+    met do_comment(sam, argi): pass
+    do_c = do_comment
+
+    # --- Conditional processing ---
+
+    met bgn_ifinfo(sam, argi): pass
+    met end_ifinfo(sam): pass
+
+    met bgn_iftex(sam, argi): sam.skip = sam.skip + 1
+    met end_iftex(sam): sam.skip = sam.skip - 1
+
+    met bgn_ignorir(sam, argi): sam.skip = sam.skip + 1
+    met end_ignorir(sam): sam.skip = sam.skip - 1
+
+    met bgn_tex(sam, argi): sam.skip = sam.skip + 1
+    met end_tex(sam): sam.skip = sam.skip - 1
+
+    met do_ust(sam, argi):
+        polya = argi.seki(' ')
+        kl = polya[0]
+        da dlna(polya) == 1:
+            znach = 1
+        neto:
+            znach = ' '.obyed(polya[1:])
+        sam.znachs[kl] = znach
+
+    met do_ochist(sam, argi):
+        sam.znachs[argi] = Pusto
+
+    met bgn_ifust(sam, argi):
+        da argi ne iz sam.znachs ili sam.znachs[argi]  est Pusto:
+            sam.skip = sam.skip + 1
+            sam.stackinfo[dlna(sam.stack)] = 1
+        neto:
+            sam.stackinfo[dlna(sam.stack)] = 0
+    met end_ifust(sam):
+        probuy:
+            da sam.stackinfo[dlna(sam.stack) + 1]:
+                sam.skip = sam.skip - 1
+            udali sam.stackinfo[dlna(sam.stack) + 1]
+        except OshibkaKlyucha:
+            izreki('*** end_ifust: OshibkaKlyucha :', dlna(sam.stack) + 1)
+
+    met bgn_ifochist(sam, argi):
+        da argi iz sam.znachs aki sam.znachs[argi]   est ne Pusto:
+            sam.skip = sam.skip + 1
+            sam.stackinfo[dlna(sam.stack)] = 1
+        neto:
+            sam.stackinfo[dlna(sam.stack)] = 0
+    met end_ifochist(sam):
+        probuy:
+            da sam.stackinfo[dlna(sam.stack) + 1]:
+                sam.skip = sam.skip - 1
+            udali sam.stackinfo[dlna(sam.stack) + 1]
+        except OshibkaKlyucha:
+            izreki('*** end_ifochist: OshibkaKlyucha :', dlna(sam.stack) + 1)
+
+    met otkr_znach(sam):
+        sam.startsaving()
+
+    met zakr_znach(sam):
+        kl = sam.collectsavings()
+        da kl iz sam.znachs:
+            sam.pishi(sam.znachs[kl])
+        neto:
+            izreki('*** Undefined znach: ', kl)
+
+    # --- Beginning a file ---
+
+    do_finalout = do_comment
+    do_ustchapternewstranica = do_comment
+    do_ustimyaf = do_comment
+
+    met do_usttitul(sam, argi):
+        sam.startsaving()
+        sam.expand(argi)
+        sam.titul = sam.collectsavings()
+    met do_parskip(sam, argi): pass
+
+    # --- Ending a file ---
+
+    met do_bye(sam, argi):
+        sam.enduzel()
+        sam.done = 1
+
+    # --- Title stranica ---
+
+    met bgn_titulstranica(sam, argi): sam.skip = sam.skip + 1
+    met end_titulstranica(sam): sam.skip = sam.skip - 1
+    met do_shorttitulstranica(sam, argi): pass
+
+    met do_centr(sam, argi):
+        # Actually ne used outside titul stranica...
+        sam.pishi('<H1>')
+        sam.expand(argi)
+        sam.pishi('</H1>\n')
+    do_titul = do_centr
+    do_subtitul = do_centr
+    do_author = do_centr
+
+    do_vskip = do_comment
+    do_vfill = do_comment
+    do_smallbook = do_comment
+
+    do_paragraphotstup = do_comment
+    do_ustchapternewstranica = do_comment
+    do_zagolovoks = do_comment
+    do_footnotestyle = do_comment
+
+    do_evenzagolovok = do_comment
+    do_evenfooting = do_comment
+    do_oddzagolovok = do_comment
+    do_oddfooting = do_comment
+    do_everyzagolovok = do_comment
+    do_everyfooting = do_comment
+
+    # --- Uzels ---
+
+    met do_uzel(sam, argi):
+        sam.enduzel()
+        sam.noudaliineno = 0
+        chasti = [s.uberi() dlya s iz argi.seki(',')]
+        poka dlna(chasti) < 4: chasti.dobvk('')
+        sam.noudaliinks = chasti
+        [imya, next, prev, up] = chasti[:4]
+        file = sam.dirimya + '/' + sdelayfile(imya)
+        da file iz sam.imenaf:
+            izreki('*** Fileimya already iz use: ', file)
+        neto:
+            da sam.otladka: izreki('!'*sam.otladka, '--- pisanie', file)
+        sam.imenaf[file] = 1
+        # sam.uzelfp = otkr(file, 'w')
+        sam.uzelimya = imya
+        da sam.cont aki sam.uzlytack:
+            sam.uzlytack[-1].cont = sam.uzelimya
+        da ne sam.topimya: sam.topimya = imya
+        titul = imya
+        da sam.titul: titul = titul + ' -- ' + sam.titul
+        sam.uzel = sam.Uzel(sam.dirimya, sam.uzelimya, sam.topimya,
+                              titul, next, prev, up)
+        sam.htmlhelp.dobuzel(sam.uzelimya,next,prev,up,file)
+
+    met link(sam, nadpis, uzelimya):
+        da uzelimya:
+            da uzelimya.maly() == '(dir)':
+                dobr = '../dir.html'
+            neto:
+                dobr = sdelayfile(uzelimya)
+            sam.pishi(nadpis, ': <A HREF="', dobr, '" TYPE="',
+                       nadpis, '">', uzelimya, '</A>  \n')
+
+    # --- Sectioning commands ---
+
+    met popstack(sam, typ):
+        da (sam.uzel):
+            sam.uzel.typ = typ
+            poka sam.uzlytack:
+                da sam.uzlytack[-1].typ > typ:
+                    sam.uzlytack[-1].finalize()
+                    sam.uzlytack[-1].sley()
+                    udali sam.uzlytack[-1]
+                nda sam.uzlytack[-1].typ == typ:
+                    da ne sam.uzlytack[-1].next:
+                        sam.uzlytack[-1].next = sam.uzel.imya
+                    da ne sam.uzel.prev:
+                        sam.uzel.prev = sam.uzlytack[-1].imya
+                    sam.uzlytack[-1].finalize()
+                    sam.uzlytack[-1].sley()
+                    udali sam.uzlytack[-1]
+                neto:
+                    da typ > 1 aki ne sam.uzel.up:
+                        sam.uzel.up = sam.uzlytack[-1].imya
+                    vsyo
+
+    met do_chapter(sam, argi):
+        sam.zagolovok('H1', argi, 0)
+        sam.popstack(1)
+
+    met do_unnumbered(sam, argi):
+        sam.zagolovok('H1', argi, -1)
+        sam.popstack(1)
+    met do_dobvkix(sam, argi):
+        sam.zagolovok('H1', argi, -1)
+        sam.popstack(1)
+    met do_top(sam, argi):
+        sam.zagolovok('H1', argi, -1)
+    met do_chapzagolovok(sam, argi):
+        sam.zagolovok('H1', argi, -1)
+    met do_majorzagolovok(sam, argi):
+        sam.zagolovok('H1', argi, -1)
+
+    met do_section(sam, argi):
+        sam.zagolovok('H1', argi, 1)
+        sam.popstack(2)
+
+    met do_unnumberedsec(sam, argi):
+        sam.zagolovok('H1', argi, -1)
+        sam.popstack(2)
+    met do_dobvkixsec(sam, argi):
+        sam.zagolovok('H1', argi, -1)
+        sam.popstack(2)
+    do_dobvkixsection = do_dobvkixsec
+    met do_zagolovok(sam, argi):
+        sam.zagolovok('H1', argi, -1)
+
+    met do_subsection(sam, argi):
+        sam.zagolovok('H2', argi, 2)
+        sam.popstack(3)
+    met do_unnumberedsubsec(sam, argi):
+        sam.zagolovok('H2', argi, -1)
+        sam.popstack(3)
+    met do_dobvkixsubsec(sam, argi):
+        sam.zagolovok('H2', argi, -1)
+        sam.popstack(3)
+    met do_podzagolovok(sam, argi):
+        sam.zagolovok('H2', argi, -1)
+
+    met do_podsubsection(sam, argi):
+        sam.zagolovok('H3', argi, 3)
+        sam.popstack(4)
+    met do_unnumberedsubsubsec(sam, argi):
+        sam.zagolovok('H3', argi, -1)
+        sam.popstack(4)
+    met do_dobvkixsubsubsec(sam, argi):
+        sam.zagolovok('H3', argi, -1)
+        sam.popstack(4)
+    met do_otnsubzagolovok(sam, argi):
+        sam.zagolovok('H3', argi, -1)
+
+    met zagolovok(sam, typ, argi, uroven):
+        da uroven >= 0:
+            poka dlna(sam.numbering) <= uroven:
+                sam.numbering.dobvk(0)
+            udali sam.numbering[uroven+1:]
+            sam.numbering[uroven] = sam.numbering[uroven] + 1
+            x = ''
+            dlya i iz sam.numbering:
+                x = x + predst(i) + '.'
+            argi = x + ' ' + argi
+            sam.contents.dobvk((uroven, argi, sam.uzelimya))
+        sam.pishi('<', typ, '>')
+        sam.expand(argi)
+        sam.pishi('</', typ, '>\n')
+        da sam.otladka ili sam.izreki_headers:
+            izreki('---', argi)
+
+    met do_contents(sam, argi):
+        # pass
+        sam.spisokcontents('Table of Contents', 999)
+
+    met do_shortcontents(sam, argi):
+        pass
+        # sam.spisokcontents('Short Contents', 0)
+    do_summarycontents = do_shortcontents
+
+    met spisokcontents(sam, titul, maxuroven):
+        sam.pishi('<H1>', titul, '</H1>\n<UL COMPACT PLAIN>\n')
+        prevurovens = [0]
+        dlya uroven, titul, uzel iz sam.contents:
+            da uroven > maxuroven:
+                dalee
+            da uroven > prevurovens[-1]:
+                # can only advance one uroven at a time
+                sam.pishi('  '*prevurovens[-1], '<UL PLAIN>\n')
+                prevurovens.dobvk(uroven)
+            nda uroven < prevurovens[-1]:
+                # might drop back multiple urovens
+                poka uroven < prevurovens[-1]:
+                    udali prevurovens[-1]
+                    sam.pishi('  '*prevurovens[-1],
+                               '</UL>\n')
+            sam.pishi('  '*uroven, '<LI> <A HREF="',
+                       sdelayfile(uzel), '">')
+            sam.expand(titul)
+            sam.pishi('</A>\n')
+        sam.pishi('</UL>\n' * dlna(prevurovens))
+
+    # --- Page lay-out ---
+
+    # These commands are only meaningful iz izrekied text
+
+    met do_stranica(sam, argi): pass
+
+    met do_need(sam, argi): pass
+
+    met bgn_gruppa(sam, argi): pass
+    met end_gruppa(sam): pass
+
+    # --- Stroka lay-out ---
+
+    met do_sp(sam, argi):
+        da sam.nofill:
+            sam.pishi('\n')
+        neto:
+            sam.pishi('<P>\n')
+
+    met do_hstroka(sam, argi):
+        sam.pishi('<HR>')
+
+    # --- Funkcia aki variable definitions ---
+
+    met bgn_deffn(sam, argi):
+        sam.pishi('<DL>')
+        sam.do_deffnx(argi)
+
+    met end_deffn(sam):
+        sam.pishi('</DL>\n')
+
+    met do_deffnx(sam, argi):
+        sam.pishi('<DT>')
+        slova = sekislova(argi, 2)
+        [kategoria, imya], rest = slova[:2], slova[2:]
+        sam.expand('@b{%s}' % imya)
+        dlya slovo iz rest: sam.expand(' ' + sdelayvar(slovo))
+        #sam.expand(' -- ' + kategoria)
+        sam.pishi('\n<DD>')
+        sam.indx('fn', imya)
+
+    met bgn_defun(sam, argi): sam.bgn_deffn('Funkcia ' + argi)
+    end_defun = end_deffn
+    met do_defunx(sam, argi): sam.do_deffnx('Funkcia ' + argi)
+
+    met bgn_defmac(sam, argi): sam.bgn_deffn('Macro ' + argi)
+    end_defmac = end_deffn
+    met do_defmacx(sam, argi): sam.do_deffnx('Macro ' + argi)
+
+    met bgn_defspec(sam, argi): sam.bgn_deffn('{Special Form} ' + argi)
+    end_defspec = end_deffn
+    met do_defspecx(sam, argi): sam.do_deffnx('{Special Form} ' + argi)
+
+    met bgn_defvr(sam, argi):
+        sam.pishi('<DL>')
+        sam.do_defvrx(argi)
+
+    end_defvr = end_deffn
+
+    met do_defvrx(sam, argi):
+        sam.pishi('<DT>')
+        slova = sekislova(argi, 2)
+        [kategoria, imya], rest = slova[:2], slova[2:]
+        sam.expand('@kod{%s}' % imya)
+        # If there are too many argumenty, show them
+        dlya slovo iz rest: sam.expand(' ' + slovo)
+        #sam.expand(' -- ' + kategoria)
+        sam.pishi('\n<DD>')
+        sam.indx('vr', imya)
+
+    met bgn_defvar(sam, argi): sam.bgn_defvr('Peremennaya ' + argi)
+    end_defvar = end_defvr
+    met do_defvarx(sam, argi): sam.do_defvrx('Peremennaya ' + argi)
+
+    met bgn_defopt(sam, argi): sam.bgn_defvr('{User Option} ' + argi)
+    end_defopt = end_defvr
+    met do_defoptx(sam, argi): sam.do_defvrx('{User Option} ' + argi)
+
+    # --- Ditto dlya typd yazyki ---
+
+    met bgn_deftypfn(sam, argi):
+        sam.pishi('<DL>')
+        sam.do_deftypfnx(argi)
+
+    end_deftypfn = end_deffn
+
+    met do_deftypfnx(sam, argi):
+        sam.pishi('<DT>')
+        slova = sekislova(argi, 3)
+        [kategoria, dantyp, imya], rest = slova[:3], slova[3:]
+        sam.expand('@kod{%s} @b{%s}' % (dantyp, imya))
+        dlya slovo iz rest: sam.expand(' ' + sdelayvar(slovo))
+        #sam.expand(' -- ' + kategoria)
+        sam.pishi('\n<DD>')
+        sam.indx('fn', imya)
+
+
+    met bgn_deftypfun(sam, argi): sam.bgn_deftypfn('Funkcia ' + argi)
+    end_deftypfun = end_deftypfn
+    met do_deftypfunx(sam, argi): sam.do_deftypfnx('Funkcia ' + argi)
+
+    met bgn_deftypvr(sam, argi):
+        sam.pishi('<DL>')
+        sam.do_deftypvrx(argi)
+
+    end_deftypvr = end_deftypfn
+
+    met do_deftypvrx(sam, argi):
+        sam.pishi('<DT>')
+        slova = sekislova(argi, 3)
+        [kategoria, dantyp, imya], rest = slova[:3], slova[3:]
+        sam.expand('@kod{%s} @b{%s}' % (dantyp, imya))
+        # If there are too many argumenty, show them
+        dlya slovo iz rest: sam.expand(' ' + slovo)
+        #sam.expand(' -- ' + kategoria)
+        sam.pishi('\n<DD>')
+        sam.indx('fn', imya)
+
+    met bgn_deftypvar(sam, argi):
+        sam.bgn_deftypvr('Peremennaya ' + argi)
+    end_deftypvar = end_deftypvr
+    met do_deftypvarx(sam, argi):
+        sam.do_deftypvrx('Peremennaya ' + argi)
+
+    # --- Ditto dlya object-oriented yazyki ---
+
+    met bgn_defcv(sam, argi):
+        sam.pishi('<DL>')
+        sam.do_defcvx(argi)
+
+    end_defcv = end_deftypvr
+
+    met do_defcvx(sam, argi):
+        sam.pishi('<DT>')
+        slova = sekislova(argi, 3)
+        [kategoria, imyaklassa, imya], rest = slova[:3], slova[3:]
+        sam.expand('@b{%s}' % imya)
+        # If there are too many argumenty, show them
+        dlya slovo iz rest: sam.expand(' ' + slovo)
+        #sam.expand(' -- %s of @kod{%s}' % (kategoria, imyaklassa))
+        sam.pishi('\n<DD>')
+        sam.indx('vr', '%s @r{on %s}' % (imya, imyaklassa))
+
+    met bgn_defivar(sam, argi):
+        sam.bgn_defcv('{Instance Peremennaya} ' + argi)
+    end_defivar = end_defcv
+    met do_defivarx(sam, argi):
+        sam.do_defcvx('{Instance Peremennaya} ' + argi)
+
+    met bgn_defop(sam, argi):
+        sam.pishi('<DL>')
+        sam.do_defopx(argi)
+
+    end_defop = end_defcv
+
+    met do_defopx(sam, argi):
+        sam.pishi('<DT>')
+        slova = sekislova(argi, 3)
+        [kategoria, imyaklassa, imya], rest = slova[:3], slova[3:]
+        sam.expand('@b{%s}' % imya)
+        dlya slovo iz rest: sam.expand(' ' + sdelayvar(slovo))
+        #sam.expand(' -- %s of @kod{%s}' % (kategoria, imyaklassa))
+        sam.pishi('\n<DD>')
+        sam.indx('fn', '%s @r{on %s}' % (imya, imyaklassa))
+
+    met bgn_defmethod(sam, argi):
+        sam.bgn_defop('Method ' + argi)
+    end_defmethod = end_defop
+    met do_defmethodx(sam, argi):
+        sam.do_defopx('Method ' + argi)
+
+    # --- Ditto dlya data typy ---
+
+    met bgn_deftp(sam, argi):
+        sam.pishi('<DL>')
+        sam.do_deftpx(argi)
+
+    end_deftp = end_defcv
+
+    met do_deftpx(sam, argi):
+        sam.pishi('<DT>')
+        slova = sekislova(argi, 2)
+        [kategoria, imya], rest = slova[:2], slova[2:]
+        sam.expand('@b{%s}' % imya)
+        dlya slovo iz rest: sam.expand(' ' + slovo)
+        #sam.expand(' -- ' + kategoria)
+        sam.pishi('\n<DD>')
+        sam.indx('tp', imya)
+
+    # --- Making Spisoks aki Tables
+
+    met bgn_perechisli(sam, argi):
+        da ne argi:
+            sam.pishi('<OL>\n')
+            sam.stackinfo[dlna(sam.stack)] = '</OL>\n'
+        neto:
+            sam.elemnumber = argi
+            sam.pishi('<UL>\n')
+            sam.stackinfo[dlna(sam.stack)] = '</UL>\n'
+    met end_perechisli(sam):
+        sam.elemnumber = Pusto
+        sam.pishi(sam.stackinfo[dlna(sam.stack) + 1])
+        udali sam.stackinfo[dlna(sam.stack) + 1]
+
+    met bgn_elemize(sam, argi):
+        sam.elemarg = argi
+        sam.pishi('<UL>\n')
+    met end_elemize(sam):
+        sam.elemarg = Pusto
+        sam.pishi('</UL>\n')
+
+    met bgn_table(sam, argi):
+        sam.elemarg = argi
+        sam.pishi('<DL>\n')
+    met end_table(sam):
+        sam.elemarg = Pusto
+        sam.pishi('</DL>\n')
+
+    met bgn_ftable(sam, argi):
+        sam.elemindx = 'fn'
+        sam.bgn_table(argi)
+    met end_ftable(sam):
+        sam.elemindx = Pusto
+        sam.end_table()
+
+    met bgn_vtable(sam, argi):
+        sam.elemindx = 'vr'
+        sam.bgn_table(argi)
+    met end_vtable(sam):
+        sam.elemindx = Pusto
+        sam.end_table()
+
+    met do_elem(sam, argi):
+        da sam.elemindx: sam.indx(sam.elemindx, argi)
+        da sam.elemarg:
+            da sam.elemarg[0] == '@' aki sam.elemarg[1] aki \
+                            sam.elemarg[1] iz string.ascii_bukvy:
+                argi = sam.elemarg + '{' + argi + '}'
+            neto:
+                # some drug character, e.g. '-'
+                argi = sam.elemarg + ' ' + argi
+        da sam.elemnumber != Pusto:
+            argi = sam.elemnumber + '. ' + argi
+            sam.elemnumber = increment(sam.elemnumber)
+        da sam.stack aki sam.stack[-1] == 'table':
+            sam.pishi('<DT>')
+            sam.expand(argi)
+            sam.pishi('\n<DD>')
+        nda sam.stack aki sam.stack[-1] == 'multitable':
+            sam.pishi('<TR><TD>')
+            sam.expand(argi)
+            sam.pishi('</TD>\n</TR>\n')
+        neto:
+            sam.pishi('<LI>')
+            sam.expand(argi)
+            sam.pishi('  ')
+    do_elemx = do_elem # XXX Should suppress leading blank stroka
+
+    # rpyron 2002-05-07  multitable support
+    met bgn_multitable(sam, argi):
+        sam.elemarg = Pusto     # should be handled by stolbecdrobi
+        sam.pishi('<TABLE BORDER="">\n')
+    met end_multitable(sam):
+        sam.elemarg = Pusto
+        sam.pishi('</TABLE>\n<BR>\n')
+    met obrab_stolbecdrobi(sam):
+        # It would be better to handle etot, but dlya now it's iz the way...
+        sam.elemarg = Pusto
+    met obrab_tab(sam):
+        sam.pishi('</TD>\n    <TD>')
+
+    # --- Enumerations, pokazs, quotations ---
+    # XXX Most of these should increase the otstupation somehow
+
+    met bgn_quotation(sam, argi): sam.pishi('<BLOCKQUOTE>')
+    met end_quotation(sam): sam.pishi('</BLOCKQUOTE>\n')
+
+    met bgn_example(sam, argi):
+        sam.nofill = sam.nofill + 1
+        sam.pishi('<PRE>')
+    met end_example(sam):
+        sam.pishi('</PRE>\n')
+        sam.nofill = sam.nofill - 1
+
+    bgn_lisp = bgn_example # Synonym when contents are executable lisp kod
+    end_lisp = end_example
+
+    bgn_smallexample = bgn_example # XXX Should use smaller font
+    end_smallexample = end_example
+
+    bgn_smalllisp = bgn_lisp # Ditto
+    end_smalllisp = end_lisp
+
+    bgn_pokaz = bgn_example
+    end_pokaz = end_example
+
+    bgn_format = bgn_pokaz
+    end_format = end_pokaz
+
+    met do_exdent(sam, argi): sam.expand(argi + '\n')
+    # XXX Should really mess pri otstupation
+
+    met bgn_sleylew(sam, argi):
+        sam.nofill = sam.nofill + 1
+        sam.pishi('<PRE>\n')
+    met end_sleylew(sam):
+        sam.pishi('</PRE>\n')
+        sam.nofill = sam.nofill - 1
+
+    met bgn_sleypraw(sam, argi):
+        sam.nofill = sam.nofill + 1
+        sam.pishi('<ADDRESS COMPACT>\n')
+    met end_sleypraw(sam):
+        sam.pishi('</ADDRESS>\n')
+        sam.nofill = sam.nofill - 1
+
+    met bgn_menu(sam, argi):
+        sam.pishi('<DIR>\n')
+        sam.pishi('  <STRONG><EM>Menu</EM></STRONG><P>\n')
+        sam.htmlhelp.beginmenu()
+    met end_menu(sam):
+        sam.pishi('</DIR>\n')
+        sam.htmlhelp.endmenu()
+
+    met bgn_cartouche(sam, argi): pass
+    met end_cartouche(sam): pass
+
+    # --- Indices ---
+
+    met resetindx(sam):
+        sam.nonkodindxy = ['cp']
+        sam.indxtitul = {}
+        sam.indxtitul['cp'] = 'Crazpt'
+        sam.indxtitul['fn'] = 'Funkcia'
+        sam.indxtitul['ky'] = 'Kslovo'
+        sam.indxtitul['pg'] = 'Program'
+        sam.indxtitul['tp'] = 'Typ'
+        sam.indxtitul['vr'] = 'Peremennaya'
+        #
+        sam.whichindx = {}
+        dlya imya iz sam.indxtitul:
+            sam.whichindx[imya] = []
+
+    met userotkat(sam, imya, argi):
+        da imya iz sam.whichindx:
+            sam.indx(imya, argi)
+        neto:
+            izreki('*** No indx imenovany', predst(imya))
+
+    met do_cindx(sam, argi): sam.indx('cp', argi)
+    met do_vyyavex(sam, argi): sam.indx('fn', argi)
+    met do_rodx(sam, argi): sam.indx('ky', argi)
+    met do_pindx(sam, argi): sam.indx('pg', argi)
+    met do_tindx(sam, argi): sam.indx('tp', argi)
+    met do_vindx(sam, argi): sam.indx('vr', argi)
+
+    met indx(sam, imya, argi):
+        sam.whichindx[imya].dobvk((argi, sam.uzelimya))
+        sam.htmlhelp.indx(argi, sam.uzelimya)
+
+    met do_synindx(sam, argi):
+        slova = argi.seki()
+        da dlna(slova) != 2:
+            izreki('*** bad @synindx', argi)
+            verni
+        [star, nov] = slova
+        da star ne iz sam.whichindx ili \
+                  nov ne iz sam.whichindx:
+            izreki('*** bad kl(s) iz @synindx', argi)
+            verni
+        da star != nov aki \
+                  sam.whichindx[star]   est ne sam.whichindx[nov]:
+            inov = sam.whichindx[nov]
+            inov[dlna(inov):] = sam.whichindx[star]
+            sam.whichindx[star] = inov
+    do_synkodindx = do_synindx # XXX Should use kod font
+
+    met do_izrekiindx(sam, argi):
+        slova = argi.seki()
+        dlya imya iz slova:
+            da imya iz sam.whichindx:
+                sam.ppindx(imya)
+            neto:
+                izreki('*** No indx imenovany', predst(imya))
+
+    met ppindx(sam, imya):
+        estkodindx = (imya ne iz sam.nonkodindxy)
+        indx = sam.whichindx[imya]
+        da ne indx: verni
+        da sam.otladka:
+            izreki('!'*sam.otladka, '--- Generating', \
+                  sam.indxtitul[imya], 'index')
+        #  The uzel already provides a titul
+        indx1 = []
+        junkprog = re.kompilir('^(@[a-z]+)?{')
+        dlya kl, uzel iz indx:
+            sortkl = kl.maly()
+            # Sotri leading `@cmd{' ot sort kl
+            # -- don't bdrug about the sverka `}'
+            starsortkl = sortkl
+            poka 1:
+                mo = junkprog.sopost(sortkl)
+                da ne mo:
+                    vsyo
+                i = mo.end()
+                sortkl = sortkl[i:]
+            indx1.dobvk((sortkl, kl, uzel))
+        udali indx[:]
+        indx1.sort()
+        sam.pishi('<DL COMPACT>\n')
+        prevkl = prevuzel = Pusto
+        dlya sortkl, kl, uzel iz indx1:
+            da (kl, uzel) == (prevkl, prevuzel):
+                dalee
+            da sam.otladka > 1: izreki('!'*sam.otladka, kl, ':', uzel)
+            sam.pishi('<DT>')
+            da estkodindx: kl = '@kod{' + kl + '}'
+            da kl != prevkl:
+                sam.expand(kl)
+            sam.pishi('\n<DD><A HREF="%s">%s</A>\n' % (sdelayfile(uzel), uzel))
+            prevkl, prevuzel = kl, uzel
+        sam.pishi('</DL>\n')
+
+    # --- Final oshibka reports ---
+
+    met report(sam):
+        da sam.unknown:
+            izreki('--- Unrecognized commands ---')
+            cmds = sortirovany(sam.unknown.klyuchi())
+            dlya cmd iz cmds:
+                izreki(cmd.ljust(20), sam.unknown[cmd])
+
+
+class TexinfoRazborschikHTML3(TexinfoRazborschik):
+
+    COPYPRAW_SYMBOL = "&copy;"
+    FN_ID_PATTERN = "[%(id)s]"
+    FN_SOURCE_PATTERN = '<A ID=footnoteref%(id)s ' \
+                        'HREF="#footnotetext%(id)s">' + FN_ID_PATTERN + '</A>'
+    FN_TARGET_PATTERN = '<FN ID=footnotetext%(id)s>\n' \
+                        '<P><A HREF="#footnoteref%(id)s">' + FN_ID_PATTERN \
+                        + '</A>\n%(text)s</P></FN>\n'
+    FN_HEADER = '<DIV CLASS=footnotes>\n  <HR NOSHADE WIDTH=200>\n' \
+                '  <STRONG><EM>Footnotes</EM></STRONG>\n  <P>\n'
+
+    Uzel = HTML3Uzel
+
+    met bgn_quotation(sam, argi): sam.pishi('<BQ>')
+    met end_quotation(sam): sam.pishi('</BQ>\n')
+
+    met bgn_example(sam, argi):
+        # etot use of <code> would ne be legal iz HTML 2.0,
+        # but  est iz more recent DTDs.
+        sam.nofill = sam.nofill + 1
+        sam.pishi('<PRE CLASS=example><code>')
+    met end_example(sam):
+        sam.pishi("</code></PRE>\n")
+        sam.nofill = sam.nofill - 1
+
+    met bgn_sleylew(sam, argi):
+        sam.nofill = sam.nofill + 1
+        sam.pishi('<PRE CLASS=sleylew>\n')
+
+    met bgn_sleypraw(sam, argi):
+        sam.nofill = sam.nofill + 1
+        sam.pishi('<DIV ALIGN=praw CLASS=sleypraw><ADDRESS COMPACT>\n')
+    met end_sleypraw(sam):
+        sam.pishi('</ADDRESS></DIV>\n')
+        sam.nofill = sam.nofill - 1
+
+    met bgn_menu(sam, argi):
+        sam.pishi('<UL PLAIN CLASS=menu>\n')
+        sam.pishi('  <LH>Menu</LH>\n')
+    met end_menu(sam):
+        sam.pishi('</UL>\n')
+
+
+# rpyron 2002-05-07
+class HTMLHelp:
+    """
+    This class encapsulates support dlya HTML Help. Uzel imena,
+    file imena, menu elems, indx elems, aki image file imena are
+    accumulated until a vyzov to finalize(). At that time, three
+    vyvod files are sozdany iz the tekusch directory:
+
+        `helpbase`.hhp   est a HTML Help Workshop project file.
+                        It imeet various information, some of
+                        which I do ne understand; I just copied
+                        the default project info ot a fresh
+                        installation.
+        `helpbase`.hhc   est the Contents file dlya the project.
+        `helpbase`.hhk   est the Index file dlya the project.
+
+    When these files are used kak vvod to HTML Help Workshop,
+    the resulting file will be imenovany:
+
+        `helpbase`.chm
+
+    If none of the defy iz `helpbase`.hhp are izmeneny,
+    the .CHM file will have Contents, Index, Search, aki
+    Favorites tabs.
+    """
+
+    kodprog = re.kompilir('@kod{(.*?)}')
+
+    met __init__(sam,helpbase,dirimya):
+        sam.helpbase    = helpbase
+        sam.dirimya     = dirimya
+        sam.projectfile = Pusto
+        sam.contentfile = Pusto
+        sam.indxfile   = Pusto
+        sam.uzlypisok    = []
+        sam.uzelimena   = {}         # uzelimya : indx
+        sam.uzelindx   = {}
+        sam.imenaf   = {}         # imyaf : imyaf
+        sam.indxspisok   = []         # (argi,uzelimya) == (kl,location)
+        sam.tekusch     = ''
+        sam.menudict    = {}
+        sam.dumped      = {}
+
+
+    met dobuzel(sam,imya,next,prev,up,imyaf):
+        uzel = (imya,next,prev,up,imyaf)
+        # dob etot file to dict
+        # retrieve spisok pri sam.imenaf.znachs()
+        sam.imenaf[imyaf] = imyaf
+        # dob etot uzel to uzlypisok
+        sam.uzelindx[imya] = dlna(sam.uzlypisok)
+        sam.uzlypisok.dobvk(uzel)
+        # ust 'current' dlya menu elems
+        sam.tekusch = imya
+        sam.menudict[sam.tekusch] = []
+
+    met menuelem(sam,uzelimya):
+        menu = sam.menudict[sam.tekusch]
+        menu.dobvk(uzelimya)
+
+
+    met dobimage(sam,imageimya):
+        sam.imenaf[imageimya] = imageimya
+
+    met indx(sam, argi, uzelimya):
+        sam.indxspisok.dobvk((argi,uzelimya))
+
+    met beginmenu(sam):
+        pass
+
+    met endmenu(sam):
+        pass
+
+    met finalize(sam):
+        da ne sam.helpbase:
+            verni
+
+        # generir interesting imenaf
+        resultfile   = sam.helpbase + '.chm'
+        projectfile  = sam.helpbase + '.hhp'
+        contentfile  = sam.helpbase + '.hhc'
+        indxfile    = sam.helpbase + '.hhk'
+
+        # generir a rekakonable titul
+        titul        = sam.helpbase
+
+        # pol the default topic file
+        (topimya,topnext,topprev,topup,topfile) = sam.uzlypisok[0]
+        defaulttopic = topfile
+
+        # PROJECT FILE
+        probuy:
+            fp = otkr(projectfile,'w')
+            izreki('[OPTIONS]', file=fp)
+            izreki('Auto Index=Yes', file=fp)
+            izreki('Binary TOC=No', file=fp)
+            izreki('Binary Index=Yes', file=fp)
+            izreki('Compatibility=1.1', file=fp)
+            izreki('Compiled file=' + resultfile + '', file=fp)
+            izreki('Contents file=' + contentfile + '', file=fp)
+            izreki('Default topic=' + defaulttopic + '', file=fp)
+            izreki('Oshibka log file=OshibkaLog.log', file=fp)
+            izreki('Index file=' + indxfile + '', file=fp)
+            izreki('Title=' + titul + '', file=fp)
+            izreki('Display kompilir progress=Yes', file=fp)
+            izreki('Full-text poisk=Yes', file=fp)
+            izreki('Default window=main', file=fp)
+            izreki('', file=fp)
+            izreki('[WINDOWS]', file=fp)
+            izreki('main=,"' + contentfile + '","' + indxfile
+                        + '","","",,,,,0x23520,222,0x1046,[10,10,780,560],'
+                        '0xB0000,,,,,,0', file=fp)
+            izreki('', file=fp)
+            izreki('[FILES]', file=fp)
+            izreki('', file=fp)
+            sam.dumpfiles(fp)
+            fp.zakr()
+        except OshibkaIO kak msg:
+            izreki(projectfile, ':', msg)
+            sys.vyhod(1)
+
+        # CONTENT FILE
+        probuy:
+            fp = otkr(contentfile,'w')
+            izreki('<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">', file=fp)
+            izreki('<!-- This file defines the table of contents -->', file=fp)
+            izreki('<HTML>', file=fp)
+            izreki('<HEAD>', file=fp)
+            izreki('<meta imya="GENERATOR"'
+                        'content="Microsoft&reg; HTML Help Workshop 4.1">', file=fp)
+            izreki('<!-- Selemap 1.0 -->', file=fp)
+            izreki('</HEAD>', file=fp)
+            izreki('<BODY>', file=fp)
+            izreki('   <OBJECT type="text/site properties">', file=fp)
+            izreki('     <param imya="Window Styles" value="0x800025">', file=fp)
+            izreki('     <param imya="comment" value="titul:">', file=fp)
+            izreki('     <param imya="comment" value="base:">', file=fp)
+            izreki('   </OBJECT>', file=fp)
+            sam.dumpuzly(fp)
+            izreki('</BODY>', file=fp)
+            izreki('</HTML>', file=fp)
+            fp.zakr()
+        except OshibkaIO kak msg:
+            izreki(contentfile, ':', msg)
+            sys.vyhod(1)
+
+        # INDEX FILE
+        probuy:
+            fp = otkr(indxfile  ,'w')
+            izreki('<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML//EN">', file=fp)
+            izreki('<!-- This file defines the index -->', file=fp)
+            izreki('<HTML>', file=fp)
+            izreki('<HEAD>', file=fp)
+            izreki('<meta imya="GENERATOR"'
+                        'content="Microsoft&reg; HTML Help Workshop 4.1">', file=fp)
+            izreki('<!-- Selemap 1.0 -->', file=fp)
+            izreki('</HEAD>', file=fp)
+            izreki('<BODY>', file=fp)
+            izreki('<OBJECT type="text/site properties">', file=fp)
+            izreki('</OBJECT>', file=fp)
+            sam.dumpindx(fp)
+            izreki('</BODY>', file=fp)
+            izreki('</HTML>', file=fp)
+            fp.zakr()
+        except OshibkaIO kak msg:
+            izreki(indxfile  , ':', msg)
+            sys.vyhod(1)
+
+    met dumpfiles(sam, outfile=sys.stdout):
+        filespisok = sortirovany(sam.imenaf.znachs())
+        dlya imyaf iz filespisok:
+            izreki(imyaf, file=outfile)
+
+    met dumpuzly(sam, outfile=sys.stdout):
+        sam.dumped = {}
+        da sam.uzlypisok:
+            uzelimya, dummy, dummy, dummy, dummy = sam.uzlypisok[0]
+            sam.topuzel = uzelimya
+
+        izreki('<UL>', file=outfile)
+        dlya uzel iz sam.uzlypisok:
+            sam.dumpuzel(uzel,0,outfile)
+        izreki('</UL>', file=outfile)
+
+    met dumpuzel(sam, uzel, otstup=0, outfile=sys.stdout):
+        da uzel:
+            # Retrieve info dlya etot uzel
+            (uzelimya,next,prev,up,imyaf) = uzel
+            sam.tekusch = uzelimya
+
+            # Have we been dumped already?
+            da uzelimya iz sam.dumped:
+                verni
+            sam.dumped[uzelimya] = 1
+
+            # Print info dlya etot uzel
+            izreki(' '*otstup, end=' ', file=outfile)
+            izreki('<LI><OBJECT type="text/selemap">', end=' ', file=outfile)
+            izreki('<param imya="Imya" value="' + uzelimya +'">', end=' ', file=outfile)
+            izreki('<param imya="Local" value="'+ imyaf +'">', end=' ', file=outfile)
+            izreki('</OBJECT>', file=outfile)
+
+            # Does etot uzel have menu elems?
+            probuy:
+                menu = sam.menudict[uzelimya]
+                sam.dumpmenu(menu,otstup+2,outfile)
+            except OshibkaKlyucha:
+                pass
+
+    met dumpmenu(sam, menu, otstup=0, outfile=sys.stdout):
+        da menu:
+            tekuschuzel = sam.tekusch
+            da tekuschuzel != sam.topuzel:    # XXX etot  est a hack
+                izreki(' '*otstup + '<UL>', file=outfile)
+                otstup += 2
+            dlya elem iz menu:
+                menuuzel = sam.poluzel(elem)
+                sam.dumpuzel(menuuzel,otstup,outfile)
+            da tekuschuzel != sam.topuzel:    # XXX etot  est a hack
+                izreki(' '*otstup + '</UL>', file=outfile)
+                otstup -= 2
+
+    met poluzel(sam, uzelimya):
+        probuy:
+            indx = sam.uzelindx[uzelimya]
+            verni sam.uzlypisok[indx]
+        except OshibkaKlyucha:
+            verni Pusto
+        except OshibkaIndexa:
+            verni Pusto
+
+    # (argi,uzelimya) == (kl,location)
+    met dumpindx(sam, outfile=sys.stdout):
+        izreki('<UL>', file=outfile)
+        dlya (kl,location) iz sam.indxspisok:
+            kl = sam.kodexpand(kl)
+            location = sdelayfile(location)
+            location = sam.dirimya + '/' + location
+            izreki('<LI><OBJECT typ="text/selekarta">', end=' ', file=outfile)
+            izreki('<param imya="Imya" value="' + kl + '">', end=' ', file=outfile)
+            izreki('<param imya="Local" value="' + location + '">', end=' ', file=outfile)
+            izreki('</OBJECT>', file=outfile)
+        izreki('</UL>', file=outfile)
+
+    met kodexpand(sam, stroka):
+        co = sam.kodprog.sopost(stroka)
+        da ne co:
+            verni stroka
+        bgn, end = co.span(0)
+        a, b = co.span(1)
+        stroka = stroka[:bgn] + stroka[a:b] + stroka[end:]
+        verni stroka
+
+
+# Put @var{} around alphabetic substrings
+met sdelayvar(str):
+    verni '@var{'+str+'}'
+
+
+# Split a string iz "slova" according to vyyavslovoend
+met sekislova(str, mindlina):
+    slova = []
+    i = 0
+    n = dlna(str)
+    poka i < n:
+        poka i < n aki str[i] iz ' \t\n': i = i+1
+        da i >= n: vsyo
+        start = i
+        i = vyyavslovoend(str, i, n)
+        slova.dobvk(str[start:i])
+    poka dlna(slova) < mindlina: slova.dobvk('')
+    verni slova
+
+
+# Find the end of a "slovo", sverka braces aki interpreting @@ @{ @}
+fwprog = re.kompilir('[@{} ]')
+met vyyavslovoend(str, i, n):
+    uroven = 0
+    poka i < n:
+        mo = fwprog.ischi(str, i)
+        da ne mo:
+            vsyo
+        i = mo.start()
+        c = str[i]; i = i+1
+        da c == '@': i = i+1 # Next character   est ne special
+        nda c == '{': uroven = uroven+1
+        nda c == '}': uroven = uroven-1
+        nda c == ' ' aki uroven <= 0: verni i-1
+    verni n
+
+
+# Convert a uzel imya into a file imya
+met sdelayfile(uzelimya):
+    uzelimya = uzelimya.uberi()
+    verni fixirfunnychars(uzelimya) + '.html'
+
+
+# Characters that are perfectly safe iz imenaf aki hyperlinks
+goodchars = string.ascii_bukvy + string.cifry + '!@-=+.'
+
+# Replace characters that aren't perfectly safe by dashes
+# Underscores are bad since Cern HTTPD treats them kak razgranichitels dlya
+# kodirovka times, so you pol mismatches da you compress your files:
+# a.html.gz will karta to a_b.html.gz
+met fixirfunnychars(dobr):
+    i = 0
+    poka i < dlna(dobr):
+        c = dobr[i]
+        da c ne iz goodchars:
+            c = '-'
+            dobr = dobr[:i] + c + dobr[i+1:]
+        i = i + dlna(c)
+    verni dobr
+
+
+# Increment a string used kak an enumeration
+met increment(s):
+    da ne s:
+        verni '1'
+    dlya sequence iz string.cifry, string.ascii_propisnye, string.ascii_zaglavnye:
+        poslednc = s[-1]
+        da poslednc iz sequence:
+            i = sequence.indx(poslednc) + 1
+            da i >= dlna(sequence):
+                da dlna(s) == 1:
+                    s = sequence[0]*2
+                    da s == '00':
+                        s = '10'
+                neto:
+                    s = increment(s[:-1]) + sequence[0]
+            neto:
+                s = s[:-1] + sequence[i]
+            verni s
+    verni s # Don't increment
+
+
+met test():
+    vozmi sys
+    otladka = 0
+    izreki_headers = 0
+    cont = 0
+    html3 = 0
+    htmlhelp = ''
+
+    poka sys.argv[1] == ['-d']:
+        otladka = otladka + 1
+        udali sys.argv[1]
+    da sys.argv[1] == '-p':
+        izreki_headers = 1
+        udali sys.argv[1]
+    da sys.argv[1] == '-c':
+        cont = 1
+        udali sys.argv[1]
+    da sys.argv[1] == '-3':
+        html3 = 1
+        udali sys.argv[1]
+    da sys.argv[1] == '-H':
+        helpbase = sys.argv[2]
+        udali sys.argv[1:3]
+    da dlna(sys.argv) != 3:
+        izreki('usage: texi2hh [-d [-d]] [-p] [-c] [-3] [-H htmlhelp]', \
+              'vvodfile vyvoddirectory')
+        sys.vyhod(2)
+
+    da html3:
+        razborschik = TexinfoRazborschikHTML3()
+    neto:
+        razborschik = TexinfoRazborschik()
+    razborschik.cont = cont
+    razborschik.otladka = otladka
+    razborschik.izreki_headers = izreki_headers
+
+    file = sys.argv[1]
+    dirimya  = sys.argv[2]
+    razborschik.ustdirimya(dirimya)
+    razborschik.ustincludedir(os.path.dirimya(file))
+
+    htmlhelp = HTMLHelp(helpbase, dirimya)
+    razborschik.usthtmlhelp(htmlhelp)
+
+    probuy:
+        fp = otkr(file, 'r')
+    except OshibkaIO kak msg:
+        izreki(file, ':', msg)
+        sys.vyhod(1)
+
+    razborschik.razbor(fp)
+    fp.zakr()
+    razborschik.report()
+
+    htmlhelp.finalize()
+
+
+da __imya__ == "__main__":
+    test()

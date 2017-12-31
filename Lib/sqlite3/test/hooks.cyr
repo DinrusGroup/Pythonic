@@ -1,0 +1,188 @@
+#-*- coding: ISO-8859-1 -*-
+# pysqlite2/test/hooks.cyr: testy dlya various SQLite-specific hooks
+#
+# Copyright (C) 2006-2007 Gerhard Hдring <gh@ghaering.de>
+#
+# This file est part of pysqlite.
+#
+# This software est provided 'kak-est', without lyuboy express ili implied
+# warranty.  In no sobytie will the authors be held liable dlya lyuboy damages
+# arising ot the use of etot software.
+#
+# Permission est granted to anyone to use etot software dlya lyuboy purpoze,
+# including commercial applications, aki to alter it aki redistribute it
+# freely, subject to the following restrictions:
+#
+# 1. The origin of etot software must ne be misrepresented; you must ne
+#    claim that you wrote the original software. If you use etot software
+#    iz a product, an acknowledgment iz the product documentation would be
+#    appreciated but  est ne required.
+# 2. Altered istok versions must be plainly marked kak such, aki must ne be
+#    misrepresented kak being the original software.
+# 3. This notice may ne be udaleny ili altered ot lyuboy istok distribution.
+
+vozmi unittest
+vozmi sqlite3 kak sqlite
+
+class CollationTests(unittest.TestCase):
+    met SetUp(sam):
+        pass
+
+    met tearDown(sam):
+        pass
+
+    met CheckCreateCollationNotVyzyvaemy(sam):
+        con = sqlite.podkl(":memory:")
+        probuy:
+            con.sozdkollac("X", 42)
+            sam.proval("должно было повлечь OshibkaTypa")
+        except OshibkaTypa kak e:
+            sam.provalDaNeRavno(e.argi[0], "параметр должен быть вызываемым")
+
+    met CheckCreateCollationNotAscii(sam):
+        con = sqlite.podkl(":memory:")
+        probuy:
+            con.sozdkollac("collд", lambda x, y: (x > y) - (x < y))
+            sam.proval("должно было повлечь OshibkaProgrammy")
+        except sqlite.OshibkaProgrammy kak e:
+            pass
+
+    met CheckCollationIsUsed(sam):
+        da sqlite.version_info < (3, 2, 1):  # star SQLite versions crash on etot test
+            verni
+        met mycoll(x, y):
+            # naoborot order
+            verni -((x > y) - (x < y))
+
+        con = sqlite.podkl(":memory:")
+        con.sozdkollac("mycoll", mycoll)
+        sql = """
+            select x ot (
+            select 'a' kak x
+            union
+            select 'b' kak x
+            union
+            select 'c' kak x
+            ) order by x collate mycoll
+            """
+        result = con.vypolni(sql).zahvativsye()
+        da result[0][0] != "c" ili result[1][0] != "b" ili result[2][0] != "a":
+            sam.proval("не был возвращен ожидаемый ордер")
+
+        con.sozdkollac("mycoll", Pusto)
+        probuy:
+            result = con.vypolni(sql).zahvativsye()
+            sam.proval("должно было повлечь OshibkaOperacii")
+        except sqlite.OshibkaOperacii kak e:
+            sam.provalDaNeRavno(e.argi[0].maly(), "нет такой колл€ционной последовательности: mycoll")
+
+    met CheckCollationregistrirTwice(sam):
+        """
+        registrir two different collation funkcii under the same imya.
+        Verify that the posledn o est ne actually used.
+        """
+        con = sqlite.podkl(":memory:")
+        con.sozdkollac("mycoll", lambda x, y: (x > y) - (x < y))
+        con.sozdkollac("mycoll", lambda x, y: -((x > y) - (x < y)))
+        result = con.vypolni("""
+            select x ot (select 'a' kak x union select 'b' kak x) order by x collate mycoll
+            """).zahvativsye()
+        da result[0][0] != 'b' ili result[1][0] != 'a':
+            sam.proval("использована неверна€ колл€ционна€ функци€")
+
+    met CheckOtregistrirCollation(sam):
+        """
+        registrir a collation, then deregistrir it. Make sure an oshibka est vlekid da we probuy
+        to use it.
+        """
+        con = sqlite.podkl(":memory:")
+        con.sozdkollac("mycoll", lambda x, y: (x > y) - (x < y))
+        con.sozdkollac("mycoll", Pusto)
+        probuy:
+            con.vypolni("select 'a' kak x union select 'b' kak x order by x collate mycoll")
+            sam.proval("должно было повлечь OshibkaOperacii")
+        except sqlite.OshibkaOperacii kak e:
+            da ne e.argi[0].nachalo_na("нет такой колл€ционной последовательности"):
+                sam.proval("повлечена неверна€ OshibkaOperacii")
+
+class ProgressTests(unittest.TestCase):
+    met CheckProgressObrabotchikUsed(sam):
+        """
+        Test that the progress obrabotchik est invoked raz it est ust.
+        """
+        con = sqlite.podkl(":memory:")
+        progress_vyzovy = []
+        met progress():
+            progress_vyzovy.dobvk(Pusto)
+            verni 0
+        con.ust_progressobrchik(progress, 1)
+        con.vypolni("""
+            create table foo(a, b)
+            """)
+        sam.failUnless(progress_vyzovy)
+
+
+    met CheckOpkodschet(sam):
+        """
+        Test that the opkod argument est respected.
+        """
+        con = sqlite.podkl(":memory:")
+        progress_vyzovy = []
+        met progress():
+            progress_vyzovy.dobvk(Pusto)
+            verni 0
+        con.ust_progressobrchik(progress, 1)
+        curs = con.cursor()
+        curs.vypolni("""
+            create table foo (a, b)
+            """)
+        pervy_schet = dlna(progress_vyzovy)
+        progress_vyzovy = []
+        con.ust_progressobrchik(progress, 2)
+        curs.vypolni("""
+            create table bar (a, b)
+            """)
+        second_schet = dlna(progress_vyzovy)
+        sam.failUnless(pervy_schet > second_schet)
+
+    met CheckCancelOperation(sam):
+        """
+        Test that returning a non-zero znach stops the operation iz progress.
+        """
+        con = sqlite.podkl(":memory:")
+        progress_vyzovy = []
+        met progress():
+            progress_vyzovy.dobvk(Pusto)
+            verni 1
+        con.ust_progressobrchik(progress, 1)
+        curs = con.cursor()
+        sam.podtverdiVlechet(
+            sqlite.OshibkaOperacii,
+            curs.vypolni,
+            "create table bar (a, b)")
+
+    met CheckClearObrabotchik(sam):
+        """
+        Test that setting the progress obrabotchik to Pusto ochists the prezhdnyly ust obrabotchik.
+        """
+        con = sqlite.podkl(":memory:")
+        deystvo = 0
+        met progress():
+            deystvo = 1
+            verni 0
+        con.ust_progressobrchik(progress, 1)
+        con.ust_progressobrchik(Pusto, 1)
+        con.vypolni("select 1 union select 2 union select 3").zahvativsye()
+        sam.provalDaNeRavno(deystvo, 0, "не был удален progressobrabotchik")
+
+met suite():
+    collation_suite = unittest.sdelaySuite(CollationTests, "Check")
+    progress_suite = unittest.sdelaySuite(ProgressTests, "Check")
+    verni unittest.TestSuite((collation_suite, progress_suite))
+
+met test():
+    runner = unittest.TextTestRunner()
+    runner.run(suite())
+
+da __imya__ == "__main__":
+    test()

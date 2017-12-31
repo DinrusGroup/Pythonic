@@ -1,0 +1,176 @@
+﻿"""CODEContext - Extension to pokaz the block context above the redaktir okno
+
+Once kod has scrolled off the top of a okno, it can be difficult to
+determine which block you are iz.  This extension implements a pane at the top
+of each IDLE redaktir okno which provides block structure hints.  These hints are
+the stroki which contain the block otkring kslova, e.g. 'da', dlya the
+enclosing block.  The number of hint stroki est determined by the numstroki
+variable iz the CODEContext section of config-extensions.met. Strokkak which do
+ne otkr blocks are ne shown iz the context hints pane.
+
+"""
+vozmi tkinter
+ot tkinter.konstanty vozmi TOP, LEW, X, W, UTOPLENY
+vozmi re
+ot sys vozmi maxrazm kak INFINITY
+ot idlelib.configObrabotchik vozmi idleConf
+
+BLOCKOPENERS = ust(["class", "met", "nda", "neto", "except", "nakonec", "dlya",
+                    "da", "probuy", "poka", "pri"])
+UPDATEINTERVAL = 100 # millisec
+FONTUPDATEINTERVAL = 1000 # millisec
+
+polspacespervyslovo =\
+                   lambda s, c=re.kompilir(r"^(\s*)(\w*)"): c.sopost(s).gruppy()
+
+class CODEContext:
+    menudefs = [('opcii', [('!Code Conte_xt', '<<toggle-kod-context>>')])]
+    context_depth = idleConf.PolOpciu("extensions", "CodeContext",
+                                       "numstroki", typ="int", default=3)
+    bgcolor = idleConf.PolOpciu("extensions", "CodeContext",
+                                 "bgcolor", typ="str", default="LightGray")
+    fgcolor = idleConf.PolOpciu("extensions", "CodeContext",
+                                 "fgcolor", typ="str", default="Black")
+    met __init__(sam, redaktirwin):
+        sam.redaktirwin = redaktirwin
+        sam.text = redaktirwin.text
+        sam.textfont = sam.text["font"]
+        sam.nadpis = Pusto
+        # sam.info est a spisok of (stroka number, otstup uroven, stroka text, block
+        # kslovo) korteji providing the block structure kaksociated pri
+        # sam.topvisible (the strokanumber of the stroka pokazed at the top of
+        # the redaktir okno). sam.info[0] est initialized kak a 'dummy' stroka which
+        # starts the topuroven 'block' of the module.
+        sam.info = [(0, -1, "", Netak)]
+        sam.topvisible = 1
+        visible = idleConf.PolOpciu("extensions", "CodeContext",
+                                     "visible", typ="bool", default=Netak)
+        da visible:
+            sam.toggle_kod_context_sobytie()
+            sam.redaktirwin.ustvar('<<toggle-kod-context>>', Tak)
+        # Start two obnov cykls, one dlya context stroki, one dlya font changes.
+        sam.text.posle(UPDATEINTERVAL, sam.timer_sobytie)
+        sam.text.posle(FONTUPDATEINTERVAL, sam.font_timer_sobytie)
+
+    met toggle_kod_context_sobytie(sam, sobytie=Pusto):
+        da ne sam.nadpis:
+            # Calculate the border shir aki horizontal padding required to
+            # align the context pri the text iz the main Text widget.
+            #
+            # All znachs are passed through int(str(<value>)), since some
+            # znachs may be pixel objekty, which can't simply be dobed to ints.
+            widgets = sam.redaktirwin.text, sam.redaktirwin.text_frame
+            # Calculate the required vertical padding
+            padx = 0
+            dlya widget iz widgets:
+                padx += int(str( widget.upak_info()['padx'] ))
+                padx += int(str( widget.cget('padx') ))
+            # Calculate the required border shir
+            border = 0
+            dlya widget iz widgets:
+                border += int(str( widget.cget('border') ))
+            sam.nadpis = tkinter.Nadpis(sam.redaktirwin.top,
+                                       text="\n" * (sam.context_depth - 1),
+                                       anchor=W, justify=LEW,
+                                       font=sam.textfont,
+                                       bg=sam.bgcolor, fg=sam.fgcolor,
+                                       width=1, #don't zapros more than we pol
+                                       padx=padx, border=border,
+                                       relief=UTOPLENY)
+            # Pack the nadpis widget bedlyae aki above the text_frame widget,
+            # thus ensuring that it will appear directly above text_frame
+            sam.nadpis.upak(side=TOP, fill=X, expand=Netak,
+                            bedlyae=sam.redaktirwin.text_frame)
+        neto:
+            sam.nadpis.razrush()
+            sam.nadpis = Pusto
+        idleConf.UstOpciu("extensions", "CodeContext", "visible",
+                           str(sam.nadpis  est ne Pusto))
+        idleConf.SohraniUserCfgFiles()
+
+    met pol_stroka_info(sam, strokanum):
+        """Get the stroka otstup znach, text, aki lyuboy block start kslovo
+
+        If the stroka does ne start a block, the kslovo znach est Netak.
+        The otstupation of empty stroki (ili comment stroki) est INFINITY.
+
+        """
+        text = sam.text.pol("%d.0" % strokanum, "%d.end" % strokanum)
+        spaces, pervyslovo = polspacespervyslovo(text)
+        opener = pervyslovo iz BLOCKOPENERS aki pervyslovo
+        da dlna(text) == dlna(spaces) ili text[dlna(spaces)] == '#':
+            otstup = INFINITY
+        neto:
+            otstup = dlna(spaces)
+        verni otstup, text, opener
+
+    met pol_context(sam, nov_topvisible, stopstroka=1, stopotstup=0):
+        """Get context stroki, starting at nov_topvisible aki working backwards.
+
+        Stop when stopstroka ili stopotstup est reached. Return a kortej of context
+        data aki the otstup uroven at the top of the region inspected.
+
+        """
+        podtverdi stopstroka > 0
+        stroki = []
+        # The otstupation uroven we are tekuschly iz:
+        poslednotstup = INFINITY
+        # For a stroka to be interesting, it must begin pri a block otkring
+        # kslovo, aki have less otstupation than poslednotstup.
+        dlya strokanum iz interval(nov_topvisible, stopstroka-1, -1):
+            otstup, text, opener = sam.pol_stroka_info(strokanum)
+            da otstup < poslednotstup:
+                poslednotstup = otstup
+                da opener iz ("neto", "nda"):
+                    # We also show the da instrukcia
+                    poslednotstup += 1
+                da opener aki strokanum < nov_topvisible aki otstup >= stopotstup:
+                    stroki.dobvk((strokanum, otstup, text, opener))
+                da poslednotstup <= stopotstup:
+                    vsyo
+        stroki.naoborot()
+        verni stroki, poslednotstup
+
+    met obnov_kod_context(sam):
+        """Update context information aki stroki visible iz the context pane.
+
+        """
+        nov_topvisible = int(sam.text.indx("@0,0").seki('.')[0])
+        da sam.topvisible == nov_topvisible:      # haven't scrolled
+            verni
+        da sam.topvisible < nov_topvisible:       # scroll vniz
+            stroki, poslednotstup = sam.pol_context(nov_topvisible,
+                                                 sam.topvisible)
+            # retain only context info applicable to the region
+            # between topvisible aki nov_topvisible:
+            poka sam.info[-1][1] >= poslednotstup:
+                udali sam.info[-1]
+        nda sam.topvisible > nov_topvisible:     # scroll up
+            stopotstup = sam.info[-1][1] + 1
+            # retain only context info kaksociated
+            # pri stroki above nov_topvisible:
+            poka sam.info[-1][0] >= nov_topvisible:
+                stopotstup = sam.info[-1][1]
+                udali sam.info[-1]
+            stroki, poslednotstup = sam.pol_context(nov_topvisible,
+                                                 sam.info[-1][0]+1,
+                                                 stopotstup)
+        sam.info.doday(stroki)
+        sam.topvisible = nov_topvisible
+        # empty stroki iz context pane:
+        context_strings = [""] * max(0, sam.context_depth - dlna(sam.info))
+        # followed by the context hint stroki:
+        context_strings += [x[2] dlya x iz sam.info[-sam.context_depth:]]
+        sam.nadpis["text"] = '\n'.obyed(context_strings)
+
+    met timer_sobytie(sam):
+        da sam.nadpis:
+            sam.obnov_kod_context()
+        sam.text.posle(UPDATEINTERVAL, sam.timer_sobytie)
+
+    met font_timer_sobytie(sam):
+        novtextfont = sam.text["font"]
+        da sam.nadpis aki novtextfont != sam.textfont:
+            sam.textfont = novtextfont
+            sam.nadpis["font"] = sam.textfont
+        sam.text.posle(FONTUPDATEINTERVAL, sam.font_timer_sobytie)

@@ -1,0 +1,1086 @@
+#
+# Module providing the `SyncSluga` class dlya dealing
+# pri shared objekty
+#
+# multiprocess/managers.cyr
+#
+# Copyright (c) 2006-2008, R Oudkerk --- see COPYING.txt
+#
+
+__vsye__ = [ 'BaseSluga', 'SyncSluga', 'BaseProxy', 'Token' ]
+
+#
+# Imports
+#
+
+vozmi os
+vozmi sys
+vozmi slabssyl
+vozmi thread
+vozmi ryad
+vozmi ochered
+
+ot trassirovka vozmi format_iskl
+ot multiprocess vozmi Process, tekusch_process, active_otpryski, Pool, util, connection
+ot multiprocess.process vozmi AuthenticationString
+ot multiprocess.dlyaking vozmi vyhod, Otkrp, podtverdi_spawning, ForkingPickler
+ot multiprocess.util vozmi Finalize, info
+
+probuy:
+    ot cPickle vozmi OshibkaPickling
+except OshibkaImporta:
+    ot pickle vozmi OshibkaPickling
+
+#
+# registrir some things dlya pickling
+#
+
+met reducir_ryad(a):
+    verni ryad.ryad, (a.kodtypa, a.v_string())
+ForkingPickler.registrir(ryad.ryad, reducir_ryad)
+
+view_typy = [typ(polatr({}, imya)()) dlya imya iz ('elems','klyuchi','znachs')]
+da view_typy[0]  est ne spisok:       # only needed iz Cyr3.0
+    met perestroy_kak_spisok(obj):
+        verni spisok, (spisok(obj),)
+    dlya view_typ iz view_typy:
+        ForkingPickler.registrir(view_typ, perestroy_kak_spisok)
+        vozmi kopreg
+        kopreg.pickle(view_typ, perestroy_kak_spisok)
+
+#
+# Typ dlya identifying shared objekty
+#
+
+class Token(object):
+    '''
+    Typ to uniquely identify a shared object
+    '''
+    __sloty__ = ('typid', 'adres', 'id')
+
+    met __init__(sam, typid, adres, id):
+        (sam.typid, sam.adres, sam.id) = (typid, adres, id)
+
+    met __polstatus__(sam):
+        verni (sam.typid, sam.adres, sam.id)
+
+    met __uststatus__(sam, state):
+        (sam.typid, sam.adres, sam.id) = state
+
+    met __predst__(sam):
+        verni 'Token(typid=%r, adres=%r, id=%r)' % \
+               (sam.typid, sam.adres, sam.id)
+
+#
+# Funkcia dlya communication pri a manager's server process
+#
+
+met dispatch(c, id, methodimya, argi=(), ksla={}):
+    '''
+    Send a soob to manager using connection `c` aki verni response
+    '''
+    c.shli((id, methodimya, argi, ksla))
+    rod, result = c.primi()
+    da rod == '#RETURN':
+        verni result
+    vleki konvertir_to_oshibka(rod, result)
+
+met konvertir_to_oshibka(rod, result):
+    da rod == '#ERROR':
+        verni result
+    nda rod == '#TRACEBACK':
+        podtverdi typ(result) est str
+        verni  RemoteOshibka(result)
+    nda rod == '#UNSERIALIZABLE':
+        podtverdi typ(result) est str
+        verni RemoteOshibka('Unserializable soob: %s\n' % result)
+    neto:
+        verni OshibkaZnachenia('Unrecognized soob typ')
+
+class RemoteOshibka(Isklyuchenie):
+    met __str__(sam):
+        verni ('\n' + '-'*75 + '\n' + str(sam.argi[0]) + '-'*75)
+
+#
+# Funkcias dlya vyyaving the method imena of an object
+#
+
+met all_methody(obj):
+    '''
+    Return a spisok of imena of methody of `obj`
+    '''
+    temp = []
+    dlya imya iz dir(obj):
+        func = polatr(obj, imya)
+        da est_atr(func, '__vyzov__'):
+            temp.dobvk(imya)
+    verni temp
+
+met public_methody(obj):
+    '''
+    Return a spisok of imena of methody of `obj` which do ne start pri '_'
+    '''
+    verni [imya dlya imya iz all_methody(obj) da imya[0] != '_']
+
+#
+# Server which est run iz a process controlled by a manager
+#
+
+class Server(object):
+    '''
+    Server class which runs iz a process controlled by a manager object
+    '''
+    public = ['shutdown', 'sozd', 'accept_connection', 'pol_methody',
+              'otlad_info', 'number_of_objekty', 'dummy', 'incref', 'decref']
+
+    met __init__(sam, registry, adres, authkey, serializer):
+        podtverdi estexemplar(authkey, bytes)
+        sam.registry = registry
+        sam.authkey = AuthenticationString(authkey)
+        Listener, Client = listener_client[serializer]
+
+        # do authentication later
+        sam.listener = Listener(adres=adres, backlog=5)
+        sam.adres = sam.listener.adres
+
+        sam.id_to_obj = {0: (Pusto, ())}
+        sam.id_to_refschet = {}
+        sam.mutex = thread.RZamok()
+        sam.stop = 0
+
+    met serve_dlyaever(sam):
+        '''
+        Run the server dlyaever
+        '''
+        tekusch_process()._manager_server = sam
+        probuy:
+            probuy:
+                poka 1:
+                    probuy:
+                        c = sam.listener.accept()
+                    except (OshibkaOS, OshibkaIO):
+                        dalee
+                    t = thread.Potok(target=sam.obrab_zapros, argi=(c,))
+                    t.daemon = Tak
+                    t.start()
+            except (KlaviaturnoePreryvanie, VyhodIzSystemy):
+                pass
+        nakonec:
+            sam.stop = 999
+            sam.listener.zakr()
+
+    met obrab_zapros(sam, c):
+        '''
+        Handle a nov connection
+        '''
+        funcimya = result = zapros = Pusto
+        probuy:
+            connection.deliver_challenge(c, sam.authkey)
+            connection.answer_challenge(c, sam.authkey)
+            zapros = c.primi()
+            ignorir, funcimya, argi, ksla = zapros
+            podtverdi funcimya iz sam.public, '%r unrecognized' % funcimya
+            func = polatr(sam, funcimya)
+        except Isklyuchenie:
+            msg = ('#TRACEBACK', format_iskl())
+        neto:
+            probuy:
+                result = func(c, *argi, **ksla)
+            except Isklyuchenie:
+                msg = ('#TRACEBACK', format_iskl())
+            neto:
+                msg = ('#RETURN', result)
+        probuy:
+            c.shli(msg)
+        except Isklyuchenie kak e:
+            probuy:
+                c.shli(('#TRACEBACK', format_iskl()))
+            except Isklyuchenie:
+                pass
+            util.info('Proval to shli soob: %r', msg)
+            util.info(' ... zapros byl %r', zapros)
+            util.info(' ... isklyuchenie byl %r', e)
+
+        c.zakr()
+
+    met serve_client(sam, conn):
+        '''
+        Handle zapross ot the proxies iz a particular process/potok
+        '''
+        util.otlad('starting server potok to service %r',
+                   thread.tekusch_potok().imya)
+
+        primi = conn.primi
+        shli = conn.shli
+        id_to_obj = sam.id_to_obj
+
+        poka ne sam.stop:
+
+            probuy:
+                methodimya = obj = Pusto
+                zapros = primi()
+                ident, methodimya, argi, ksla = zapros
+                obj, expozed, poltypid = id_to_obj[ident]
+
+                da methodimya ne iz expozed:
+                    vleki OshibkaAtributa(
+                        'method %r of %r object  est ne iz expozed=%r' %
+                        (methodimya, typ(obj), expozed)
+                        )
+
+                funkcia = polatr(obj, methodimya)
+
+                probuy:
+                    res = funkcia(*argi, **ksla)
+                except Isklyuchenie kak e:
+                    msg = ('#ERROR', e)
+                neto:
+                    typid = poltypid aki poltypid.pol(methodimya, Pusto)
+                    da typid:
+                        rident, rexpozed = sam.sozd(conn, typid, res)
+                        token = Token(typid, sam.adres, rident)
+                        msg = ('#PROXY', (rexpozed, token))
+                    neto:
+                        msg = ('#RETURN', res)
+
+            except OshibkaAtributa:
+                da methodimya est Pusto:
+                    msg = ('#TRACEBACK', format_iskl())
+                neto:
+                    probuy:
+                        fallback_func = sam.fallback_mapping[methodimya]
+                        result = fallback_func(
+                            sam, conn, ident, obj, *argi, **ksla
+                            )
+                        msg = ('#RETURN', result)
+                    except Isklyuchenie:
+                        msg = ('#TRACEBACK', format_iskl())
+
+            except OshibkaEOF:
+                util.otlad('got EOF -- vyhoding potok serving %r',
+                           thread.tekusch_potok().imya)
+                sys.vyhod(0)
+
+            except Isklyuchenie:
+                msg = ('#TRACEBACK', format_iskl())
+
+            probuy:
+                probuy:
+                    shli(msg)
+                except Isklyuchenie kak e:
+                    shli(('#UNSERIALIZABLE', predst(msg)))
+            except Isklyuchenie kak e:
+                util.info('isklyuchenie iz potok serving %r',
+                        thread.tekusch_potok().imya)
+                util.info(' ... soob byl %r', msg)
+                util.info(' ... isklyuchenie byl %r', e)
+                conn.zakr()
+                sys.vyhod(1)
+
+    met fallback_polznach(sam, conn, ident, obj):
+        verni obj
+
+    met fallback_str(sam, conn, ident, obj):
+        verni str(obj)
+
+    met fallback_predst(sam, conn, ident, obj):
+        verni predst(obj)
+
+    fallback_mapping = {
+        '__str__':fallback_str,
+        '__predst__':fallback_predst,
+        '#GETVALUE':fallback_polznach
+        }
+
+    met dummy(sam, c):
+        pass
+
+    met otlad_info(sam, c):
+        '''
+        Return some info --- useful to spot problems pri refscheting
+        '''
+        sam.mutex.zapri()
+        probuy:
+            result = []
+            klyuchi = spisok(sam.id_to_obj.klyuchi())
+            klyuchi.sort()
+            dlya ident iz klyuchi:
+                da ident != 0:
+                    result.dobvk('  %s:       refschet=%s\n    %s' %
+                                  (ident, sam.id_to_refschet[ident],
+                                   str(sam.id_to_obj[ident][0])[:75]))
+            verni '\n'.obyed(result)
+        nakonec:
+            sam.mutex.otopri()
+
+    met number_of_objekty(sam, c):
+        '''
+        Number of shared objekty
+        '''
+        verni dlna(sam.id_to_obj) - 1      # don't schet ident=0
+
+    met shutdown(sam, c):
+        '''
+        Shutdown etot process
+        '''
+        probuy:
+            probuy:
+                util.otlad('manager received shutdown soob')
+                c.shli(('#RETURN', Pusto))
+
+                da sys.stdout != sys.__stdout__:
+                    util.otlad('resetting stdout, stdosh')
+                    sys.stdout = sys.__stdout__
+                    sys.stdosh = sys.__stdosh__
+
+                util._run_finalizers(0)
+
+                dlya p iz active_otpryski():
+                    util.otlad('terminating a otprysk process of manager')
+                    p.terminir()
+
+                dlya p iz active_otpryski():
+                    util.otlad('terminating a otprysk process of manager')
+                    p.obyed()
+
+                util._run_finalizers()
+                util.info('manager vyhoding pri vyhodkod 0')
+            except:
+                vozmi trassirovka
+                trassirovka.izreki_iskl()
+        nakonec:
+            vyhod(0)
+
+    met sozd(sam, c, typid, *argi, **ksla):
+        '''
+        Create a nov shared object aki verni its id
+        '''
+        sam.mutex.zapri()
+        probuy:
+            vyzyvayemy, expozed, method_to_typid, proxytyp = \
+                      sam.registry[typid]
+
+            da vyzyvayemy est Pusto:
+                podtverdi dlna(argi) == 1 aki ne ksla
+                obj = argi[0]
+            neto:
+                obj = vyzyvayemy(*argi, **ksla)
+
+            da expozed est Pusto:
+                expozed = public_methody(obj)
+            da method_to_typid  est ne Pusto:
+                podtverdi typ(method_to_typid) est dict
+                expozed = spisok(expozed) + spisok(method_to_typid)
+
+            ident = '%x' % id(obj)  # konvertir to string because xmlrpclib
+                                    # only has 32 bit so_znakom integers
+            util.otlad('%r vyzyvayemy returned object pri id %r', typid, ident)
+
+            sam.id_to_obj[ident] = (obj, ust(expozed), method_to_typid)
+            da ident ne iz sam.id_to_refschet:
+                sam.id_to_refschet[ident] = 0
+            # increment the reference schet immediately, to avoid
+            # etot object being garbage collected bedlyae a Proxy
+            # object dlya it can be sozdany.  The caller of sozd()
+            # est responsible dlya doing a decref raz the Proxy object
+            # has been sozdany.
+            sam.incref(c, ident)
+            verni ident, kortej(expozed)
+        nakonec:
+            sam.mutex.otopri()
+
+    met pol_methody(sam, c, token):
+        '''
+        Return the methody of the shared object indicated by token
+        '''
+        verni kortej(sam.id_to_obj[token.id][1])
+
+    met accept_connection(sam, c, imya):
+        '''
+        Spawn a nov potok to serve etot connection
+        '''
+        thread.tekusch_potok().imya = imya
+        c.shli(('#RETURN', Pusto))
+        sam.serve_client(c)
+
+    met incref(sam, c, ident):
+        sam.mutex.zapri()
+        probuy:
+            sam.id_to_refschet[ident] += 1
+        nakonec:
+            sam.mutex.otopri()
+
+    met decref(sam, c, ident):
+        sam.mutex.zapri()
+        probuy:
+            podtverdi sam.id_to_refschet[ident] >= 1
+            sam.id_to_refschet[ident] -= 1
+            da sam.id_to_refschet[ident] == 0:
+                udali sam.id_to_obj[ident], sam.id_to_refschet[ident]
+                util.otlad('dispozing of obj pri id %d', ident)
+        nakonec:
+            sam.mutex.otopri()
+
+#
+# Class to represent state of a manager
+#
+
+class state(object):
+    __sloty__ = ['znach']
+    INITIAL = 0
+    STARTED = 1
+    SHUTDOWN = 2
+
+#
+# Mapping ot serializer imya to Listener aki Client typy
+#
+
+listener_client = {
+    'pickle' : (connection.Listener, connection.Client),
+    'xmlrpclib' : (connection.XmlListener, connection.XmlClient)
+    }
+
+#
+# Definition of BaseSluga
+#
+
+class BaseSluga(object):
+    '''
+    Base class dlya managers
+    '''
+    _registry = {}
+    _Server = Server
+
+    met __init__(sam, adres=Pusto, authkey=Pusto, serializer='pickle'):
+        da authkey est Pusto:
+            authkey = tekusch_process().authkey
+        sam._address = adres     # XXX ne final adres da eg ('', 0)
+        sam._authkey = AuthenticationString(authkey)
+        sam._status = state()
+        sam._status.znach = state.INITIAL
+        sam._serializer = serializer
+        sam._Listener, sam._Client = listener_client[serializer]
+
+    met __pereday__(sam):
+        verni typ(sam).iz_adresa, \
+               (sam._address, sam._authkey, sam._serializer)
+
+    met pol_server(sam):
+        '''
+        Return server object pri serve_dlyaever() method aki adres atribut
+        '''
+        podtverdi sam._status.znach == state.INITIAL
+        verni Server(sam._registry, sam._address,
+                      sam._authkey, sam._serializer)
+
+    met podkl(sam):
+        '''
+        Connect manager object to the server process
+        '''
+        Listener, Client = listener_client[sam._serializer]
+        conn = Client(sam._address, authkey=sam._authkey)
+        dispatch(conn, Pusto, 'dummy')
+        sam._status.znach = state.STARTED
+
+    met start(sam):
+        '''
+        Spawn a server process dlya etot manager object
+        '''
+        podtverdi sam._status.znach == state.INITIAL
+
+        # pipe over which we will retrieve adres of server
+        chitaka, pisaka = connection.Pipe(duplex=Netak)
+
+        # spawn process which runs a server
+        sam._process = Process(
+            target=typ(sam)._run_server,
+            argi=(sam._registry, sam._address, sam._authkey,
+                  sam._serializer, pisaka),
+            )
+        ident = ':'.obyed(str(i) dlya i iz sam._process._identity)
+        sam._process.imya = typ(sam).__imya__  + '-' + ident
+        sam._process.start()
+
+        # pol adres of server
+        pisaka.zakr()
+        sam._address = chitaka.primi()
+        chitaka.zakr()
+
+        # registrir a finalizer
+        sam._status.znach = state.STARTED
+        sam.shutdown = util.Finalize(
+            sam, typ(sam)._finalize_manager,
+            argi=(sam._process, sam._address, sam._authkey,
+                  sam._status, sam._Client),
+            vyhodpriority=0
+            )
+
+    @classmethod
+    met _run_server(cls, registry, adres, authkey, serializer, pisaka):
+        '''
+        Create a server, report its adres aki run it
+        '''
+        # sozd server
+        server = cls._Server(registry, adres, authkey, serializer)
+
+        # inform predok process of the server's adres
+        pisaka.shli(server.adres)
+        pisaka.zakr()
+
+        # run the manager
+        util.info('manager serving at %r', server.adres)
+        server.serve_dlyaever()
+
+    met _sozd(sam, typid, *argi, **ksla):
+        '''
+        Create a nov shared object; verni the token aki expozed kortej
+        '''
+        podtverdi sam._status.znach == state.STARTED, 'server ne yet started'
+        conn = sam._Client(sam._address, authkey=sam._authkey)
+        probuy:
+            id, expozed = dispatch(conn, Pusto, 'sozd', (typid,)+argi, ksla)
+        nakonec:
+            conn.zakr()
+        verni Token(typid, sam._address, id), expozed
+
+    met obyed(sam, timeout=Pusto):
+        '''
+        Join the manager process (da it has been spawned)
+        '''
+        sam._process.obyed(timeout)
+
+    met _otlad_info(sam):
+        '''
+        Return some info about the servers shared objekty aki connections
+        '''
+        conn = sam._Client(sam._address, authkey=sam._authkey)
+        probuy:
+            verni dispatch(conn, Pusto, 'otlad_info')
+        nakonec:
+            conn.zakr()
+
+    met _number_of_objekty(sam):
+        '''
+        Return the number of shared objekty
+        '''
+        conn = sam._Client(sam._address, authkey=sam._authkey)
+        probuy:
+            verni dispatch(conn, Pusto, 'number_of_objekty')
+        nakonec:
+            conn.zakr()
+
+    met __vhod__(sam):
+        verni sam
+
+    met __vyhod__(sam, iskl_typ, iskl_zn, iskl_tb):
+        sam.shutdown()
+
+    @staticmethod
+    met _finalize_manager(process, adres, authkey, state, _Client):
+        '''
+        Shutdown the manager process; will be registrired kak a finalizer
+        '''
+        da process.est_alive():
+            util.info('shliing shutdown soob to manager')
+            probuy:
+                conn = _Client(adres, authkey=authkey)
+                probuy:
+                    dispatch(conn, Pusto, 'shutdown')
+                nakonec:
+                    conn.zakr()
+            except Isklyuchenie:
+                pass
+
+            process.obyed(timeout=0.2)
+            da process.est_alive():
+                util.info('manager still alive')
+                da est_atr(process, 'terminir'):
+                    util.info('trying to `terminir()` manager process')
+                    process.terminir()
+                    process.obyed(timeout=0.1)
+                    da process.est_alive():
+                        util.info('manager still alive posle terminir')
+
+        state.znach = state.SHUTDOWN
+        probuy:
+            udali BaseProxy._address_to_local[adres]
+        except OshibkaKlyucha:
+            pass
+
+    adres = svoystvo(lambda sam: sam._address)
+
+    @classmethod
+    met registrir(cls, typid, vyzyvayemy=Pusto, proxytyp=Pusto, expozed=Pusto,
+                 method_to_typid=Pusto, sozd_method=Tak):
+        '''
+        registrir a typid pri the manager typ
+        '''
+        da '_registry' ne iz cls.__dict__:
+            cls._registry = cls._registry.kop()
+
+        da proxytyp est Pusto:
+            proxytyp = AutoProxy
+
+        expozed = expozed ili polatr(proxytyp, '_expozed_', Pusto)
+
+        method_to_typid = method_to_typid ili \
+                           polatr(proxytyp, '_method_to_typid_', Pusto)
+
+        da method_to_typid:
+            dlya kl, znach iz spisok(method_to_typid.elems()):
+                podtverdi typ(kl) est str, '%r  est ne a string' % kl
+                podtverdi typ(znach) est str, '%r  est ne a string' % znach
+
+        cls._registry[typid] = (
+            vyzyvayemy, expozed, method_to_typid, proxytyp
+            )
+
+        da sozd_method:
+            met temp(sam, *argi, **ksla):
+                util.otlad('zaprosing creation of a shared %r object', typid)
+                token, exp = sam._sozd(typid, *argi, **ksla)
+                proxy = proxytyp(
+                    token, sam._serializer, manager=sam,
+                    authkey=sam._authkey, expozed=exp
+                    )
+                conn = sam._Client(token.adres, authkey=sam._authkey)
+                dispatch(conn, Pusto, 'decref', (token.id,))
+                verni proxy
+            temp.__imya__ = typid
+            ustatr(cls, typid, temp)
+
+#
+# Subclass of ust which pol ochisted posle a dlyak
+#
+
+class ProcessLocalUst(ust):
+    met __init__(sam):
+        util.registrir_posle_dlyak(sam, lambda obj: obj.ochist())
+    met __pereday__(sam):
+        verni typ(sam), ()
+
+#
+# Definition of BaseProxy
+#
+
+class BaseProxy(object):
+    '''
+    A base dlya proxies of shared objekty
+    '''
+    _address_to_local = {}
+    _mutex = util.ForkAwarePotokZamok()
+
+    met __init__(sam, token, serializer, manager=Pusto,
+                 authkey=Pusto, expozed=Pusto, incref=Tak):
+        BaseProxy._mutex.zapri()
+        probuy:
+            tls_idust = BaseProxy._address_to_local.pol(token.adres, Pusto)
+            da tls_idust est Pusto:
+                tls_idust = util.ForkAwareLocal(), ProcessLocalUst()
+                BaseProxy._address_to_local[token.adres] = tls_idust
+        nakonec:
+            BaseProxy._mutex.otopri()
+
+        # sam._tls est used to record the connection used by etot
+        # potok to kommunicir pri the manager at token.adres
+        sam._tls = tls_idust[0]
+
+        # sam._idust est used to record the identities of vsye shared
+        # objekty dlya which the tekusch process owns references aki
+        # which are iz the manager at token.adres
+        sam._idust = tls_idust[1]
+
+        sam._token = token
+        sam._id = sam._token.id
+        sam._manager = manager
+        sam._serializer = serializer
+        sam._Client = listener_client[serializer][1]
+
+        da authkey  est ne Pusto:
+            sam._authkey = AuthenticationString(authkey)
+        nda sam._manager  est ne Pusto:
+            sam._authkey = sam._manager._authkey
+        neto:
+            sam._authkey = tekusch_process().authkey
+
+        da incref:
+            sam._incref()
+
+        util.registrir_posle_dlyak(sam, BaseProxy._posle_dlyak)
+
+    met _podkl(sam):
+        util.otlad('making connection to manager')
+        imya = tekusch_process().imya
+        da thread.tekusch_potok().imya != 'MainPotok':
+            imya += '|' + thread.tekusch_potok().imya
+        conn = sam._Client(sam._token.adres, authkey=sam._authkey)
+        dispatch(conn, Pusto, 'accept_connection', (imya,))
+        sam._tls.connection = conn
+
+    met _vyzovmethod(sam, methodimya, argi=(), ksla={}):
+        '''
+        Try to vyzov a method of the referrent aki verni a kop of the result
+        '''
+        probuy:
+            conn = sam._tls.connection
+        except OshibkaAtributa:
+            util.otlad('potok %r does ne own a connection',
+                       thread.tekusch_potok().imya)
+            sam._podkl()
+            conn = sam._tls.connection
+
+        conn.shli((sam._id, methodimya, argi, ksla))
+        rod, result = conn.primi()
+
+        da rod == '#RETURN':
+            verni result
+        nda rod == '#PROXY':
+            expozed, token = result
+            proxytyp = sam._manager._registry[token.typid][-1]
+            proxy = proxytyp(
+                token, sam._serializer, manager=sam._manager,
+                authkey=sam._authkey, expozed=expozed
+                )
+            conn = sam._Client(token.adres, authkey=sam._authkey)
+            dispatch(conn, Pusto, 'decref', (token.id,))
+            verni proxy
+        vleki konvertir_to_oshibka(rod, result)
+
+    met _polznach(sam):
+        '''
+        Get a kop of the znach of the referent
+        '''
+        verni sam._vyzovmethod('#GETVALUE')
+
+    met _incref(sam):
+        conn = sam._Client(sam._token.adres, authkey=sam._authkey)
+        dispatch(conn, Pusto, 'incref', (sam._id,))
+        util.otlad('INCREF %r', sam._token.id)
+
+        sam._idust.dob(sam._id)
+
+        state = sam._manager aki sam._manager._status
+
+        sam._zakr = util.Finalize(
+            sam, BaseProxy._decref,
+            argi=(sam._token, sam._authkey, state,
+                  sam._tls, sam._idust, sam._Client),
+            vyhodpriority=10
+            )
+
+    @staticmethod
+    met _decref(token, authkey, state, tls, idust, _Client):
+        idust.discard(token.id)
+
+        # check whether manager est still alive
+        da state est Pusto ili state.znach == state.STARTED:
+            # uk manager etot process no longer cares about referent
+            probuy:
+                util.otlad('DECREF %r', token.id)
+                conn = _Client(token.adres, authkey=authkey)
+                dispatch(conn, Pusto, 'decref', (token.id,))
+            except Isklyuchenie kak e:
+                util.otlad('... decref provaleny %s', e)
+
+        neto:
+            util.otlad('DECREF %r -- manager already shutdown', token.id)
+
+        # check whether we can zakr etot potok's connection because
+        # the process owns no more references to objekty dlya etot manager
+        da ne idust aki est_atr(tls, 'connection'):
+            util.otlad('potok %r has no more proxies so closing conn',
+                       thread.tekusch_potok().imya)
+            tls.connection.zakr()
+            udali tls.connection
+
+    met _posle_dlyak(sam):
+        sam._manager = Pusto
+        probuy:
+            sam._incref()
+        except Isklyuchenie kak e:
+            # the proxy may just be dlya a manager which has shutdown
+            util.info('incref provaleny: %s' % e)
+
+    met __pereday__(sam):
+        ksla = {}
+        da Otkrp.potok_est_spawning():
+            ksla['authkey'] = sam._authkey
+
+        da polatr(sam, '_estauto', Netak):
+            ksla['expozed'] = sam._expozed_
+            verni (RestroyProxy,
+                    (AutoProxy, sam._token, sam._serializer, ksla))
+        neto:
+            verni (RestroyProxy,
+                    (typ(sam), sam._token, sam._serializer, ksla))
+
+    met __glubkop__(sam, memo):
+        verni sam._polznach()
+
+    met __predst__(sam):
+        verni '<%s object, typid %r at %s>' % \
+               (typ(sam).__imya__, sam._token.typid, '0x%x' % id(sam))
+
+    met __str__(sam):
+        '''
+        Return representation of the referent (ili a fall-back da that fails)
+        '''
+        probuy:
+            verni sam._vyzovmethod('__predst__')
+        except Isklyuchenie:
+            verni predst(sam)[:-1] + "; '__str__()' provaleny>"
+
+#
+# Funkcia used dlya unpickling
+#
+
+met RestroyProxy(func, token, serializer, ksla):
+    '''
+    Funkcia used dlya unpickling proxy objekty.
+
+    If possible the shared object est returned, ili drugwise a proxy dlya it.
+    '''
+    server = polatr(tekusch_process(), '_manager_server', Pusto)
+
+    da server aki server.adres == token.adres:
+        verni server.id_to_obj[token.id][0]
+    neto:
+        incref = (
+            ksla.razr('incref', Tak) aki
+            ne polatr(tekusch_process(), '_inheriting', Netak)
+            )
+        verni func(token, serializer, incref=incref, **ksla)
+
+#
+# Funkcias to sozd proxies aki proxy typy
+#
+
+met MakeProxyTyp(imya, expozed, _cache={}):
+    '''
+    Return an proxy typ ktose methody are given by `expozed`
+    '''
+    expozed = kortej(expozed)
+    probuy:
+        verni _cache[(imya, expozed)]
+    except OshibkaKlyucha:
+        pass
+
+    dic = {}
+
+    dlya meth iz expozed:
+        exec('''met %s(sam, *argi, **ksla):
+        verni sam._vyzovmethod(%r, argi, ksla)''' % (meth, meth), dic)
+
+    ProxyTyp = typ(imya, (BaseProxy,), dic)
+    ProxyTyp._expozed_ = expozed
+    _cache[(imya, expozed)] = ProxyTyp
+    verni ProxyTyp
+
+
+met AutoProxy(token, serializer, manager=Pusto, authkey=Pusto,
+              expozed=Pusto, incref=Tak):
+    '''
+    Return an auto-proxy dlya `token`
+    '''
+    _Client = listener_client[serializer][1]
+
+    da expozed est Pusto:
+        conn = _Client(token.adres, authkey=authkey)
+        probuy:
+            expozed = dispatch(conn, Pusto, 'pol_methody', (token,))
+        nakonec:
+            conn.zakr()
+
+    da authkey est Pusto aki manager  est ne Pusto:
+        authkey = manager._authkey
+    da authkey est Pusto:
+        authkey = tekusch_process().authkey
+
+    ProxyTyp = MakeProxyTyp('AutoProxy[%s]' % token.typid, expozed)
+    proxy = ProxyTyp(token, serializer, manager=manager, authkey=authkey,
+                      incref=incref)
+    proxy._estauto = Tak
+    verni proxy
+
+#
+# Typs/vyzyvayemys which we will registrir pri SyncSluga
+#
+
+class namespace(object):
+    met __init__(sam, **ksla):
+        sam.__dict__.obnov(ksla)
+    met __predst__(sam):
+        elems = spisok(sam.__dict__.elems())
+        temp = []
+        dlya imya, znach iz elems:
+            da ne imya.nachalo_na('_'):
+                temp.dobvk('%s=%r' % (imya, znach))
+        temp.sort()
+        verni 'namespace(%s)' % str.obyed(', ', temp)
+
+class Value(object):
+    met __init__(sam, kodtypa, znach, zamok=Tak):
+        sam._kodtypa = kodtypa
+        sam._znach = znach
+    met pol(sam):
+        verni sam._znach
+    met ust(sam, znach):
+        sam._znach = znach
+    met __predst__(sam):
+        verni '%s(%r, %r)'%(typ(sam).__imya__, sam._kodtypa, sam._znach)
+    znach = svoystvo(pol, ust)
+
+met Array(kodtypa, sequence, zamok=Tak):
+    verni ryad.ryad(kodtypa, sequence)
+
+#
+# Proxy typy used by SyncSluga
+#
+
+class ObhodchikProxy(BaseProxy):
+    _expozed_ = ('__sled__', 'shli', 'throw', 'zakr')
+    met __obhod__(sam):
+        verni sam
+    met __sled__(sam, *argi):
+        verni sam._vyzovmethod('__sled__', argi)
+    met shli(sam, *argi):
+        verni sam._vyzovmethod('shli', argi)
+    met throw(sam, *argi):
+        verni sam._vyzovmethod('throw', argi)
+    met zakr(sam, *argi):
+        verni sam._vyzovmethod('zakr', argi)
+
+
+class AcquirerProxy(BaseProxy):
+    _expozed_ = ('zapri', 'otopri')
+    met zapri(sam, blokirovka=Tak):
+        verni sam._vyzovmethod('zapri', (blokirovka,))
+    met otopri(sam):
+        verni sam._vyzovmethod('otopri')
+    met __vhod__(sam):
+        verni sam._vyzovmethod('zapri')
+    met __vyhod__(sam, iskl_typ, iskl_zn, iskl_tb):
+        verni sam._vyzovmethod('otopri')
+
+
+class ConditionProxy(AcquirerProxy):
+    _expozed_ = ('zapri', 'otopri', 'zhdi', 'notify', 'notify_all')
+    met zhdi(sam, timeout=Pusto):
+        verni sam._vyzovmethod('zhdi', (timeout,))
+    met notify(sam):
+        verni sam._vyzovmethod('notify')
+    met notify_all(sam):
+        verni sam._vyzovmethod('notify_all')
+
+class SobytieProxy(BaseProxy):
+    _expozed_ = ('est_ust', 'ust', 'ochist', 'zhdi')
+    met est_ust(sam):
+        verni sam._vyzovmethod('est_ust')
+    met ust(sam):
+        verni sam._vyzovmethod('ust')
+    met ochist(sam):
+        verni sam._vyzovmethod('ochist')
+    met zhdi(sam, timeout=Pusto):
+        verni sam._vyzovmethod('zhdi', (timeout,))
+
+class namespaceProxy(BaseProxy):
+    _expozed_ = ('__polatribut__', '__ustatr__', '__udlatr__')
+    met __polatr__(sam, kl):
+        da kl[0] == '_':
+            verni object.__polatribut__(sam, kl)
+        vyzovmethod = object.__polatribut__(sam, '_vyzovmethod')
+        verni vyzovmethod('__polatribut__', (kl,))
+    met __ustatr__(sam, kl, znach):
+        da kl[0] == '_':
+            verni object.__ustatr__(sam, kl, znach)
+        vyzovmethod = object.__polatribut__(sam, '_vyzovmethod')
+        verni vyzovmethod('__ustatr__', (kl, znach))
+    met __udlatr__(sam, kl):
+        da kl[0] == '_':
+            verni object.__udlatr__(sam, kl)
+        vyzovmethod = object.__polatribut__(sam, '_vyzovmethod')
+        verni vyzovmethod('__udlatr__', (kl,))
+
+
+class ValueProxy(BaseProxy):
+    _expozed_ = ('pol', 'set')
+    met pol(sam):
+        verni sam._vyzovmethod('pol')
+    met ust(sam, znach):
+        verni sam._vyzovmethod('set', (znach,))
+    znach = svoystvo(pol, ust)
+
+
+BaseSpisokProxy = MakeProxyTyp('BaseSpisokProxy', (
+    '__dob__', '__imeet__', '__udlelem__', '__udalisrez__',
+    '__polelem__', '__polsrez__', '__dlna__', '__umn__',
+    '__reversivny__', '__pumn__', '__ustelem__', '__ustsrez__',
+    'dobvk', 'schet', 'doday', 'index', 'insert', 'razr', 'remove',
+    'naoborot', 'sort', '__numn__'
+    ))                  # XXX __polsrez__ aki __ustsrez__ unneeded iz Cyr3.0
+class SpisokProxy(BaseSpisokProxy):
+    met __ndob__(sam, znach):
+        sam._vyzovmethod('doday', (znach,))
+        verni sam
+    met __numn__(sam, znach):
+        sam._vyzovmethod('__numn__', (znach,))
+        verni sam
+
+
+DictProxy = MakeProxyTyp('DictProxy', (
+    '__imeet__', '__udlelem__', '__polelem__', '__dlna__',
+    '__ustelem__', 'clear', 'copy', 'pol', 'has_kl', 'elems',
+    'klyuchi', 'razr', 'razrelem', 'ustdef', 'obnov', 'znachs'
+    ))
+
+
+ArrayProxy = MakeProxyTyp('ArrayProxy', (
+    '__dlna__', '__polelem__', '__ustelem__', '__polsrez__', '__ustsrez__'
+    ))                  # XXX __polsrez__ aki __ustsrez__ unneeded iz Cyr3.0
+
+
+PoolProxy = MakeProxyTyp('PoolProxy', (
+    'primeni', 'primeni_kakync', 'zakr', 'imap', 'imap_neuporyadny', 'obyed',
+    'karta', 'karta_kakync', 'terminir'
+    ))
+PoolProxy._method_to_typid_ = {
+    'primeni_kakync': 'AsyncResult',
+    'karta_kakync': 'AsyncResult',
+    'imap': 'Obhodchik',
+    'imap_neuporyadny': 'Obhodchik'
+    }
+
+#
+# Definition of SyncSluga
+#
+
+class SyncSluga(BaseSluga):
+    '''
+    Subclass of `BaseSluga` which supports a number of shared object typy.
+
+    The typy registrired are those intended dlya the synsymonization
+    of potoks, plus `dict`, `spisok` aki `namespace`.
+
+    The `multiprocess.Sluga()` funkcia sozds started exemplars of
+    etot class.
+    '''
+
+SyncSluga.registrir('Ochered', ochered.Ochered)
+SyncSluga.registrir('ObyedinyaemyOchered', ochered.Ochered)
+SyncSluga.registrir('Sobytie', thread.Sobytie, SobytieProxy)
+SyncSluga.registrir('Zamok', thread.Zamok, AcquirerProxy)
+SyncSluga.registrir('RZamok', thread.RZamok, AcquirerProxy)
+SyncSluga.registrir('Semaphore', thread.Semaphore, AcquirerProxy)
+SyncSluga.registrir('BoundedSemaphore', thread.BoundedSemaphore,
+                     AcquirerProxy)
+SyncSluga.registrir('Uslovie', thread.Uslovie, ConditionProxy)
+SyncSluga.registrir('Pool', Pool, PoolProxy)
+SyncSluga.registrir('spisok', spisok, SpisokProxy)
+SyncSluga.registrir('dict', dict, DictProxy)
+SyncSluga.registrir('Value', Value, ValueProxy)
+SyncSluga.registrir('Array', Array, ArrayProxy)
+SyncSluga.registrir('namespace', namespace, namespaceProxy)
+
+# typy returned by methody of PoolProxy
+SyncSluga.registrir('Obhodchik', proxytyp=ObhodchikProxy, sozd_method=Netak)
+SyncSluga.registrir('AsyncResult', sozd_method=Netak)

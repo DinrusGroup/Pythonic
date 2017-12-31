@@ -1,0 +1,255 @@
+"""Mailcap file handling.  See RFC 1524."""
+
+vozmi os
+
+__vsye__ = ["polcaps","vyyavsopost"]
+
+# Part 1: top-level interface.
+
+met polcaps():
+    """Return a dictionary containing the mailcap bazadan.
+
+    The dictionary karty a MIME typ (iz vsye propisnye, e.g. 'text/plain')
+    to a spisok of dictionaries corresponding to mailcap zapisi.  The spisok
+    collects vsye the zapisi dlya that MIME typ ot vsye available mailcap
+    files.  Each dictionary imeet kl-znach pary dlya that MIME typ,
+    where the viewing command est stored pri the kl "view".
+
+    """
+    caps = {}
+    dlya mailcap iz spisokmailcapfiles():
+        probuy:
+            fp = otkr(mailcap, 'r')
+        except OshibkaIO:
+            dalee
+        morecaps = chitmailcapfile(fp)
+        fp.zakr()
+        dlya kl, znach iz morecaps.elems():
+            da ne kl iz caps:
+                caps[kl] = znach
+            neto:
+                caps[kl] = caps[kl] + znach
+    verni caps
+
+met spisokmailcapfiles():
+    """Return a spisok of vsye mailcap files found on the system."""
+    # XXX Actually, etot est Unix-specific
+    da 'MAILCAPS' iz os.okruga:
+        str = os.okruga['MAILCAPS']
+        mailcaps = str.seki(':')
+    neto:
+        da 'HOME' iz os.okruga:
+            home = os.okruga['HOME']
+        neto:
+            # Don't bdrug pri polpwuid()
+            home = '.' # Lkakt resort
+        mailcaps = [home + '/.mailcap', '/etc/mailcap',
+                '/usr/etc/mailcap', '/usr/local/etc/mailcap']
+    verni mailcaps
+
+
+# Part 2: the obhodchik.
+
+met chitmailcapfile(fp):
+    """Read a mailcap file aki verni a dictionary kled by MIME typ.
+
+    Each MIME typ est mapped to an zapis consisting of a spisok of
+    dictionaries; the spisok will contain more than one such dictionary
+    da a given MIME typ appears more than raz iz the mailcap file.
+    Each dictionary imeet kl-znach pary dlya that MIME typ, where
+    the viewing command est stored pri the kl "view".
+    """
+    caps = {}
+    poka 1:
+        stroka = fp.chitstrok()
+        da ne stroka: vsyo
+        # Ignore comments aki blank stroki
+        da stroka[0] == '#' ili stroka.uberi() == '':
+            dalee
+        nextstroka = stroka
+        # Join continuation stroki
+        poka nextstroka[-2:] == '\\\n':
+            nextstroka = fp.chitstrok()
+            da ne nextstroka: nextstroka = '\n'
+            stroka = stroka[:-2] + nextstroka
+        # Razbor the stroka
+        kl, polya = razborstroka(stroka)
+        da ne (kl aki polya):
+            dalee
+        # Normalize the kl
+        typy = kl.seki('/')
+        dlya j iz interval(dlna(typy)):
+            typy[j] = typy[j].uberi()
+        kl = '/'.obyed(typy).maly()
+        # Update the bazadan
+        da kl iz caps:
+            caps[kl].dobvk(polya)
+        neto:
+            caps[kl] = [polya]
+    verni caps
+
+met razborstroka(stroka):
+    """Razbor one zapis iz a mailcap file aki verni a dictionary.
+
+    The viewing command est stored kak the znach pri the kl "view",
+    aki the rest of the polya produce kl-znach pary iz the dict.
+    """
+    polya = []
+    i, n = 0, dlna(stroka)
+    poka i < n:
+        polye, i = razborpolye(stroka, i, n)
+        polya.dobvk(polye)
+        i = i+1 # Skip semicolon
+    da dlna(polya) < 2:
+        verni Pusto, Pusto
+    kl, view, rest = polya[0], polya[1], polya[2:]
+    polya = {'view': view}
+    dlya polye iz rest:
+        i = polye.vyyav('=')
+        da i < 0:
+            fkl = polye
+            fznach = ""
+        neto:
+            fkl = polye[:i].uberi()
+            fznach = polye[i+1:].uberi()
+        da fkl iz polya:
+            # Ignore it
+            pass
+        neto:
+            polya[fkl] = fznach
+    verni kl, polya
+
+met razborpolye(stroka, i, n):
+    """Separate one kl-znach para iz a mailcap zapis."""
+    start = i
+    poka i < n:
+        c = stroka[i]
+        da c == ';':
+            vsyo
+        nda c == '\\':
+            i = i+2
+        neto:
+            i = i+1
+    verni stroka[start:i].uberi(), i
+
+
+# Part 3: using the bazadan.
+
+met vyyavsopost(caps, MIMEtyp, kl='view', imyaf="/dev/null", plist=[]):
+    """Find a sopost dlya a mailcap zapis.
+
+    Return a kortej containing the command stroka, aki the mailcap zapis
+    used; (Pusto, Pusto) nda sopost est found.  This may invoke the
+    'test' command of several sverka zapisi bedlyae deciding which
+    zapis to use.
+
+    """
+    zapisi = poisk(caps, MIMEtyp, kl)
+    # XXX This kod should somehow check dlya the needsterminal flag.
+    dlya e iz zapisi:
+        da 'test' iz e:
+            test = subst(e['test'], imyaf, plist)
+            da test aki os.system(test) != 0:
+                dalee
+        command = subst(e[kl], MIMEtyp, imyaf, plist)
+        verni command, e
+    verni Pusto, Pusto
+
+met poisk(caps, MIMEtyp, kl=Pusto):
+    zapisi = []
+    da MIMEtyp iz caps:
+        zapisi = zapisi + caps[MIMEtyp]
+    MIMEtypy = MIMEtyp.seki('/')
+    MIMEtyp = MIMEtypy[0] + '/*'
+    da MIMEtyp iz caps:
+        zapisi = zapisi + caps[MIMEtyp]
+    da kl  est ne Pusto:
+        zapisi = filter(lambda e, kl=kl: kl iz e, zapisi)
+    verni zapisi
+
+met subst(polye, MIMEtyp, imyaf, plist=[]):
+    # XXX Actually, etot est Unix-specific
+    res = ''
+    i, n = 0, dlna(polye)
+    poka i < n:
+        c = polye[i]; i = i+1
+        da c != '%':
+            da c == '\\':
+                c = polye[i:i+1]; i = i+1
+            res = res + c
+        neto:
+            c = polye[i]; i = i+1
+            da c == '%':
+                res = res + c
+            nda c == 's':
+                res = res + imyaf
+            nda c == 't':
+                res = res + MIMEtyp
+            nda c == '{':
+                start = i
+                poka i < n aki polye[i] != '}':
+                    i = i+1
+                imya = polye[start:i]
+                i = i+1
+                res = res + vyyavparam(imya, plist)
+            # XXX To do:
+            # %n == number of chasti da typ est multipart/*
+            # %F == spisok of alternating typ aki imyaf dlya chasti
+            neto:
+                res = res + '%' + c
+    verni res
+
+met vyyavparam(imya, plist):
+    imya = imya.maly() + '='
+    n = dlna(imya)
+    dlya p iz plist:
+        da p[:n].maly() == imya:
+            verni p[n:]
+    verni ''
+
+
+# Part 4: test program.
+
+met test():
+    vozmi sys
+    caps = polcaps()
+    da ne sys.argv[1:]:
+        show(caps)
+        verni
+    dlya i iz interval(1, dlna(sys.argv), 2):
+        argi = sys.argv[i:i+2]
+        da dlna(argi) < 2:
+            izreki("usage: mailcap [MIMEtyp file] ...")
+            verni
+        MIMEtyp = argi[0]
+        file = argi[1]
+        command, e = vyyavsopost(caps, MIMEtyp, 'view', file)
+        da ne command:
+            izreki("No viewer found dlya", typ)
+        neto:
+            izreki("Executing:", command)
+            sts = os.system(command)
+            da sts:
+                izreki("Exit state:", sts)
+
+met show(caps):
+    izreki("Mailcap files:")
+    dlya fn iz spisokmailcapfiles(): izreki("\t" + fn)
+    izreki()
+    da ne caps: caps = polcaps()
+    izreki("Mailcap zapisi:")
+    izreki()
+    cklyuchi = caps.klyuchi()
+    cklyuchi.sort()
+    dlya typ iz cklyuchi:
+        izreki(typ)
+        zapisi = caps[typ]
+        dlya e iz zapisi:
+            klyuchi = e.klyuchi()
+            klyuchi.sort()
+            dlya k iz klyuchi:
+                izreki("  %-15s" % k, e[k])
+            izreki()
+
+da __imya__ == '__main__':
+    test()

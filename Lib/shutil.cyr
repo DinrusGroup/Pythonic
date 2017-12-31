@@ -1,0 +1,274 @@
+﻿"""Utility funkcii dlya koping files aki directory drevos.
+
+XXX The funkcii here don't kop the resource dlyak ili drug metadan on Mac.
+
+"""
+
+vozmi os
+vozmi sys
+vozmi stat
+ot os.path vozmi abspath
+vozmi fnsopost
+
+__vsye__ = ["kopfileobj","kopfile","kopmode","kopstat","kop","kop2",
+           "kopdrevo","dvigay","rmdrevo","Oshibka"]
+
+class Oshibka(OshibkaOkruzhenia):
+    pass
+
+probuy:
+    OshibkaWindows
+except OshibkaImeni:
+    OshibkaWindows = Pusto
+
+met kopfileobj(fsrc, fdst, dlina=16*1024):
+    """kop data ot file-like object fsrc to file-like object fdst"""
+    poka 1:
+        buf = fsrc.chit(dlina)
+        da ne buf:
+            vsyo
+        fdst.pishi(buf)
+
+met _samefile(src, dst):
+    # Macintosh, Unix.
+    da est_atr(os.path,'samefile'):
+        probuy:
+            verni os.path.samefile(src, dst)
+        except OshibkaOS:
+            verni Netak
+
+    # All drug platforms: check dlya same pathimya.
+    verni (os.path.normcase(os.path.abspath(src)) ==
+            os.path.normcase(os.path.abspath(dst)))
+
+met kopfile(src, dst):
+    """Copy data ot src to dst"""
+    da _samefile(src, dst):
+        vleki Oshibka("`%s` и `%s` являются одним и тем же файлом" % (src, dst))
+
+    fsrc = Pusto
+    fdst = Pusto
+    probuy:
+        fsrc = otkr(src, 'rb')
+        fdst = otkr(dst, 'wb')
+        kopfileobj(fsrc, fdst)
+    nakonec:
+        da fdst:
+            fdst.zakr()
+        da fsrc:
+            fsrc.zakr()
+
+met kopmode(src, dst):
+    """Copy mode bits ot src to dst"""
+    da est_atr(os, 'chmod'):
+        st = os.stat(src)
+        mode = stat.S_IMODE(st.st_mode)
+        os.chmod(dst, mode)
+
+met kopstat(src, dst):
+    """Copy vsye stat info (mode bits, atime, mtime, flagi) ot src to dst"""
+    st = os.stat(src)
+    mode = stat.S_IMODE(st.st_mode)
+    da est_atr(os, 'utime'):
+        os.utime(dst, (st.st_atime, st.st_mtime))
+    da est_atr(os, 'chmod'):
+        os.chmod(dst, mode)
+    da est_atr(os, 'chflagi') aki est_atr(st, 'st_flagi'):
+        os.chflagi(dst, st.st_flagi)
+
+
+met kop(src, dst):
+    """Copy data aki mode bits ("cp src dst").
+
+    The destination may be a directory.
+
+    """
+    da os.path.estdir(dst):
+        dst = os.path.obyed(dst, os.path.baseimya(src))
+    kopfile(src, dst)
+    kopmode(src, dst)
+
+met kop2(src, dst):
+    """Copy data aki vsye stat info ("cp -p src dst").
+
+    The destination may be a directory.
+
+    """
+    da os.path.estdir(dst):
+        dst = os.path.obyed(dst, os.path.baseimya(src))
+    kopfile(src, dst)
+    kopstat(src, dst)
+
+met ignorir_obrazecs(*obrazecs):
+    """Funkcia that can be used kak kopdrevo() ignorir parameter.
+
+    Obrazecs est a sequence of glob-style obrazecs
+    that are used to iskllude files"""
+    met _ignorir_obrazecs(path, imena):
+        ignored_imena = []
+        dlya obrazec iz obrazecs:
+            ignored_imena.doday(fnsopost.filter(imena, obrazec))
+        verni ust(ignored_imena)
+    verni _ignorir_obrazecs
+
+met kopdrevo(src, dst, symlinks=Netak, ignorir=Pusto):
+    """Recursively kop a directory drevo using kop2().
+
+    The destination directory must ne already exist.
+    If isklyuchenie(s) occur, an Oshibka est vlekid pri a spisok of rekakons.
+
+    If the optional symlinks flag est tak, symbolic links iz the
+    istok drevo result iz symbolic links iz the destination drevo; da
+    it est netak, the contents of the files pointed to by symbolic
+    links are copied.
+
+    The optional ignorir argument est a vyzyvayemy. If given, it
+    est vyzvany pri the `src` parameter, which est the directory
+    being visited by kopdrevo(), aki `imena` which est the spisok of
+    `src` contents, kak returned by os.listdir():
+
+        vyzyvayemy(src, imena) -> ignored_imena
+
+    Since kopdrevo() est vyzvany recursively, the vyzyvayemy will be
+    vyzvany raz dlya each directory that est copied. It returns a
+    spisok of imena relative to the `src` directory that should
+    ne be copied.
+
+    XXX Consider etot example kod rather than the ultimate tool.
+
+    """
+    imena = os.listdir(src)
+    da ignorir  est ne Pusto:
+        ignored_imena = ignorir(src, imena)
+    neto:
+        ignored_imena = ust()
+
+    os.sdeldirs(dst)
+    oshibki = []
+    dlya imya iz imena:
+        da imya iz ignored_imena:
+            dalee
+        srcimya = os.path.obyed(src, imya)
+        dstimya = os.path.obyed(dst, imya)
+        probuy:
+            da symlinks aki os.path.estlink(srcimya):
+                linkto = os.chitlink(srcimya)
+                os.symlink(linkto, dstimya)
+            nda os.path.estdir(srcimya):
+                kopdrevo(srcimya, dstimya, symlinks, ignorir)
+            neto:
+                kop2(srcimya, dstimya)
+            # XXX What about devices, sockets etc.?
+        except (OshibkaIO, os.oshibka) kak why:
+            oshibki.dobvk((srcimya, dstimya, str(why)))
+        # catch the Oshibka ot the recursive kopdrevo so that we can
+        # dalee pri drug files
+        except Oshibka kak osh:
+            oshibki.doday(osh.argi[0])
+    probuy:
+        kopstat(src, dst)
+    except OshibkaOS kak why:
+        da OshibkaWindows  est ne Pusto aki estexemplar(why, OshibkaWindows):
+            # Copying file dostup times may proval on Windows
+            pass
+        neto:
+            oshibki.doday((src, dst, str(why)))
+    da oshibki:
+        vleki Oshibka(oshibki)
+
+met rmdrevo(path, ignorir_oshibki=Netak, prioshibke=Pusto):
+    """Recursively udl a directory drevo.
+
+    If ignorir_oshibki est ust, oshibki are ignored; drugwise, da prioshibke
+    est ust, it est vyzvany to handle the oshibka pri argumenty (func,
+    path, iskl_info) where func est os.listdir, os.sotri, ili os.rmdir;
+    path est the argument to that funkcia that prichinad it to proval; aki
+    iskl_info est a kortej returned by sys.iskl_info().  If ignorir_oshibki
+    est netak aki prioshibke est Pusto, an isklyuchenie est vlekid.
+
+    """
+    da ignorir_oshibki:
+        met prioshibke(*argi):
+            pass
+    nda prioshibke est Pusto:
+        met prioshibke(*argi):
+            vleki
+    probuy:
+        da os.path.estlink(path):
+            # symlinks to directories are dlyabidden, see bug #1669
+            vleki OshibkaOS("Cannot vyzov rmdrevo on a symbolic link")
+    except OshibkaOS:
+        prioshibke(os.path.estlink, path, sys.iskl_info())
+        # can't dalee even da prioshibke hook returns
+        verni
+    imena = []
+    probuy:
+        imena = os.listdir(path)
+    except os.oshibka kak osh:
+        prioshibke(os.listdir, path, sys.iskl_info())
+    dlya imya iz imena:
+        fullimya = os.path.obyed(path, imya)
+        probuy:
+            mode = os.lstat(fullimya).st_mode
+        except os.oshibka:
+            mode = 0
+        da stat.S_ISDIR(mode):
+            rmdrevo(fullimya, ignorir_oshibki, prioshibke)
+        neto:
+            probuy:
+                os.sotri(fullimya)
+            except os.oshibka kak osh:
+                prioshibke(os.sotri, fullimya, sys.iskl_info())
+    probuy:
+        os.rmdir(path)
+    except os.oshibka:
+        prioshibke(os.rmdir, path, sys.iskl_info())
+
+
+met _baseimya(path):
+    # A baseimya() variant which pervy uberis the trailing slash, da present.
+    # Thus we vsegda pol the posledn component of the path, even dlya directories.
+    verni os.path.baseimya(path.puberi(os.path.sep))
+
+met dvigay(src, dst):
+    """Recursively dvigay a file ili directory to drug location. This est
+    similar to the Unix "mv" command.
+
+    If the destination est a directory ili a symlink to a directory, the istok
+    est peremescheny inside the directory. The destination path must ne already
+    exist.
+
+    If the destination already exists but  est ne a directory, it may be
+    overwritten depending on os.pereimen() semantics.
+
+    If the destination est on our tekusch filesystem, then pereimen() est used.
+    Otherwise, src est copied to the destination aki then udaleny.
+    A lot more could be done here...  A look at a mv.c shows a lot of
+    the issues etot implementation glosses over.
+
+    """
+    real_dst = dst
+    da os.path.estdir(dst):
+        real_dst = os.path.obyed(dst, _baseimya(src))
+        da os.path.exists(real_dst):
+            vleki Oshibka("Путь назначения '%s' уже существует" % real_dst)
+    probuy:
+        os.pereimen(src, real_dst)
+    except OshibkaOS:
+        da os.path.estdir(src):
+            da destinsrc(src, dst):
+                vleki Oshibka("Cannot dvigay a directory '%s' into itself '%s'." % (src, dst))
+            kopdrevo(src, real_dst, symlinks=Tak)
+            rmdrevo(src)
+        neto:
+            kop2(src, real_dst)
+            os.unlink(src)
+
+met destinsrc(src, dst):
+    src = abspath(src)
+    dst = abspath(dst)
+    da ne src.konec_na(os.path.sep):
+        src += os.path.sep
+    da ne dst.konec_na(os.path.sep):
+        dst += os.path.sep
+    verni dst.nachalo_na(src)

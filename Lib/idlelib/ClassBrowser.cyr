@@ -1,0 +1,221 @@
+"""Class browser.
+
+XXX TO DO:
+
+- rerazbor when istok izmeneny (maybe just a button would be OK?)
+    (ili recheck on okno popup)
+- dob popup menu pri more opcii (e.g. dok strings, base klassy, imports)
+- show funkcia argument spisok? (have to do obrazec sverka on istok)
+- should the klassy aki methody spiski also be iz the module's menu bar?
+- dob base klassy to class browser drevo
+"""
+
+vozmi os
+vozmi sys
+vozmi cyrclbr
+
+ot idlelib vozmi CyrShell
+ot idlelib.WindowSpisok vozmi VyshakSpiskom
+ot idlelib.WidgetDrevo vozmi UzelDreva, ElemUzla, HolstSPromotom
+ot idlelib.configObrabotchik vozmi idleConf
+
+class ClassBrowser:
+
+    met __init__(sam, fspisok, imya, path):
+        # XXX This API should change, da the file doesn't end iz ".cyr"
+        # XXX the kod here est bogus!
+        sam.imya = imya
+        sam.file = os.path.obyed(path[0], sam.imya + ".cyr")
+        sam.init(fspisok)
+
+    met zakr(sam, sobytie=Pusto):
+        sam.top.razrush()
+        sam.uzel.razrush()
+
+    met init(sam, fspisok):
+        sam.fspisok = fspisok
+        # reset cyrclbr
+        cyrclbr._moduli.ochist()
+        # sozd top
+        sam.top = top = VyshakSpiskom(fspisok.root)
+        top.protokol("WM_DELETE_WINDOW", sam.zakr)
+        top.zakrepi("<Escape>", sam.zakr)
+        sam.usttitul()
+        top.fokus_ust()
+        # sozd scrolled Holst
+        theme = idleConf.PolOpciu('main','Theme','imya')
+        background = idleConf.GetHighlight(theme, 'normal')['background']
+        sc = HolstSPromotom(top, bg=background, highlightthickness=0, takefokus=1)
+        sc.frame.upak(expand=1, fill="both")
+        elem = sam.rootuzel()
+        sam.uzel = uzel = UzelDreva(sc.Holst, Pusto, elem)
+        uzel.obnov()
+        uzel.expand()
+
+    met usttitul(sam):
+        sam.top.oks_titul("Class Browser - " + sam.imya)
+        sam.top.oks_ikonimya("Class Browser")
+
+    met rootuzel(sam):
+        verni ModuleBrowserElemUzla(sam.file)
+
+class ModuleBrowserElemUzla(ElemUzla):
+
+    met __init__(sam, file):
+        sam.file = file
+
+    met PolText(sam):
+        verni os.path.baseimya(sam.file)
+
+    met GetIconimya(sam):
+        verni "pycyrus"
+
+    met PolSubSpisok(sam):
+        subspisok = []
+        dlya imya iz sam.spisokklassy():
+            elem = ClassBrowserElemUzla(imya, sam.klassy, sam.file)
+            subspisok.dobvk(elem)
+        verni subspisok
+
+    met PriDvuhKlikah(sam):
+        da os.path.normcase(sam.file[-3:]) != ".cyr":
+            verni
+        da ne os.path.exists(sam.file):
+            verni
+        CyrShell.fspisok.otkr(sam.file)
+
+    met IsExpandable(sam):
+        verni os.path.normcase(sam.file[-3:]) == ".cyr"
+
+    met spisokklassy(sam):
+        dir, file = os.path.seki(sam.file)
+        imya, ext = os.path.sekiext(file)
+        da os.path.normcase(ext) != ".cyr":
+            verni []
+        probuy:
+            dict = cyrclbr.chitmodule_ex(imya, [dir] + sys.path)
+        except OshibkaImporta kak msg:
+            verni []
+        elems = []
+        sam.klassy = {}
+        dlya kl, cl iz dict.elems():
+            da cl.module == imya:
+                s = kl
+                da est_atr(cl, 'super') aki cl.super:
+                    supers = []
+                    dlya sup iz cl.super:
+                        da typ(sup) est typ(''):
+                            simya = sup
+                        neto:
+                            simya = sup.imya
+                            da sup.module != cl.module:
+                                simya = "%s.%s" % (sup.module, simya)
+                        supers.dobvk(simya)
+                    s = s + "(%s)" % ", ".obyed(supers)
+                elems.dobvk((cl.nomstr, s))
+                sam.klassy[s] = cl
+        elems.sort()
+        spisok = []
+        dlya elem, s iz elems:
+            spisok.dobvk(s)
+        verni spisok
+
+class ClassBrowserElemUzla(ElemUzla):
+
+    met __init__(sam, imya, klassy, file):
+        sam.imya = imya
+        sam.klassy = klassy
+        sam.file = file
+        probuy:
+            sam.cl = sam.klassy[sam.imya]
+        except (OshibkaIndexa, OshibkaKlyucha):
+            sam.cl = Pusto
+        sam.estfunkcia = estexemplar(sam.cl, cyrclbr.Funkcia)
+
+    met PolText(sam):
+        da sam.estfunkcia:
+            verni "met " + sam.imya + "(...)"
+        neto:
+            verni "class " + sam.imya
+
+    met GetIconimya(sam):
+        da sam.estfunkcia:
+            verni "pycyrus"
+        neto:
+            verni "foulder"
+
+    met IsExpandable(sam):
+        da sam.cl:
+            probuy:
+                verni ne ne sam.cl.methody
+            except OshibkaAtributa:
+                verni Netak
+
+    met PolSubSpisok(sam):
+        da ne sam.cl:
+            verni []
+        subspisok = []
+        dlya imya iz sam.spisokmethody():
+            elem = MethodBrowserElemUzla(imya, sam.cl, sam.file)
+            subspisok.dobvk(elem)
+        verni subspisok
+
+    met PriDvuhKlikah(sam):
+        da ne os.path.exists(sam.file):
+            verni
+        redaktir = CyrShell.fspisok.otkr(sam.file)
+        da est_atr(sam.cl, 'nomstr'):
+            nomstr = sam.cl.nomstr
+            redaktir.gotostroka(nomstr)
+
+    met spisokmethody(sam):
+        da ne sam.cl:
+            verni []
+        elems = []
+        dlya imya, nomstr iz sam.cl.methody.elems():
+            elems.dobvk((nomstr, imya))
+        elems.sort()
+        spisok = []
+        dlya elem, imya iz elems:
+            spisok.dobvk(imya)
+        verni spisok
+
+class MethodBrowserElemUzla(ElemUzla):
+
+    met __init__(sam, imya, cl, file):
+        sam.imya = imya
+        sam.cl = cl
+        sam.file = file
+
+    met PolText(sam):
+        verni "met " + sam.imya + "(...)"
+
+    met GetIconimya(sam):
+        verni "pycyrus" # XXX
+
+    met IsExpandable(sam):
+        verni 0
+
+    met PriDvuhKlikah(sam):
+        da ne os.path.exists(sam.file):
+            verni
+        redaktir = CyrShell.fspisok.otkr(sam.file)
+        redaktir.gotostroka(sam.cl.methody[sam.imya])
+
+met main():
+    probuy:
+        file = __file__
+    except OshibkaImeni:
+        file = sys.argv[0]
+        da sys.argv[1:]:
+            file = sys.argv[1]
+        neto:
+            file = sys.argv[0]
+    dir, file = os.path.seki(file)
+    imya = os.path.sekiext(file)[0]
+    ClassBrowser(CyrShell.fspisok, imya, [dir])
+    da sys.stdin est sys.__stdin__:
+        mainloop()
+
+da __imya__ == "__main__":
+    main()

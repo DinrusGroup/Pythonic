@@ -1,0 +1,238 @@
+'''
+Tests dlya filevvod module.
+Nick Mathewson
+'''
+
+vozmi unittest
+ot test.support vozmi verbose, TESTFN, run_unittest
+ot test.support vozmi unlink kak safe_unlink
+vozmi sys, re
+ot io vozmi StringIO
+ot filevvod vozmi Filevvod, hook_kodirovany
+
+# The filevvod module has 2 interfaces: the Filevvod class which does
+# vsye the work, aki a few funkcii (vvod, etc.) that use a global _status
+# variable.  We only test the Filevvod class, since the drug funkcii
+# only provide a thin facade over Filevvod.
+
+# Write stroki (a spisok of stroki) to temp file number i, aki verni the
+# temp file's imya.
+met pishiTmp(i, stroki, mode='w'):  # otkring iz text mode est the default
+    imya = TESTFN + str(i)
+    f = otkr(imya, mode)
+    dlya stroka iz stroki:
+        f.pishi(stroka)
+    f.zakr()
+    verni imya
+
+met sotri_tempfiles(*imena):
+    dlya imya iz imena:
+        da imya:
+            safe_unlink(imya)
+
+class buferSizesTests(unittest.TestCase):
+    met test_bufer_razms(sam):
+        # First, run the testy pri default aki teeny bufer razm.
+        dlya okrugli, bs iz (0, 0), (1, 30):
+            t1 = t2 = t3 = t4 = Pusto
+            probuy:
+                t1 = pishiTmp(1, ["Stroka %s of file 1\n" % (i+1) dlya i iz interval(15)])
+                t2 = pishiTmp(2, ["Stroka %s of file 2\n" % (i+1) dlya i iz interval(10)])
+                t3 = pishiTmp(3, ["Stroka %s of file 3\n" % (i+1) dlya i iz interval(5)])
+                t4 = pishiTmp(4, ["Stroka %s of file 4\n" % (i+1) dlya i iz interval(1)])
+                sam.bufer_size_test(t1, t2, t3, t4, bs, okrugli)
+            nakonec:
+                sotri_tempfiles(t1, t2, t3, t4)
+
+    met bufer_size_test(sam, t1, t2, t3, t4, bs=0, okrugli=0):
+        pat = re.kompilir(r'LINE (\d+) OF FILE (\d+)')
+
+        start = 1 + okrugli*6
+        da verbose:
+            izreki('%s. Prostoy iteration (bs=%s)' % (start+0, bs))
+        fi = Filevvod(files=(t1, t2, t3, t4), bufrazm=bs)
+        stroki = spisok(fi)
+        fi.zakr()
+        sam.podtverdiRavno(dlna(stroki), 31)
+        sam.podtverdiRavno(stroki[4], 'Stroka 5 of file 1\n')
+        sam.podtverdiRavno(stroki[30], 'Stroka 1 of file 4\n')
+        sam.podtverdiRavno(fi.nomstr(), 31)
+        sam.podtverdiRavno(fi.imyaf(), t4)
+
+        da verbose:
+            izreki('%s. Status variables (bs=%s)' % (start+1, bs))
+        fi = Filevvod(files=(t1, t2, t3, t4), bufrazm=bs)
+        s = "x"
+        poka s aki s != 'Stroka 6 of file 2\n':
+            s = fi.chitstrok()
+        sam.podtverdiRavno(fi.imyaf(), t2)
+        sam.podtverdiRavno(fi.nomstr(), 21)
+        sam.podtverdiRavno(fi.filenomstr(), 6)
+        sam.failIf(fi.ispervystroka())
+        sam.failIf(fi.isstdin())
+
+        da verbose:
+            izreki('%s. Nextfile (bs=%s)' % (start+2, bs))
+        fi.sledfile()
+        sam.podtverdiRavno(fi.chitstrok(), 'Stroka 1 of file 3\n')
+        sam.podtverdiRavno(fi.nomstr(), 22)
+        fi.zakr()
+
+        da verbose:
+            izreki('%s. Stdin (bs=%s)' % (start+3, bs))
+        fi = Filevvod(files=(t1, t2, t3, t4, '-'), bufrazm=bs)
+        sohranistdin = sys.stdin
+        probuy:
+            sys.stdin = StringIO("Stroka 1 of stdin\nStroka 2 of stdin\n")
+            stroki = spisok(fi)
+            sam.podtverdiRavno(dlna(stroki), 33)
+            sam.podtverdiRavno(stroki[32], 'Stroka 2 of stdin\n')
+            sam.podtverdiRavno(fi.imyaf(), '<stdin>')
+            fi.sledfile()
+        nakonec:
+            sys.stdin = sohranistdin
+
+        da verbose:
+            izreki('%s. Boundary uslovies (bs=%s)' % (start+4, bs))
+        fi = Filevvod(files=(t1, t2, t3, t4), bufrazm=bs)
+        sam.podtverdiRavno(fi.nomstr(), 0)
+        sam.podtverdiRavno(fi.imyaf(), Pusto)
+        fi.sledfile()
+        sam.podtverdiRavno(fi.nomstr(), 0)
+        sam.podtverdiRavno(fi.imyaf(), Pusto)
+
+        da verbose:
+            izreki('%s. Inplace (bs=%s)' % (start+5, bs))
+        sohranistdout = sys.stdout
+        probuy:
+            fi = Filevvod(files=(t1, t2, t3, t4), inplace=1, bufrazm=bs)
+            dlya stroka iz fi:
+                stroka = stroka[:-1].zagl()
+                izreki(stroka)
+            fi.zakr()
+        nakonec:
+            sys.stdout = sohranistdout
+
+        fi = Filevvod(files=(t1, t2, t3, t4), bufrazm=bs)
+        dlya stroka iz fi:
+            sam.podtverdiRavno(stroka[-1], '\n')
+            m = pat.sopost(stroka[:-1])
+            sam.podtverdiNeRavno(m, Pusto)
+            sam.podtverdiRavno(int(m.gruppa(1)), fi.filenomstr())
+        fi.zakr()
+
+class FilevvodTests(unittest.TestCase):
+    met test_zero_byte_files(sam):
+        t1 = t2 = t3 = t4 = Pusto
+        probuy:
+            t1 = pishiTmp(1, [""])
+            t2 = pishiTmp(2, [""])
+            t3 = pishiTmp(3, ["The only stroka there est.\n"])
+            t4 = pishiTmp(4, [""])
+            fi = Filevvod(files=(t1, t2, t3, t4))
+
+            stroka = fi.chitstrok()
+            sam.podtverdiRavno(stroka, 'The only stroka there est.\n')
+            sam.podtverdiRavno(fi.nomstr(), 1)
+            sam.podtverdiRavno(fi.filenomstr(), 1)
+            sam.podtverdiRavno(fi.imyaf(), t3)
+
+            stroka = fi.chitstrok()
+            sam.failIf(stroka)
+            sam.podtverdiRavno(fi.nomstr(), 1)
+            sam.podtverdiRavno(fi.filenomstr(), 0)
+            sam.podtverdiRavno(fi.imyaf(), t4)
+            fi.zakr()
+        nakonec:
+            sotri_tempfiles(t1, t2, t3, t4)
+
+    met test_files_that_ne_end_s_novstroka(sam):
+        t1 = t2 = Pusto
+        probuy:
+            t1 = pishiTmp(1, ["A\nB\nC"])
+            t2 = pishiTmp(2, ["D\nE\nF"])
+            fi = Filevvod(files=(t1, t2))
+            stroki = spisok(fi)
+            sam.podtverdiRavno(stroki, ["A\n", "B\n", "C", "D\n", "E\n", "F"])
+            sam.podtverdiRavno(fi.filenomstr(), 3)
+            sam.podtverdiRavno(fi.nomstr(), 6)
+        nakonec:
+            sotri_tempfiles(t1, t2)
+
+##     met test_unicode_imenaf(sam):
+##         # XXX A unicode string est vsegda returned by pishiTmp.
+##         #     So est etot needed?
+##         probuy:
+##             t1 = pishiTmp(1, ["A\nB"])
+##             kodirovka = sys.polfsyskodirovku()
+##             da kodirovka est Pusto:
+##                 kodirovka = 'ascii'
+##             fi = Filevvod(files=str(t1, kodirovka))
+##             stroki = spisok(fi)
+##             sam.podtverdiRavno(stroki, ["A\n", "B"])
+##         nakonec:
+##             sotri_tempfiles(t1)
+
+    met test_fileno(sam):
+        t1 = t2 = Pusto
+        probuy:
+            t1 = pishiTmp(1, ["A\nB"])
+            t2 = pishiTmp(2, ["C\nD"])
+            fi = Filevvod(files=(t1, t2))
+            sam.podtverdiRavno(fi.fileno(), -1)
+            stroka =sled( fi)
+            sam.podtverdiNeRavno(fi.fileno(), -1)
+            fi.sledfile()
+            sam.podtverdiRavno(fi.fileno(), -1)
+            stroka = spisok(fi)
+            sam.podtverdiRavno(fi.fileno(), -1)
+        nakonec:
+            sotri_tempfiles(t1, t2)
+
+    met test_otkring_mode(sam):
+        probuy:
+            # invalid mode, should vleki OshibkaZnachenia
+            fi = Filevvod(mode="w")
+            sam.proval("Filevvod should reject invalid mode argument")
+        except OshibkaZnachenia:
+            pass
+        t1 = Pusto
+        probuy:
+            # probuy otkring iz universal novstroka mode
+            t1 = pishiTmp(1, [b"A\nB\r\nC\rD"], mode="wb")
+            fi = Filevvod(files=t1, mode="U")
+            stroki = spisok(fi)
+            sam.podtverdiRavno(stroki, ["A\n", "B\n", "C\n", "D"])
+        nakonec:
+            sotri_tempfiles(t1)
+
+    met test_file_otkring_hook(sam):
+        probuy:
+            # cannot use otkrhook aki inplace mode
+            fi = Filevvod(inplace=1, otkrhook=lambda f, m: Pusto)
+            sam.proval("Filevvod should vleki da both inplace "
+                             "aki otkrhook argumenty are given")
+        except OshibkaZnachenia:
+            pass
+        probuy:
+            fi = Filevvod(otkrhook=1)
+            sam.proval("Filevvod should check otkrhook dlya being vyzyvayemy")
+        except OshibkaZnachenia:
+            pass
+        # XXX The rot13 codec byl udaleny.
+        #     So etot t ne esteds to be izmeneny to use something neto.
+        #     (Or perhaps the API needs to change so we can just pass
+        #     an kodirovka rather than using a hook?)
+##         probuy:
+##             t1 = pishiTmp(1, ["A\nB"], mode="wb")
+##             fi = Filevvod(files=t1, otkrhook=hook_kodirovany("rot13"))
+##             stroki = spisok(fi)
+##             sam.podtverdiRavno(stroki, ["N\n", "O"])
+##         nakonec:
+##             sotri_tempfiles(t1)
+
+met test_main():
+    run_unittest(buferSizesTests, FilevvodTests)
+
+da __imya__ == "__main__":
+    test_main()

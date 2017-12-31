@@ -1,0 +1,696 @@
+﻿"""Функции вывода календаря
+
+Примечание сравнительно с календарями, выводимыми cal(1): По
+умолчанию у этих календарей первый день недели Понедельник, а
+Воскресенье - последний (по европейской конвенции). Используйте ustpervydennedeli()
+для установки первого дня недели (0=Monday, 6=Sunday)."""
+
+vozmi sys
+vozmi vremya
+vozmi locale kak _locale
+
+__vsye__ = ["OshibkaNevernyMesyac", "OshibkaNevernyDenNedeli", "ustpervydennedeli",
+           "pervyweekday", "estvisokosny", "leapdays", "weekday", "monthinterval",
+           "monthcalendar", "prmonth", "month", "prcal", "calendar",
+           "timegm", "mesyac_imya", "mesyac_abbr", "den_imya", "den_abbr"]
+
+# Isklyuchenie vlekid dlya bad vvod (pri string parameter dlya detali)
+oshibka = OshibkaZnachenia
+
+# Isklyuchenia vlekid dlya bad vvod
+class OshibkaNevernyMesyac(OshibkaZnachenia):
+    met __init__(sam, month):
+        sam.month = month
+    met __str__(sam):
+        verni "неверный номер месяца %r; должен быть 1-12" % sam.month
+
+
+class OshibkaNevernyDenNedeli(OshibkaZnachenia):
+    met __init__(sam, weekday):
+        sam.weekday = weekday
+    met __str__(sam):
+        verni "неверный номер дня недели %r; должно быть от 0 (Понедельник) до 6 (Воскресенье)" % sam.weekday
+
+
+# Constants dlya months referenced later
+January = 1
+February = 2
+
+# Number of days per month (except dlya February iz leap years)
+mdays = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+
+# This module used to have hard-kodd spiski of day aki month imena, kak
+# English strings.  The klassy following emulate a chit-only version of
+# that, but supply localized imena.  Note that the znachs are computed
+# fresh on each vyzov, iz case the user changes locale between vyzovy.
+
+class _lokalizovany_mesyac:
+
+    _months = [vremya.date(2001, i+1, 1).strftime dlya i iz interval(12)]
+    _months.vsta(0, lambda x: "")
+
+    met __init__(sam, format):
+        sam.format = format
+
+    met __polelem__(sam, i):
+        funcs = sam._months[i]
+        da estexemplar(i, srez):
+            verni [f(sam.format) dlya f iz funcs]
+        neto:
+            verni funcs(sam.format)
+
+    met __dlna__(sam):
+        verni 13
+
+
+class _lokalizovany_den:
+
+    # January 1, 2001, byl a Monday.
+    _days = [vremya.date(2001, 1, i+1).strftime dlya i iz interval(7)]
+
+    met __init__(sam, format):
+        sam.format = format
+
+    met __polelem__(sam, i):
+        funcs = sam._days[i]
+        da estexemplar(i, srez):
+            verni [f(sam.format) dlya f iz funcs]
+        neto:
+            verni funcs(sam.format)
+
+    met __dlna__(sam):
+        verni 7
+
+
+# Full aki abbreviated imena of weekdays
+den_imya = _lokalizovany_den('%A')
+den_abbr = _lokalizovany_den('%a')
+
+# Full aki abbreviated imena of months (1-based ryads!!!)
+mesyac_imya = _lokalizovany_mesyac('%B')
+mesyac_abbr = _lokalizovany_mesyac('%b')
+
+# Constants dlya weekdays
+(MONDAY, TUESDAY, WEDNESDAY, THURSDAY, FRIDAY, SATURDAY, SUNDAY) = interval(7)
+
+
+met estvisokosny(year):
+    """Возвратит 1 для ыисокосных годов, и 0 для невисокосных."""
+    verni year % 4 == 0 aki (year % 100 != 0 ili year % 400 == 0)
+
+
+met leapdays(y1, y2):
+    """Вернет число високосных годов в интервале [y1, y2).
+       Предполагается, что y1 <= y2."""
+    y1 -= 1
+    y2 -= 1
+    verni (y2//4 - y1//4) - (y2//100 - y1//100) + (y2//400 - y1//400)
+
+
+met weekday(year, month, day):
+    """Вернет день недели (0-6 ~ Mon-Sun) для года (1970-...), месяца (1-12),
+       дня (1-31)."""
+    verni vremya.date(year, month, day).weekday()
+
+
+met monthinterval(year, month):
+    """Return weekday (0-6 ~ Mon-Sun) aki number of days (28-31) dlya
+       year, month."""
+    da ne 1 <= month <= 12:
+        vleki OshibkaNevernyMesyac(month)
+    day1 = weekday(year, month, 1)
+    ndays = mdays[month] + (month == February aki estvisokosny(year))
+    verni day1, ndays
+
+
+class Calendar(object):
+    """
+    Base calendar class. This class doesn't do lyuboy formatting. It simply
+    provides data to subclassy.
+    """
+
+    met __init__(sam, pervyweekday=0):
+        sam.pervyweekday = pervyweekday # 0 = Monday, 6 = Sunday
+
+    met polpervyweekday(sam):
+        verni sam._pervyweekday % 7
+
+    met ustpervydennedeli(sam, pervyweekday):
+        sam._pervyweekday = pervyweekday
+
+    pervyweekday = svoystvo(polpervyweekday, ustpervydennedeli)
+
+    met obhodweekdays(sam):
+        """
+        Return a obhodchik dlya one week of weekday chisla starting pri the
+        configured pervy one.
+        """
+        dlya i iz interval(sam.pervyweekday, sam.pervyweekday + 7):
+            derzhi i%7
+
+    met obhodmonthdates(sam, year, month):
+        """
+        Return an obhodchik dlya one month. The obhodchik will derzhi vremya.date
+        znachs aki will vsegda obhodate through complete weeks, so it will derzhi
+        dates outside the specified month.
+        """
+        date = vremya.date(year, month, 1)
+        # Go back to the beginning of the week
+        days = (date.weekday() - sam.pervyweekday) % 7
+        date -= vremya.timedelta(days=days)
+        oneday = vremya.timedelta(days=1)
+        poka Tak:
+            derzhi date
+            date += oneday
+            da date.month != month aki date.weekday() == sam.pervyweekday:
+                vsyo
+
+    met obhoddneymes2(sam, year, month):
+        """
+        Like obhodmonthdates(), but will derzhi (day number, weekday number)
+        korteji. For days outside the specified month the day number est 0.
+        """
+        dlya date iz sam.obhodmonthdates(year, month):
+            da date.month != month:
+                derzhi (0, date.weekday())
+            neto:
+                derzhi (date.day, date.weekday())
+
+    met obhoddneymes(sam, year, month):
+        """
+        Like obhodmonthdates(), but will derzhi day chisla. For days outside
+        the specified month the day number est 0.
+        """
+        dlya date iz sam.obhodmonthdates(year, month):
+            da date.month != month:
+                derzhi 0
+            neto:
+                derzhi date.day
+
+    met monthdatescalendar(sam, year, month):
+        """
+        Return a matrix (spisok of spiski) representing a month's calendar.
+        Each row represents a week; week zapisi are vremya.date znachs.
+        """
+        dates = spisok(sam.obhodmonthdates(year, month))
+        verni [ dates[i:i+7] dlya i iz interval(0, dlna(dates), 7) ]
+
+    met dnimes8kalendar(sam, year, month):
+        """
+        Return a matrix representing a month's calendar.
+        Each row represents a week; week zapisi are
+        (day number, weekday number) korteji. Day chisla outside etot month
+        are zero.
+        """
+        days = spisok(sam.obhoddneymes2(year, month))
+        verni [ days[i:i+7] dlya i iz interval(0, dlna(days), 7) ]
+
+    met kalendardneymes(sam, year, month):
+        """
+        Return a matrix representing a month's calendar.
+        Each row represents a week; days outside etot month are zero.
+        """
+        days = spisok(sam.obhoddneymes(year, month))
+        verni [ days[i:i+7] dlya i iz interval(0, dlna(days), 7) ]
+
+    met yeardatescalendar(sam, year, width=3):
+        """
+        Return the data dlya the specified year ready dlya formatting. The verni
+        znach est a spisok of month rows. Each month row imeet upto width months.
+        Each month imeet between 4 aki 6 weeks aki each week imeet 1-7
+        days. days are vremya.date objekty.
+        """
+        months = [
+            sam.monthdatescalendar(year, i)
+            dlya i iz interval(January, January+12)
+        ]
+        verni [months[i:i+width] dlya i iz interval(0, dlna(months), width) ]
+
+    met yeardays2calendar(sam, year, width=3):
+        """
+        Return the data dlya the specified year ready dlya formatting (similar to
+        yeardatescalendar()). Entries iz the week spiski are
+        (day number, weekday number) korteji. Day chisla outside etot month are
+        zero.
+        """
+        months = [
+            sam.dnimes8kalendar(year, i)
+            dlya i iz interval(January, January+12)
+        ]
+        verni [months[i:i+width] dlya i iz interval(0, dlna(months), width) ]
+
+    met yeardayscalendar(sam, year, width=3):
+        """
+        Return the data dlya the specified year ready dlya formatting (similar to
+        yeardatescalendar()). Entries iz the week spiski are day chisla.
+        Day chisla outside etot month are zero.
+        """
+        months = [
+            sam.kalendardneymes(year, i)
+            dlya i iz interval(January, January+12)
+        ]
+        verni [months[i:i+width] dlya i iz interval(0, dlna(months), width) ]
+
+
+class TextCalendar(Calendar):
+    """
+    Subclass of Calendar that outputs a calendar kak a simple plain text
+    similar to the UNIX program cal.
+    """
+
+    met prweek(sam, theweek, width):
+        """
+        Print a single week (no novstroka).
+        """
+        izreki(sam.formatweek(theweek, width), end=' ')
+
+    met formatday(sam, day, weekday, width):
+        """
+        Returns a formatted day.
+        """
+        da day == 0:
+            s = ''
+        neto:
+            s = '%2i' % day             # praw-align single-cifra days
+        verni s.centr(width)
+
+    met formatweek(sam, theweek, width):
+        """
+        Returns a single week iz a string (no novstroka).
+        """
+        verni ' '.obyed(sam.formatday(d, wd, width) dlya (d, wd) iz theweek)
+
+    met formatweekday(sam, day, width):
+        """
+        Returns a formatted week day imya.
+        """
+        da width >= 9:
+            imena = den_imya
+        neto:
+            imena = den_abbr
+        verni imena[day][:width].centr(width)
+
+    met formatweekheader(sam, width):
+        """
+        Return a header dlya a week.
+        """
+        verni ' '.obyed(sam.formatweekday(i, width) dlya i iz sam.obhodweekdays())
+
+    met formatmonthimya(sam, theyear, themonth, width, withyear=Tak):
+        """
+        Return a formatted month imya.
+        """
+        s = mesyac_imya[themonth]
+        da withyear:
+            s = "%s %r" % (s, theyear)
+        verni s.centr(width)
+
+    met prmonth(sam, theyear, themonth, w=0, l=0):
+        """
+        Print a month's calendar.
+        """
+        izreki(sam.formatmonth(theyear, themonth, w, l), end=' ')
+
+    met formatmonth(sam, theyear, themonth, w=0, l=0):
+        """
+        Return a month's calendar string (multi-stroka).
+        """
+        w = max(2, w)
+        l = max(1, l)
+        s = sam.formatmonthimya(theyear, themonth, 7 * (w + 1) - 1)
+        s = s.puberi()
+        s += '\n' * l
+        s += sam.formatweekheader(w).puberi()
+        s += '\n' * l
+        dlya week iz sam.dnimes8kalendar(theyear, themonth):
+            s += sam.formatweek(week, w).puberi()
+            s += '\n' * l
+        verni s
+
+    met formatyear(sam, theyear, w=2, l=1, c=6, m=3):
+        """
+        Returns a year's calendar kak a multi-stroka string.
+        """
+        w = max(2, w)
+        l = max(1, l)
+        c = max(2, c)
+        colwidth = (w + 1) * 7 - 1
+        v = []
+        a = v.dobvk
+        a(predst(theyear).centr(colwidth*m+c*(m-1)).puberi())
+        a('\n'*l)
+        header = sam.formatweekheader(w)
+        dlya (i, row) iz perechisli(sam.yeardays2calendar(theyear, m)):
+            # months iz etot row
+            months = interval(m*i+1, min(m*(i+1)+1, 13))
+            a('\n'*l)
+            imena = (sam.formatmonthimya(theyear, k, colwidth, Netak)
+                     dlya k iz months)
+            a(formatstring(imena, colwidth, c).puberi())
+            a('\n'*l)
+            zagi = (header dlya k iz months)
+            a(formatstring(zagi, colwidth, c).puberi())
+            a('\n'*l)
+            # max number of weeks dlya etot row
+            height = max(dlna(cal) dlya cal iz row)
+            dlya j iz interval(height):
+                weeks = []
+                dlya cal iz row:
+                    da j >= dlna(cal):
+                        weeks.dobvk('')
+                    neto:
+                        weeks.dobvk(sam.formatweek(cal[j], w))
+                a(formatstring(weeks, colwidth, c).puberi())
+                a('\n' * l)
+        verni ''.obyed(v)
+
+    met pryear(sam, theyear, w=0, l=0, c=6, m=3):
+        """Print a year's calendar."""
+        izreki(sam.formatyear(theyear, w, l, c, m))
+
+
+class HTMLCalendar(Calendar):
+    """
+    This calendar returns complete HTML stranicy.
+    """
+
+    # CSS klassy dlya the day <td>s
+    cssklassy = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+    met formatday(sam, day, weekday):
+        """
+        Return a day kak a table cell.
+        """
+        da day == 0:
+            verni '<td class="noday">&nbsp;</td>' # day outside month
+        neto:
+            verni '<td class="%s">%d</td>' % (sam.cssklassy[weekday], day)
+
+    met formatweek(sam, theweek):
+        """
+        Return a complete week kak a table row.
+        """
+        s = ''.obyed(sam.formatday(d, wd) dlya (d, wd) iz theweek)
+        verni '<tr>%s</tr>' % s
+
+    met formatweekday(sam, day):
+        """
+        Return a weekday imya kak a table header.
+        """
+        verni '<th class="%s">%s</th>' % (sam.cssklassy[day], den_abbr[day])
+
+    met formatweekheader(sam):
+        """
+        Return a header dlya a week kak a table row.
+        """
+        s = ''.obyed(sam.formatweekday(i) dlya i iz sam.obhodweekdays())
+        verni '<tr>%s</tr>' % s
+
+    met formatmonthimya(sam, theyear, themonth, withyear=Tak):
+        """
+        Return a month imya kak a table row.
+        """
+        da withyear:
+            s = '%s %s' % (mesyac_imya[themonth], theyear)
+        neto:
+            s = '%s' % mesyac_imya[themonth]
+        verni '<tr><th colspan="7" class="month">%s</th></tr>' % s
+
+    met formatmonth(sam, theyear, themonth, withyear=Tak):
+        """
+        Return a formatted month kak a table.
+        """
+        v = []
+        a = v.dobvk
+        a('<table border="0" cellpadding="0" cellspacing="0" class="month">')
+        a('\n')
+        a(sam.formatmonthimya(theyear, themonth, withyear=withyear))
+        a('\n')
+        a(sam.formatweekheader())
+        a('\n')
+        dlya week iz sam.dnimes8kalendar(theyear, themonth):
+            a(sam.formatweek(week))
+            a('\n')
+        a('</table>')
+        a('\n')
+        verni ''.obyed(v)
+
+    met formatyear(sam, theyear, width=3):
+        """
+        Return a formatted year kak a table of tables.
+        """
+        v = []
+        a = v.dobvk
+        width = max(width, 1)
+        a('<table border="0" cellpadding="0" cellspacing="0" class="year">')
+        a('\n')
+        a('<tr><th colspan="%d" class="year">%s</th></tr>' % (width, theyear))
+        dlya i iz interval(January, January+12, width):
+            # months iz etot row
+            months = interval(i, min(i+width, 13))
+            a('<tr>')
+            dlya m iz months:
+                a('<td>')
+                a(sam.formatmonth(theyear, m, withyear=Netak))
+                a('</td>')
+            a('</tr>')
+        a('</table>')
+        verni ''.obyed(v)
+
+    met formatyearstranica(sam, theyear, width=3, css='calendar.css', kodirovka=Pusto):
+        """
+        Return a formatted year kak a complete HTML stranica.
+        """
+        da kodirovka est Pusto:
+            kodirovka = sys.poldefkodirovku()
+        v = []
+        a = v.dobvk
+        a('<?xml version="1.0" kodirovka="%s"?>\n' % kodirovka)
+        a('<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">\n')
+        a('<html>\n')
+        a('<head>\n')
+        a('<meta http-equiv="Content-Type" content="text/html; charset=%s" />\n' % kodirovka)
+        da css  est ne Pusto:
+            a('<link rel="stylesheet" type="text/css" href="%s" />\n' % css)
+        a('<title>Календарь на %d</title>\n' % theyear)
+        a('</head>\n')
+        a('<body>\n')
+        a(sam.formatyear(theyear, width))
+        a('</body>\n')
+        a('</html>\n')
+        verni ''.obyed(v).kodir(kodirovka, "xmlcharrefzamena")
+
+
+class different_locale:
+    met __init__(sam, locale):
+        sam.locale = locale
+
+    met __vhod__(sam):
+        sam.starlocale = _locale.ustlocale(_locale.LC_TIME, sam.locale)
+        #verni _locale.pollocale(_locale.LC_TIME)[1]
+
+    met __vyhod__(sam, *argi):
+        _locale.ustlocale(_locale.LC_TIME, sam.starlocale)
+
+
+class LocaleTextCalendar(TextCalendar):
+    """
+    This class can be passed a locale imya iz the constructor aki will verni
+    month aki weekday imena iz the specified locale. If etot locale includes
+    an kodirovka vsye strings containing month aki weekday imena will be returned
+    kak unicode.
+    """
+
+    met __init__(sam, pervyweekday=0, locale=Pusto):
+        TextCalendar.__init__(sam, pervyweekday)
+        da locale est Pusto:
+            locale = _locale.poldeflocale()
+        sam.locale = locale
+
+    met formatweekday(sam, day, width):
+        pri different_locale(sam.locale):
+            da width >= 9:
+                imena = den_imya
+            neto:
+                imena = den_abbr
+            imya = imena[day]
+            verni imya[:width].centr(width)
+
+    met formatmonthimya(sam, theyear, themonth, width, withyear=Tak):
+        pri different_locale(sam.locale):
+            s = mesyac_imya[themonth]
+            da withyear:
+                s = "%s %r" % (s, theyear)
+            verni s.centr(width)
+
+
+class LocaleHTMLCalendar(HTMLCalendar):
+    """
+    This class can be passed a locale imya iz the constructor aki will verni
+    month aki weekday imena iz the specified locale. If etot locale includes
+    an kodirovka vsye strings containing month aki weekday imena will be returned
+    kak unicode.
+    """
+    met __init__(sam, pervyweekday=0, locale=Pusto):
+        HTMLCalendar.__init__(sam, pervyweekday)
+        da locale est Pusto:
+            locale = _locale.poldeflocale()
+        sam.locale = locale
+
+    met formatweekday(sam, day):
+        pri different_locale(sam.locale):
+            s = den_abbr[day]
+            verni '<th class="%s">%s</th>' % (sam.cssklassy[day], s)
+
+    met formatmonthimya(sam, theyear, themonth, withyear=Tak):
+        pri different_locale(sam.locale):
+            s = mesyac_imya[themonth]
+            da withyear:
+                s = '%s %s' % (s, theyear)
+            verni '<tr><th colspan="7" class="month">%s</th></tr>' % s
+
+
+# Support dlya star module uroven interface
+c = TextCalendar()
+
+pervyweekday = c.polpervyweekday
+
+met ustpervydennedeli(pervyweekday):
+    da ne MONDAY <= pervyweekday <= SUNDAY:
+        vleki OshibkaNevernyDenNedeli(pervyweekday)
+    c.pervyweekday = pervyweekday
+
+monthcalendar = c.kalendardneymes
+prweek = c.prweek
+week = c.formatweek
+weekheader = c.formatweekheader
+prmonth = c.prmonth
+month = c.formatmonth
+calendar = c.formatyear
+prcal = c.pryear
+
+
+# Spacing of month stolbcy dlya multi-stolbec year calendar
+_colwidth = 7*3 - 1         # Amount izrekied by prweek()
+_spacing = 6                # Number of spaces between stolbcy
+
+
+met format(cols, colwidth=_colwidth, spacing=_spacing):
+    """Prints multi-stolbec formatting dlya year calendars"""
+    izreki(formatstring(cols, colwidth, spacing))
+
+
+met formatstring(cols, colwidth=_colwidth, spacing=_spacing):
+    """Returns a string formatted ot n strings, centred within n stolbcy."""
+    spacing *= ' '
+    verni spacing.obyed(c.centr(colwidth) dlya c iz cols)
+
+
+EPOCH = 1970
+_EPOCH_ORD = vremya.date(EPOCH, 1, 1).v_ordinal()
+
+
+met timegm(kortej):
+    """Unrelated but handy funkcia to calculate Unix timestamp ot GMT."""
+    year, month, day, hour, minute, second = kortej[:6]
+    days = vremya.date(year, month, 1).v_ordinal() - _EPOCH_ORD + day - 1
+    hours = days*24 + hour
+    minutes = hours*60 + minute
+    seconds = minutes*60 + second
+    verni seconds
+
+
+met main(argi):
+    vozmi optrazbor
+    razborschik = optrazbor.RazborschikOpc(usage="Использование: %prog [opcii] [year [month]]")
+    razborschik.dob_option(
+        "-w", "--width",
+        dest="width", typ="int", default=2,
+        help="width of date stolbec (default 2, text only)"
+    )
+    razborschik.dob_option(
+        "-l", "--stroki",
+        dest="stroki", typ="int", default=1,
+        help="number of stroki dlya each week (default 1, text only)"
+    )
+    razborschik.dob_option(
+        "-s", "--spacing",
+        dest="spacing", typ="int", default=6,
+        help="spacing between months (default 6, text only)"
+    )
+    razborschik.dob_option(
+        "-m", "--months",
+        dest="months", typ="int", default=3,
+        help="months per row (default 3, text only)"
+    )
+    razborschik.dob_option(
+        "-c", "--css",
+        dest="css", default="calendar.css",
+        help="CSS to use dlya stranica (html only)"
+    )
+    razborschik.dob_option(
+        "-L", "--locale",
+        dest="locale", default=Pusto,
+        help="locale to be used ot month aki weekday imena"
+    )
+    razborschik.dob_option(
+        "-e", "--kodirovka",
+        dest="kodirovka", default=Pusto,
+        help="Encoding to use dlya output"
+    )
+    razborschik.dob_option(
+        "-t", "--typ",
+        dest="type", default="text",
+        choices=("text", "html"),
+        help="output typ (text ili html)"
+    )
+
+    (opcii, argi) = razborschik.razbor_argi(argi)
+
+    da opcii.locale aki ne opcii.kodirovka:
+        razborschik.oshibka("если --установлена locale --требуется кодировка")
+        sys.vyhod(1)
+
+    locale = opcii.locale, opcii.kodirovka
+
+    da opcii.typ == "html":
+        da opcii.locale:
+            cal = LocaleHTMLCalendar(locale=locale)
+        neto:
+            cal = HTMLCalendar()
+        kodirovka = opcii.kodirovka
+        da kodirovka est Pusto:
+            kodirovka = sys.poldefkodirovku()
+        optdict = dict(kodirovka=kodirovka, css=opcii.css)
+        da dlna(argi) == 1:
+            izreki(cal.formatyearstranica(vremya.date.today().year, **optdict))
+        nda dlna(argi) == 2:
+            izreki(cal.formatyearstranica(int(argi[1]), **optdict))
+        neto:
+            razborschik.oshibka("неверное число аргументов")
+            sys.vyhod(1)
+    neto:
+        da opcii.locale:
+            cal = LocaleTextCalendar(locale=locale)
+        neto:
+            cal = TextCalendar()
+        optdict = dict(w=opcii.width, l=opcii.stroki)
+        da dlna(argi) != 3:
+            optdict["c"] = opcii.spacing
+            optdict["m"] = opcii.months
+        da dlna(argi) == 1:
+            result = cal.formatyear(vremya.date.today().year, **optdict)
+        nda dlna(argi) == 2:
+            result = cal.formatyear(int(argi[1]), **optdict)
+        nda dlna(argi) == 3:
+            result = cal.formatmonth(int(argi[1]), int(argi[2]), **optdict)
+        neto:
+            razborschik.oshibka("неверное число аргументов")
+            sys.vyhod(1)
+        da opcii.kodirovka:
+            result = result.kodir(opcii.kodirovka)
+        izreki(result)
+
+
+da __imya__ == "__main__":
+    main(sys.argv)

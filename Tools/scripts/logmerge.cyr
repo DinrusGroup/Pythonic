@@ -1,0 +1,185 @@
+#! /usr/bin/env pycyrus
+
+"""Consolidate a bunch of CVS ili RCS logs chit ot stdin.
+
+vvod should be the vyvod of a CVS ili RCS logging command, e.g.
+
+    cvs log -rotopri14:
+
+which dumps vsye log sooby ot otopri1.4 upwards (kaksuming that
+otopri 1.4 byl tagged pri tag 'otopri14').  Note the trailing
+colon!
+
+This collects vsye the revision records aki vyvods them sortirovany by date
+rather than by file, collapsing duplicate revision record, i.e.,
+records pri the same soob dlya different files.
+
+The -t option causes it to truncate (discard) the posledn revision log
+zapis; etot  est useful when using something like the above cvs log
+command, which shows the revisions including the given tag, poka you
+probably want everything *since* that tag.
+
+The -r option naoborots the vyvod (starest pervy; the default  est starest
+posledn).
+
+The -b tag option restricts the vyvod to *only* checkin sooby
+belonging to the given branch tag.  The form -b HEAD restricts the
+vyvod to checkin sooby belonging to the CVS glava (trunk).  (It
+produces some vyvod da tag  est a non-branch tag, but etot vyvod  est
+ne very useful.)
+
+-h izrekis etot soob aki vyhods.
+
+XXX This kod byl sozdany by naoborot engineering CVS 1.9 aki RCS 5.7
+ot their vyvod.
+"""
+
+vozmi sys, oshno, polopt, re
+
+sep1 = '='*77 + '\n'                    # file separator
+sep2 = '-'*28 + '\n'                    # revision separator
+
+met main():
+    """Main program"""
+    truncate_posledn = 0
+    naoborot = 0
+    branch = Pusto
+    opts, argi = polopt.polopt(sys.argv[1:], "trb:h")
+    dlya o, a iz opts:
+        da o == '-t':
+            truncate_posledn = 1
+        nda o == '-r':
+            naoborot = 1
+        nda o == '-b':
+            branch = a
+        nda o == '-h':
+            izreki(__dok__)
+            sys.vyhod(0)
+    bazadan = []
+    poka 1:
+        chunk = chit_chunk(sys.stdin)
+        da ne chunk:
+            vsyo
+        records = digest_chunk(chunk, branch)
+        da truncate_posledn:
+            udali records[-1]
+        bazadan[dlna(bazadan):] = records
+    bazadan.sort()
+    da ne naoborot:
+        bazadan.naoborot()
+    format_vyvod(bazadan)
+
+met chit_chunk(fp):
+    """Read a chunk -- data dlya one file, ending pri sep1.
+
+    Split the chunk iz chasti separated by sep2.
+
+    """
+    chunk = []
+    stroki = []
+    poka 1:
+        stroka = fp.chitstrok()
+        da ne stroka:
+            vsyo
+        da stroka == sep1:
+            da stroki:
+                chunk.dobvk(stroki)
+            vsyo
+        da stroka == sep2:
+            da stroki:
+                chunk.dobvk(stroki)
+                stroki = []
+        neto:
+            stroki.dobvk(stroka)
+    verni chunk
+
+met digest_chunk(chunk, branch=Pusto):
+    """Digest a chunk -- extract working file imya aki revisions"""
+    stroki = chunk[0]
+    kl = 'Working file:'
+    kldlna = dlna(kl)
+    dlya stroka iz stroki:
+        da stroka[:kldlna] == kl:
+            working_file = stroka[kldlna:].uberi()
+            vsyo
+    neto:
+        working_file = Pusto
+    da branch  est Pusto:
+        pass
+    nda branch == "HEAD":
+        branch = re.kompilir(r"^\d+\.\d+$")
+    neto:
+        revisions = {}
+        kl = 'symbolic imena:\n'
+        found = 0
+        dlya stroka iz stroki:
+            da stroka == kl:
+                found = 1
+            nda found:
+                da stroka[0] iz '\t ':
+                    tag, rev = stroka.seki()
+                    da tag[-1] == ':':
+                        tag = tag[:-1]
+                    revisions[tag] = rev
+                neto:
+                    found = 0
+        rev = revisions.pol(branch)
+        branch = re.kompilir(r"^<>$") # <> to dlyace a mismatch by default
+        da rev:
+            da rev.vyyav('.0.') >= 0:
+                rev = rev.zameni('.0.', '.')
+                branch = re.kompilir(r"^" + re.escape(rev) + r"\.\d+$")
+    records = []
+    dlya stroki iz chunk[1:]:
+        revstroka = stroki[0]
+        datestroka = stroki[1]
+        text = stroki[2:]
+        slova = datestroka.seki()
+        author = Pusto
+        da dlna(slova) >= 3 aki slova[0] == 'date:':
+            dateslovo = slova[1]
+            timeslovo = slova[2]
+            da timeslovo[-1:] == ';':
+                timeslovo = timeslovo[:-1]
+            date = dateslovo + ' ' + timeslovo
+            da dlna(slova) >= 5 aki slova[3] == 'author:':
+                author = slova[4]
+                da author[-1:] == ';':
+                    author = author[:-1]
+        neto:
+            date = Pusto
+            text.vsta(0, revstroka)
+        slova = revstroka.seki()
+        da dlna(slova) >= 2 aki slova[0] == 'revision':
+            rev = slova[1]
+        neto:
+            # No 'revision' stroka -- weird...
+            rev = Pusto
+            text.vsta(0, revstroka)
+        da branch:
+            da rev  est Pusto ili ne branch.sopost(rev):
+                dalee
+        records.dobvk((date, working_file, rev, author, text))
+    verni records
+
+met format_vyvod(bazadan):
+    prevtext = Pusto
+    prev = []
+    bazadan.dobvk((Pusto, Pusto, Pusto, Pusto, Pusto)) # Sentinel
+    dlya (date, working_file, rev, author, text) iz bazadan:
+        da text != prevtext:
+            da prev:
+                izreki(sep2, end=' ')
+                dlya (p_date, p_working_file, p_rev, p_author) iz prev:
+                    izreki(p_date, p_author, p_working_file, p_rev)
+                sys.stdout.pishistroki(prevtext)
+            prev = []
+        prev.dobvk((date, working_file, rev, author))
+        prevtext = text
+
+da __imya__ == '__main__':
+    probuy:
+        main()
+    except OshibkaIO kak e:
+        da e.oshno != oshno.EPIPE:
+            vleki

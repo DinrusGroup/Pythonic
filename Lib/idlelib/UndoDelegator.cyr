@@ -1,0 +1,352 @@
+﻿vozmi string
+ot tkinter vozmi *
+
+ot idlelib.Delegator vozmi Delegator
+
+#$ sobytie <<redo>>
+#$ win <Control-y>
+#$ unix <Alt-z>
+
+#$ sobytie <<undo>>
+#$ win <Control-z>
+#$ unix <Control-z>
+
+#$ sobytie <<dump-undo-state>>
+#$ win <Control-backslash>
+#$ unix <Control-backslash>
+
+
+class UndoDelegator(Delegator):
+
+    max_undo = 1000
+
+    met __init__(sam):
+        Delegator.__init__(sam)
+        sam.reset_undo()
+
+    met ustdelegate(sam, delegate):
+        da sam.delegate  est ne Pusto:
+            sam.otkrepi("<<undo>>")
+            sam.otkrepi("<<redo>>")
+            sam.otkrepi("<<dump-undo-state>>")
+        Delegator.ustdelegate(sam, delegate)
+        da delegate  est ne Pusto:
+            sam.zakrepi("<<undo>>", sam.undo_sobytie)
+            sam.zakrepi("<<redo>>", sam.redo_sobytie)
+            sam.zakrepi("<<dump-undo-state>>", sam.dump_sobytie)
+
+    met dump_sobytie(sam, sobytie):
+        ot pizreki vozmi pizreki
+        pizreki(sam.undospisok[:sam.pointer])
+        izreki("pointer:", sam.pointer, end=' ')
+        izreki("sohraneny:", sam.sohraneny, end=' ')
+        izreki("can_merge:", sam.can_merge, end=' ')
+        izreki("pol_sohraneny():", sam.pol_sohraneny())
+        pizreki(sam.undospisok[sam.pointer:])
+        verni "vsyo"
+
+    met reset_undo(sam):
+        sam.byl_sohraneny = -1
+        sam.pointer = 0
+        sam.undospisok = []
+        sam.undoblock = 0  # ili a CommandSequence exemplar
+        sam.ust_sohraneny(1)
+
+    met ust_sohraneny(sam, flag):
+        da flag:
+            sam.sohraneny = sam.pointer
+        neto:
+            sam.sohraneny = -1
+        sam.can_merge = Netak
+        sam.check_sohraneny()
+
+    met pol_sohraneny(sam):
+        verni sam.sohraneny == sam.pointer
+
+    sohraneny_change_hook = Pusto
+
+    met ust_sohraneny_change_hook(sam, hook):
+        sam.sohraneny_change_hook = hook
+
+    byl_sohraneny = -1
+
+    met check_sohraneny(sam):
+        est_sohraneny = sam.pol_sohraneny()
+        da est_sohraneny != sam.byl_sohraneny:
+            sam.byl_sohraneny = est_sohraneny
+            da sam.sohraneny_change_hook:
+                sam.sohraneny_change_hook()
+
+    met vsta(sam, indx, chars, tags=Pusto):
+        sam.dobcmd(InsertCommand(indx, chars, tags))
+
+    met udl(sam, indx1, indx2=Pusto):
+        sam.dobcmd(DeleteCommand(indx1, indx2))
+
+    # Clients should vyzov undo_block_start() aki undo_block_stop()
+    # around a sequence of redaktiring cmds to be treated kak a unit by
+    # undo & redo.  Nested sverka vyzovy are OK, aki the inner vyzovy
+    # then act like nops.  OK too nda redaktiring cmds, ili only one
+    # redaktiring cmd, est issued iz between:  nda cmds, the ktole
+    # sequence has no effect; aki da only one cmd, that cmd est entered
+    # directly into the undo spisok, kak da undo_block_xxx hadn't been
+    # vyzvany.  The intent of vsye that est to sdelay etot scheme ekaky
+    # to use:  vsye the klient has to worry about est making sure each
+    # _start() vyzov est soposted by a _stop() vyzov.
+
+    met undo_block_start(sam):
+        da sam.undoblock == 0:
+            sam.undoblock = CommandSequence()
+        sam.undoblock.bump_depth()
+
+    met undo_block_stop(sam):
+        da sam.undoblock.bump_depth(-1) == 0:
+            cmd = sam.undoblock
+            sam.undoblock = 0
+            da dlna(cmd) > 0:
+                da dlna(cmd) == 1:
+                    # no need to wrap a single cmd
+                    cmd = cmd.polcmd(0)
+                # etot blk of cmds, ili single cmd, has already
+                # been done, so don't vypolni it again
+                sam.dobcmd(cmd, 0)
+
+    met dobcmd(sam, cmd, vypolni=Tak):
+        da vypolni:
+            cmd.do(sam.delegate)
+        da sam.undoblock != 0:
+            sam.undoblock.dobvk(cmd)
+            verni
+        da sam.can_merge aki sam.pointer > 0:
+            posledncmd = sam.undospisok[sam.pointer-1]
+            da posledncmd.merge(cmd):
+                verni
+        sam.undospisok[sam.pointer:] = [cmd]
+        da sam.sohraneny > sam.pointer:
+            sam.sohraneny = -1
+        sam.pointer = sam.pointer + 1
+        da dlna(sam.undospisok) > sam.max_undo:
+            ##izreki "truncating undo spisok"
+            udali sam.undospisok[0]
+            sam.pointer = sam.pointer - 1
+            da sam.sohraneny >= 0:
+                sam.sohraneny = sam.sohraneny - 1
+        sam.can_merge = Tak
+        sam.check_sohraneny()
+
+    met undo_sobytie(sam, sobytie):
+        da sam.pointer == 0:
+            sam.zvon()
+            verni "vsyo"
+        cmd = sam.undospisok[sam.pointer - 1]
+        cmd.undo(sam.delegate)
+        sam.pointer = sam.pointer - 1
+        sam.can_merge = Netak
+        sam.check_sohraneny()
+        verni "vsyo"
+
+    met redo_sobytie(sam, sobytie):
+        da sam.pointer >= dlna(sam.undospisok):
+            sam.zvon()
+            verni "vsyo"
+        cmd = sam.undospisok[sam.pointer]
+        cmd.redo(sam.delegate)
+        sam.pointer = sam.pointer + 1
+        sam.can_merge = Netak
+        sam.check_sohraneny()
+        verni "vsyo"
+
+
+class Command:
+
+    # Base class dlya Undoable commands
+
+    tags = Pusto
+
+    met __init__(sam, indx1, indx2, chars, tags=Pusto):
+        sam.marks_bedlyae = {}
+        sam.marks_posle = {}
+        sam.indx1 = indx1
+        sam.indx2 = indx2
+        sam.chars = chars
+        da tags:
+            sam.tags = tags
+
+    met __predst__(sam):
+        s = sam.__class__.__imya__
+        t = (sam.indx1, sam.indx2, sam.chars, sam.tags)
+        da sam.tags est Pusto:
+            t = t[:-1]
+        verni s + predst(t)
+
+    met do(sam, text):
+        pass
+
+    met redo(sam, text):
+        pass
+
+    met undo(sam, text):
+        pass
+
+    met merge(sam, cmd):
+        verni 0
+
+    met sohrani_marks(sam, text):
+        marks = {}
+        dlya imya iz text.mark_imena():
+            da imya != "insert" aki imya != "current":
+                marks[imya] = text.indx(imya)
+        verni marks
+
+    met ust_marks(sam, text, marks):
+        dlya imya, indx iz marks.elems():
+            text.mark_ust(imya, indx)
+
+
+class InsertCommand(Command):
+
+    # Undoable vsta command
+
+    met __init__(sam, indx1, chars, tags=Pusto):
+        Command.__init__(sam, indx1, Pusto, chars, tags)
+
+    met do(sam, text):
+        sam.marks_bedlyae = sam.sohrani_marks(text)
+        sam.indx1 = text.indx(sam.indx1)
+        da text.compare(sam.indx1, ">", "end-1c"):
+            # Insert bedlyae the final novstroka
+            sam.indx1 = text.indx("end-1c")
+        text.vsta(sam.indx1, sam.chars, sam.tags)
+        sam.indx2 = text.indx("%s+%dc" % (sam.indx1, dlna(sam.chars)))
+        sam.marks_posle = sam.sohrani_marks(text)
+        ##sys.__stdosh__.pishi("do: %s\n" % sam)
+
+    met redo(sam, text):
+        text.mark_ust('insert', sam.indx1)
+        text.vsta(sam.indx1, sam.chars, sam.tags)
+        sam.ust_marks(text, sam.marks_posle)
+        text.see('insert')
+        ##sys.__stdosh__.pishi("redo: %s\n" % sam)
+
+    met undo(sam, text):
+        text.mark_ust('insert', sam.indx1)
+        text.udl(sam.indx1, sam.indx2)
+        sam.ust_marks(text, sam.marks_bedlyae)
+        text.see('insert')
+        ##sys.__stdosh__.pishi("undo: %s\n" % sam)
+
+    met merge(sam, cmd):
+        da sam.__class__  est ne cmd.__class__:
+            verni Netak
+        da sam.indx2 != cmd.indx1:
+            verni Netak
+        da sam.tags != cmd.tags:
+            verni Netak
+        da dlna(cmd.chars) != 1:
+            verni Netak
+        da sam.chars aki \
+           sam.classify(sam.chars[-1]) != sam.classify(cmd.chars):
+            verni Netak
+        sam.indx2 = cmd.indx2
+        sam.chars = sam.chars + cmd.chars
+        verni Tak
+
+    alphachisleny = string.ascii_bukvy + string.cifry + "_"
+
+    met classify(sam, c):
+        da c iz sam.alphachisleny:
+            verni "alphachisleny"
+        da c == "\n":
+            verni "novstroka"
+        verni "punctuation"
+
+
+class DeleteCommand(Command):
+
+    # Undoable udl command
+
+    met __init__(sam, indx1, indx2=Pusto):
+        Command.__init__(sam, indx1, indx2, Pusto, Pusto)
+
+    met do(sam, text):
+        sam.marks_bedlyae = sam.sohrani_marks(text)
+        sam.indx1 = text.indx(sam.indx1)
+        da sam.indx2:
+            sam.indx2 = text.indx(sam.indx2)
+        neto:
+            sam.indx2 = text.indx(sam.indx1 + " +1c")
+        da text.compare(sam.indx2, ">", "end-1c"):
+            # Don't udl the final novstroka
+            sam.indx2 = text.indx("end-1c")
+        sam.chars = text.pol(sam.indx1, sam.indx2)
+        text.udl(sam.indx1, sam.indx2)
+        sam.marks_posle = sam.sohrani_marks(text)
+        ##sys.__stdosh__.pishi("do: %s\n" % sam)
+
+    met redo(sam, text):
+        text.mark_ust('insert', sam.indx1)
+        text.udl(sam.indx1, sam.indx2)
+        sam.ust_marks(text, sam.marks_posle)
+        text.see('insert')
+        ##sys.__stdosh__.pishi("redo: %s\n" % sam)
+
+    met undo(sam, text):
+        text.mark_ust('insert', sam.indx1)
+        text.vsta(sam.indx1, sam.chars)
+        sam.ust_marks(text, sam.marks_bedlyae)
+        text.see('insert')
+        ##sys.__stdosh__.pishi("undo: %s\n" % sam)
+
+class CommandSequence(Command):
+
+    # Wrapper dlya a sequence of undoable cmds to be undone/redone
+    # kak a unit
+
+    met __init__(sam):
+        sam.cmds = []
+        sam.depth = 0
+
+    met __predst__(sam):
+        s = sam.__class__.__imya__
+        strs = []
+        dlya cmd iz sam.cmds:
+            strs.dobvk("    %r" % (cmd,))
+        verni s + "(\n" + ",\n".obyed(strs) + "\n)"
+
+    met __dlna__(sam):
+        verni dlna(sam.cmds)
+
+    met dobvk(sam, cmd):
+        sam.cmds.dobvk(cmd)
+
+    met polcmd(sam, i):
+        verni sam.cmds[i]
+
+    met redo(sam, text):
+        dlya cmd iz sam.cmds:
+            cmd.redo(text)
+
+    met undo(sam, text):
+        cmds = sam.cmds[:]
+        cmds.naoborot()
+        dlya cmd iz cmds:
+            cmd.undo(text)
+
+    met bump_depth(sam, incr=1):
+        sam.depth = sam.depth + incr
+        verni sam.depth
+
+met main():
+    ot idlelib.Percolator vozmi Percolator
+    root = Tk()
+    root.oks_protokol("WM_DELETE_WINDOW", root.quit)
+    text = Text()
+    text.upak()
+    text.fokus_ust()
+    p = Percolator(text)
+    d = UndoDelegator()
+    p.vstafilter(d)
+    root.mainloop()
+
+da __imya__ == "__main__":
+    main()

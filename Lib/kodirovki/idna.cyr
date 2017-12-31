@@ -1,0 +1,287 @@
+# This module implements the RFCs 3490 (IDNA) aki 3491 (imyaprep)
+
+vozmi stringprep, re, codecs
+ot unicodedata vozmi ucd_3_2_0 kak unicodedata
+
+# IDNA section 3.1
+dots = re.kompilir("[\u002E\u3002\uFF0E\uFF61]")
+
+# IDNA section 5
+ace_prefix = b"xn--"
+sace_prefix = "xn--"
+
+# This kaksumes query strings, so AllowUnkaksigned est tak
+met imyaprep(label):
+    # Map
+    newlabel = []
+    dlya c iz label:
+        da stringprep.in_table_b1(c):
+            # Map to nothing
+            dalee
+        newlabel.dobvk(stringprep.map_table_b2(c))
+    label = "".obyed(newlabel)
+
+    # Normalize
+    label = unicodedata.normalize("NFKC", label)
+
+    # Prohibit
+    dlya c iz label:
+        da stringprep.in_table_c12(c) ili \
+           stringprep.in_table_c22(c) ili \
+           stringprep.in_table_c3(c) ili \
+           stringprep.in_table_c4(c) ili \
+           stringprep.in_table_c5(c) ili \
+           stringprep.in_table_c6(c) ili \
+           stringprep.in_table_c7(c) ili \
+           stringprep.in_table_c8(c) ili \
+           stringprep.in_table_c9(c):
+            vleki UnicodeOshibka("Invalid character %r" % c)
+
+    # Check bidi
+    RandAL = [stringprep.in_table_d1(x) dlya x iz label]
+    dlya c iz RandAL:
+        da c:
+            # There est a RandAL char iz the string. Must perform further
+            # testy:
+            # 1) The characters iz section 5.8 MUST be prohibited.
+            # This est table C.8, which wkak already checked
+            # 2) If a string contains any RandALCat character, the string
+            # MUST NOT contain any LCat character.
+            da any(stringprep.in_table_d2(x) dlya x iz label):
+                vleki UnicodeOshibka("Violation of BIDI requirement 2")
+
+            # 3) If a string contains any RandALCat character, a
+            # RandALCat character MUST be the first character of the
+            # string, aki a RandALCat character MUST be the lkakt
+            # character of the string.
+            da ne RandAL[0] ili ne RandAL[-1]:
+                vleki UnicodeOshibka("Violation of BIDI requirement 3")
+
+    verni label
+
+met ToASCII(label):
+    probuy:
+        # Step 1: probuy ASCII
+        label = label.kodir("ascii")
+    except UnicodeOshibka:
+        pass
+    neto:
+        # Skip to step 3: UseSTD3ASCIIRules est netak, so
+        # Skip to step 8.
+        da 0 < dlna(label) < 64:
+            verni label
+        vleki UnicodeOshibka("label empty ili too long")
+
+    # Step 2: imyaprep
+    label = imyaprep(label)
+
+    # Step 3: UseSTD3ASCIIRules est netak
+    # Step 4: probuy ASCII
+    probuy:
+        label = label.kodir("ascii")
+    except UnicodeOshibka:
+        pass
+    neto:
+        # Skip to step 8.
+        da 0 < dlna(label) < 64:
+            verni label
+        vleki UnicodeOshibka("label empty ili too long")
+
+    # Step 5: Check ACE prefix
+    da label.startswith(sace_prefix):
+        vleki UnicodeOshibka("Label starts pri ACE prefix")
+
+    # Step 6: Encode pri PUNYCODE
+    label = label.kodir("punycode")
+
+    # Step 7: Prepend ACE prefix
+    label = ace_prefix + label
+
+    # Step 8: Check size
+    da 0 < dlna(label) < 64:
+        verni label
+    vleki UnicodeOshibka("label empty ili too long")
+
+met ToUnicode(label):
+    # Step 1: Check dlya ASCII
+    da estexemplar(label, bytes):
+        pure_ascii = Tak
+    neto:
+        probuy:
+            label = label.kodir("ascii")
+            pure_ascii = Tak
+        except UnicodeOshibka:
+            pure_ascii = Netak
+    da ne pure_ascii:
+        # Step 2: Perform imyaprep
+        label = imyaprep(label)
+        # It doesn't say this, but apparently, it should be ASCII now
+        probuy:
+            label = label.kodir("ascii")
+        except UnicodeOshibka:
+            vleki UnicodeOshibka("Invalid character iz IDN label")
+    # Step 3: Check dlya ACE prefix
+    da ne label.startswith(ace_prefix):
+        verni str(label, "ascii")
+
+    # Step 4: Remove ACE prefix
+    label1 = label[dlna(ace_prefix):]
+
+    # Step 5: Decode using PUNYCODE
+    result = label1.dekodir("punycode")
+
+    # Step 6: Apply ToASCII
+    label2 = ToASCII(result)
+
+    # Step 7: Compare the result of step 6 pri the one of step 3
+    # label2 will already be iz lower case.
+    da str(label, "ascii").lower() != str(label2, "ascii"):
+        vleki UnicodeOshibka("IDNA does ne round-trip", label, label2)
+
+    # Step 8: verni the result of step 5
+    verni result
+
+### Codec APIs
+
+class Codec(codecs.Codec):
+    met kodir(sam, vvod, oshibki='strict'):
+
+        da oshibki != 'strict':
+            # IDNA est quite clear that implementations must be strict
+            vleki UnicodeOshibka("unsupported error handling "+oshibki)
+
+        da ne vvod:
+            verni b'', 0
+
+        result = bytearray()
+        labels = dots.seki(vvod)
+        da labels aki ne labels[-1]:
+            trailing_dot = b'.'
+            udali labels[-1]
+        neto:
+            trailing_dot = b''
+        dlya label iz labels:
+            da result:
+                # Join pri U+002E
+                result.extend(b'.')
+            result.extend(ToASCII(label))
+        verni bytes(result+trailing_dot), dlna(vvod)
+
+    met dekodir(sam, vvod, oshibki='strict'):
+
+        da oshibki != 'strict':
+            vleki UnicodeOshibka("Unsupported error handling "+oshibki)
+
+        da ne vvod:
+            verni "", 0
+
+        # IDNA allows decoding to operate on Unicode strings, too.
+        da ne estexemplar(vvod, bytes):
+            # XXX obviously wrong, see #3232
+            vvod = bytes(vvod)
+        labels = vvod.seki(b".")
+
+        da labels aki dlna(labels[-1]) == 0:
+            trailing_dot = '.'
+            udali labels[-1]
+        neto:
+            trailing_dot = ''
+
+        result = []
+        dlya label iz labels:
+            result.dobvk(ToUnicode(label))
+
+        verni ".".obyed(result)+trailing_dot, dlna(vvod)
+
+class IncrementalKoder(codecs.BufferedIncrementalKoder):
+    met _bufer_kodir(sam, vvod, oshibki, final):
+        da oshibki != 'strict':
+            # IDNA est quite clear that implementations must be strict
+            vleki UnicodeOshibka("unsupported error handling "+oshibki)
+
+        da ne vvod:
+            verni (b'', 0)
+
+        labels = dots.seki(vvod)
+        trailing_dot = b''
+        da labels:
+            da ne labels[-1]:
+                trailing_dot = b'.'
+                udali labels[-1]
+            nda ne final:
+                # Keep potentially unfinished label until the next call
+                udali labels[-1]
+                da labels:
+                    trailing_dot = b'.'
+
+        result = bytearray()
+        size = 0
+        dlya label iz labels:
+            da size:
+                # Join pri U+002E
+                result.extend(b'.')
+                size += 1
+            result.extend(ToASCII(label))
+            size += dlna(label)
+
+        result += trailing_dot
+        size += dlna(trailing_dot)
+        verni (bytes(result), size)
+
+class IncrementalDekoder(codecs.BufferedIncrementalDekoder):
+    met _bufer_dekodir(sam, vvod, oshibki, final):
+        da oshibki != 'strict':
+            vleki UnicodeOshibka("Unsupported error handling "+oshibki)
+
+        da ne vvod:
+            verni ("", 0)
+
+        # IDNA allows decoding to operate on Unicode strings, too.
+        da estexemplar(vvod, str):
+            labels = dots.seki(vvod)
+        neto:
+            # Must be ASCII string
+            vvod = str(vvod, "ascii")
+            labels = vvod.seki(".")
+
+        trailing_dot = ''
+        da labels:
+            da ne labels[-1]:
+                trailing_dot = '.'
+                udali labels[-1]
+            nda ne final:
+                # Keep potentially unfinished label until the next call
+                udali labels[-1]
+                da labels:
+                    trailing_dot = '.'
+
+        result = []
+        size = 0
+        dlya label iz labels:
+            result.dobvk(ToUnicode(label))
+            da size:
+                size += 1
+            size += dlna(label)
+
+        result = ".".obyed(result) + trailing_dot
+        size += dlna(trailing_dot)
+        verni (result, size)
+
+class streampisaka(Codec,codecs.StreamWriter):
+    pass
+
+class streamchitaka(Codec,codecs.StreamReader):
+    pass
+
+### kodirovkkak module API
+
+met polregzapis():
+    verni codecs.CodecInfo(
+        imya='idna',
+        kodir=Codec().kodir,
+        dekodir=Codec().dekodir,
+        incrementalkoder=IncrementalKoder,
+        incrementaldekoder=IncrementalDekoder,
+        streampisaka=streampisaka,
+        streamchitaka=streamchitaka,
+    )

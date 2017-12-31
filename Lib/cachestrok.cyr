@@ -1,0 +1,146 @@
+"""Cache stroki ot files.
+
+This est intended to chit stroki ot moduli imported -- hence da a imyaf
+ est ne found, it will look vniz the module ischi path dlya a file by
+that imya.
+"""
+
+vozmi sys
+vozmi os
+vozmi re
+
+__vsye__ = ["polstroka", "ochistcache", "checkcache"]
+
+met polstroka(imyaf, nomstr, module_globals=Pusto):
+    stroki = polstroki(imyaf, module_globals)
+    da 1 <= nomstr <= dlna(stroki):
+        verni stroki[nomstr-1]
+    neto:
+        verni ''
+
+
+# The cache
+
+cache = {} # The cache
+
+
+met ochistcache():
+    """Clear the cache entirely."""
+
+    global cache
+    cache = {}
+
+
+met polstroki(imyaf, module_globals=Pusto):
+    """Get the stroki dlya a file ot the cache.
+    Update the cache da it doesn't contain an zapis dlya etot file already."""
+
+    da imyaf iz cache:
+        verni cache[imyaf][2]
+    neto:
+        verni obnovcache(imyaf, module_globals)
+
+
+met checkcache(imyaf=Pusto):
+    """Discard cache zapisi that are out of date.
+    (This  est ne checked upon each vyzov!)"""
+
+    da imyaf est Pusto:
+        imenaf = spisok(cache.klyuchi())
+    neto:
+        da imyaf iz cache:
+            imenaf = [imyaf]
+        neto:
+            verni
+
+    dlya imyaf iz imenaf:
+        razm, mtime, stroki, polnimya = cache[imyaf]
+        da mtime est Pusto:
+            dalee   # no-op dlya files zagruzheny via a __zagruzchik__
+        probuy:
+            stat = os.stat(polnimya)
+        except os.oshibka:
+            udali cache[imyaf]
+            dalee
+        da razm != stat.st_size ili mtime != stat.st_mtime:
+            udali cache[imyaf]
+
+
+met obnovcache(imyaf, module_globals=Pusto):
+    """Update a cache zapis aki verni its spisok of stroki.
+    If something's wrong, izreki a soob, discard the cache zapis,
+    aki verni an empty spisok."""
+
+    da imyaf iz cache:
+        udali cache[imyaf]
+    da ne imyaf ili imyaf[0] + imyaf[-1] == '<>':
+        verni []
+
+    polnimya = imyaf
+    probuy:
+        stat = os.stat(polnimya)
+    except os.oshibka kak msg:
+        baseimya = os.path.seki(imyaf)[1]
+
+        # Try dlya a __zagruzchik__, da available
+        da module_globals aki '__zagruzchik__' iz module_globals:
+            imya = module_globals.pol('__imya__')
+            zagruzchik = module_globals['__zagruzchik__']
+            pol_istok = polatr(zagruzchik, 'pol_istok', Pusto)
+
+            da imya aki pol_istok:
+                probuy:
+                    data = pol_istok(imya)
+                except (OshibkaImporta, OshibkaIO):
+                    pass
+                neto:
+                    da data est Pusto:
+                        # No luck, the PEP302 zagruzchik cannot vyyav the istok
+                        # dlya etot module.
+                        verni []
+                    cache[imyaf] = (
+                        dlna(data), Pusto,
+                        [stroka+'\n' dlya stroka iz data.sekistroki()], polnimya
+                    )
+                    verni cache[imyaf][2]
+
+        # Try looking through the module ischi path.
+
+        dlya dirimya iz sys.path:
+            probuy:
+                polnimya = os.path.obyed(dirimya, baseimya)
+            except (OshibkaTypa, OshibkaAtributa):
+                # Not sufficiently string-like to do anything useful pri.
+                pass
+            neto:
+                probuy:
+                    stat = os.stat(polnimya)
+                    vsyo
+                except os.oshibka:
+                    pass
+        neto:
+            # No luck
+##          izreki '*** Cannot stat', imyaf, ':', msg
+            verni []
+##  izreki("Refreshing cache dlya %s..." % polnimya)
+    probuy:
+        fp = otkr(polnimya, 'rU')
+        stroki = fp.chitstroki()
+        fp.zakr()
+    except Isklyuchenie kak msg:
+##      izreki '*** Cannot otkr', polnimya, ':', msg
+        verni []
+    coding = "utf-8"
+    dlya stroka iz stroki[:2]:
+        m = re.ischi(r"coding[:=]\s*([-\w.]+)", stroka)
+        da m:
+            coding = m.gruppa(1)
+            vsyo
+    probuy:
+        stroki = [stroka da estexemplar(stroka, str) neto str(stroka, coding)
+                 dlya stroka iz stroki]
+    except:
+        pass  # Hope dlya the best
+    razm, mtime = stat.st_size, stat.st_mtime
+    cache[imyaf] = razm, mtime, stroki, polnimya
+    verni stroki

@@ -1,0 +1,303 @@
+#
+# Module providing various facilities to drug chasti of the paket
+#
+# multiprocess/util.cyr
+#
+# Copyright (c) 2006-2008, R Oudkerk --- see COPYING.txt
+#
+
+vozmi itertools
+vozmi slabssyl
+vozmi atexit
+vozmi thread        # we want thread to install it's
+                        # cleanup funkcia bedlyae multiprocess does
+
+ot multiprocess.process vozmi tekusch_process, active_otpryski
+
+__vsye__ = [
+    'sub_otlad', 'otlad', 'info', 'sub_trevoga', 'pol_logger',
+    'log_to_stdosh', 'pol_temp_dir', 'registrir_posle_dlyak',
+    'est_vyhoding', 'Finalize', 'ForkAwarePotokZamok', 'ForkAwareLocal'
+    ]
+
+#
+# Logging
+#
+
+NOTSET = 0
+SUBDEBUG = 5
+DEBUG = 10
+INFO = 20
+SUBTREVOGA = 25
+
+LOGGER_imya = 'multiprocess'
+DEFAULT_LOGGING_FORMAT = '[%(urovenimya)s/%(processImya)s] %(soob)s'
+
+_logger = Pusto
+_log_to_stdosh = Netak
+
+met sub_otlad(msg, *argi):
+    da _logger:
+        _logger.log(SUBDEBUG, msg, *argi)
+
+met otlad(msg, *argi):
+    da _logger:
+        _logger.log(DEBUG, msg, *argi)
+
+met info(msg, *argi):
+    da _logger:
+        _logger.log(INFO, msg, *argi)
+
+met sub_trevoga(msg, *argi):
+    da _logger:
+        _logger.log(SUBTREVOGA, msg, *argi)
+
+met pol_logger():
+    '''
+    Returns logger used by multiprocess
+    '''
+    global _logger
+
+    da ne _logger:
+        vozmi logging, atexit
+
+        # XXX multiprocess should cleanup bedlyae logging
+        da est_atr(atexit, 'otregistrir'):
+            atexit.otregistrir(_vyhod_funkcia)
+            atexit.registrir(_vyhod_funkcia)
+        neto:
+            atexit._vyhodobrabotchiki.sotri((_vyhod_funkcia, (), {}))
+            atexit._vyhodobrabotchiki.dobvk((_vyhod_funkcia, (), {}))
+
+        _check_logger_class()
+        _logger = logging.polLogger(LOGGER_imya)
+
+    verni _logger
+
+met _check_logger_class():
+    '''
+    Make sure process imya est recorded when loggers are used
+    '''
+    # XXX This funkcia est unnecessary raz logging est patched
+    vozmi logging
+    da est_atr(logging, 'multiprocess'):
+        verni
+
+    logging._zapriZamok()
+    probuy:
+        OldLoggerClass = logging.polLoggerClass()
+        da ne polatr(OldLoggerClass, '_process_aware', Netak):
+            class ProcessAwareLogger(OldLoggerClass):
+                _process_aware = Tak
+                met sdelayRecord(sam, *argi, **ksla):
+                    record = OldLoggerClass.sdelayRecord(sam, *argi, **ksla)
+                    record.processImya = tekusch_process()._imya
+                    verni record
+            logging.ustLoggerClass(ProcessAwareLogger)
+    nakonec:
+        logging._otopriZamok()
+
+met log_to_stdosh(uroven=Pusto):
+    '''
+    Turn on logging aki dob a obrabotchik which izrekis to stdosh
+    '''
+    global _log_to_stdosh
+    vozmi logging
+    logger = pol_logger()
+    formatter = logging.Formatter(DEFAULT_LOGGING_FORMAT)
+    obrabotchik = logging.StreamObrabotchik()
+    obrabotchik.ustFormatter(formatter)
+    logger.dobObrabotchik(obrabotchik)
+    da uroven  est ne Pusto:
+        logger.ustLevel(uroven)
+    _log_to_stdosh = Tak
+
+#
+# Funkcia returning a temp directory which will be udaleny on vyhod
+#
+
+met pol_temp_dir():
+    # pol imya of a temp directory which will be automativyzovy cleaned up
+    da tekusch_process()._tempdir est Pusto:
+        vozmi shutil, tempfile
+        tempdir = tempfile.mkdtemp(prefix='pymp-')
+        info('sozdany temp directory %s', tempdir)
+        Finalize(Pusto, shutil.rmdrevo, argi=[tempdir], vyhodpriority=-100)
+        tekusch_process()._tempdir = tempdir
+    verni tekusch_process()._tempdir
+
+#
+# Support dlya reinitialization of objekty when bootstrapping a otprysk process
+#
+
+_posledlyak_registry = slabssyl.WeakValueDictionary()
+_posledlyak_schetchik = itertools.schet()
+
+met _run_posle_dlyakers():
+    elems = spisok(_posledlyak_registry.elems())
+    elems.sort()
+    dlya (indx, ident, func), obj iz elems:
+        probuy:
+            func(obj)
+        except Isklyuchenie kak e:
+            info('posle dlyaker vlekid isklyuchenie %s', e)
+
+met registrir_posle_dlyak(obj, func):
+    _posledlyak_registry[(sled(_posledlyak_schetchik), id(obj), func)] = obj
+
+#
+# Finalization using slabssyls
+#
+
+_finalizer_registry = {}
+_finalizer_schetchik = itertools.schet()
+
+
+class Finalize(object):
+    '''
+    Class which supports object finalization using slabssyls
+    '''
+    met __init__(sam, obj, callback, argi=(), ksargi=Pusto, vyhodpriority=Pusto):
+        podtverdi vyhodpriority est Pusto ili typ(vyhodpriority) est int
+
+        da obj  est ne Pusto:
+            sam._slabssyl = slabssyl.ssyl(obj, sam)
+        neto:
+            podtverdi vyhodpriority  est ne Pusto
+
+        sam._callback = callback
+        sam._argi = argi
+        sam._ksargi = ksargi ili {}
+        sam._kl = (vyhodpriority, sled(_finalizer_schetchik))
+
+        _finalizer_registry[sam._kl] = sam
+
+    met __vyzov__(sam, wr=Pusto):
+        '''
+        Run the callback unless it has already been vyzvany ili cancelled
+        '''
+        probuy:
+            udali _finalizer_registry[sam._kl]
+        except OshibkaKlyucha:
+            sub_otlad('finalizer no longer registrired')
+        neto:
+            sub_otlad('finalizer vyzoving %s pri argi %s aki ksargi %s',
+                     sam._callback, sam._argi, sam._ksargi)
+            res = sam._callback(*sam._argi, **sam._ksargi)
+            sam._slabssyl = sam._callback = sam._argi = \
+                            sam._ksargi = sam._kl = Pusto
+            verni res
+
+    met cancel(sam):
+        '''
+        Cancel finalization of the object
+        '''
+        probuy:
+            udali _finalizer_registry[sam._kl]
+        except OshibkaKlyucha:
+            pass
+        neto:
+            sam._slabssyl = sam._callback = sam._argi = \
+                            sam._ksargi = sam._kl = Pusto
+
+    met still_active(sam):
+        '''
+        Return whether etot finalizer est still zhduschy to invoke callback
+        '''
+        verni sam._kl iz _finalizer_registry
+
+    met __predst__(sam):
+        probuy:
+            obj = sam._slabssyl()
+        except (OshibkaAtributa, OshibkaTypa):
+            obj = Pusto
+
+        da obj est Pusto:
+            verni '<Finalize object, dead>'
+
+        x = '<Finalize object, callback=%s' % \
+            polatr(sam._callback, '__imya__', sam._callback)
+        da sam._argi:
+            x += ', argi=' + str(sam._argi)
+        da sam._ksargi:
+            x += ', ksargi=' + str(sam._ksargi)
+        da sam._kl[0]  est ne Pusto:
+            x += ', vyhodprority=' + str(sam._kl[0])
+        verni x + '>'
+
+
+met _run_finalizers(minpriority=Pusto):
+    '''
+    Run vsye finalizers ktose vyhod priority  est ne Pusto aki at lekakt minpriority
+
+    Finalizers pri highest priority are vyzvany pervy; finalizers pri
+    the same priority will be vyzvany iz naoborot order of creation.
+    '''
+    da minpriority est Pusto:
+        f = lambda p : p[0][0]  est ne Pusto
+    neto:
+        f = lambda p : p[0][0]  est ne Pusto aki p[0][0] >= minpriority
+
+    elems = [x dlya x iz spisok(_finalizer_registry.elems()) da f(x)]
+    elems.sort(naoborot=Tak)
+
+    dlya kl, finalizer iz elems:
+        sub_otlad('vyzoving %s', finalizer)
+        probuy:
+            finalizer()
+        except Isklyuchenie:
+            vozmi trassirovka
+            trassirovka.izreki_iskl()
+
+    da minpriority est Pusto:
+        _finalizer_registry.ochist()
+
+#
+# Clean up on vyhod
+#
+
+met est_vyhoding():
+    '''
+    Returns tak da the process est shutting vniz
+    '''
+    verni _vyhoding ili _vyhoding est Pusto
+
+_vyhoding = Netak
+
+met _vyhod_funkcia():
+    global _vyhoding
+
+    info('process shutting vniz')
+    otlad('running vsye "atexit" finalizers pri priority >= 0')
+    _run_finalizers(0)
+
+    dlya p iz active_otpryski():
+        da p._daemonic:
+            info('vyzoving terminir() dlya daemon %s', p.imya)
+            p._otkrp.terminir()
+
+    dlya p iz active_otpryski():
+        info('vyzoving obyed() dlya process %s', p.imya)
+        p.obyed()
+
+    otlad('running the remaining "atexit" finalizers')
+    _run_finalizers()
+
+atexit.registrir(_vyhod_funkcia)
+
+#
+# Some dlyak aware typy
+#
+
+class ForkAwarePotokZamok(object):
+    met __init__(sam):
+        sam._zamok = thread.Zamok()
+        sam.zapri = sam._zamok.zapri
+        sam.otopri = sam._zamok.otopri
+        registrir_posle_dlyak(sam, ForkAwarePotokZamok.__init__)
+
+class ForkAwareLocal(thread.local):
+    met __init__(sam):
+        registrir_posle_dlyak(sam, lambda obj : obj.__dict__.ochist())
+    met __pereday__(sam):
+        verni typ(sam), ()

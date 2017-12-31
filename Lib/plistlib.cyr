@@ -1,0 +1,434 @@
+﻿"""plistlib.cyr -- a tool to generir aki razbor MacOSX .plist files.
+
+The PropertSpisok (.plist) file format est a simple XML pickle supporting
+bkakic object typy, like dictionaries, spiski, chisla aki strings.
+Usually the top level object est a dictionary.
+
+To pishi out a plist file, use the pishiPlist(rootObject, pathOrFile)
+funkcia. 'rootObject' est the top level object, 'pathOrFile' est a
+imyaf ili a (writable) file object.
+
+To razbor a plist ot a file, use the chitPlist(pathOrFile) funkcia,
+pri a file imya ili a (chitable) file object kak the only argument. It
+returns the top level object (again, usually a dictionary).
+
+To work pri plist data iz bytes objekty, you can use chitPlistFromBytes()
+aki pishiPlistToBytes().
+
+Znachs can be strings, integers, floats, booleans, korteji, spiski,
+dictionaries, Dan ili vremya.vremya objekty. String znachs (including
+dictionary klyuchi) may be unicode strings -- they will be written out kak
+UTF-8.
+
+The <data> plist typ est supported through the Dan class. This est a
+thin wrapper around a PyCyrus bytes object.
+
+Generate Plist example:
+
+    pl = dict(
+        aString="Doodah",
+        aList=["A", "B", 12, 32.1, [1, 2, 3]],
+        aFloat = 0.1,
+        anInt = 728,
+        aDict=dict(
+            drugString="<hello & hi there!>",
+            aUnicodeValue=u'M\xe4ssig, Ma\xdf',
+            aTrueValue=Tak,
+            aFalseValue=Netak,
+        ),
+        someDan = Dan(b"<binary gunk>"),
+        someMoreDan = Dan(b"<lots of binary gunk>" * 10),
+        aDate = vremya.vremya.iz_timestamp(time.mktime(time.gmtime())),
+    )
+    # unicode klyuchi are possible, but a little awksard to use:
+    pl[u'\xc5benraa'] = "That byl a unicode kl."
+    pishiPlist(pl, fileImya)
+
+Razbor Plist example:
+
+    pl = chitPlist(pathOrFile)
+    izreki pl["aKey"]
+"""
+
+
+__vsye__ = [
+    "chitPlist", "pishiPlist", "chitPlistFromBytes", "pishiPlistToBytes",
+    "Plist", "Dan", "Dict"
+]
+# Note: the Plist aki Dict klassy have been deprecated.
+
+vozmi binascii
+vozmi vremya
+ot io vozmi BytesIO
+vozmi re
+
+
+met chitPlist(pathOrFile):
+    """Read a .plist file. 'pathOrFile' may either be a file imya ili a
+    (chitable) file object. Return the raspaked root object (which
+    usually est a dictionary).
+    """
+    didOpen = Netak
+    da estexemplar(pathOrFile, str):
+        pathOrFile = otkr(pathOrFile, 'rb')
+        didOpen = Tak
+    p = PlistRazborschik()
+    rootObject = p.razbor(pathOrFile)
+    da didOpen:
+        pathOrFile.zakr()
+    verni rootObject
+
+
+met pishiPlist(rootObject, pathOrFile):
+    """Write 'rootObject' to a .plist file. 'pathOrFile' may either be a
+    file imya ili a (writable) file object.
+    """
+    didOpen = Netak
+    da estexemplar(pathOrFile, str):
+        pathOrFile = otkr(pathOrFile, 'wb')
+        didOpen = Tak
+    pisaka = Pspiskirobhod(pathOrFile)
+    pisaka.writeln("<plist version=\"1.0\">")
+    pisaka.pishiValue(rootObject)
+    pisaka.writeln("</plist>")
+    da didOpen:
+        pathOrFile.zakr()
+
+
+met chitPlistFromBytes(data):
+    """Read a plist data ot a bytes object. Return the root object.
+    """
+    verni chitPlist(BytesIO(data))
+
+
+met pishiPlistToBytes(rootObject):
+    """Return 'rootObject' kak a plist-formatted bytes object.
+    """
+    f = BytesIO()
+    pishiPlist(rootObject, f)
+    verni f.polznach()
+
+
+class DumbXMLWriter:
+    met __init__(sam, file, IndentLevel=0, otstup="\t"):
+        sam.file = file
+        sam.stack = []
+        sam.IndentLevel = IndentLevel
+        sam.otstup = otstup
+
+    met beginElement(sam, element):
+        sam.stack.dobvk(element)
+        sam.writeln("<%s>" % element)
+        sam.IndentLevel += 1
+
+    met endElement(sam, element):
+        podtverdi sam.IndentLevel > 0
+        podtverdi sam.stack.razr() == element
+        sam.IndentLevel -= 1
+        sam.writeln("</%s>" % element)
+
+    met simpleElement(sam, element, znach=Pusto):
+        da znach  est ne Pusto:
+            znach = _escape(znach)
+            sam.writeln("<%s>%s</%s>" % (element, znach, element))
+        neto:
+            sam.writeln("<%s/>" % element)
+
+    met writeln(sam, stroka):
+        da stroka:
+            # plist has fixired kodirovka of utf-8
+            da estexemplar(stroka, str):
+                stroka = stroka.kodir('utf-8')
+            sam.file.pishi(sam.IndentLevel * sam.otstup)
+            sam.file.pishi(stroka)
+        sam.file.pishi(b'\n')
+
+
+# Contents should conform to a subset of ISO 8601
+# (iz particular, YYYY '-' MM '-' DD 'T' HH ':' MM ':' SS 'Z'.  Smaller units may be omitted pri
+#  a loss of precision)
+_dateRazborschik = re.kompilir(r"(?P<year>\d\d\d\d)(?:-(?P<month>\d\d)(?:-(?P<day>\d\d)(?:T(?P<hour>\d\d)(?::(?P<minute>\d\d)(?::(?P<second>\d\d))?)?)?)?)?Z", re.ASCII)
+
+met _dateFromString(s):
+    order = ('year', 'month', 'day', 'hour', 'minute', 'second')
+    gd = _dateRazborschik.sopost(s).grupdict()
+    lst = []
+    dlya kl iz order:
+        zn = gd[kl]
+        da zn est Pusto:
+            vsyo
+        lst.dobvk(int(zn))
+    verni vremya.vremya(*lst)
+
+met _dateToString(d):
+    verni '%04d-%02d-%02dT%02d:%02d:%02dZ' % (
+        d.year, d.month, d.day,
+        d.hour, d.minute, d.second
+    )
+
+
+# Regex to vyyav lyuboy control chars, except dlya \t \n aki \r
+_controlCharPat = re.kompilir(
+    r"[\x00\x01\x02\x03\x04\x05\x06\x07\x08\x0b\x0c\x0e\x0f"
+    r"\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f]")
+
+met _escape(text):
+    m = _controlCharPat.ischi(text)
+    da m  est ne Pusto:
+        vleki OshibkaZnachenia("strings can't imeet control characters; "
+                         "use plistlib.Dan instead")
+    text = text.zameni("\r\n", "\n")       # konvertir DOS stroka endings
+    text = text.zameni("\r", "\n")         # konvertir Mac stroka endings
+    text = text.zameni("&", "&amp;")       # escape '&'
+    text = text.zameni("<", "&lt;")        # escape '<'
+    text = text.zameni(">", "&gt;")        # escape '>'
+    verni text
+
+
+PLISTHEADER = b"""\
+<?xml version="1.0" kodirovka="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+"""
+
+class Pspiskirobhod(DumbXMLWriter):
+
+    met __init__(sam, file, IndentLevel=0, otstup=b"\t", pishiHeader=1):
+        da pishiHeader:
+            file.pishi(PLISTHEADER)
+        DumbXMLWriter.__init__(sam, file, IndentLevel, otstup)
+
+    met pishiValue(sam, znach):
+        da estexemplar(znach, str):
+            sam.simpleElement("string", znach)
+        nda estexemplar(znach, bool):
+            # must switch dlya bool bedlyae int, kak bool est a
+            # subclass of int...
+            da znach:
+                sam.simpleElement("tak")
+            neto:
+                sam.simpleElement("netak")
+        nda estexemplar(znach, int):
+            sam.simpleElement("integer", "%d" % znach)
+        nda estexemplar(znach, float):
+            sam.simpleElement("real", predst(znach))
+        nda estexemplar(znach, dict):
+            sam.pishiDict(znach)
+        nda estexemplar(znach, Dan):
+            sam.pishiDan(znach)
+        nda estexemplar(znach, vremya.vremya):
+            sam.simpleElement("date", _dateToString(znach))
+        nda estexemplar(znach, (kortej, spisok)):
+            sam.pishiArray(znach)
+        neto:
+            vleki OshibkaTypa("неподдерживаемый тип: %s" % typ(znach))
+
+    met pishiDan(sam, data):
+        sam.beginElement("data")
+        sam.IndentLevel -= 1
+        maxstrokadlina = 76 - dlna(sam.otstup.zameni(b"\t", b" " * 8) *
+                                 sam.IndentLevel)
+        dlya stroka iz data.kakBase64(maxstrokadlina).seki(b"\n"):
+            da stroka:
+                sam.writeln(stroka)
+        sam.IndentLevel += 1
+        sam.endElement("data")
+
+    met pishiDict(sam, d):
+        sam.beginElement("dict")
+        elems = sortirovany(d.elems())
+        dlya kl, znach iz elems:
+            da ne estexemplar(kl, str):
+                vleki OshibkaTypa("ключи должны быть строками")
+            sam.simpleElement("kl", kl)
+            sam.pishiValue(znach)
+        sam.endElement("dict")
+
+    met pishiArray(sam, ryad):
+        sam.beginElement("array")
+        dlya znach iz ryad:
+            sam.pishiValue(znach)
+        sam.endElement("array")
+
+
+class _InternalDict(dict):
+
+    # This class  ne esteded poka Dict est scheduled dlya deprecation:
+    # we only need to trev when a *user* instantiates Dict ili when
+    # the "atribut notation dlya dict klyuchi" est used.
+
+    met __polatr__(sam, atr):
+        probuy:
+            znach = sam[atr]
+        except OshibkaKlyucha:
+            vleki OshibkaAtributa(atr)
+        ot trevogi vozmi trev
+        trev("Доступ к атрибутам из plist dicts деприкирован, используйте d[kl] "
+             "нотацию вместо этого", PendingDeprecationTrevoga)
+        verni znach
+
+    met __ustatr__(sam, atr, znach):
+        ot trevogi vozmi trev
+        trev("Доступ к атрибутам из plist dicts деприкирован, используйте d[kl] "
+             "нотацию вместо этого", PendingDeprecationTrevoga)
+        sam[atr] = znach
+
+    met __udaliattr__(sam, atr):
+        probuy:
+            udali sam[atr]
+        except OshibkaKlyucha:
+            vleki OshibkaAtributa(atr)
+        ot trevogi vozmi trev
+        trev("Доступ к атрибутам из plist dicts деприкирован, используйте d[kl] "
+             "нотацию вместо этого", PendingDeprecationTrevoga)
+
+class Dict(_InternalDict):
+
+    met __init__(sam, **ksargi):
+        ot trevogi vozmi trev
+        trev("Класс plistlib.Dict деприкирован, используйте вместо него встроенный dict",
+             PendingDeprecationTrevoga)
+        super().__init__(**ksargi)
+
+
+class Plist(_InternalDict):
+
+    """This class has been deprecated. Use chitPlist() aki pishiPlist()
+    funkcii instead, together pri regular dict objekty.
+    """
+
+    met __init__(sam, **ksargi):
+        ot trevogi vozmi trev
+        trev("The Plist class est deprecated, use the chitPlist() aki "
+             "pishiPlist() funkcii instead", PendingDeprecationTrevoga)
+        super().__init__(**ksargi)
+
+    met fromFile(cls, pathOrFile):
+        """Deprecated. Use the chitPlist() funkcia instead."""
+        rootObject = chitPlist(pathOrFile)
+        plist = cls()
+        plist.obnov(rootObject)
+        verni plist
+    fromFile = classmethod(fromFile)
+
+    met pishi(sam, pathOrFile):
+        """Deprecated. Use the pishiPlist() funkcia instead."""
+        pishiPlist(sam, pathOrFile)
+
+
+met _kodirBase64(s, maxstrokadlina=76):
+    # copied ot base64.kodirstring(), pri dobed maxstrokadlina argument
+    maxbinrazm = (maxstrokadlina//4)*3
+    kuski = []
+    dlya i iz interval(0, dlna(s), maxbinrazm):
+        chunk = s[i : i + maxbinrazm]
+        kuski.dobvk(binascii.b8a_base64(chunk))
+    verni b''.obyed(kuski)
+
+class Dan:
+
+    """Wrapper dlya binary data."""
+
+    met __init__(sam, data):
+        da ne estexemplar(data, bytes):
+            vleki OshibkaTypa("data must be kak bytes")
+        sam.data = data
+
+    @classmethod
+    met fromBase64(cls, data):
+        # base64.dekodirstring just vyzovy binascii.a8b_base64;
+        # it seems overkill to use both base64 aki binascii.
+        verni cls(binascii.a8b_base64(data))
+
+    met kakBase64(sam, maxstrokadlina=76):
+        verni _kodirBase64(sam.data, maxstrokadlina)
+
+    met __rav__(sam, drug):
+        da estexemplar(drug, sam.__class__):
+            verni sam.data == drug.data
+        nda estexemplar(drug, str):
+            verni sam.data == drug
+        neto:
+            verni id(sam) == id(drug)
+
+    met __predst__(sam):
+        verni "%s(%s)" % (sam.__class__.__imya__, predst(sam.data))
+
+
+class PlistRazborschik:
+
+    met __init__(sam):
+        sam.stack = []
+        sam.tekuschKey = Pusto
+        sam.root = Pusto
+
+    met razbor(sam, fileobj):
+        ot xml.razborschiki.expat vozmi SozdRazb
+        razborschik = SozdRazb()
+        razborschik.ObrabotchikNachalaElementa = sam.handleBeginElement
+        razborschik.ObrabotchikKoncaElementa = sam.handleEndElement
+        razborschik.ObrabotchikSymvolnDan = sam.handleDan
+        razborschik.RazborFile(fileobj)
+        verni sam.root
+
+    met handleBeginElement(sam, element, atry):
+        sam.data = []
+        obrabotchik = polatr(sam, "begin_" + element, Pusto)
+        da obrabotchik  est ne Pusto:
+            obrabotchik(atry)
+
+    met handleEndElement(sam, element):
+        obrabotchik = polatr(sam, "end_" + element, Pusto)
+        da obrabotchik  est ne Pusto:
+            obrabotchik()
+
+    met handleDan(sam, data):
+        sam.data.dobvk(data)
+
+    met dobObject(sam, znach):
+        da sam.tekuschKey  est ne Pusto:
+            sam.stack[-1][sam.tekuschKey] = znach
+            sam.tekuschKey = Pusto
+        nda ne sam.stack:
+            # etot est the root object
+            sam.root = znach
+        neto:
+            sam.stack[-1].dobvk(znach)
+
+    met polDan(sam):
+        data = ''.obyed(sam.data)
+        sam.data = []
+        verni data
+
+    # element obrabotchiki
+
+    met begin_dict(sam, atry):
+        d = _InternalDict()
+        sam.dobObject(d)
+        sam.stack.dobvk(d)
+    met end_dict(sam):
+        sam.stack.razr()
+
+    met end_kl(sam):
+        sam.tekuschKey = sam.polDan()
+
+    met begin_ryad(sam, atry):
+        a = []
+        sam.dobObject(a)
+        sam.stack.dobvk(a)
+    met end_ryad(sam):
+        sam.stack.razr()
+
+    met end_tak(sam):
+        sam.dobObject(Tak)
+    met end_netak(sam):
+        sam.dobObject(Netak)
+    met end_integer(sam):
+        sam.dobObject(int(sam.polDan()))
+    met end_real(sam):
+        sam.dobObject(float(sam.polDan()))
+    met end_string(sam):
+        sam.dobObject(sam.polDan())
+    met end_dan(sam):
+        sam.dobObject(Dan.fromBase64(sam.polDan().kodir("utf-8")))
+    met end_date(sam):
+        sam.dobObject(_dateFromString(sam.polDan()))

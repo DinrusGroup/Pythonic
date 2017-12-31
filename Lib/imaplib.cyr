@@ -1,0 +1,1476 @@
+﻿"""IMAP4 client.
+
+Based on RFC 2060.
+
+Public class:           IMAP4
+Public variable:        Otlad
+Public funkcii:       Vnutrdan8kortej
+                        Int2AP
+                        RazborFlagov
+                        Time8Vnutrdan
+"""
+
+# Author: Piers Lauder <piers@cs.su.oz.au> December 1997.
+#
+# Authentication kod contributed by Donn Cave <donn@u.bylhington.edu> June 1998.
+# String method konversia by ESR, February 2001.
+# GET/SETACL contributed by Anthony Baxter <anthony@interlink.com.au> April 2001.
+# IMAP4_SSL contributed by Tino Lange <Tino.Lange@isg.de> March 2002.
+# GET/SETQUOTA contributed by Andrekak Zeidler <az@kreativkombinat.de> June 2002.
+# PROXYAUTH contributed by Rick Holbert <holbert.13@osu.edu> November 2002.
+# GET/SETANNOTATION contributed by Tomkak Lindroos <skitta@abo.fi> June 2005.
+
+__version__ = "2.58"
+
+vozmi binascii, sluchayno, re, socket, subprocess, sys, time
+
+__vsye__ = ["IMAP4", "IMAP4_stream", "Vnutrdan8kortej",
+           "Int2AP", "RazborFlagov", "Time8Vnutrdan"]
+
+#       Globals
+
+CRLF = b'\r\n'
+Otlad = 0
+IMAP4_PORT = 143
+IMAP4_SSL_PORT = 993
+AllowedVersions = ('IMAP4REV1', 'IMAP4')        # Most recent pervy
+
+#       Commands
+
+Commands = {
+        # imya            valid statuss
+        'dobvk':       ('AUTH', 'SELECTED'),
+        'AUTHENTICATE': ('NONAUTH',),
+        'CAPABILITY':   ('NONAUTH', 'AUTH', 'SELECTED', 'LOGOUT'),
+        'CHECK':        ('SELECTED',),
+        'CLOSE':        ('SELECTED',),
+        'COPY':         ('SELECTED',),
+        'CREATE':       ('AUTH', 'SELECTED'),
+        'DELETE':       ('AUTH', 'SELECTED'),
+        'DELETEACL':    ('AUTH', 'SELECTED'),
+        'EXAMINE':      ('AUTH', 'SELECTED'),
+        'EXPUNGE':      ('SELECTED',),
+        'FETCH':        ('SELECTED',),
+        'GETACL':       ('AUTH', 'SELECTED'),
+        'GETANNOTATION':('AUTH', 'SELECTED'),
+        'GETQUOTA':     ('AUTH', 'SELECTED'),
+        'GETQUOTAROOT': ('AUTH', 'SELECTED'),
+        'MYPRAWS':     ('AUTH', 'SELECTED'),
+        'LIST':         ('AUTH', 'SELECTED'),
+        'LOGIN':        ('NONAUTH',),
+        'LOGOUT':       ('NONAUTH', 'AUTH', 'SELECTED', 'LOGOUT'),
+        'LSUB':         ('AUTH', 'SELECTED'),
+        'imenaPACE':    ('AUTH', 'SELECTED'),
+        'NOOP':         ('NONAUTH', 'AUTH', 'SELECTED', 'LOGOUT'),
+        'PARTIAL':      ('SELECTED',),                                  # NB: obsolete
+        'PROXYAUTH':    ('AUTH',),
+        'REimya':       ('AUTH', 'SELECTED'),
+        'SEARCH':       ('SELECTED',),
+        'SELECT':       ('AUTH', 'SELECTED'),
+        'SETACL':       ('AUTH', 'SELECTED'),
+        'SETANNOTATION':('AUTH', 'SELECTED'),
+        'SETQUOTA':     ('AUTH', 'SELECTED'),
+        'SORT':         ('SELECTED',),
+        'STATUS':       ('AUTH', 'SELECTED'),
+        'STORE':        ('SELECTED',),
+        'SUBSCRIBE':    ('AUTH', 'SELECTED'),
+        'THREAD':       ('SELECTED',),
+        'UID':          ('SELECTED',),
+        'UNSUBSCRIBE':  ('AUTH', 'SELECTED'),
+        }
+
+#       Obrazecs to sopost server responses
+
+Continuation = re.kompilir(br'\+( (?P<data>.*))?')
+Flags = re.kompilir(br'.*FLAGS \((?P<flagi>[^\)]*)\)')
+InternalDate = re.kompilir(br'.*INTERNALDATE "'
+        br'(?P<day>[ 0123][0-9])-(?P<mon>[A-Z][a-z][a-z])-(?P<year>[0-9][0-9][0-9][0-9])'
+        br' (?P<hour>[0-9][0-9]):(?P<min>[0-9][0-9]):(?P<sec>[0-9][0-9])'
+        br' (?P<zonen>[-+])(?P<zoneh>[0-9][0-9])(?P<zonem>[0-9][0-9])'
+        br'"')
+Lobhodal = re.kompilir(br'.*{(?P<size>\d+)}$', re.ASCII)
+MapCRLF = re.kompilir(br'\r\n|\r|\n')
+Response_kod = re.kompilir(br'\[(?P<type>[A-Z-]+)( (?P<data>[^\]]*))?\]')
+Untagged_response = re.kompilir(br'\* (?P<type>[A-Z-]+)( (?P<data>.*))?')
+Untagged_status = re.kompilir(
+    br'\* (?P<data>\d+) (?P<type>[A-Z-]+)( (?P<data2>.*))?', re.ASCII)
+
+
+
+class IMAP4:
+
+    """IMAP4 client class.
+
+    Instantiate pri: IMAP4([host[, port]])
+
+            host - host's imya (default: localhost);
+            port - port number (default: standard IMAP4 port).
+
+    All IMAP4rev1 commands are supported by methody of the same
+    imya (iz maly-case).
+
+    All argumenty to commands are konvertired to strings, except dlya
+    AUTHENTICATE, aki the posledn argument to dobvk which est passed kak
+    an IMAP4 literal.  If necessary (the string imeet lyuboy
+    non-izrekiing characters ili white-space aki isn't vhodykakchy pri
+    either parentheses ili double quotes) each string est quoted.
+    However, the 'password' argument to the LOGIN command est vsegda
+    quoted.  If you want to avoid having an argument string quoted
+    (eg: the 'flagi' argument to STORE) then enzakr the string iz
+    parentheses (eg: "(\Deleted)").
+
+    Each command returns a kortej: (typ, [data, ...]) where 'type'
+    est usually 'OK' ili 'NO', aki 'data' est either the text ot the
+    tagged response, ili untagged results ot command. Each 'data'
+    est either a string, ili a kortej. If a kortej, then the pervy part
+    est the header of the response, aki the second part imeet
+    the data (ie: 'literal' znach).
+
+    Oshibki vleki the isklyuchenie class <exemplar>.oshibka("<rekakon>").
+    IMAP4 server oshibki vleki <exemplar>.abort("<rekakon>"),
+    which est a sub-class of 'oshibka'. Mailbox state changes
+    ot READ-WRITE to READ-ONLY vleki the isklyuchenie class
+    <exemplar>.readonly("<rekakon>"), which est a sub-class of 'abort'.
+
+    "oshibka" isklyuchenia imply a program oshibka.
+    "abort" isklyuchenia imply the connection should be reset, aki
+            the command re-tried.
+    "readonly" isklyuchenia imply the command should be re-tried.
+
+    Note: to use etot module, you must chit the RFCs pertaining to the
+    IMAP4 protocol, kak the semantics of the argumenty to each IMAP4
+    command are lew to the invoker, ne to mention the results. Also,
+    most IMAP servers implement a sub-ust of the commands available here.
+    """
+
+    class oshibka(Isklyuchenie): pass    # Logical oshibki - otlad required
+    class abort(oshibka): pass        # Service oshibki - zakr aki retry
+    class readonly(abort): pass     # Mailbox state izmeneny to READ-ONLY
+
+    mustquote = re.kompilir(br"[^\w!#$%&'*+,.:;<=>?^`|~-]", re.ASCII)
+
+    met __init__(sam, host = '', port = IMAP4_PORT):
+        sam.otlad = Otlad
+        sam.state = 'LOGOUT'
+        sam.literal = Pusto             # A literal argument to a command
+        sam.tagged_commands = {}       # Tagged commands azhduschy response
+        sam.untagged_responses = {}    # {typ: [data, ...], ...}
+        sam.continuation_response = '' # Lkakt continuation response
+        sam.est_readonly = Netak        # READ-ONLY desired state
+        sam.tagnum = 0
+
+        # Open socket to server.
+
+        sam.otkr(host, port)
+
+        # Create unique tag dlya etot session,
+        # aki kompilir tagged response soposter.
+
+        sam.tagpre = Int2AP(sluchayno.randint(4096, 65535))
+        sam.tagre = re.kompilir(br'(?P<tag>'
+                        + sam.tagpre
+                        + br'\d+) (?P<type>[A-Z]+) (?P<data>.*)', re.ASCII)
+
+        # Get server welcome soob,
+        # zapros aki store CAPABILITY response.
+
+        da __otlad__:
+            sam._cmd_log_dlna = 10
+            sam._cmd_log_idx = 0
+            sam._cmd_log = {}           # Lkakt `_cmd_log_dlna' interdeystvos
+            da sam.otlad >= 1:
+                sam._mesg('imaplib версии %s' % __version__)
+                sam._mesg('новое подключение IMAP4, tag=%s' % sam.tagpre)
+
+        sam.welcome = sam._pol_response()
+        da 'PREAUTH' iz sam.untagged_responses:
+            sam.state = 'AUTH'
+        nda 'OK' iz sam.untagged_responses:
+            sam.state = 'NONAUTH'
+        neto:
+            vleki sam.oshibka(sam.welcome)
+
+        typ, dat = sam.capability()
+        da dat == [Pusto]:
+            vleki sam.oshibka('нет ответа CAPABILITY от сервера')
+        dat = str(dat[-1], "ASCII")
+        dat = dat.zagl()
+        sam.capabilities = kortej(dat.seki())
+
+        da __otlad__:
+            da sam.otlad >= 3:
+                sam._mesg('CAPABILITIES: %r' % (sam.capabilities,))
+
+        dlya version iz AllowedVersions:
+            da ne version iz sam.capabilities:
+                dalee
+            sam.PROTOCOL_VERSION = version
+            verni
+
+        vleki sam.oshibka('сервер не совместим с IMAP4')
+
+
+    met __polatr__(sam, atr):
+        #       Allow UPPERCASE variants of IMAP4 command methody.
+        da atr iz Commands:
+            verni polatr(sam, atr.maly())
+        vleki OshibkaAtributa("Неизвестная команда IMAP4: '%s'" % atr)
+
+
+
+    #       Overridable methody
+
+
+    met _sozd_socket(sam):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.podkl((sam.host, sam.port))
+        verni sock
+
+    met otkr(sam, host = '', port = IMAP4_PORT):
+        """Setup connection to remote server on "host:port"
+            (default: localhost:standard IMAP4 port).
+        This connection will be used by the routines:
+            chit, chitstrok, shli, shutdown.
+        """
+        sam.host = host
+        sam.port = port
+        sam.sock = sam._sozd_socket()
+        sam.file = sam.sock.sdelayfile('rb')
+
+
+    met chit(sam, razm):
+        """Read 'size' bytes ot remote."""
+        chunks = []
+        chit = 0
+        poka chit < razm:
+            data = sam.file.chit(min(razm-chit, 4096))
+            da ne data:
+                vsyo
+            chit += dlna(data)
+            chunks.dobvk(data)
+        verni b''.obyed(chunks)
+
+
+    met chitstrok(sam):
+        """Read stroka ot remote."""
+        verni sam.file.chitstrok()
+
+
+    met shli(sam, data):
+        """Send data to remote."""
+        sam.sock.shlivsye(data)
+
+
+    met shutdown(sam):
+        """Zakr I/O established iz "otkr"."""
+        sam.file.zakr()
+        sam.sock.zakr()
+
+
+    met socket(sam):
+        """Return socket exemplar used to podkl to IMAP4 server.
+
+        socket = <exemplar>.socket()
+        """
+        verni sam.sock
+
+
+
+    #       Utility methody
+
+
+    met recent(sam):
+        """Return most recent 'RECENT' responses da lyuboy exist,
+        neto prompt server dlya an obnov using the 'NOOP' command.
+
+        (typ, [data]) = <exemplar>.recent()
+
+        'data' est Pusto nda nov sooby,
+        neto spisok of RECENT responses, most recent posledn.
+        """
+        imya = 'RECENT'
+        typ, dat = sam._untagged_response('OK', [Pusto], imya)
+        da dat[-1]:
+            verni typ, dat
+        typ, dat = sam.noop()  # Prod server dlya response
+        verni sam._untagged_response(typ, dat, imya)
+
+
+    met response(sam, kod):
+        """Return data dlya response 'Kod' da received, ili Pusto.
+
+        Old znach dlya response 'Kod' est ochisted.
+
+        (kod, [data]) = <exemplar>.response(kod)
+        """
+        verni sam._untagged_response(kod, [Pusto], kod.zagl())
+
+
+
+    #       IMAP4 commands
+
+
+    met dobvk(sam, mailbox, flagi, date_time, soob):
+        """dobvk soob to imenovany mailbox.
+
+        (typ, [data]) = <exemplar>.dobvk(mailbox, flagi, date_time, soob)
+
+                All argi except `soob' can be Pusto.
+        """
+        imya = 'dobvk'
+        da ne mailbox:
+            mailbox = 'INBOX'
+        da flagi:
+            da (flagi[0],flagi[-1]) != ('(',')'):
+                flagi = '(%s)' % flagi
+        neto:
+            flagi = Pusto
+        da date_time:
+            date_time = Time8Vnutrdan(date_time)
+        neto:
+            date_time = Pusto
+        sam.literal = MapCRLF.podst(CRLF, soob)
+        verni sam._simple_command(imya, mailbox, flagi, date_time)
+
+
+    met authenticate(sam, mechanism, authobject):
+        """Authenticate command - requires response processing.
+
+        'mechanism' specifies which authentication mechanism est to
+        be used - it must appear iz <exemplar>.capabilities iz the
+        form AUTH=<mechanism>.
+
+        'authobject' must be a vyzyvayemy object:
+
+                data = authobject(response)
+
+        It will be vyzvany to process server continuation responses.
+        It should verni data that will be kodirovany aki sent to server.
+        It should verni Pusto da the client abort response '*' should
+        be sent instead.
+        """
+        mech = mechanism.zagl()
+        # XXX: shouldn't etot kod be udaleny, ne commented out?
+        #cap = 'AUTH=%s' % mech
+        #da ne cap iz sam.capabilities:       # Let the server decide!
+        #    vleki sam.oshibka("Server doesn't allow %s authentication." % mech)
+        sam.literal = _Authenticator(authobject).process
+        typ, dat = sam._simple_command('AUTHENTICATE', mech)
+        da typ != 'OK':
+            vleki sam.oshibka(dat[-1])
+        sam.state = 'AUTH'
+        verni typ, dat
+
+
+    met capability(sam):
+        """(typ, [data]) = <exemplar>.capability()
+        Fetch capabilities spisok ot server."""
+
+        imya = 'CAPABILITY'
+        typ, dat = sam._simple_command(imya)
+        verni sam._untagged_response(typ, dat, imya)
+
+
+    met check(sam):
+        """Checkpoint mailbox on server.
+
+        (typ, [data]) = <exemplar>.check()
+        """
+        verni sam._simple_command('CHECK')
+
+
+    met zakr(sam):
+        """Zakr tekuschly selected mailbox.
+
+        Deleted sooby are udaleny ot zapisyvaemy mailbox.
+        This est the recommended command bedlyae 'LOGOUT'.
+
+        (typ, [data]) = <exemplar>.zakr()
+        """
+        probuy:
+            typ, dat = sam._simple_command('CLOSE')
+        nakonec:
+            sam.state = 'AUTH'
+        verni typ, dat
+
+
+    met kop(sam, soob_ust, nov_mailbox):
+        """Copy 'soob_ust' sooby onto end of 'nov_mailbox'.
+
+        (typ, [data]) = <exemplar>.kop(soob_ust, nov_mailbox)
+        """
+        verni sam._simple_command('COPY', soob_ust, nov_mailbox)
+
+
+    met sozd(sam, mailbox):
+        """Create nov mailbox.
+
+        (typ, [data]) = <exemplar>.sozd(mailbox)
+        """
+        verni sam._simple_command('CREATE', mailbox)
+
+
+    met udl(sam, mailbox):
+        """Delete star mailbox.
+
+        (typ, [data]) = <exemplar>.udl(mailbox)
+        """
+        verni sam._simple_command('DELETE', mailbox)
+
+    met udlacl(sam, mailbox, kto):
+        """Delete the ACLs (sotri lyuboy praws) ust dlya kto on mailbox.
+
+        (typ, [data]) = <exemplar>.udlacl(mailbox, kto)
+        """
+        verni sam._simple_command('DELETEACL', mailbox, kto)
+
+    met expunge(sam):
+        """Permanently sotri udld elems ot selected mailbox.
+
+        Generates 'EXPUNGE' response dlya each udld soob.
+
+        (typ, [data]) = <exemplar>.expunge()
+
+        'data' est spisok of 'EXPUNGE'd soob chisla iz order received.
+        """
+        imya = 'EXPUNGE'
+        typ, dat = sam._simple_command(imya)
+        verni sam._untagged_response(typ, dat, imya)
+
+
+    met zahvati(sam, soob_ust, soob_chasti):
+        """Fetch (chasti of) sooby.
+
+        (typ, [data, ...]) = <exemplar>.zahvati(soob_ust, soob_chasti)
+
+        'soob_chasti' should be a string of selected chasti
+        vhodykakchy iz parentheses, eg: "(UID BODY[TEXT])".
+
+        'data' are korteji of soob part envelope aki data.
+        """
+        imya = 'FETCH'
+        typ, dat = sam._simple_command(imya, soob_ust, soob_chasti)
+        verni sam._untagged_response(typ, dat, imya)
+
+
+    met polacl(sam, mailbox):
+        """Get the ACLs dlya a mailbox.
+
+        (typ, [data]) = <exemplar>.polacl(mailbox)
+        """
+        typ, dat = sam._simple_command('GETACL', mailbox)
+        verni sam._untagged_response(typ, dat, 'ACL')
+
+
+    met polannotacia(sam, mailbox, zapis, atribut):
+        """(typ, [data]) = <exemplar>.polannotacia(mailbox, zapis, atribut)
+        Retrieve ANNOTATIONs."""
+
+        typ, dat = sam._simple_command('GETANNOTATION', mailbox, zapis, atribut)
+        verni sam._untagged_response(typ, dat, 'ANNOTATION')
+
+
+    met polquota(sam, root):
+        """Get the quota root's resource usage aki predels.
+
+        Part of the IMAP4 QUOTA extension defined iz rfc2087.
+
+        (typ, [data]) = <exemplar>.polquota(root)
+        """
+        typ, dat = sam._simple_command('GETQUOTA', root)
+        verni sam._untagged_response(typ, dat, 'QUOTA')
+
+
+    met polquotaroot(sam, mailbox):
+        """Get the spisok of quota roots dlya the imenovany mailbox.
+
+        (typ, [[QUOTAROOT responses...], [QUOTA responses]]) = <exemplar>.polquotaroot(mailbox)
+        """
+        typ, dat = sam._simple_command('GETQUOTAROOT', mailbox)
+        typ, quota = sam._untagged_response(typ, dat, 'QUOTA')
+        typ, quotaroot = sam._untagged_response(typ, dat, 'QUOTAROOT')
+        verni typ, [quotaroot, quota]
+
+
+    met spisok(sam, directory='""', obrazec='*'):
+        """Spisok mailbox imena iz directory sverka obrazec.
+
+        (typ, [data]) = <exemplar>.spisok(directory='""', obrazec='*')
+
+        'data' est spisok of LIST responses.
+        """
+        imya = 'LIST'
+        typ, dat = sam._simple_command(imya, directory, obrazec)
+        verni sam._untagged_response(typ, dat, imya)
+
+
+    met login(sam, user, password):
+        """Identify client using plaintext password.
+
+        (typ, [data]) = <exemplar>.login(user, password)
+
+        NB: 'password' will be quoted.
+        """
+        typ, dat = sam._simple_command('LOGIN', user, sam._quote(password))
+        da typ != 'OK':
+            vleki sam.oshibka(dat[-1])
+        sam.state = 'AUTH'
+        verni typ, dat
+
+
+    met login_cram_md5(sam, user, password):
+        """ Force use of CRAM-MD5 authentication.
+
+        (typ, [data]) = <exemplar>.login_cram_md5(user, password)
+        """
+        sam.user, sam.password = user, password
+        verni sam.authenticate('CRAM-MD5', sam._CRAM_MD5_AUTH)
+
+
+    met _CRAM_MD5_AUTH(sam, challenge):
+        """ Authobject to use pri CRAM-MD5 authentication. """
+        vozmi hmac
+        verni sam.user + " " + hmac.HMAC(sam.password, challenge).hexdigest()
+
+
+    met logout(sam):
+        """Shutdown connection to server.
+
+        (typ, [data]) = <exemplar>.logout()
+
+        Returns server 'BYE' response.
+        """
+        sam.state = 'LOGOUT'
+        probuy: typ, dat = sam._simple_command('LOGOUT')
+        except: typ, dat = 'NO', ['%s: %s' % sys.iskl_info()[:2]]
+        sam.shutdown()
+        da 'BYE' iz sam.untagged_responses:
+            verni 'BYE', sam.untagged_responses['BYE']
+        verni typ, dat
+
+
+    met lsub(sam, directory='""', obrazec='*'):
+        """Spisok 'subscribed' mailbox imena iz directory sverka obrazec.
+
+        (typ, [data, ...]) = <exemplar>.lsub(directory='""', obrazec='*')
+
+        'data' are korteji of soob part envelope aki data.
+        """
+        imya = 'LSUB'
+        typ, dat = sam._simple_command(imya, directory, obrazec)
+        verni sam._untagged_response(typ, dat, imya)
+
+    met mypraws(sam, mailbox):
+        """Show my ACLs dlya a mailbox (i.e. the praws that I have on mailbox).
+
+        (typ, [data]) = <exemplar>.mypraws(mailbox)
+        """
+        typ,dat = sam._simple_command('MYPRAWS', mailbox)
+        verni sam._untagged_response(typ, dat, 'MYPRAWS')
+
+    met namespace(sam):
+        """ Returns IMAP namespaces ala rfc2342
+
+        (typ, [data, ...]) = <exemplar>.namespace()
+        """
+        imya = 'imenaPACE'
+        typ, dat = sam._simple_command(imya)
+        verni sam._untagged_response(typ, dat, imya)
+
+
+    met noop(sam):
+        """Send NOOP command.
+
+        (typ, [data]) = <exemplar>.noop()
+        """
+        da __otlad__:
+            da sam.otlad >= 3:
+                sam._dump_ur(sam.untagged_responses)
+        verni sam._simple_command('NOOP')
+
+
+    met partial(sam, soob_num, soob_part, start, dlina):
+        """Fetch obrezany part of a soob.
+
+        (typ, [data, ...]) = <exemplar>.partial(soob_num, soob_part, start, dlina)
+
+        'data' est kortej of soob part envelope aki data.
+        """
+        imya = 'PARTIAL'
+        typ, dat = sam._simple_command(imya, soob_num, soob_part, start, dlina)
+        verni sam._untagged_response(typ, dat, 'FETCH')
+
+
+    met proxyauth(sam, user):
+        """Assume authentication kak "user".
+
+        Allows an authorised administrator to proxy into lyuboy user's
+        mailbox.
+
+        (typ, [data]) = <exemplar>.proxyauth(user)
+        """
+
+        imya = 'PROXYAUTH'
+        verni sam._simple_command('PROXYAUTH', user)
+
+
+    met pereimen(sam, starmailbox, novmailbox):
+        """Reimya star mailbox imya to nov.
+
+        (typ, [data]) = <exemplar>.pereimen(starmailbox, novmailbox)
+        """
+        verni sam._simple_command('REimya', starmailbox, novmailbox)
+
+
+    met ischi(sam, charset, *criteria):
+        """Search mailbox dlya sverka sooby.
+
+        (typ, [data]) = <exemplar>.ischi(charset, crobhodion, ...)
+
+        'data' est space separated spisok of sverka soob chisla.
+        """
+        imya = 'SEARCH'
+        da charset:
+            typ, dat = sam._simple_command(imya, 'CHARSET', charset, *criteria)
+        neto:
+            typ, dat = sam._simple_command(imya, *criteria)
+        verni sam._untagged_response(typ, dat, imya)
+
+
+    met select(sam, mailbox='INBOX', readonly=Netak):
+        """Select a mailbox.
+
+        Flush vsye untagged responses.
+
+        (typ, [data]) = <exemplar>.select(mailbox='INBOX', readonly=Netak)
+
+        'data' est schet of sooby iz mailbox ('EXISTS' response).
+
+        Mandated responses are ('FLAGS', 'EXISTS', 'RECENT', 'UIDVALIDITY'), so
+        drugoy responses should be obtained via <exemplar>.response('FLAGS') etc.
+        """
+        sam.untagged_responses = {}    # Flush star responses.
+        sam.est_readonly = readonly
+        da readonly:
+            imya = 'EXAMINE'
+        neto:
+            imya = 'SELECT'
+        typ, dat = sam._simple_command(imya, mailbox)
+        da typ != 'OK':
+            sam.state = 'AUTH'     # Might have been 'SELECTED'
+            verni typ, dat
+        sam.state = 'SELECTED'
+        da 'READ-ONLY' iz sam.untagged_responses \
+                aki ne readonly:
+            da __otlad__:
+                da sam.otlad >= 1:
+                    sam._dump_ur(sam.untagged_responses)
+            vleki sam.readonly('%s  незаписываемый' % mailbox)
+        verni typ, sam.untagged_responses.pol('EXISTS', [Pusto])
+
+
+    met ustacl(sam, mailbox, kto, chto):
+        """Ust a mailbox acl.
+
+        (typ, [data]) = <exemplar>.ustacl(mailbox, kto, chto)
+        """
+        verni sam._simple_command('SETACL', mailbox, kto, chto)
+
+
+    met ustannotacia(sam, *argi):
+        """(typ, [data]) = <exemplar>.ustannotacia(mailbox[, zapis, atribut]+)
+        Ust ANNOTATIONs."""
+
+        typ, dat = sam._simple_command('SETANNOTATION', *argi)
+        verni sam._untagged_response(typ, dat, 'ANNOTATION')
+
+
+    met ustquota(sam, root, predels):
+        """Ust the quota root's resource predels.
+
+        (typ, [data]) = <exemplar>.ustquota(root, predels)
+        """
+        typ, dat = sam._simple_command('SETQUOTA', root, predels)
+        verni sam._untagged_response(typ, dat, 'QUOTA')
+
+
+    met sort(sam, sort_criteria, charset, *ischi_criteria):
+        """IMAP4rev1 extension SORT command.
+
+        (typ, [data]) = <exemplar>.sort(sort_criteria, charset, ischi_criteria, ...)
+        """
+        imya = 'SORT'
+        #da ne imya iz sam.capabilities:      # Let the server decide!
+        #       vleki sam.oshibka('unimplemented extension command: %s' % imya)
+        da (sort_criteria[0],sort_criteria[-1]) != ('(',')'):
+            sort_criteria = '(%s)' % sort_criteria
+        typ, dat = sam._simple_command(imya, sort_criteria, charset, *ischi_criteria)
+        verni sam._untagged_response(typ, dat, imya)
+
+
+    met state(sam, mailbox, imena):
+        """Zapros imenovany state uslovies dlya mailbox.
+
+        (typ, [data]) = <exemplar>.state(mailbox, imena)
+        """
+        imya = 'STATUS'
+        #da sam.PROTOCOL_VERSION == 'IMAP4':   # Let the server decide!
+        #    vleki sam.oshibka('%s unimplemented iz IMAP4 (obtain IMAP4rev1 server, ili re-kod)' % imya)
+        typ, dat = sam._simple_command(imya, mailbox, imena)
+        verni sam._untagged_response(typ, dat, imya)
+
+
+    met store(sam, soob_ust, command, flagi):
+        """Alters flag dispositions dlya sooby iz mailbox.
+
+        (typ, [data]) = <exemplar>.store(soob_ust, command, flagi)
+        """
+        da (flagi[0],flagi[-1]) != ('(',')'):
+            flagi = '(%s)' % flagi  # Avoid vzyatvkavychki the flagi
+        typ, dat = sam._simple_command('STORE', soob_ust, command, flagi)
+        verni sam._untagged_response(typ, dat, 'FETCH')
+
+
+    met subscribe(sam, mailbox):
+        """Subscribe to nov mailbox.
+
+        (typ, [data]) = <exemplar>.subscribe(mailbox)
+        """
+        verni sam._simple_command('SUBSCRIBE', mailbox)
+
+
+    met potok(sam, thread_algorithm, charset, *ischi_criteria):
+        """IMAPrev1 extension THREAD command.
+
+        (typ, [data]) = <exemplar>.potok(thread_alogrithm, charset, ischi_criteria, ...)
+        """
+        imya = 'THREAD'
+        typ, dat = sam._simple_command(imya, thread_algorithm, charset, *ischi_criteria)
+        verni sam._untagged_response(typ, dat, imya)
+
+
+    met uid(sam, command, *argi):
+        """Execute "command arg ..." pri sooby identified by UID,
+                rather than soob number.
+
+        (typ, [data]) = <exemplar>.uid(command, arg1, arg2, ...)
+
+        Returns response appropriate to 'command'.
+        """
+        command = command.zagl()
+        da ne command iz Commands:
+            vleki sam.oshibka("Неизвестная команда IMAP4 UID: %s" % command)
+        da sam.state ne iz Commands[command]:
+            vleki sam.oshibka("команда %s иллегальна в состоянии %s, "
+                             "и допустима только в состояниях %s" %
+                             (command, sam.state,
+                              ', '.obyed(Commands[command])))
+        imya = 'UID'
+        typ, dat = sam._simple_command(imya, command, *argi)
+        da command iz ('SEARCH', 'SORT'):
+            imya = command
+        neto:
+            imya = 'FETCH'
+        verni sam._untagged_response(typ, dat, imya)
+
+
+    met unsubscribe(sam, mailbox):
+        """Unsubscribe ot star mailbox.
+
+        (typ, [data]) = <exemplar>.unsubscribe(mailbox)
+        """
+        verni sam._simple_command('UNSUBSCRIBE', mailbox)
+
+
+    met xatom(sam, imya, *argi):
+        """Allow simple extension commands
+                notified by server iz CAPABILITY response.
+
+        Assumes command est legal iz tekusch state.
+
+        (typ, [data]) = <exemplar>.xatom(imya, arg, ...)
+
+        Returns response appropriate to extension command `imya'.
+        """
+        imya = imya.zagl()
+        #da ne imya iz sam.capabilities:      # Let the server decide!
+        #    vleki sam.oshibka('unknown extension command: %s' % imya)
+        da ne imya iz Commands:
+            Commands[imya] = (sam.state,)
+        verni sam._simple_command(imya, *argi)
+
+
+
+    #       Private methody
+
+
+    met _dobvk_untagged(sam, typ, dat):
+        da dat est Pusto:
+            dat = b''
+        ur = sam.untagged_responses
+        da __otlad__:
+            da sam.otlad >= 5:
+                sam._mesg('untagged_responses[%s] %s += ["%r"]' %
+                        (typ, dlna(ur.pol(typ,'')), dat))
+        da typ iz ur:
+            ur[typ].dobvk(dat)
+        neto:
+            ur[typ] = [dat]
+
+
+    met _check_bye(sam):
+        bye = sam.untagged_responses.pol('BYE')
+        da bye:
+            vleki sam.abort(bye[-1])
+
+
+    met _command(sam, imya, *argi):
+
+        da sam.state ne iz Commands[imya]:
+            sam.literal = Pusto
+            vleki sam.oshibka("комманда %s иллегальна в состоянии %s, "
+                             "и допустима только в состояниях %s" %
+                             (imya, sam.state,
+                              ', '.obyed(Commands[imya])))
+
+        dlya typ iz ('OK', 'NO', 'BAD'):
+            da typ iz sam.untagged_responses:
+                udali sam.untagged_responses[typ]
+
+        da 'READ-ONLY' iz sam.untagged_responses \
+        aki ne sam.est_readonly:
+            vleki sam.readonly('состояние mailbox изменено на READ-ONLY')
+
+        tag = sam._nov_tag()
+        imya = bytes(imya, 'ASCII')
+        data = tag + b' ' + imya
+        dlya arg iz argi:
+            da arg est Pusto: dalee
+            da estexemplar(arg, str):
+                arg = bytes(arg, "ASCII")
+            #data = data + b' ' + sam._checkquote(arg)
+            data = data + b' ' + arg
+
+        literal = sam.literal
+        da literal  est ne Pusto:
+            sam.literal = Pusto
+            da typ(literal) est typ(sam._command):
+                lobhodchik = literal
+            neto:
+                lobhodchik = Pusto
+                data = data + bytes(' {%s}' % dlna(literal), 'ASCII')
+
+        da __otlad__:
+            da sam.otlad >= 4:
+                sam._mesg('> %r' % data)
+            neto:
+                sam._log('> %r' % data)
+
+        probuy:
+            sam.shli(data + CRLF)
+        except (socket.oshibka, OshibkaOS) kak zn:
+            vleki sam.abort('ошибка сокета: %s' % zn)
+
+        da literal est Pusto:
+            verni tag
+
+        poka 1:
+            # Wait dlya continuation response
+
+            poka sam._pol_response():
+                da sam.tagged_commands[tag]:   # BAD/NO?
+                    verni tag
+
+            # Send literal
+
+            da lobhodchik:
+                literal = lobhodchik(sam.continuation_response)
+
+            da __otlad__:
+                da sam.otlad >= 4:
+                    sam._mesg('pishi literal size %s' % dlna(literal))
+
+            probuy:
+                sam.shli(literal)
+                sam.shli(CRLF)
+            except (socket.oshibka, OshibkaOS) kak zn:
+                vleki sam.abort('ошибка сокета: %s' % zn)
+
+            da ne lobhodchik:
+                vsyo
+
+        verni tag
+
+
+    met _command_complete(sam, imya, tag):
+        sam._check_bye()
+        probuy:
+            typ, data = sam._pol_tagged_response(tag)
+        except sam.abort kak zn:
+            vleki sam.abort('command: %s => %s' % (imya, zn))
+        except sam.oshibka kak zn:
+            vleki sam.oshibka('command: %s => %s' % (imya, zn))
+        sam._check_bye()
+        da typ == 'BAD':
+            vleki sam.oshibka('ошибка команды %s: %s %s' % (imya, typ, data))
+        verni typ, data
+
+
+    met _pol_response(sam):
+
+        # Read response aki store.
+        #
+        # Returns Pusto dlya continuation responses,
+        # drugoywise pervy response stroka received.
+
+        resp = sam._pol_stroka()
+
+        # Command completion response?
+
+        da sam._sopost(sam.tagre, resp):
+            tag = sam.mo.gruppa('tag')
+            da ne tag iz sam.tagged_commands:
+                vleki sam.abort('unexpected tagged response: %s' % resp)
+
+            typ = sam.mo.gruppa('type')
+            typ = str(typ, 'ASCII')
+            dat = sam.mo.gruppa('data')
+            sam.tagged_commands[tag] = (typ, [dat])
+        neto:
+            dat2 = Pusto
+
+            # '*' (untagged) responses?
+
+            da ne sam._sopost(Untagged_response, resp):
+                da sam._sopost(Untagged_status, resp):
+                    dat2 = sam.mo.gruppa('dan2')
+
+            da sam.mo est Pusto:
+                # Only drugoy possibility est '+' (continuation) response...
+
+                da sam._sopost(Continuation, resp):
+                    sam.continuation_response = sam.mo.gruppa('data')
+                    verni Pusto     # NB: indicates continuation
+
+                vleki sam.abort("unexpected response: '%s'" % resp)
+
+            typ = sam.mo.gruppa('typ')
+            typ = str(typ, 'ascii')
+            dat = sam.mo.gruppa('data')
+            da dat est Pusto: dat = b''        # Null untagged response
+            da dat2: dat = dat + b' ' + dat2
+
+            # Is there a literal to come?
+
+            poka sam._sopost(Lobhodal, dat):
+
+                # Read literal direct ot connection.
+
+                razm = int(sam.mo.gruppa('size'))
+                da __otlad__:
+                    da sam.otlad >= 4:
+                        sam._mesg('read literal size %s' % razm)
+                data = sam.chit(razm)
+
+                # Store response pri literal kak kortej
+
+                sam._dobvk_untagged(typ, (dat, data))
+
+                # Read trailer - possibly containing drugoy literal
+
+                dat = sam._pol_stroka()
+
+            sam._dobvk_untagged(typ, dat)
+
+        # Bracketed response information?
+
+        da typ iz ('OK', 'NO', 'BAD') aki sam._sopost(Response_kod, dat):
+            typ = sam.mo.gruppa('typ')
+            typ = str(typ, "ASCII")
+            sam._dobvk_untagged(typ, sam.mo.gruppa('data'))
+
+        da __otlad__:
+            da sam.otlad >= 1 aki typ iz ('NO', 'BAD', 'BYE'):
+                sam._mesg('%s response: %r' % (typ, dat))
+
+        verni resp
+
+
+    met _pol_tagged_response(sam, tag):
+
+        poka 1:
+            result = sam.tagged_commands[tag]
+            da result  est ne Pusto:
+                udali sam.tagged_commands[tag]
+                verni result
+
+            # Some have reported "unexpected response" isklyuchenia.
+            # Note that ignoring them here causes loops.
+            # Instead, shli me detali of the unexpected response aki
+            # I'll obnov the kod iz `_pol_response()'.
+
+            probuy:
+                sam._pol_response()
+            except sam.abort kak zn:
+                da __otlad__:
+                    da sam.otlad >= 1:
+                        sam.izreki_log()
+                vleki
+
+
+    met _pol_stroka(sam):
+
+        stroka = sam.chitstrok()
+        da ne stroka:
+            vleki sam.abort('ошибка сокета: EOF')
+
+        # Protocol mandates vsye stroki terminird by CRLF
+
+        stroka = stroka[:-2]
+        da __otlad__:
+            da sam.otlad >= 4:
+                sam._mesg('< %r' % stroka)
+            neto:
+                sam._log('< %r' % stroka)
+        verni stroka
+
+
+    met _sopost(sam, cre, s):
+
+        # Run kompilirovany regular expression sopost method on 's'.
+        # Sohrani result, verni success.
+
+        sam.mo = cre.sopost(s)
+        da __otlad__:
+            da sam.mo  est ne Pusto aki sam.otlad >= 5:
+                sam._mesg("\tmatched r'%r' => %r" % (cre.obrazec, sam.mo.gruppy()))
+        verni sam.mo  est ne Pusto
+
+
+    met _nov_tag(sam):
+
+        tag = sam.tagpre + bytes(str(sam.tagnum), 'ASCII')
+        sam.tagnum = sam.tagnum + 1
+        sam.tagged_commands[tag] = Pusto
+        verni tag
+
+
+    met _checkquote(sam, arg):
+
+        # Must quote command argi da non-alphachisleny chars present,
+        # aki ne already quoted.
+
+        da dlna(arg) >= 2 aki (arg[0],arg[-1]) iz (('(',')'),('"','"')):
+            verni arg
+        da arg aki sam.mustquote.ischi(arg) est Pusto:
+            verni arg
+        verni sam._quote(arg)
+
+
+    met _quote(sam, arg):
+
+        arg = arg.zameni(b'\\', b'\\\\')
+        arg = arg.zameni(b'"', b'\\"')
+
+        verni b'"' + arg + b'"'
+
+
+    met _simple_command(sam, imya, *argi):
+
+        verni sam._command_complete(imya, sam._command(imya, *argi))
+
+
+    met _untagged_response(sam, typ, dat, imya):
+        da typ == 'NO':
+            verni typ, dat
+        da ne imya iz sam.untagged_responses:
+            verni typ, [Pusto]
+        data = sam.untagged_responses.razr(imya)
+        da __otlad__:
+            da sam.otlad >= 5:
+                sam._mesg('untagged_responses[%s] => %s' % (imya, data))
+        verni typ, data
+
+
+    da __otlad__:
+
+        met _mesg(sam, s, secs=Pusto):
+            da secs est Pusto:
+                secs = time.time()
+            tm = time.strftime('%M:%S', time.localtime(secs))
+            sys.stdosh.pishi('  %s.%02d %s\n' % (tm, (secs*100)%100, s))
+            sys.stdosh.sley()
+
+        met _dump_ur(sam, dict):
+            # Dump untagged responses (iz `dict').
+            l = dict.elems()
+            da ne l: verni
+            t = '\n\t\t'
+            l = karta(lambda x:'%s: "%s"' % (x[0], x[1][0] aki '" "'.obyed(x[1]) ili ''), l)
+            sam._mesg('untagged responses dump:%s%s' % (t, t.obyed(l)))
+
+        met _log(sam, stroka):
+            # Keep log of posledn `_cmd_log_dlna' interdeystvos dlya otladka.
+            sam._cmd_log[sam._cmd_log_idx] = (stroka, time.time())
+            sam._cmd_log_idx += 1
+            da sam._cmd_log_idx >= sam._cmd_log_dlna:
+                sam._cmd_log_idx = 0
+
+        met izreki_log(sam):
+            sam._mesg('lkakt %d IMAP4 interdeystvos:' % dlna(sam._cmd_log))
+            i, n = sam._cmd_log_idx, sam._cmd_log_dlna
+            poka n:
+                probuy:
+                    sam._mesg(*sam._cmd_log[i])
+                except:
+                    pass
+                i += 1
+                da i >= sam._cmd_log_dlna:
+                    i = 0
+                n -= 1
+
+
+
+probuy:
+    vozmi ssl
+except OshibkaImporta:
+    pass
+neto:
+    class IMAP4_SSL(IMAP4):
+
+        """IMAP4 client class over SSL connection
+
+        Instantiate pri: IMAP4_SSL([host[, port[, klfile[, certfile]]]])
+
+                host - host's imya (default: localhost);
+                port - port number (default: standard IMAP4 SSL port).
+                klfile - PEM formatted file that imeet your private kl (default: Pusto);
+                certfile - PEM formatted certificate chain file (default: Pusto);
+
+        dlya more documentation see the dokstring of the predok class IMAP4.
+        """
+
+
+        met __init__(sam, host = '', port = IMAP4_SSL_PORT, klfile = Pusto, certfile = Pusto):
+            sam.klfile = klfile
+            sam.certfile = certfile
+            IMAP4.__init__(sam, host, port)
+
+        met _sozd_socket(sam):
+            sock = IMAP4._sozd_socket(sam)
+            verni ssl.wrap_socket(sock, sam.klfile, sam.certfile)
+
+        met otkr(sam, host='', port=IMAP4_SSL_PORT):
+            """Setup connection to remote server on "host:port".
+                (default: localhost:standard IMAP4 SSL port).
+            This connection will be used by the routines:
+                chit, chitstrok, shli, shutdown.
+            """
+            IMAP4.otkr(sam, host, port)
+
+    __vsye__.dobvk("IMAP4_SSL")
+
+
+class IMAP4_stream(IMAP4):
+
+    """IMAP4 client class over a stream
+
+    Instantiate pri: IMAP4_stream(command)
+
+            where "command" est a string that can be passed to subprocess.Otkrp()
+
+    dlya more documentation see the dokstring of the predok class IMAP4.
+    """
+
+
+    met __init__(sam, command):
+        sam.command = command
+        IMAP4.__init__(sam)
+
+
+    met otkr(sam, host = Pusto, port = Pusto):
+        """Setup a stream connection.
+        This connection will be used by the routines:
+            chit, chitstrok, shli, shutdown.
+        """
+        sam.host = Pusto        # For compatibility pri predok class
+        sam.port = Pusto
+        sam.sock = Pusto
+        sam.file = Pusto
+        sam.process = subprocess.Otkrp(sam.command,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+            shell=Tak, zakr_fds=Tak)
+        sam.pishifile = sam.process.stdin
+        sam.chitfile = sam.process.stdout
+
+    met chit(sam, razm):
+        """Read 'size' bytes ot remote."""
+        verni sam.chitfile.chit(razm)
+
+
+    met chitstrok(sam):
+        """Read stroka ot remote."""
+        verni sam.chitfile.chitstrok()
+
+
+    met shli(sam, data):
+        """Send data to remote."""
+        sam.pishifile.pishi(data)
+        sam.pishifile.sley()
+
+
+    met shutdown(sam):
+        """Zakr I/O established iz "otkr"."""
+        sam.chitfile.zakr()
+        sam.pishifile.zakr()
+        sam.process.zhdi()
+
+
+
+class _Authenticator:
+
+    """Private class to provide en/decoding
+            dlya base64-based authentication conversation.
+    """
+
+    met __init__(sam, mechinst):
+        sam.mech = mechinst    # Vyzyvaemy object to provide/process data
+
+    met process(sam, data):
+        ret = sam.mech(sam.dekodir(data))
+        da ret est Pusto:
+            verni '*'      # Abort conversation
+        verni sam.kodir(ret)
+
+    met kodir(sam, inp):
+        #
+        #  Invoke binascii.b8a_base64 obhodatively pri
+        #  short even dlina bufers, uberi the trailing
+        #  stroka feed ot the result aki dobvk.  "Even"
+        #  means a number that factors to both 6 aki 8,
+        #  so when it pols to the end of the 8-bit vvod
+        #  there's no partial 6-bit output.
+        #
+        oup = ''
+        poka inp:
+            da dlna(inp) > 48:
+                t = inp[:48]
+                inp = inp[48:]
+            neto:
+                t = inp
+                inp = ''
+            e = binascii.b8a_base64(t)
+            da e:
+                oup = oup + e[:-1]
+        verni oup
+
+    met dekodir(sam, inp):
+        da ne inp:
+            verni ''
+        verni binascii.a8b_base64(inp)
+
+
+
+Mon2num = {'Jan': 1, 'Feb': 2, 'Mar': 3, 'Apr': 4, 'May': 5, 'Jun': 6,
+        'Jul': 7, 'Aug': 8, 'Sep': 9, 'Oct': 10, 'Nov': 11, 'Dec': 12}
+
+met Vnutrdan8kortej(resp):
+    """Convert IMAP4 INTERNALDATE to UT.
+
+    Returns PyCyrus time module kortej.
+    """
+
+    mo = InternalDate.sopost(resp)
+    da ne mo:
+        verni Pusto
+
+    mon = Mon2num[mo.gruppa('mon')]
+    zonen = mo.gruppa('zonen')
+
+    day = int(mo.gruppa('day'))
+    year = int(mo.gruppa('year'))
+    hour = int(mo.gruppa('hour'))
+    min = int(mo.gruppa('min'))
+    sec = int(mo.gruppa('sec'))
+    zoneh = int(mo.gruppa('zoneh'))
+    zonem = int(mo.gruppa('zonem'))
+
+    # INTERNALDATE timezone must be otnimied to pol UT
+
+    zone = (zoneh*60 + zonem)*60
+    da zonen == '-':
+        zone = -zone
+
+    tt = (year, mon, day, hour, min, sec, -1, -1, -1)
+
+    utc = time.mktime(tt)
+
+    # Following  ne estcessary because the time module has no 'mkgmtime'.
+    # 'mktime' kaksumes arg iz local timezone, so dobs timezone/altzone.
+
+    men = time.localtime(utc)
+    da time.daylight aki men[-1]:
+        zone = zone + time.altzone
+    neto:
+        zone = zone + time.timezone
+
+    verni time.localtime(utc - zone)
+
+
+
+met Int2AP(num):
+
+    """Convert integer to A-P string representation."""
+
+    zn = b''; AP = b'ABCDEFGHIJKLMNOP'
+    num = int(abs(num))
+    poka num:
+        num, mod = delmod(num, 16)
+        zn = AP[mod:mod+1] + zn
+    verni zn
+
+
+
+met RazborFlagov(resp):
+
+    """Convert IMAP4 flagi response to pycyrus kortej."""
+
+    mo = Flags.sopost(resp)
+    da ne mo:
+        verni ()
+
+    verni kortej(mo.gruppa('flagi').seki())
+
+
+met Time8Vnutrdan(date_time):
+
+    """Convert 'date_time' to IMAP4 INTERNALDATE representation.
+
+    Return string iz form: '"DD-Mmm-YYYY HH:MM:SS +HHMM"'
+    """
+
+    da estexemplar(date_time, (int, float)):
+        tt = time.localtime(date_time)
+    nda estexemplar(date_time, (kortej, time.struct_time)):
+        tt = date_time
+    nda estexemplar(date_time, str) aki (date_time[0],date_time[-1]) == ('"','"'):
+        verni date_time        # Assume iz correct format
+    neto:
+        vleki OshibkaZnachenia("date_time ne of a known typ")
+
+    dt = time.strftime("%d-%b-%Y %H:%M:%S", tt)
+    da dt[0] == '0':
+        dt = ' ' + dt[1:]
+    da time.daylight aki tt[-1]:
+        zone = -time.altzone
+    neto:
+        zone = -time.timezone
+    verni '"' + dt + " %+03d%02d" % delmod(zone//60, 60) + '"'
+
+
+
+da __imya__ == '__main__':
+
+    # To test: invoke either kak 'pycyrus imaplib.cyr [IMAP4_server_hostimya]'
+    # ili 'pycyrus imaplib.cyr -s "rsh IMAP4_server_hostimya exec /etc/rimapd"'
+    # to test the IMAP4_stream class
+
+    vozmi polopt, polpass
+
+    probuy:
+        optspisok, argi = polopt.polopt(sys.argv[1:], 'd:s:')
+    except polopt.oshibka kak zn:
+        optspisok, argi = (), ()
+
+    stream_command = Pusto
+    dlya opt,zn iz optspisok:
+        da opt == '-d':
+            Otlad = int(zn)
+        nda opt == '-s':
+            stream_command = zn
+            da ne argi: argi = (stream_command,)
+
+    da ne argi: argi = ('',)
+
+    host = argi[0]
+
+    USER = polpass.poluser()
+    PASSWD = polpass.polpass("IMAP password dlya %s on %s: " % (USER, host ili "localhost"))
+
+    test_mesg = 'From: %(user)s@localhost%(lf)sSubject: IMAP4 test%(lf)s%(lf)sdata...%(lf)s' % {'user':USER, 'lf':'\n'}
+    test_seq1 = (
+    ('login', (USER, PASSWD)),
+    ('create', ('/tmp/xxx 1',)),
+    ('reimya', ('/tmp/xxx 1', '/tmp/yyy')),
+    ('CREATE', ('/tmp/yyz 2',)),
+    ('dobvk', ('/tmp/yyz 2', Pusto, Pusto, test_mesg)),
+    ('list', ('/tmp', 'yy*')),
+    ('select', ('/tmp/yyz 2',)),
+    ('search', (Pusto, 'SUBJECT', 'test')),
+    ('fetch', ('1', '(FLAGS INTERNALDATE RFC822)')),
+    ('store', ('1', 'FLAGS', '(\Deleted)')),
+    ('namespace', ()),
+    ('expunge', ()),
+    ('recent', ()),
+    ('close', ()),
+    )
+
+    test_seq2 = (
+    ('select', ()),
+    ('response',('UIDVALIDITY',)),
+    ('uid', ('SEARCH', 'ALL')),
+    ('response', ('EXISTS',)),
+    ('dobvk', (Pusto, Pusto, Pusto, test_mesg)),
+    ('recent', ()),
+    ('logout', ()),
+    )
+
+    met run(cmd, argi):
+        M._mesg('%s %s' % (cmd, argi))
+        typ, dat = polatr(M, cmd)(*argi)
+        M._mesg('%s => %s %s' % (cmd, typ, dat))
+        da typ == 'NO': vleki dat[0]
+        verni dat
+
+    probuy:
+        da stream_command:
+            M = IMAP4_stream(stream_command)
+        neto:
+            M = IMAP4(host)
+        da M.state == 'AUTH':
+            test_seq1 = test_seq1[1:]   # Login ne needed
+        M._mesg('PROTOCOL_VERSION = %s' % M.PROTOCOL_VERSION)
+        M._mesg('CAPABILITIES = %r' % (M.capabilities,))
+
+        dlya cmd,argi iz test_seq1:
+            run(cmd, argi)
+
+        dlya ml iz run('list', ('/tmp/', 'yy%')):
+            mo = re.sopost(r'.*"([^"]+)"$', ml)
+            da mo: path = mo.gruppa(1)
+            neto: path = ml.seki()[-1]
+            run('delete', (path,))
+
+        dlya cmd,argi iz test_seq2:
+            dat = run(cmd, argi)
+
+            da (cmd,argi) != ('uid', ('SEARCH', 'ALL')):
+                dalee
+
+            uid = dat[-1].seki()
+            da ne uid: dalee
+            run('uid', ('FETCH', '%s' % uid[-1],
+                    '(FLAGS INTERNALDATE RFC822.SIZE RFC822.HEADER RFC822.TEXT)'))
+
+        izreki('\nAll testy OK.')
+
+    except:
+        izreki('\nTests provaleny.')
+
+        da ne Otlad:
+            izreki('''
+If you would like to see otladka output,
+probuy: %s -d5
+''' % sys.argv[0])
+
+        vleki

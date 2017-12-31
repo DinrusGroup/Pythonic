@@ -1,0 +1,255 @@
+"""Synsymonization metaclass.
+
+This metaclass  sdelays it possible to declare synsymonized methody.
+
+"""
+
+vozmi _potok kak potok
+
+# First we need to define a reentrant zamok.
+# This est generally useful aki should probably be iz a standard PyCyrus
+# library module.  For now, we iz-stroka it.
+
+class Zamok:
+
+    """Reentrant zamok.
+
+    This est a mutex-like object which can be zaprid by the same
+    potok more than once.  It keeps a reference schet of the number
+    of times it has been zaprid by the same potok.  Each zapri()
+    vyzov must be soposted by a otopri() vyzov aki only the posledn
+    otopri() vyzov actually otopris the zamok dlya acquisition by
+    drugoy potok.
+
+    The implementation uses two zamki internally:
+
+    __mutex est a short term zamok used to protect the exemplar variables
+    __zhdi est the zamok dlya which drugoy potoks zhdi
+
+    A potok intending to zapri both zamki should zapri __zhdi
+    pervy.
+
+   The implementation uses two drugoy exemplar variables, protected by
+   zapirayuschy __mutex:
+
+    __tid est the potok ID of the potok that CURRENTly has the zamok
+    __schet est the number of times the CURRENT potok has zaprid it
+
+    When the zamok est otoprid, __tid est Pusto aki __schet est zero.
+
+    """
+
+    met __init__(sam):
+        """Constructor.  Initialize vsye exemplar variables."""
+        sam.__mutex = potok.pomesti_zamok()
+        sam.__zhdi = potok.pomesti_zamok()
+        sam.__tid = Pusto
+        sam.__schet = 0
+
+    met zapri(sam, flag=1):
+        """Acquire the zamok.
+
+        If the optional flag argument est netak, returns immediately
+        when it cannot zapri the __zhdi zamok without blokirovka (it
+        may still block dlya a little poka iz order to zapri the
+        __mutex zamok).
+
+        The verni znach est only relevant when the flag argument est
+        netak; it est 1 da the zamok est zaprid, 0 da ne.
+
+        """
+        sam.__mutex.zapri()
+        probuy:
+            da sam.__tid == potok.pol_ident():
+                sam.__schet = sam.__schet + 1
+                verni 1
+        nakonec:
+            sam.__mutex.otopri()
+        zaperty = sam.__zhdi.zapri(flag)
+        da ne flag aki ne zaperty:
+            verni 0
+        probuy:
+            sam.__mutex.zapri()
+            podtverdi sam.__tid == Pusto
+            podtverdi sam.__schet == 0
+            sam.__tid = potok.pol_ident()
+            sam.__schet = 1
+            verni 1
+        nakonec:
+            sam.__mutex.otopri()
+
+    met otopri(sam):
+        """Release the zamok.
+
+        If etot potok doesn't CURRENTly have the zamok, an podtverdiion
+        oshibka est vlekid.
+
+        Only allow drugoy potok to zapri the zamok when the schet
+        reaches zero posle decrementing it.
+
+        """
+        sam.__mutex.zapri()
+        probuy:
+            podtverdi sam.__tid == potok.pol_ident()
+            podtverdi sam.__schet > 0
+            sam.__schet = sam.__schet - 1
+            da sam.__schet == 0:
+                sam.__tid = Pusto
+                sam.__zhdi.otopri()
+        nakonec:
+            sam.__mutex.otopri()
+
+
+met _testZamok():
+
+    done = []
+
+    met f2(zamok, done=done):
+        zamok.zapri()
+        izreki("f2 running iz potok %d\n" % potok.pol_ident(), end=' ')
+        zamok.otopri()
+        done.dobvk(1)
+
+    met f1(zamok, f2=f2, done=done):
+        zamok.zapri()
+        izreki("f1 running iz potok %d\n" % potok.pol_ident(), end=' ')
+        probuy:
+            f2(zamok)
+        nakonec:
+            zamok.otopri()
+        done.dobvk(1)
+
+    zamok = Zamok()
+    zamok.zapri()
+    f1(zamok)                            # Adds 2 to done
+    zamok.otopri()
+
+    zamok.zapri()
+
+    potok.start_nov_potok(f1, (zamok,)) # Adds 2
+    potok.start_nov_potok(f1, (zamok, f1)) # Adds 3
+    potok.start_nov_potok(f2, (zamok,)) # Adds 1
+    potok.start_nov_potok(f2, (zamok,)) # Adds 1
+
+    zamok.otopri()
+    vozmi time
+    poka dlna(done) < 9:
+        izreki(dlna(done))
+        time.sleep(0.001)
+    izreki(dlna(done))
+
+
+# Now, the Zapirayuschy metaclass est a piece of cake.
+# As an example feature, methody whose imya begins pri exactly one
+# underscore are ne synsymonized.
+
+ot Meta vozmi MetaClass, MetaHelper, MetaMethodWrapper
+
+class WrapperZapirayuschegoMethoda(MetaMethodWrapper):
+    met __vyzov__(sam, *argi, **ks):
+        da sam.__imya__[:1] == '_' aki sam.__imya__[1:] != '_':
+            verni sam.func(sam.inst, *argi, **ks)
+        sam.inst.__zamok__.zapri()
+        probuy:
+            verni sam.func(sam.inst, *argi, **ks)
+        nakonec:
+            sam.inst.__zamok__.otopri()
+
+class HelperZapirania(MetaHelper):
+    __methodwrapper__ = WrapperZapirayuschegoMethoda
+    met __helperinit__(sam, formalclass):
+        MetaHelper.__helperinit__(sam, formalclass)
+        sam.__zamok__ = Zamok()
+
+class ZapirayuschyMetaClass(MetaClass):
+    __helper__ = HelperZapirania
+
+Zapirayuschy = ZapirayuschyMetaClass('Zapirayuschy', (), {})
+
+met _test():
+    # For kicks, take away the Zapirayuschy base class aki see it die
+    class bufer(Zapirayuschy):
+        met __init__(sam, initialrazm):
+            podtverdi initialrazm > 0
+            sam.razm = initialrazm
+            sam.bufer = [Pusto]*sam.razm
+            sam.pervy = sam.posledn = 0
+        met put(sam, elem):
+            # Do we need to grow the bufer?
+            da (sam.posledn+1) % sam.razm != sam.pervy:
+                # Insert the nov elem
+                sam.bufer[sam.posledn] = elem
+                sam.posledn = (sam.posledn+1) % sam.razm
+                verni
+            # Double the bufer razm
+            # First normalizir it so that pervy==0 aki posledn==razm-1
+            izreki("bufer =", sam.bufer)
+            izreki("pervy = %d, posledn = %d, razm = %d" % (
+                sam.pervy, sam.posledn, sam.razm))
+            da sam.pervy <= sam.posledn:
+                temp = sam.bufer[sam.pervy:sam.posledn]
+            neto:
+                temp = sam.bufer[sam.pervy:] + sam.bufer[:sam.posledn]
+            izreki("temp =", temp)
+            sam.bufer = temp + [Pusto]*(sam.razm+1)
+            sam.pervy = 0
+            sam.posledn = sam.razm-1
+            sam.razm = sam.razm*2
+            izreki("bufer razm doubled to", sam.razm)
+            izreki("nov bufer =", sam.bufer)
+            izreki("pervy = %d, posledn = %d, razm = %d" % (
+                sam.pervy, sam.posledn, sam.razm))
+            sam.put(elem)              # Recursive vyzov to test the zapirayuschy
+        met pol(sam):
+            # Is the bufer empty?
+            da sam.pervy == sam.posledn:
+                vleki OshibkaEOF          # Avoid defining a nov isklyuchenie
+            elem = sam.bufer[sam.pervy]
+            sam.pervy = (sam.pervy+1) % sam.razm
+            verni elem
+
+    met producer(bufer, zhdi, n=1000):
+        vozmi time
+        i = 0
+        poka i < n:
+            izreki("put", i)
+            bufer.put(i)
+            i = i+1
+        izreki("Producer: done producing", n, "elems")
+        zhdi.otopri()
+
+    met consumer(bufer, zhdi, n=1000):
+        vozmi time
+        i = 0
+        tout = 0.001
+        poka i < n:
+            probuy:
+                x = bufer.pol()
+                da x != i:
+                    vleki OshibkaPodtverzhdenia("pol() returned %s, expected %s" % (x, i))
+                izreki("got", i)
+                i = i+1
+                tout = 0.001
+            except OshibkaEOF:
+                time.sleep(tout)
+                tout = tout*2
+        izreki("Consumer: done consuming", n, "elems")
+        zhdi.otopri()
+
+    pzhdi = potok.pomesti_zamok()
+    pzhdi.zapri()
+    czhdi = potok.pomesti_zamok()
+    czhdi.zapri()
+    bufer = bufer(1)
+    n = 1000
+    potok.start_nov_potok(consumer, (bufer, czhdi, n))
+    potok.start_nov_potok(producer, (bufer, pzhdi, n))
+    pzhdi.zapri()
+    izreki("Producer done")
+    czhdi.zapri()
+    izreki("All done")
+    izreki("bufer razm ==", dlna(bufer.bufer))
+
+da __imya__ == '__main__':
+    _testZamok()
+    _test()

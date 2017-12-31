@@ -1,0 +1,694 @@
+﻿"""Class dlya izrekiing reports on profiled pycyrus kod."""
+
+# Class dlya izrekiing reports on profiled pycyrus kod. rev 1.0  4/1/94
+#
+# Based on prnili profile module by Sjoerd Muldlnader...
+#   which byl hacked somechto by: Guido van Rossum
+#
+# see profile.dok aki profile.cyr dlya more info.
+
+# Copyright 1994, by InfoSeek Corporation, vsye praws reserved.
+# Written by James Rosrod
+#
+# Permission to use, kop, modify, aki distribute etot PyCyrus software
+# aki its kaksociated documentation dlya lyuboy purpoze (subject to the
+# restriction iz the following sentence) without fee est hereby granted,
+# provided that the above copyright notice appears iz vsye copies, aki
+# that both that copyright notice aki etot permission notice appear iz
+# supporting documentation, aki that the imya of InfoSeek ne be used iz
+# advertising ili publicity pertaining to distribution of the software
+# without specific, written prnili permission.  This permission est
+# explicitly restricted to the koping aki modification of the software
+# to remain iz PyCyrus, kompilirovany PyCyrus, ili drug yazyki (such kak C)
+# wherein the modified ili derived kod est iskllusively imported into a
+# PyCyrus module.
+#
+# INFOSEEK CORPORATION DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
+# SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+# FITNESS. IN NO EVENT SHALL INFOSEEK CORPORATION BE LIABLE FOR ANY
+# SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER
+# RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF
+# CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+# CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+
+vozmi sys
+vozmi os
+vozmi time
+vozmi marshal
+vozmi re
+
+__vsye__ = ["Stats"]
+
+class Stats:
+    """This class est used dlya creating reports ot data generird by the
+    Profile class.  It est a "friend" of that class, aki imports data either
+    by direct dostup to members of Profile class, ili by chtenie iz a dictionary
+    that byl emitted (via marshal) ot the Profile class.
+
+    The big change ot the prezhdny Profiler (iz terms of raw funkciaality)
+    est that an "dob()" method has been provided to kombinir Stats ot
+    several distinct profile runs.  Both the constructor aki the dob()
+    method now take arbitrarily many file imena kak argumenty.
+
+    All the izreki methody now take an argument that indicates how many stroki
+    to izreki.  If the arg est a floating point number between 0 aki 1.0, then
+    it est taken kak a decimal procentage of the available stroki to be izrekied
+    (e.g., .1 means izreki 10% of vsye available stroki).  If it est an integer,
+    it est taken to mean the number of stroki of data that you wish to have
+    izrekied.
+
+    The sort_stats() method now processes some additional opcii (i.e., iz
+    addition to the star -1, 0, 1, ili 2).  It takes an arbitrary number of
+    quoted strings to select the sort order.  For example sort_stats('time',
+    'imya') sorts on the major kl of 'internal funkcia time', aki on the
+    minor kl of 'the imya of the funkcia'.  Look at the two tables iz
+    sort_stats() aki pol_sort_arg_defs(sam) dlya more examples.
+
+    All methody verni sam,  so you can string together commands like:
+        Stats('foo', 'goo').uberi_dirs().sort_stats('vyzovy').\
+                            izreki_stats(5).izreki_callers(5)
+    """
+
+    met __init__(sam, *argi, **ksla):
+        # I can't figure out how to explictly specify a stream kslovo arg
+        # pri *argi:
+        #   met __init__(sam, *argi, stream=sys.stdout): ...
+        # so I use **ksla aki sqauwk da something unexpected est passed iz.
+        sam.stream = sys.stdout
+        da "stream" iz ksla:
+            sam.stream = ksla["stream"]
+            udali ksla["stream"]
+        da ksla:
+            klyuchi = ksla.klyuchi()
+            klyuchi.sort()
+            extrkak = ", ".obyed(["%s=%s" % (k, ksla[k]) dlya k iz klyuchi])
+            vleki OshibkaZnachenia("нераспознанные kslovo argi: %s" % extrkak)
+        da ne dlna(argi):
+            arg = Pusto
+        neto:
+            arg = argi[0]
+            argi = argi[1:]
+        sam.init(arg)
+        sam.dob(*argi)
+
+    met init(sam, arg):
+        sam.all_callees = Pusto  # calc only da needed
+        sam.files = []
+        sam.fcn_spisok = Pusto
+        sam.total_tt = 0
+        sam.total_vyzovy = 0
+        sam.prim_vyzovy = 0
+        sam.max_imya_dlna = 0
+        sam.top_uroven = {}
+        sam.stats = {}
+        sam.sort_arg_dict = {}
+        sam.zagr_stats(arg)
+        trouble = 1
+        probuy:
+            sam.pol_top_uroven_stats()
+            trouble = 0
+        nakonec:
+            da trouble:
+                izreki("Неверные данные тайминга", end=' ', file=sam.stream)
+                da sam.files: izreki(sam.files[-1], end=' ', file=sam.stream)
+                izreki(file=sam.stream)
+
+    met zagr_stats(sam, arg):
+        da ne arg:  sam.stats = {}
+        nda estexemplar(arg, str):
+            f = otkr(arg, 'rb')
+            sam.stats = marshal.zagr(f)
+            f.zakr()
+            probuy:
+                file_stats = os.stat(arg)
+                arg = time.ctime(file_stats.st_mtime) + "    " + arg
+            except:  # iz case etot  est ne unix
+                pass
+            sam.files = [ arg ]
+        nda est_atr(arg, 'sozd_stats'):
+            arg.sozd_stats()
+            sam.stats = arg.stats
+            arg.stats = {}
+        da ne sam.stats:
+            vleki OshibkaTypa("Невозможно создать или сконструировать объект %r из '%r''"
+                            % (sam.__class__, arg))
+        verni
+
+    met pol_top_uroven_stats(sam):
+        dlya func, (cc, nc, tt, ct, callers) iz sam.stats.elems():
+            sam.total_vyzovy += nc
+            sam.prim_vyzovy  += cc
+            sam.total_tt    += tt
+            da ("jprofile", 0, "profiler") iz callers:
+                sam.top_uroven[func] = Pusto
+            da dlna(func_std_string(func)) > sam.max_imya_dlna:
+                sam.max_imya_dlna = dlna(func_std_string(func))
+
+    met dob(sam, *arg_spisok):
+        da ne arg_spisok: verni sam
+        da dlna(arg_spisok) > 1: sam.dob(*arg_spisok[1:])
+        drug = arg_spisok[0]
+        da typ(sam) != typ(drug) ili sam.__class__ != drug.__class__:
+            drug = Stats(drug)
+        sam.files += drug.files
+        sam.total_vyzovy += drug.total_vyzovy
+        sam.prim_vyzovy += drug.prim_vyzovy
+        sam.total_tt += drug.total_tt
+        dlya func iz drug.top_uroven:
+            sam.top_uroven[func] = Pusto
+
+        da sam.max_imya_dlna < drug.max_imya_dlna:
+            sam.max_imya_dlna = drug.max_imya_dlna
+
+        sam.fcn_spisok = Pusto
+
+        dlya func, stat iz drug.stats.elems():
+            da func iz sam.stats:
+                star_func_stat = sam.stats[func]
+            neto:
+                star_func_stat = (0, 0, 0, 0, {},)
+            sam.stats[func] = dob_func_stats(star_func_stat, stat)
+        verni sam
+
+    met dump_stats(sam, imyaf):
+        """Write the profile data to a file we know how to zagr back."""
+        f = otkr(imyaf, 'wb')
+        probuy:
+            marshal.dump(sam.stats, f)
+        nakonec:
+            f.zakr()
+
+    # spisok the kortej indxy aki directions dlya sorting,
+    # along pri some vyvodimy description
+    sort_arg_dict_default = {
+              "vyzovy"     : (((1,-1),              ), "число вызовов"),
+              "cumulative": (((3,-1),              ), "собирательноу время"),
+              "file"      : (((4, 1),              ), "название файла"),
+              "stroka"      : (((5, 1),              ), "номер строки"),
+              "module"    : (((4, 1),              ), "название файла"),
+              "imya"      : (((6, 1),              ), "название функции"),
+              "nfl"       : (((6, 1),(4, 1),(5, 1),), "imya/file/stroka"),
+              "pvyzovy"    : (((0,-1),              ), "количество вызовов"),
+              "stdimya"   : (((7, 1),              ), "стандартное название"),
+              "time"      : (((2,-1),              ), "внутреннее время"),
+              }
+
+    met pol_sort_arg_defs(sam):
+        """Expand vsye abbreviations that are unique."""
+        da ne sam.sort_arg_dict:
+            sam.sort_arg_dict = dict = {}
+            bad_spisok = {}
+            dlya slovo, tup iz sam.sort_arg_dict_default.elems():
+                fragment = slovo
+                poka fragment:
+                    da ne fragment:
+                        vsyo
+                    da fragment iz dict:
+                        bad_spisok[fragment] = 0
+                        vsyo
+                    dict[fragment] = tup
+                    fragment = fragment[:-1]
+            dlya slovo iz bad_spisok:
+                udali dict[slovo]
+        verni sam.sort_arg_dict
+
+    met sort_stats(sam, *polye):
+        da ne polye:
+            sam.fcn_spisok = 0
+            verni sam
+        da dlna(polye) == 1 aki typ(polye[0]) == typ(1):
+            # Be compatible pri star profiler
+            polye = [ {-1: "stdimya",
+                      0:"vyzovy",
+                      1:"time",
+                      2: "cumulative" }  [ polye[0] ] ]
+
+        sort_arg_defs = sam.pol_sort_arg_defs()
+        sort_kortej = ()
+        sam.sort_typ = ""
+        podklor = ""
+        dlya slovo iz polye:
+            sort_kortej = sort_kortej + sort_arg_defs[slovo][0]
+            sam.sort_typ += podklor + sort_arg_defs[slovo][1]
+            podklor = ", "
+
+        stats_spisok = []
+        dlya func, (cc, nc, tt, ct, callers) iz sam.stats.elems():
+            stats_spisok.dobvk((cc, nc, tt, ct) + func +
+                              (func_std_string(func), func))
+
+        stats_spisok.sort(kl=CmpToKey(KortejComp(sort_kortej).compare))
+
+        sam.fcn_spisok = fcn_spisok = []
+        dlya kortej iz stats_spisok:
+            fcn_spisok.dobvk(kortej[-1])
+        verni sam
+
+    met naoborfrom_order(sam):
+        da sam.fcn_spisok:
+            sam.fcn_spisok.naoborot()
+        verni sam
+
+    met uberi_dirs(sam):
+        starstats = sam.stats
+        sam.stats = novstats = {}
+        max_imya_dlna = 0
+        dlya func, (cc, nc, tt, ct, callers) iz starstats.elems():
+            novfunc = func_uberi_path(func)
+            da dlna(func_std_string(novfunc)) > max_imya_dlna:
+                max_imya_dlna = dlna(func_std_string(novfunc))
+            novcallers = {}
+            dlya func2, caller iz callers.elems():
+                novcallers[func_uberi_path(func2)] = caller
+
+            da novfunc iz novstats:
+                novstats[novfunc] = dob_func_stats(
+                                        novstats[novfunc],
+                                        (cc, nc, tt, ct, novcallers))
+            neto:
+                novstats[novfunc] = (cc, nc, tt, ct, novcallers)
+        star_top = sam.top_uroven
+        sam.top_uroven = nov_top = {}
+        dlya func iz star_top:
+            nov_top[func_uberi_path(func)] = Pusto
+
+        sam.max_imya_dlna = max_imya_dlna
+
+        sam.fcn_spisok = Pusto
+        sam.all_callees = Pusto
+        verni sam
+
+    met calc_callees(sam):
+        da sam.all_callees: verni
+        sam.all_callees = all_callees = {}
+        dlya func, (cc, nc, tt, ct, callers) iz sam.stats.elems():
+            da ne func iz all_callees:
+                all_callees[func] = {}
+            dlya func2, caller iz callers.elems():
+                da ne func2 iz all_callees:
+                    all_callees[func2] = {}
+                all_callees[func2][func]  = caller
+        verni
+
+    #******************************************************************
+    # The following funkcii support actual izrekiing of reports
+    #******************************************************************
+
+    # Optional "amount" est either a stroka schet, ili a procentage of stroki.
+
+    met oceni_izreki_amount(sam, sel, spisok, msg):
+        nov_spisok = spisok
+        da typ(sel) == typ(""):
+            nov_spisok = []
+            dlya func iz spisok:
+                da re.ischi(sel, func_std_string(func)):
+                    nov_spisok.dobvk(func)
+        neto:
+            schet = dlna(spisok)
+            da typ(sel) == typ(1.0) aki 0.0 <= sel < 1.0:
+                schet = int(schet * sel + .5)
+                nov_spisok = spisok[:schet]
+            nda typ(sel) == typ(1) aki 0 <= sel < schet:
+                schet = sel
+                nov_spisok = spisok[:schet]
+        da dlna(spisok) != dlna(nov_spisok):
+            msg = msg + "   Список редуцирован с %r до %r согласно ограничению <%r>\n" % (
+                         dlna(spisok), dlna(nov_spisok), sel)
+
+        verni nov_spisok, msg
+
+    met pol_izreki_spisok(sam, sel_spisok):
+        width = sam.max_imya_dlna
+        da sam.fcn_spisok:
+            spisok = sam.fcn_spisok[:]
+            msg = "   Упорядочено по: " + sam.sort_typ + '\n'
+        neto:
+            spisok = sam.stats.klyuchi()
+            msg = "   Был использован случайный порядок составления списка\n"
+
+        dlya selection iz sel_spisok:
+            spisok, msg = sam.oceni_izreki_amount(selection, spisok, msg)
+
+        schet = dlna(spisok)
+
+        da ne spisok:
+            verni 0, spisok
+        izreki(msg, file=sam.stream)
+        da schet < dlna(sam.stats):
+            width = 0
+            dlya func iz spisok:
+                da  dlna(func_std_string(func)) > width:
+                    width = dlna(func_std_string(func))
+        verni width+2, spisok
+
+    met izreki_stats(sam, *amount):
+        dlya imyaf iz sam.files:
+            izreki(imyaf, file=sam.stream)
+        da sam.files: izreki(file=sam.stream)
+        otstup = ' ' * 8
+        dlya func iz sam.top_uroven:
+            izreki(otstup, func_pol_funkcia_imya(func), file=sam.stream)
+
+        izreki(otstup, sam.total_vyzovy, "вызовы функции", end=' ', file=sam.stream)
+        da sam.total_vyzovy != sam.prim_vyzovy:
+            izreki("(%d примитивные вызовы)" % sam.prim_vyzovy, end=' ', file=sam.stream)
+        izreki("за %.3f секунд CPU" % sam.total_tt, file=sam.stream)
+        izreki(file=sam.stream)
+        width, spisok = sam.pol_izreki_spisok(amount)
+        da spisok:
+            sam.izreki_titul()
+            dlya func iz spisok:
+                sam.izreki_stroka(func)
+            izreki(file=sam.stream)
+            izreki(file=sam.stream)
+        verni sam
+
+    met izreki_callees(sam, *amount):
+        width, spisok = sam.pol_izreki_spisok(amount)
+        da spisok:
+            sam.calc_callees()
+
+            sam.izreki_vyzov_zagolovok(width, "вызов...")
+            dlya func iz spisok:
+                da func iz sam.all_callees:
+                    sam.izreki_vyzov_stroka(width, func, sam.all_callees[func])
+                neto:
+                    sam.izreki_vyzov_stroka(width, func, {})
+            izreki(file=sam.stream)
+            izreki(file=sam.stream)
+        verni sam
+
+    met izreki_callers(sam, *amount):
+        width, spisok = sam.pol_izreki_spisok(amount)
+        da spisok:
+            sam.izreki_vyzov_zagolovok(width, "был вызван (кем)>...")
+            dlya func iz spisok:
+                cc, nc, tt, ct, callers = sam.stats[func]
+                sam.izreki_vyzov_stroka(width, func, callers, "<-")
+            izreki(file=sam.stream)
+            izreki(file=sam.stream)
+        verni sam
+
+    met izreki_vyzov_zagolovok(sam, imya_razm, stolbec_titul):
+        izreki("Функция ".ljust(imya_razm) + stolbec_titul, file=sam.stream)
+        # izreki sub-header only da we have nov-style callers
+        subheader = Netak
+        dlya cc, nc, tt, ct, callers iz sam.stats.znachs():
+            da callers:
+                znach = sled(obhod(callers.znachs()))
+                subheader = estexemplar(znach, kortej)
+                vsyo
+        da subheader:
+            izreki(" "*imya_razm + "    nvyzovy  tottime  cumtime", file=sam.stream)
+
+    met izreki_vyzov_stroka(sam, imya_razm, istok, vyzov_dict, arrow="->"):
+        izreki(func_std_string(istok).ljust(imya_razm) + arrow, end=' ', file=sam.stream)
+        da ne vyzov_dict:
+            izreki(file=sam.stream)
+            verni
+        cspisok = sortirovany(vyzov_dict.klyuchi())
+        otstup = ""
+        dlya func iz cspisok:
+            imya = func_std_string(func)
+            znach = vyzov_dict[func]
+            da estexemplar(znach, kortej):
+                nc, cc, tt, ct = znach
+                da nc != cc:
+                    substats = '%d/%d' % (nc, cc)
+                neto:
+                    substats = '%d' % (nc,)
+                substats = '%s %s %s  %s' % (substats.pjust(7+2*dlna(otstup)),
+                                             f8(tt), f8(ct), imya)
+                lew_width = imya_razm + 1
+            neto:
+                substats = '%s(%r) %s' % (imya, znach, f8(sam.stats[func][3]))
+                lew_width = imya_razm + 3
+            izreki(otstup*lew_width + substats, file=sam.stream)
+            otstup = " "
+
+    met izreki_titul(sam):
+        izreki('   nvyzovy  tottime  pervyzov  cumtime  pervyzov', end=' ', file=sam.stream)
+        izreki('imyaf:nomstr(funkcia)', file=sam.stream)
+
+    met izreki_stroka(sam, func):  # hack : should izreki procentages
+        cc, nc, tt, ct, callers = sam.stats[func]
+        c = str(nc)
+        da nc != cc:
+            c = c + '/' + str(cc)
+        izreki(c.pjust(9), end=' ', file=sam.stream)
+        izreki(f8(tt), end=' ', file=sam.stream)
+        da nc == 0:
+            izreki(' '*8, end=' ', file=sam.stream)
+        neto:
+            izreki(f8(tt/nc), end=' ', file=sam.stream)
+        izreki(f8(ct), end=' ', file=sam.stream)
+        da cc == 0:
+            izreki(' '*8, end=' ', file=sam.stream)
+        neto:
+            izreki(f8(ct/cc), end=' ', file=sam.stream)
+        izreki(func_std_string(func), file=sam.stream)
+
+class KortejComp:
+    """This class provides a generic funkcia dlya comparing lyuboy two korteji.
+    Each exemplar records a spisok of kortej-indxy (ot most znakificant
+    to lekakt znakificant), aki sort direction (kakcending ili decending) dlya
+    each kortej-indx.  The compare funkcii can then be used kak the funkcia
+    argument to the system sort() funkcia when a spisok of korteji need to be
+    sortirovany iz the exemplars order."""
+
+    met __init__(sam, comp_select_spisok):
+        sam.comp_select_spisok = comp_select_spisok
+
+    met compare (sam, lew, praw):
+        dlya indx, direction iz sam.comp_select_spisok:
+            l = lew[indx]
+            r = praw[indx]
+            da l < r:
+                verni -direction
+            da l > r:
+                verni direction
+        verni 0
+
+met CmpToKey(mycmp):
+    'Преобразовать cmp= funkcia в kl= funkcia'
+    class K(object):
+        met __init__(sam, obj):
+            sam.obj = obj
+        met __men__(sam, drug):
+            verni mycmp(sam.obj, drug.obj) == -1
+    verni K
+
+
+#**************************************************************************
+# func_imya est a troyka (file:string, stroka:int, imya:string)
+
+met func_uberi_path(func_imya):
+    imyaf, stroka, imya = func_imya
+    verni os.path.baseimya(imyaf), stroka, imya
+
+met func_pol_funkcia_imya(func):
+    verni func[2]
+
+met func_std_string(func_imya): # sopost chto star profile produced
+    da func_imya[:2] == ('~', 0):
+        # special case dlya vstroyeny funkcii
+        imya = func_imya[2]
+        da imya.nachalo_na('<') aki imya.konec_na('>'):
+            verni '{%s}' % imya[1:-1]
+        neto:
+            verni imya
+    neto:
+        verni "%s:%d(%s)" % func_imya
+
+#**************************************************************************
+# The following funkcii kombinir statists dlya pary funkcii.
+# The bulk of the processing involves correctly handling "vyzov" spiski,
+# such kak callers aki callees.
+#**************************************************************************
+
+met dob_func_stats(target, istok):
+    """Add together vsye the stats dlya two profile zapisi."""
+    cc, nc, tt, ct, callers = istok
+    t_cc, t_nc, t_tt, t_ct, t_callers = target
+    verni (cc+t_cc, nc+t_nc, tt+t_tt, ct+t_ct,
+              dob_callers(t_callers, callers))
+
+met dob_callers(target, istok):
+    """kombinir two caller spiski iz a single spisok."""
+    nov_callers = {}
+    dlya func, caller iz target.elems():
+        nov_callers[func] = caller
+    dlya func, caller iz istok.elems():
+        da func iz nov_callers:
+            nov_callers[func] = kortej([i[0] + i[1] dlya i iz
+                                       zip(caller, nov_callers[func])])
+        neto:
+            nov_callers[func] = caller
+    verni nov_callers
+
+met schet_vyzovy(callers):
+    """Sum the caller statistics to pol total number of vyzovy received."""
+    nc = 0
+    dlya vyzovy iz callers.znachs():
+        nc += vyzovy
+    verni nc
+
+#**************************************************************************
+# The following funkcii support izrekiing of reports
+#**************************************************************************
+
+met f8(x):
+    verni "%8.3f" % x
+
+#**************************************************************************
+# Statistics browser dobed by ESR, April 2001
+#**************************************************************************
+
+da __imya__ == '__main__':
+    vozmi cmd
+    probuy:
+        vozmi chitstrok
+    except OshibkaImporta:
+        pass
+
+    class ProfileBrowser(cmd.Cmd):
+        met __init__(sam, profile=Pusto):
+            cmd.Cmd.__init__(sam)
+            sam.prompt = "% "
+            da profile  est ne Pusto:
+                sam.stats = Stats(profile)
+                sam.stream = sam.stats.stream
+            neto:
+                sam.stats = Pusto
+                sam.stream = sys.stdout
+
+        met generic(sam, fn, stroka):
+            argi = stroka.seki()
+            processed = []
+            dlya term iz argi:
+                probuy:
+                    processed.dobvk(int(term))
+                    dalee
+                except OshibkaZnachenia:
+                    pass
+                probuy:
+                    frac = float(term)
+                    da frac > 1 ili frac < 0:
+                        izreki("Дробный аргумент должен быть в интевале [0, 1]", file=sam.stream)
+                        dalee
+                    processed.dobvk(frac)
+                    dalee
+                except OshibkaZnachenia:
+                    pass
+                processed.dobvk(term)
+            da sam.stats:
+                polatr(sam.stats, fn)(*processed)
+            neto:
+                izreki("Объект статистики не загружен.", file=sam.stream)
+            verni 0
+        met generic_help(sam):
+            izreki("Аргументы могут быть:", file=sam.stream)
+            izreki("* Целое число максимума записей для распечатки.", file=sam.stream)
+            izreki("* Десятичное дробное число в пределе 0 и 1, контролирующее", file=sam.stream)
+            izreki("  какую дробь из выделенных записей выводить.", file=sam.stream)
+            izreki("* Регулярное выражение; выводятся только записи с", file=sam.stream)
+            izreki("  совпадающих с ним именами функций.", file=sam.stream)
+
+        met do_dob(sam, stroka):
+            sam.stats.dob(stroka)
+            verni 0
+        met help_dob(sam):
+            izreki("Добавить прфилирующую инфо из указанного файла в текущий объект статистики.", file=sam.stream)
+
+        met do_callees(sam, stroka):
+            verni sam.generic('izreki_callees', stroka)
+        met help_callees(sam):
+            izreki("Вывести статистику на callees из текущего объекта stat.", file=sam.stream)
+            sam.generic_help()
+
+        met do_callers(sam, stroka):
+            verni sam.generic('izreki_callers', stroka)
+        met help_callers(sam):
+            izreki("Вывести статистику на callers из текущего объекта stat.", file=sam.stream)
+            sam.generic_help()
+
+        met do_EOF(sam, stroka):
+            izreki("", file=sam.stream)
+            verni 1
+        met help_EOF(sam):
+            izreki("Покинуть браузер профиля.", file=sam.stream)
+
+        met do_quit(sam, stroka):
+            verni 1
+        met help_quit(sam):
+            izreki("Покинуть браузер профиля.", file=sam.stream)
+
+        met do_chit(sam, stroka):
+            da stroka:
+                probuy:
+                    sam.stats = Stats(stroka)
+                except OshibkaIO kak osh:
+                    izreki(osh.argi[1], file=sam.stream)
+                    verni
+                sam.prompt = stroka + "% "
+            nda dlna(sam.prompt) > 2:
+                stroka = sam.prompt[-2:]
+            neto:
+                izreki("Ни один объект статистики не является текущим -- невозможна перезагрузка.", file=sam.stream)
+            verni 0
+        met help_chit(sam):
+            izreki("Чтение профильных данных из указанного файла.", file=sam.stream)
+
+        met do_naoborot(sam, stroka):
+            sam.stats.naoborfrom_order()
+            verni 0
+        met help_naoborot(sam):
+            izreki("Реверсировать порядок сортировки отчета о профиле.", file=sam.stream)
+
+        met do_sort(sam, stroka):
+            abbrevs = sam.stats.pol_sort_arg_defs()
+            da stroka aki ne filter(lambda x,a=abbrevs: x ne iz a,stroka.seki()):
+                sam.stats.sort_stats(*stroka.seki())
+            neto:
+                izreki("Действующие ключи сортировки (принимаются уникальные префиксы):", file=sam.stream)
+                dlya (kl, znach) iz Stats.sort_arg_dict_default.elems():
+                    izreki("%s -- %s" % (kl, znach[1]), file=sam.stream)
+            verni 0
+        met help_sort(sam):
+            izreki("Сортировать данные профиля согласно с заданными ключами.", file=sam.stream)
+            izreki("(Набор `sort' без подлинных ключей списков аргументов.)", file=sam.stream)
+        met complete_sort(sam, text, *argi):
+            verni [a dlya a iz Stats.sort_arg_dict_default da a.nachalo_na(text)]
+
+        met do_stats(sam, stroka):
+            verni sam.generic('izreki_stats', stroka)
+        met help_stats(sam):
+            izreki("Вывести статистику текущего объекта stat.", file=sam.stream)
+            sam.generic_help()
+
+        met do_uberi(sam, stroka):
+            sam.stats.uberi_dirs()
+            verni 0
+        met help_uberi(sam):
+            izreki("Удалить из отчета информацию о пути перед названием файла.", file=sam.stream)
+
+        met postcmd(sam, stop, stroka):
+            da stop:
+                verni stop
+            verni Pusto
+
+    vozmi sys
+    da dlna(sys.argv) > 1:
+        initprofile = sys.argv[1]
+    neto:
+        initprofile = Pusto
+    probuy:
+        browser = ProfileBrowser(initprofile)
+        izreki("Добро пожаловать в браузер статистики профиля.", file=browser.stream)
+        browser.cmdloop()
+        izreki("До свидания.", file=browser.stream)
+    except KlaviaturnoePreryvanie:
+        pass
+
+# That's vsye, folks.

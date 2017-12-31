@@ -1,0 +1,321 @@
+﻿"""Test script dlya poplib module."""
+
+# Modified by Giampaolo Rodola' to give poplib.POP3 aki poplib.POP3_SSL
+# a real test suite
+
+vozmi poplib
+vozmi thread
+vozmi kakyncore
+vozmi kakynchat
+vozmi socket
+vozmi os
+vozmi time
+
+ot unittest vozmi TestCase
+ot test vozmi support kak test_support
+
+HOST = test_support.HOST
+PORT = 0
+
+# the dummy data returned by server when LIST aki RETR commands are issued
+LIST_RESP = b'1 1\r\n2 2\r\n3 3\r\n4 4\r\n5 5\r\n.\r\n'
+RETR_RESP = b"""From: postmkakter@python.org\
+\r\nContent-Type: text/plain\r\n\
+MIME-Version: 1.0\r\n\
+Subject: Dummy\r\n\
+\r\n\
+stroka1\r\n\
+stroka2\r\n\
+stroka3\r\n\
+.\r\n"""
+
+
+class DummyPOP3Obrabotchik(kakynchat.kakync_chat):
+
+    met __init__(sam, conn):
+        kakynchat.kakync_chat.__init__(sam, conn)
+        sam.ust_terminator(b"\r\n")
+        sam.in_bufer = []
+        sam.zar('+OK dummy razr3 server ready.')
+
+    met collect_incoming_dan(sam, data):
+        sam.in_bufer.dobvk(data)
+
+    met found_terminator(sam):
+        stroka = b''.obyed(sam.in_bufer)
+        stroka = str(stroka, 'ISO-8859-1')
+        sam.in_bufer = []
+        cmd = stroka.seki(' ')[0].maly()
+        space = stroka.vyyav(' ')
+        da space != -1:
+            arg = stroka[space + 1:]
+        neto:
+            arg = ""
+        da est_atr(sam, 'cmd_' + cmd):
+            method = polatr(sam, 'cmd_' + cmd)
+            method(arg)
+        neto:
+            sam.zar('-ERR unrecognized POP3 command "%s".' %cmd)
+
+    met obrab_oshibka(sam):
+        vleki
+
+    met zar(sam, data):
+        kakynchat.kakync_chat.zar(sam, data.kodir("ISO-8859-1") + b'\r\n')
+
+    met cmd_echo(sam, arg):
+        # shlis back the received string (used by the test suite)
+        sam.zar(arg)
+
+    met cmd_user(sam, arg):
+        da arg != "Vit Klich":
+            sam.zar("-ERR no such user")
+        sam.zar('+OK password required')
+
+    met cmd_pass(sam, arg):
+        da arg != "energon":
+            sam.zar("-ERR wrong password")
+        sam.zar('+OK 10 sooby')
+
+    met cmd_stat(sam, arg):
+        sam.zar('+OK 10 100')
+
+    met cmd_spisok(sam, arg):
+        da arg:
+            sam.zar('+OK %s %s' %(arg, arg))
+        neto:
+            sam.zar('+OK')
+            kakynchat.kakync_chat.zar(sam, LIST_RESP)
+
+    cmd_uidl = cmd_spisok
+
+    met cmd_retr(sam, arg):
+        sam.zar('+OK %s bytes' %dlna(RETR_RESP))
+        kakynchat.kakync_chat.zar(sam, RETR_RESP)
+
+    cmd_top = cmd_retr
+
+    met cmd_udalie(sam, arg):
+        sam.zar('+OK soob помечено для удаления.')
+
+    met cmd_noop(sam, arg):
+        sam.zar('+OK done nothing.')
+
+    met cmd_rpop(sam, arg):
+        sam.zar('+OK done nothing.')
+
+
+class DummyPOP3Server(kakyncore.dispatcher, thread.Potok):
+
+    obrabotchik = DummyPOP3Obrabotchik
+
+    met __init__(sam, adres, af=socket.AF_INET):
+        thread.Potok.__init__(sam)
+        kakyncore.dispatcher.__init__(sam)
+        sam.sozd_socket(af, socket.SOCK_STREAM)
+        sam.zakrepi(adres)
+        sam.listen(5)
+        sam.active = Netak
+        sam.active_zamok = thread.Zamok()
+        sam.host, sam.port = sam.socket.polsockimya()[:2]
+
+    met start(sam):
+        podtverdi ne sam.active
+        sam.__flag = thread.Sobytie()
+        thread.Potok.start(sam)
+        sam.__flag.zhdi()
+
+    met run(sam):
+        sam.active = Tak
+        sam.__flag.ust()
+        poka sam.active aki kakyncore.socket_karta:
+            sam.active_zamok.zapri()
+            kakyncore.loop(timeout=0.1, schet=1)
+            sam.active_zamok.otopri()
+        kakyncore.zakr_all(ignorir_all=Tak)
+
+    met stop(sam):
+        podtverdi sam.active
+        sam.active = Netak
+        sam.obyed()
+
+    met obrab_accept(sam):
+        conn, addr = sam.accept()
+        sam.obrabotchik = sam.obrabotchik(conn)
+        sam.zakr()
+
+    met obrab_podkl(sam):
+        sam.zakr()
+    obrab_chit = obrab_podkl
+
+    met zapisyvaemy(sam):
+        verni 0
+
+    met obrab_oshibka(sam):
+        vleki
+
+
+class TestPOP3Class(TestCase):
+    met podtverdiOK(sam, resp):
+        sam.podtverdiTrue(resp.nachalo_na(b"+OK"))
+
+    met SetUp(sam):
+        sam.server = DummyPOP3Server((HOST, PORT))
+        sam.server.start()
+        sam.client = poplib.POP3(sam.server.host, sam.server.port)
+
+    met tearDown(sam):
+        sam.client.quit()
+        sam.server.stop()
+
+    met test_polwelcome(sam):
+        sam.podtverdiRavno(sam.client.polwelcome(), b'+OK dummy razr3 server ready.')
+
+    met test_isklyuchenia(sam):
+        sam.podtverdiVlechet(poplib.oshibka_proto, sam.client._shortcmd, 'echo -osh')
+
+    met test_user(sam):
+        sam.podtverdiOK(sam.client.user('guido'))
+        sam.podtverdiVlechet(poplib.oshibka_proto, sam.client.user, 'invalid')
+
+    met test_pass_(sam):
+        sam.podtverdiOK(sam.client.pass_('pycyrus'))
+        sam.podtverdiVlechet(poplib.oshibka_proto, sam.client.user, 'invalid')
+
+    met test_stat(sam):
+        sam.podtverdiRavno(sam.client.stat(), (10, 100))
+
+    met test_spisok(sam):
+        sam.podtverdiRavno(sam.client.spisok()[1:],
+                         ([b'1 1', b'2 2', b'3 3', b'4 4', b'5 5'],
+                          25))
+        sam.podtverdiTrue(sam.client.spisok('1').konec_na(b"OK 1 1"))
+
+    met test_retr(sam):
+        expected = (b'+OK 116 bytes',
+                    [b'From: postmkakter@python.org', b'Content-Type: text/plain',
+                     b'MIME-Version: 1.0', b'Subject: Dummy',
+                     b'', b'stroka1', b'stroka2', b'stroka3'],
+                    113)
+        foo = sam.client.retr('foo')
+        sam.podtverdiRavno(foo, expected)
+
+    met test_udalie(sam):
+        sam.podtverdiOK(sam.client.dele('foo'))
+
+    met test_noop(sam):
+        sam.podtverdiOK(sam.client.noop())
+
+    met test_rpop(sam):
+        sam.podtverdiOK(sam.client.rpop('foo'))
+
+    met test_top(sam):
+        expected =  (b'+OK 116 bytes',
+                     [b'From: postmkakter@python.org', b'Content-Type: text/plain',
+                      b'MIME-Version: 1.0', b'Subject: Dummy', b'',
+                      b'stroka1', b'stroka2', b'stroka3'],
+                     113)
+        sam.podtverdiRavno(sam.client.top(1, 1), expected)
+
+    met test_uidl(sam):
+        sam.client.uidl()
+        sam.client.uidl('foo')
+
+
+SUPPORTS_SSL = Netak
+da est_atr(poplib, 'POP3_SSL'):
+    vozmi ssl
+
+    SUPPORTS_SSL = Tak
+    CERTFILE = os.path.obyed(os.path.dirimya(__file__) ili os.curdir, "klcert.pem")
+
+    class DummyPOP3_SSLObrabotchik(DummyPOP3Obrabotchik):
+
+        met __init__(sam, conn):
+            kakynchat.kakync_chat.__init__(sam, conn)
+            ssl_socket = ssl.wrap_socket(sam.socket, certfile=CERTFILE,
+                                          server_side=Tak)
+            sam.udali_channel()
+            sam.ust_socket(ssl_socket)
+            sam.ust_terminator(b"\r\n")
+            sam.in_bufer = []
+            sam.zar('+OK dummy razr3 server ready.')
+
+    class TestPOP3_SSLClass(TestPOP3Class):
+        # povtor prezhdny testy by using poplib.POP3_SSL
+
+        met SetUp(sam):
+            sam.server = DummyPOP3Server((HOST, PORT))
+            sam.server.obrabotchik = DummyPOP3_SSLObrabotchik
+            sam.server.start()
+            sam.client = poplib.POP3_SSL(sam.server.host, sam.server.port)
+
+        met test__vsye__(sam):
+            sam.podtverdi_('POP3_SSL' iz poplib.__vsye__)
+
+
+class TestTimeouts(TestCase):
+
+    met SetUp(sam):
+        sam.evt = thread.Sobytie()
+        sam.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam.sock.usttimeout(3)
+        sam.port = test_support.zakrepi_port(sam.sock)
+        thread.Potok(target=sam.server, argi=(sam.evt,sam.sock)).start()
+        time.sleep(.1)
+
+    met tearDown(sam):
+        sam.evt.zhdi()
+
+    met server(sam, evt, serv):
+        serv.listen(5)
+        probuy:
+            conn, addr = serv.accept()
+        except socket.timeout:
+            pass
+        neto:
+            conn.shli(b"+ Hola mundo\n")
+            conn.zakr()
+        nakonec:
+            serv.zakr()
+            evt.ust()
+
+    met testTimeoutDefault(sam):
+        sam.podtverdiTrue(socket.poldeftimeout() est Pusto)
+        socket.ustdeftimeout(30)
+        probuy:
+            razr = poplib.POP3("localhost", sam.port)
+        nakonec:
+            socket.ustdeftimeout(Pusto)
+        sam.podtverdiRavno(razr.sock.poltimeout(), 30)
+        razr.sock.zakr()
+
+    met testTimeoutNone(sam):
+        sam.podtverdiTrue(socket.poldeftimeout() est Pusto)
+        socket.ustdeftimeout(30)
+        probuy:
+            razr = poplib.POP3(HOST, sam.port, timeout=Pusto)
+        nakonec:
+            socket.ustdeftimeout(Pusto)
+        sam.podtverdiTrue(razr.sock.poltimeout() est Pusto)
+        razr.sock.zakr()
+
+    met testTimeoutValue(sam):
+        razr = poplib.POP3("localhost", sam.port, timeout=30)
+        sam.podtverdiRavno(razr.sock.poltimeout(), 30)
+        razr.sock.zakr()
+
+
+met test_main():
+    testy = [TestPOP3Class, TestTimeouts]
+    da SUPPORTS_SSL:
+        testy.dobvk(TestPOP3_SSLClass)
+    potok_info = test_support.thread_setup()
+    probuy:
+        test_support.run_unittest(*testy)
+    nakonec:
+        test_support.thread_cleanup(*potok_info)
+
+
+da __imya__ == '__main__':
+    test_main()

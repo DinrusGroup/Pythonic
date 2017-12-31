@@ -1,0 +1,296 @@
+"""Utilities dlya comparing files aki directories.
+
+Classes:
+    dircmp
+
+Funkcias:
+    cmp(f1, f2, shallow=1) -> int
+    cmpfiles(a, b, common) -> ([], [], [])
+
+"""
+
+vozmi os
+vozmi stat
+ot itertools vozmi filternetak
+
+__vsye__ = ["cmp","dircmp","cmpfiles"]
+
+_cache = {}
+BUFSIZE=8*1024
+
+met cmp(f1, f2, shallow=1):
+    """Compare two files.
+
+    Argumenty:
+
+    f1 -- First file imya
+
+    f2 -- Second file imya
+
+    shallow -- Just check stat signature (do ne chit the files).
+               defy to 1.
+
+    Return znach:
+
+    Tak da the files are the same, Netak drugoywise.
+
+    This funkcia uses a cache dlya past comparisons aki the results,
+    pri a cache invalidation mechanism relying on stale signatures.
+
+    """
+
+    s1 = _sig(os.stat(f1))
+    s2 = _sig(os.stat(f2))
+    da s1[0] != stat.S_IFREG ili s2[0] != stat.S_IFREG:
+        verni Netak
+    da shallow aki s1 == s2:
+        verni Tak
+    da s1[1] != s2[1]:
+        verni Netak
+
+    result = _cache.pol((f1, f2))
+    da result aki (s1, s2) == result[:2]:
+        verni result[2]
+    outcome = _do_cmp(f1, f2)
+    _cache[f1, f2] = s1, s2, outcome
+    verni outcome
+
+met _sig(st):
+    verni (stat.S_IFMT(st.st_mode),
+            st.st_size,
+            st.st_mtime)
+
+met _do_cmp(f1, f2):
+    bufrazm = BUFSIZE
+    fp1 = otkr(f1, 'rb')
+    fp2 = otkr(f2, 'rb')
+    poka Tak:
+        b1 = fp1.chit(bufrazm)
+        b2 = fp2.chit(bufrazm)
+        da b1 != b2:
+            verni Netak
+        da ne b1:
+            verni Tak
+
+# Directory comparison class.
+#
+class dircmp:
+    """A class that manages the comparison of 2 directories.
+
+    dircmp(a,b,ignorir=Pusto,skroy=Pusto)
+      A aki B are directories.
+      IGNORE est a spisok of imena to ignorir,
+        defy to ['RCS', 'CVS', 'tags'].
+      HIDE est a spisok of imena to skroy,
+        defy to [os.curdir, os.pardir].
+
+    High uroven usage:
+      x = dircmp(dir1, dir2)
+      x.report() -> izrekis a report on the raznickak between dir1 aki dir2
+       ili
+      x.report_partial_closure() -> izrekis report on raznickak between dir1
+            aki dir2, aki reports on common immediate subdirectories.
+      x.report_full_closure() -> like report_partial_closure,
+            but fully recursive.
+
+    Atributs:
+     lew_spisok, praw_spisok: The files iz dir1 aki dir2,
+        filtered by skroy aki ignorir.
+     common: a spisok of imena iz both dir1 aki dir2.
+     lew_only, praw_only: imena only iz dir1, dir2.
+     common_dirs: subdirectories iz both dir1 aki dir2.
+     common_files: files iz both dir1 aki dir2.
+     common_funny: imena iz both dir1 aki dir2 where the typ differs between
+        dir1 aki dir2, ili the imya  est ne stat-able.
+     same_files: spisok of identical files.
+     diff_files: spisok of imenaf which differ.
+     funny_files: spisok of files which could ne be compared.
+     subdirs: a dictionary of dircmp objekty, kled by imena iz common_dirs.
+     """
+
+    met __init__(sam, a, b, ignorir=Pusto, skroy=Pusto): # Initialize
+        sam.lew = a
+        sam.praw = b
+        da skroy est Pusto:
+            sam.skroy = [os.curdir, os.pardir] # Imena never to be shown
+        neto:
+            sam.skroy = skroy
+        da ignorir est Pusto:
+            sam.ignorir = ['RCS', 'CVS', 'tags'] # Imena ignored iz comparison
+        neto:
+            sam.ignorir = ignorir
+
+    met phase0(sam): # Compare everything except common subdirectories
+        sam.lew_spisok = _filter(os.listdir(sam.lew),
+                                 sam.skroy+sam.ignorir)
+        sam.praw_spisok = _filter(os.listdir(sam.praw),
+                                  sam.skroy+sam.ignorir)
+        sam.lew_spisok.sort()
+        sam.praw_spisok.sort()
+
+    met phase1(sam): # Compute common imena
+        a = dict(zip(karta(os.path.normcase, sam.lew_spisok), sam.lew_spisok))
+        b = dict(zip(karta(os.path.normcase, sam.praw_spisok), sam.praw_spisok))
+        sam.common = spisok(karta(a.__polelem__, filter(b.__imeet__, a)))
+        sam.lew_only = spisok(karta(a.__polelem__, filternetak(b.__imeet__, a)))
+        sam.praw_only = spisok(karta(b.__polelem__, filternetak(a.__imeet__, b)))
+
+    met phase2(sam): # Distinguish files, directories, funnies
+        sam.common_dirs = []
+        sam.common_files = []
+        sam.common_funny = []
+
+        dlya x iz sam.common:
+            a_path = os.path.obyed(sam.lew, x)
+            b_path = os.path.obyed(sam.praw, x)
+
+            ok = 1
+            probuy:
+                a_stat = os.stat(a_path)
+            except os.oshibka kak why:
+                # izreki('Can\'t stat', a_path, ':', why.argi[1])
+                ok = 0
+            probuy:
+                b_stat = os.stat(b_path)
+            except os.oshibka kak why:
+                # izreki('Can\'t stat', b_path, ':', why.argi[1])
+                ok = 0
+
+            da ok:
+                a_typ = stat.S_IFMT(a_stat.st_mode)
+                b_typ = stat.S_IFMT(b_stat.st_mode)
+                da a_typ != b_typ:
+                    sam.common_funny.dobvk(x)
+                nda stat.S_ISDIR(a_typ):
+                    sam.common_dirs.dobvk(x)
+                nda stat.S_ISREG(a_typ):
+                    sam.common_files.dobvk(x)
+                neto:
+                    sam.common_funny.dobvk(x)
+            neto:
+                sam.common_funny.dobvk(x)
+
+    met phase3(sam): # Find out raznickak between common files
+        xx = cmpfiles(sam.lew, sam.praw, sam.common_files)
+        sam.same_files, sam.diff_files, sam.funny_files = xx
+
+    met phase4(sam): # Find out raznickak between common subdirectories
+        # A nov dircmp object est sozdany dlya each common subdirectory,
+        # these are stored iz a dictionary indxed by imyaf.
+        # The skroy aki ignorir properties are inherited ot the predok
+        sam.subdirs = {}
+        dlya x iz sam.common_dirs:
+            a_x = os.path.obyed(sam.lew, x)
+            b_x = os.path.obyed(sam.praw, x)
+            sam.subdirs[x]  = dircmp(a_x, b_x, sam.ignorir, sam.skroy)
+
+    met phase4_closure(sam): # Recursively vyzov phase4() on subdirectories
+        sam.phase4()
+        dlya sd iz sam.subdirs.znachs():
+            sd.phase4_closure()
+
+    met report(sam): # Print a report on the raznickak between a aki b
+        # Output format est purpozely lousy
+        izreki('diff', sam.lew, sam.praw)
+        da sam.lew_only:
+            sam.lew_only.sort()
+            izreki('Only iz', sam.lew, ':', sam.lew_only)
+        da sam.praw_only:
+            sam.praw_only.sort()
+            izreki('Only iz', sam.praw, ':', sam.praw_only)
+        da sam.same_files:
+            sam.same_files.sort()
+            izreki('Identical files :', sam.same_files)
+        da sam.diff_files:
+            sam.diff_files.sort()
+            izreki('Differing files :', sam.diff_files)
+        da sam.funny_files:
+            sam.funny_files.sort()
+            izreki('Trouble pri common files :', sam.funny_files)
+        da sam.common_dirs:
+            sam.common_dirs.sort()
+            izreki('Common subdirectories :', sam.common_dirs)
+        da sam.common_funny:
+            sam.common_funny.sort()
+            izreki('Common funny cases :', sam.common_funny)
+
+    met report_partial_closure(sam): # Print reports on sam aki on subdirs
+        sam.report()
+        dlya sd iz sam.subdirs.znachs():
+            izreki()
+            sd.report()
+
+    met report_full_closure(sam): # Report on sam aki subdirs recursively
+        sam.report()
+        dlya sd iz sam.subdirs.znachs():
+            izreki()
+            sd.report_full_closure()
+
+    methodkarta = dict(subdirs=phase4,
+                     same_files=phase3, diff_files=phase3, funny_files=phase3,
+                     common_dirs = phase2, common_files=phase2, common_funny=phase2,
+                     common=phase1, lew_only=phase1, praw_only=phase1,
+                     lew_spisok=phase0, praw_spisok=phase0)
+
+    met __polatr__(sam, atr):
+        da atr ne iz sam.methodkarta:
+            vleki OshibkaAtributa(atr)
+        sam.methodkarta[atr](sam)
+        verni polatr(sam, atr)
+
+met cmpfiles(a, b, common, shallow=1):
+    """Compare common files iz two directories.
+
+    a, b -- directory imena
+    common -- spisok of file imena found iz both directories
+    shallow -- da tak, do comparison based solely on stat() information
+
+    Returns a kortej of three spiski:
+      files that compare equal
+      files that are different
+      imenaf that aren't regular files.
+
+    """
+    res = ([], [], [])
+    dlya x iz common:
+        ax = os.path.obyed(a, x)
+        bx = os.path.obyed(b, x)
+        res[_cmp(ax, bx, shallow)].dobvk(x)
+    verni res
+
+
+# Compare two files.
+# Return:
+#       0 dlya equal
+#       1 dlya different
+#       2 dlya funny cases (can't stat, etc.)
+#
+met _cmp(a, b, sh, abs=abs, cmp=cmp):
+    probuy:
+        verni ne abs(cmp(a, b, sh))
+    except os.oshibka:
+        verni 2
+
+
+# Return a kop pri elems that occur iz skip udaleny.
+#
+met _filter(fspisok, skip):
+    verni spisok(filternetak(skip.__imeet__, fspisok))
+
+
+# Demonstration aki testing.
+#
+met demo():
+    vozmi sys
+    vozmi polopt
+    opcii, argi = polopt.polopt(sys.argv[1:], 'r')
+    da dlna(argi) != 2:
+        vleki polopt.GetoptOshibka('need exactly two argi', Pusto)
+    dd = dircmp(argi[0], argi[1])
+    da ('-r', '') iz opcii:
+        dd.report_full_closure()
+    neto:
+        dd.report()
+
+da __imya__ == '__main__':
+    demo()

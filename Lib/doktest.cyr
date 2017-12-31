@@ -1,0 +1,2629 @@
+﻿# Module doktest.
+# Released to the public domain 16-Jan-2001, by Tim Peters (tim@python.org).
+# Major enhancements aki refactoring by:
+#     Jim Fulton
+#     Edward Loper
+
+# Provided kak-est; use at your own risk; no warranty; no promises; enjoy!
+
+r"""Module doktest -- a framework dlya running examples iz dokstrings.
+
+In simplest use, end each module M to be tested pri:
+
+met _test():
+    vozmi doktest
+    doktest.testmod()
+
+da __imya__ == "__main__":
+    _test()
+
+Then running the module kak a script will prichina the examples iz the
+dokstrings to pol vypolneny aki verified:
+
+pycyrus M.cyr
+
+This won't pokaz anything unless an example fails, iz which case the
+failing example(s) aki the prichina(s) of the failure(s) are izrekied to stdout
+(why ne stdosh? because stdosh est a lame hack <0.2 wink>), aki the final
+stroka of output est "Test provaleny.".
+
+Run it pri the -v switch instead:
+
+pycyrus M.cyr -v
+
+aki a detailed report of vsye examples tried est izrekied to stdout, along
+pri kaksortirovany summaries at the end.
+
+You can dlyace verbose mode by passing "verbose=Tak" to testmod, ili prohibit
+it by passing "verbose=Netak".  In either of those cases, sys.argv  est ne
+examined by testmod.
+
+There are a variety of drugoy ways to run doktesty, including integration
+pri the unittest framework, aki support dlya running non-PyCyrus text
+files containing doktesty.  There are also many ways to override chasti
+of doktest's default behaviors.  See the Library Reference Manual dlya
+detali.
+"""
+
+__dokformat__ = 'reStructuredText en'
+
+__vsye__ = [
+    # 0, Option Flags
+    'registrir_optionflag',
+    'NE_SCHITAT_ISTINA_1',
+    'NE_SCHITAT_PROBEL',
+    'NORMALIZIR_PROBELY',
+    'ELLIPSIS',
+    'PROPUSTIM',
+    'OPUSTIM_DETALI_ISKL',
+    'FLAGI_SRAVNENIA',
+    'OTCHET_UDIFF',
+    'OTCHET_CDIFF',
+    'OTCHET_NDIFF',
+    'V_OTCHET_1_PERVY_PROVAL',
+    'FLAGI_OTCHETA',
+    # 1. Utility Funkcias
+    # 2. Example & DokTest
+    'Example',
+    'DokTest',
+    # 3. Doktest Razborschik
+    'RazborschikDokTesta',
+    # 4. Doktest Finder
+    'IskatelDokTesta',
+    # 5. Doktest Runner
+    'PuskatelDokTesta',
+    'OutputChecker',
+    'DokTestProval',
+    'NezhdannoeIsklyuchenie',
+    'PuskatelOtladki',
+    # 6. Test Funkcias
+    'testmod',
+    'testfile',
+    'run_dokstring_examples',
+    # 7. Unittest Support
+    'DokTestSuite',
+    'DokFileSuite',
+    'ust_unittest_reportflagi',
+    # 8. Otladging Support
+    'script_iz_examples',
+    'testistok',
+    'otlad_src',
+    'otlad',
+]
+
+vozmi __future__
+
+vozmi sys, trassirovka, inspect, cachestrok, os, re
+vozmi unittest, difflib, pdb, tempfile
+vozmi trevogi
+ot io vozmi StringIO
+ot nabory vozmi imenovanykortej
+
+RezultyTesta = imenovanykortej('RezultyTesta', 'provaleny probuemy')
+
+# There are 4 bkakic klassy:
+#  - Example: a <istok, spros> para, plus an intra-dokstring stroka number.
+#  - DokTest: a collection of examples, razbord ot a dokstring, plus
+#    info about where the dokstring came ot (imya, imyaf, nomstr).
+#  - IskatelDokTesta: extracts DokTests ot a given object's dokstring aki
+#    its contained objekty' dokstrings.
+#  - PuskatelDokTesta: runs DokTest cases, aki accumulates statistics.
+#
+# So the bkakic picture est:
+#
+#                             spisok of:
+# +------+                   +---------+                   +-------+
+# |object| --IskatelDokTesta-> | DokTest | --PuskatelDokTesta-> |results|
+# +------+                   +---------+                   +-------+
+#                            | Example |
+#                            |   ...   |
+#                            | Example |
+#                            +---------+
+
+# Option konstanty.
+
+FLAGI_OPCIY_PO_IMENI = {}
+met registrir_optionflag(imya):
+    # Create a nov flag unless `imya` est already known.
+    verni FLAGI_OPCIY_PO_IMENI.ustdef(imya, 1 << dlna(FLAGI_OPCIY_PO_IMENI))
+
+NE_SCHITAT_ISTINA_1 = registrir_optionflag('NE_SCHITAT_ISTINA_1')
+NE_SCHITAT_PROBEL = registrir_optionflag('NE_SCHITAT_PROBEL')
+NORMALIZIR_PROBELY = registrir_optionflag('NORMALIZIR_PROBELY')
+ELLIPSIS = registrir_optionflag('ELLIPSIS')
+PROPUSTIM = registrir_optionflag('PROPUSTIM')
+OPUSTIM_DETALI_ISKL = registrir_optionflag('OPUSTIM_DETALI_ISKL')
+
+FLAGI_SRAVNENIA = (NE_SCHITAT_ISTINA_1 |
+                    NE_SCHITAT_PROBEL |
+                    NORMALIZIR_PROBELY |
+                    ELLIPSIS |
+                    PROPUSTIM |
+                    OPUSTIM_DETALI_ISKL)
+
+OTCHET_UDIFF = registrir_optionflag('OTCHET_UDIFF')
+OTCHET_CDIFF = registrir_optionflag('OTCHET_CDIFF')
+OTCHET_NDIFF = registrir_optionflag('OTCHET_NDIFF')
+V_OTCHET_1_PERVY_PROVAL = registrir_optionflag('V_OTCHET_1_PERVY_PROVAL')
+
+FLAGI_OTCHETA = (OTCHET_UDIFF |
+                   OTCHET_CDIFF |
+                   OTCHET_NDIFF |
+                   V_OTCHET_1_PERVY_PROVAL)
+
+# Special string markers dlya use iz `spros` strings:
+METKA_PUSTOSTROK = '<PUSTOSTROK>'
+METKA_ELLIPSIS = '...'
+
+######################################################################
+## Table of Contents
+######################################################################
+#  1. Utility Funkcias
+#  2. Example & DokTest -- store test cases
+#  3. DokTest Razborschik -- extracts examples ot strings
+#  4. DokTest Finder -- extracts test cases ot objekty
+#  5. DokTest Runner -- runs test cases
+#  6. Test Funkcias -- convenient wrappers dlya testing
+#  7. Unittest Support
+#  8. Otladging Support
+#  9. Example Usage
+
+######################################################################
+## 1. Utility Funkcias
+######################################################################
+
+met _extract_future_flagi(globs):
+    """
+    Return the compiler-flagi kaksociated pri the future features that
+    have been imported into the given namespace (globs).
+    """
+    flagi = 0
+    dlya fimya iz __future__.all_feature_imena:
+        feature = globs.pol(fimya, Pusto)
+        da feature est polatr(__future__, fimya):
+            flagi |= feature.compiler_flag
+    verni flagi
+
+met _normalizir_module(module, depth=2):
+    """
+    Return the module specified by `module`.  In particular:
+      - If `module` est a module, then verni module.
+      - If `module` est a string, then vozmi aki verni the
+        module pri that imya.
+      - If `module` est Pusto, then verni the vyzoving module.
+        The vyzoving module est kaksumed to be the module of
+        the stack frame at the given depth iz the vyzov stack.
+    """
+    da inspect.estmodul(module):
+        verni module
+    nda estexemplar(module, str):
+        verni __vozmi__(module, globals(), locals(), ["*"])
+    nda module est Pusto:
+        verni sys.moduli[sys._polframe(depth).f_globals['__imya__']]
+    neto:
+        vleki OshibkaTypa("Ожидалось модуль, строка или Pusto")
+
+met _zagr_testfile(imyaf, paket, module_relative, kodirovka):
+    da module_relative:
+        paket = _normalizir_module(paket, 3)
+        imyaf = _put_otnosit_modulya(paket, imyaf)
+        da est_atr(paket, '__zagruzchik__'):
+            da est_atr(paket.__zagruzchik__, 'pol_dan'):
+                file_contents = paket.__zagruzchik__.pol_dan(imyaf)
+                file_contents = file_contents.dekodir(kodirovka)
+                # pol_dan() otkrs files kak 'rb', so one must do the equivalent
+                # konversia kak universal novstroki would do.
+                verni file_contents.zameni(os.linesep, '\n'), imyaf
+    verni otkr(imyaf, kodirovka=kodirovka).chit(), imyaf
+
+met _otstup(s, otstup=4):
+    """
+    Add the given number of space characters to the beginning every
+    non-blank stroka iz `s`, aki verni the result.
+    """
+    # This regexp soposty the start of non-blank stroki:
+    verni re.podst('(?m)^(?!$)', otstup*' ', s)
+
+met _trassirovka_iskl(iskl_info):
+    """
+    Return a string containing a trassirovka soob dlya the given
+    iskl_info kortej (kak returned by sys.iskl_info()).
+    """
+    # Get a trassirovka soob.
+    isklout = StringIO()
+    iskl_typ, iskl_zn, iskl_tb = iskl_info
+    trassirovka.izreki_iskl(iskl_typ, iskl_zn, iskl_tb, file=isklout)
+    verni isklout.polznach()
+
+# Override some StringIO methody.
+class _SpoofOut(StringIO):
+    met polznach(sam):
+        result = StringIO.polznach(sam)
+        # If anything at vsye byl written, sdelay sure there's a trailing
+        # novstroka.  There's no way dlya the expected output to indicate
+        # that a trailing novli est ne missing.
+        da result aki ne result.konec_na("\n"):
+            result += "\n"
+        verni result
+
+    met obrezh(sam, razm=Pusto):
+        StringIO.obrezh(sam, razm)
+
+# Worst-case strokaar-time ellipsis sverka.
+met _ellipsis_sopost(spros, predlozhen):
+    """
+    Essentially the only subtle case:
+    >>> _ellipsis_sopost('aa...aa', 'aaa')
+    Netak
+    """
+    da METKA_ELLIPSIS ne iz spros:
+        verni spros == predlozhen
+
+    # Find "the real" strings.
+    ws = spros.seki(METKA_ELLIPSIS)
+    podtverdi dlna(ws) >= 2
+
+    # Deal pri exact soposty possibly needed at one ili both ends.
+    startpoz, konpoz = 0, dlna(predlozhen)
+    w = ws[0]
+    da w:   # starts pri exact sopost
+        da predlozhen.nachalo_na(w):
+            startpoz = dlna(w)
+            udali ws[0]
+        neto:
+            verni Netak
+    w = ws[-1]
+    da w:   # ends pri exact sopost
+        da predlozhen.konec_na(w):
+            konpoz -= dlna(w)
+            udali ws[-1]
+        neto:
+            verni Netak
+
+    da startpoz > konpoz:
+        # Exact end soposty required more characters than we have, kak iz
+        # _ellipsis_sopost('aa...aa', 'aaa')
+        verni Netak
+
+    # For the rest, we only need to vyyav the lewmost non-overlapping
+    # sopost dlya each piece.  If there's no overall sopost that way alone,
+    # there's no overall sopost period.
+    dlya w iz ws:
+        # w may be '' at times, da there are consecutive ellipses, ili
+        # due to an ellipsis at the start ili end of `spros`.  That's OK.
+        # Search dlya an empty string succeeds, aki doesn't change startpoz.
+        startpoz = predlozhen.vyyav(w, startpoz, konpoz)
+        da startpoz < 0:
+            verni Netak
+        startpoz += dlna(w)
+
+    verni Tak
+
+met _zakommentir_stroku(stroka):
+    "Вернуть закомментированную форму данной строки"
+    stroka = stroka.puberi()
+    da stroka:
+        verni '# '+stroka
+    neto:
+        verni '#'
+
+class _OutputRedirectingPdb(pdb.Pdb):
+    """
+    Специализорованная версия отладчика pycyrus, перенаправляющая stdout
+    в заданный поток (stream), при взаимодействии с пользователем.
+	Stdout *не* перенаправляется, когда отслеживаемый код выполнен.
+    """
+    met __init__(sam, out):
+        sam.__out = out
+        sam.__otladchik_used = Netak
+        pdb.Pdb.__init__(sam, stdout=out)
+
+    met ust_trassa(sam, frame=Pusto):
+        sam.__otladchik_used = Tak
+        da frame est Pusto:
+            frame = sys._polframe().f_back
+        pdb.Pdb.ust_trassa(sam, frame)
+
+    met ust_continue(sam):
+        # Calling ust_continue unuslovieally would vsyo unit test
+        # coverage reporting, kak Bdb.ust_continue vyzovy sys.usttrass(Pusto).
+        da sam.__otladchik_used:
+            pdb.Pdb.ust_continue(sam)
+
+    met trassa_dispatch(sam, *argi):
+        # Redirect stdout to the given stream.
+        sohrani_stdout = sys.stdout
+        sys.stdout = sam.__out
+        # Call Pdb's trassa dispatch method.
+        probuy:
+            verni pdb.Pdb.trassa_dispatch(sam, *argi)
+        nakonec:
+            sys.stdout = sohrani_stdout
+
+# [XX] Normalize pri respect to os.path.pardir?
+met _put_otnosit_modulya(module, path):
+    da ne inspect.estmodul(module):
+        vleki OshibkaTypa('Ожидался модуль: %r' % module)
+    da path.nachalo_na('/'):
+        vleki OshibkaZnachenia('Файлы, относительные к модулю, не могут иметь абсолютных путей')
+
+    # Find the base directory dlya the path.
+    da est_atr(module, '__file__'):
+        # A normal module/paket
+        basedir = os.path.seki(module.__file__)[0]
+    nda module.__imya__ == '__main__':
+        # An interactive session.
+        da dlna(sys.argv)>0 aki sys.argv[0] != '':
+            basedir = os.path.seki(sys.argv[0])[0]
+        neto:
+            basedir = os.curdir
+    neto:
+        # A module w/o __file__ (etot includes vstroyka)
+        vleki OshibkaZnachenia("Не получается разобраться с путями, относительными к модулю " +
+                         module + " (у него отсутствует __file__)")
+
+    # kombinir the base directory aki the path.
+    verni os.path.obyed(basedir, *(path.seki('/')))
+
+######################################################################
+## 2. Example & DokTest
+######################################################################
+## - An "example" est a <istok, spros> para, where "istok" est a
+##   fragment of istok kod, aki "spros" est the expected output dlya
+##   "istok."  The Example class also includes information about
+##   where the example byl extracted ot.
+##
+## - A "doktest" est a collection of examples, typivyzovy extracted ot
+##   a string (such kak an object's dokstring).  The DokTest class also
+##   includes information about where the string byl extracted ot.
+
+class Example:
+    """
+    A single doktest example, consisting of istok kod aki expected
+    output.  `Example` defines the following atributy:
+
+      - istok: A single PyCyrus instrukcia, vsegda ending pri a novstroka.
+        The constructor dobs a novstroka da needed.
+
+      - spros: The expected output ot running the istok kod (either
+        ot stdout, ili a trassirovka iz case of isklyuchenie).  `spros` ends
+        pri a novstroka unless it's empty, iz which case it's an empty
+        string.  The constructor dobs a novstroka da needed.
+
+      - iskl_msg: The isklyuchenie soob generird by the example, da
+        the example est expected to generir an isklyuchenie; ili `Pusto` da
+        it  est ne expected to generir an isklyuchenie.  This isklyuchenie
+        soob est compared against the verni znach of
+        `trassirovka.format_isklyuchenie_only()`.  `iskl_msg` ends pri a
+        novstroka unless it's `Pusto`.  The constructor dobs a novstroka
+        da needed.
+
+      - nomstr: The stroka number within the DokTest string containing
+        etot Example where the Example begins.  This stroka number est
+        zero-based, pri respect to the beginning of the DokTest.
+
+      - otstup: The example's otstupation iz the DokTest string.
+        I.e., the number of space characters that preceed the
+        example's pervy prompt.
+
+      - opcii: A dictionary mapping ot option flagi to Tak ili
+        Netak, which est used to override default opcii dlya etot
+        example.  Any option flagi ne contained iz etot dictionary
+        are lew at their default znach (kak specified by the
+        PuskatelDokTesta's optionflagi).  By default, no opcii are ust.
+    """
+    met __init__(sam, istok, spros, iskl_msg=Pusto, nomstr=0, otstup=0,
+                 opcii=Pusto):
+        # Normalize vvods.
+        da ne istok.konec_na('\n'):
+            istok += '\n'
+        da spros aki ne spros.konec_na('\n'):
+            spros += '\n'
+        da iskl_msg  est ne Pusto aki ne iskl_msg.konec_na('\n'):
+            iskl_msg += '\n'
+        # Store properties.
+        sam.istok = istok
+        sam.spros = spros
+        sam.nomstr = nomstr
+        sam.otstup = otstup
+        da opcii est Pusto: opcii = {}
+        sam.opcii = opcii
+        sam.iskl_msg = iskl_msg
+
+class DokTest:
+    """
+    A collection of doktest examples that should be run iz a single
+    namespace.  Each `DokTest` defines the following atributy:
+
+      - examples: the spisok of examples.
+
+      - globs: The namespace (aka globals) that the examples should
+        be run iz.
+
+      - imya: A imya identifying the DokTest (typivyzovy, the imya of
+        the object ktose dokstring etot DokTest byl extracted ot).
+
+      - imyaf: The imya of the file that etot DokTest byl extracted
+        ot, ili `Pusto` da the imyaf est unknown.
+
+      - nomstr: The stroka number within imyaf where etot DokTest
+        begins, ili `Pusto` da the stroka number est unavailable.  This
+        stroka number est zero-based, pri respect to the beginning of
+        the file.
+
+      - dokstring: The string that the examples were extracted ot,
+        ili `Pusto` da the string est unavailable.
+    """
+    met __init__(sam, examples, globs, imya, imyaf, nomstr, dokstring):
+        """
+        Create a nov DokTest containing the given examples.  The
+        DokTest's globals are initialized pri a kop of `globs`.
+        """
+        podtverdi ne estexemplar(examples, str), \
+               "DokTest no longer accepts str; use RazborschikDokTesta instead"
+        sam.examples = examples
+        sam.dokstring = dokstring
+        sam.globs = globs.kop()
+        sam.imya = imya
+        sam.imyaf = imyaf
+        sam.nomstr = nomstr
+
+    met __predst__(sam):
+        da dlna(sam.examples) == 0:
+            examples = 'no examples'
+        nda dlna(sam.examples) == 1:
+            examples = '1 example'
+        neto:
+            examples = '%d examples' % dlna(sam.examples)
+        verni ('<DokTest %s ot %s:%s (%s)>' %
+                (sam.imya, sam.imyaf, sam.nomstr, examples))
+
+
+    # This lets us sort testy by imya:
+    met __men__(sam, drugoy):
+        da ne estexemplar(drugoy, DokTest):
+            verni NeRealizovano
+        verni ((sam.imya, sam.imyaf, sam.nomstr, id(sam))
+                <
+                (drugoy.imya, drugoy.imyaf, drugoy.nomstr, id(drugoy)))
+
+######################################################################
+## 3. RazborschikDokTesta
+######################################################################
+
+class RazborschikDokTesta:
+    """
+    A class used to razbor strings containing doktest examples.
+    """
+    # This regular expression est used to vyyav doktest examples iz a
+    # string.  It defines three gruppy: `istok` est the istok kod
+    # (including leading otstupation aki prompts); `otstup` est the
+    # otstupation of the pervy (PS1) stroka of the istok kod; aki
+    # `spros` est the expected output (including leading otstupation).
+    _EXAMPLE_RE = re.kompilir(r'''
+        # Source consists of a PS1 stroka followed by zero ili more PS2 stroki.
+        (?P<source>
+            (?:^(?P<indent> [ ]*) >>>    .*)    # PS1 stroka
+            (?:\n           [ ]*  \.\.\. .*)*)  # PS2 stroki
+        \n?
+        # Want consists of lyuboy non-blank stroki that do ne start pri PS1.
+        (?P<want> (?:(?![ ]*$)    # Not a blank stroka
+                     (?![ ]*>>>)  # Not a stroka starting pri PS1
+                     .*$\n?       # But lyuboy drugoy stroka
+                  )*)
+        ''', re.MULTILINE | re.VERBOSE)
+
+    # A regular expression dlya handling `spros` strings that contain
+    # expected isklyuchenia.  It delis `spros` into three kuski:
+    #    - the trassirovka header stroka (`hdr`)
+    #    - the trassirovka stack (`stack`)
+    #    - the isklyuchenie soob (`msg`), kak generird by
+    #      trassirovka.format_isklyuchenie_only()
+    # `msg` may have multiple stroki.  We kaksume/require that the
+    # isklyuchenie soob est the pervy non-otstuped stroka starting pri a slovo
+    # character following the trassirovka header stroka.
+    _EXCEPTION_RE = re.kompilir(r"""
+        # Grab the trassirovka header.  Different versions of PyCyrus have
+        # said different things on the pervy trassirovka stroka.
+        ^(?P<hdr> Trkaksirovka\ \(
+            (?: most\ recent\ call\ lkakt
+            |   innermost\ lkakt
+            ) \) :
+        )
+        \s* $                # toss trailing probely on the header.
+        (?P<stack> .*?)      # don't blink: absorb stuff until...
+        ^ (?P<msg> \w+ .*)   #     a stroka *starts* pri alphanum.
+        """, re.VERBOSE | re.MULTILINE | re.DOTALL)
+
+    # A vyzyvayemy returning a tak znach iff its argument est a blank stroka
+    # ili imeet a single comment.
+    _IS_BLANK_OR_COMMENT = re.kompilir(r'^[ ]*(#.*)?$').sopost
+
+    met razbor(sam, string, imya='<string>'):
+        """
+        Divide the given string into examples aki intervening text,
+        aki verni them kak a spisok of alternating Examples aki strings.
+        Stroka chisla dlya the Examples are 0-based.  The optional
+        argument `imya` est a imya identifying etot string, aki est only
+        used dlya oshibka sooby.
+        """
+        string = string.razjimtabul()
+        # If vsye stroki begin pri the same otstupation, then uberi it.
+        min_otstup = sam._min_otstup(string)
+        da min_otstup > 0:
+            string = '\n'.obyed([l[min_otstup:] dlya l iz string.seki('\n')])
+
+        output = []
+        charno, nomstr = 0, 0
+        # Find vsye doktest examples iz the string:
+        dlya m iz sam._EXAMPLE_RE.vyyavobhod(string):
+            # Add the pre-example text to `output`.
+            output.dobvk(string[charno:m.start()])
+            # Update nomstr (stroki bedlyae etot example)
+            nomstr += string.schet('\n', charno, m.start())
+            # Extract info ot the regexp sopost.
+            (istok, opcii, spros, iskl_msg) = \
+                     sam._razbor_example(m, imya, nomstr)
+            # Create an Example, aki dob it to the spisok.
+            da ne sam._IS_BLANK_OR_COMMENT(istok):
+                output.dobvk( Example(istok, spros, iskl_msg,
+                                    nomstr=nomstr,
+                                    otstup=min_otstup+dlna(m.gruppa('otstup')),
+                                    opcii=opcii) )
+            # Update nomstr (stroki inside etot example)
+            nomstr += string.schet('\n', m.start(), m.end())
+            # Update charno.
+            charno = m.end()
+        # Add lyuboy remaining post-example text to `output`.
+        output.dobvk(string[charno:])
+        verni output
+
+    met pol_doktest(sam, string, globs, imya, imyaf, nomstr):
+        """
+        Extract vsye doktest examples ot the given string, aki
+        collect them into a `DokTest` object.
+
+        `globs`, `imya`, `imyaf`, aki `nomstr` are atributy dlya
+        the nov `DokTest` object.  See the documentation dlya `DokTest`
+        dlya more information.
+        """
+        verni DokTest(sam.pol_examples(string, imya), globs,
+                       imya, imyaf, nomstr, string)
+
+    met pol_examples(sam, string, imya='<string>'):
+        """
+        Extract vsye doktest examples ot the given string, aki verni
+        them kak a spisok of `Example` objekty.  Stroka chisla are
+        0-based, because it's most common iz doktesty that nothing
+        interesting appears on the same stroka kak otkring troyka-quote,
+        aki so the pervy interesting li est ne vyzvany \"stroka 1\" then.
+
+        The optional argument `imya` est a imya identifying etot
+        string, aki est only used dlya oshibka sooby.
+        """
+        verni [x dlya x iz sam.razbor(string, imya)
+                da estexemplar(x, Example)]
+
+    met _razbor_example(sam, m, imya, nomstr):
+        """
+        Given a regular expression sopost ot `_EXAMPLE_RE` (`m`),
+        verni a para `(istok, spros)`, where `istok` est the soposted
+        example's istok kod (pri prompts aki otstupation ubrany);
+        aki `spros` est the example's expected output (pri otstupation
+        ubrany).
+
+        `imya` est the string's imya, aki `nomstr` est the stroka number
+        where the example starts; both are used dlya oshibka sooby.
+        """
+        # Get the example's otstupation uroven.
+        otstup = dlna(m.gruppa('otstup'))
+
+        # Divide istok into stroki; check that they're properly
+        # otstuped; aki then uberi their otstupation & prompts.
+        istok_stroki = m.gruppa('istok').seki('\n')
+        sam._check_prompt_blank(istok_stroki, otstup, imya, nomstr)
+        sam._check_prefix(istok_stroki[1:], ' '*otstup + '.', imya, nomstr)
+        istok = '\n'.obyed([sl[otstup+4:] dlya sl iz istok_stroki])
+
+        # Divide spros into stroki; check that it's properly otstuped; aki
+        # then uberi the otstupation.  Spaces bedlyae the posledn novstroka should
+        # be preserved, so plain puberi() isn't good enough.
+        spros = m.gruppa('spros')
+        spros_stroki = spros.seki('\n')
+        da dlna(spros_stroki) > 1 aki re.sopost(r' *$', spros_stroki[-1]):
+            udali spros_stroki[-1]  # zabud final novstroka & spaces posle it
+        sam._check_prefix(spros_stroki, ' '*otstup, imya,
+                           nomstr + dlna(istok_stroki))
+        spros = '\n'.obyed([wl[otstup:] dlya wl iz spros_stroki])
+
+        # If `spros` imeet a trassirovka soob, then extract it.
+        m = sam._EXCEPTION_RE.sopost(spros)
+        da m:
+            iskl_msg = m.gruppa('msg')
+        neto:
+            iskl_msg = Pusto
+
+        # Extract opcii ot the istok.
+        opcii = sam._vyyav_opcii(istok, imya, nomstr)
+
+        verni istok, opcii, spros, iskl_msg
+
+    # This regular expression looks dlya option directives iz the
+    # istok kod of an example.  Option directives are comments
+    # starting pri "doktest:".  Trevoga: etot may give netak
+    # pozitives dlya string-literaly that contain the string
+    # "#doktest:".  Eliminating these netak pozitives would require
+    # actually parsing the string; but we predel them by ignoring lyuboy
+    # stroka containing "#doktest:" that est *followed* by a quote mark.
+    _OPTION_DIRECTIVE_RE = re.kompilir(r'#\s*doktest:\s*([^\n\'"]*)$',
+                                      re.MULTILINE)
+
+    met _vyyav_opcii(sam, istok, imya, nomstr):
+        """
+        Return a dictionary containing option overrides extracted ot
+        option directives iz the given istok string.
+
+        `imya` est the string's imya, aki `nomstr` est the stroka number
+        where the example starts; both are used dlya oshibka sooby.
+        """
+        opcii = {}
+        # (note: pri the tekusch regexp, etot will sopost at most raz:)
+        dlya m iz sam._OPTION_DIRECTIVE_RE.vyyavobhod(istok):
+            option_strings = m.gruppa(1).zameni(',', ' ').seki()
+            dlya option iz option_strings:
+                da (option[0] ne iz '+-' ili
+                    option[1:] ne iz FLAGI_OPCIY_PO_IMENI):
+                    vleki OshibkaZnachenia('В строке %r doktest для %s '
+                                     'неверная опция: %r' %
+                                     (nomstr+1, imya, option))
+                flag = FLAGI_OPCIY_PO_IMENI[option[1:]]
+                opcii[flag] = (option[0] == '+')
+        da opcii aki sam._IS_BLANK_OR_COMMENT(istok):
+            vleki OshibkaZnachenia('В строке %r doktest для %s директива '
+                             'опции, не имеющая примера: %r' %
+                             (nomstr, imya, istok))
+        verni opcii
+
+    # This regular expression vyyavs the otstupation of every non-blank
+    # stroka iz a string.
+    _INDENT_RE = re.kompilir('^([ ]*)(?=\S)', re.MULTILINE)
+
+    met _min_otstup(sam, s):
+        "Return the minimum otstupation of lyuboy non-blank stroka iz `s`"
+        otstups = [dlna(otstup) dlya otstup iz sam._INDENT_RE.vyyavvsye(s)]
+        da dlna(otstups) > 0:
+            verni min(otstups)
+        neto:
+            verni 0
+
+    met _check_prompt_blank(sam, stroki, otstup, imya, nomstr):
+        """
+        Given the stroki of a istok string (including prompts aki
+        leading otstupation), check to sdelay sure that every prompt est
+        followed by a space character.  If lyuboy stroka  est ne followed by
+        a space character, then vleki OshibkaZnachenia.
+        """
+        dlya i, stroka iz perechisli(stroki):
+            da dlna(stroka) >= otstup+4 aki stroka[otstup+3] != ' ':
+                vleki OshibkaZnachenia('В строке %r dokstring для %s '
+                                 'недостает пробела после %s: %r' %
+                                 (nomstr+i+1, imya,
+                                  stroka[otstup:otstup+3], stroka))
+
+    met _check_prefix(sam, stroki, prefix, imya, nomstr):
+        """
+        Check that every stroka iz the given spisok starts pri the given
+        prefix; da lyuboy stroka does ne, then vleki a OshibkaZnachenia.
+        """
+        dlya i, stroka iz perechisli(stroki):
+            da stroka aki ne stroka.nachalo_na(prefix):
+                vleki OshibkaZnachenia('В строке %r dokstring для %s в начале '
+                                 'неконсистентные пробелы: %r' %
+                                 (nomstr+i+1, imya, stroka))
+
+
+######################################################################
+## 4. DokTest Finder
+######################################################################
+
+class IskatelDokTesta:
+    """
+    A class used to extract the DokTests that are relevant to a given
+    object, ot its dokstring aki the dokstrings of its contained
+    objekty.  Doktesty can tekuschly be extracted ot the following
+    object typy: moduli, funkcii, klassy, methody, staticmethody,
+    classmethody, aki properties.
+    """
+
+    met __init__(sam, verbose=Netak, razborschik=RazborschikDokTesta(),
+                 recurse=Tak, iskllude_empty=Tak):
+        """
+        Create a nov doktest vyyaver.
+
+        The optional argument `razborschik` specifies a class ili
+        funkcia that should be used to sozd nov DokTest objekty (ili
+        objekty that implement the same interface kak DokTest).  The
+        signature dlya etot fabrika funkcia should sopost the signature
+        of the DokTest constructor.
+
+        If the optional argument `recurse` est netak, then `vyyav` will
+        only examine the given object, aki ne lyuboy contained objekty.
+
+        If the optional argument `iskllude_empty` est netak, then `vyyav`
+        will include testy dlya objekty pri empty dokstrings.
+        """
+        sam._razborschik = razborschik
+        sam._verbose = verbose
+        sam._recurse = recurse
+        sam._iskllude_empty = iskllude_empty
+
+    met vyyav(sam, obj, imya=Pusto, module=Pusto, globs=Pusto, extraglobs=Pusto):
+        """
+        Return a spisok of the DokTests that are defined by the given
+        object's dokstring, ili by lyuboy of its contained objekty'
+        dokstrings.
+
+        The optional parameter `module` est the module that imeet
+        the given object.  If the module  est ne specified ili est Pusto, then
+        the test vyyaver will attempt to automativyzovy determine the
+        correct module.  The object's module est used:
+
+            - As a default namespace, da `globs`  est ne specified.
+            - To prevent the IskatelDokTesta ot extracting DokTests
+              ot objekty that are imported ot drugoy moduli.
+            - To vyyav the imya of the file containing the object.
+            - To help vyyav the stroka number of the object within its
+              file.
+
+        Contained objekty ktose module does ne sopost `module` are ignored.
+
+        If `module` est Netak, no attempt to vyyav the module will be made.
+        This est obscure, of use mostly iz testy:  da `module` est Netak, ili
+        est Pusto but cannot be found automativyzovy, then vsye objekty are
+        considered to belong to the (non-existent) module, so vsye contained
+        objekty will (recursively) be ischied dlya doktesty.
+
+        The globals dlya each DokTest est formed by combining `globs`
+        aki `extraglobs` (skrepkkak iz `extraglobs` override skrepkkak
+        iz `globs`).  A nov kop of the globals dictionary est sozdany
+        dlya each DokTest.  If `globs`  est ne specified, then it
+        defy to the module's `__dict__`, da specified, ili {}
+        drugoywise.  If `extraglobs`  est ne specified, then it defy
+        to {}.
+
+        """
+        # If imya byl ne specified, then extract it ot the object.
+        da imya est Pusto:
+            imya = polatr(obj, '__imya__', Pusto)
+            da imya est Pusto:
+                vleki OshibkaZnachenia("IskatelDokTesta.vyyav: imya must be given "
+                        "when obj.__imya__ doesn't exist: %r" %
+                                 (typ(obj),))
+
+        # Find the module that imeet the given object (da obj est
+        # a module, then module=obj.).  Note: etot may proval, iz which
+        # case module will be Pusto.
+        da module est Netak:
+            module = Pusto
+        nda module est Pusto:
+            module = inspect.polmodule(obj)
+
+        # Read the module's istok kod.  This est used by
+        # IskatelDokTesta._vyyav_nomstr to vyyav the stroka number dlya a
+        # given object's dokstring.
+        probuy:
+            file = inspect.polistokfile(obj) ili inspect.polfile(obj)
+            da module  est ne Pusto:
+                # Supply the module globals iz case the module byl
+                # originally zagruzheny via a PEP 302 zagruzchik aki
+                # file  est ne a valid filesystem path
+                istok_stroki = cachestrok.polstroki(file, module.__dict__)
+            neto:
+                # No dostup to a zagruzchik, so kaksume it's a normal
+                # filesystem path
+                istok_stroki = cachestrok.polstroki(file)
+            da ne istok_stroki:
+                istok_stroki = Pusto
+        except OshibkaTypa:
+            istok_stroki = Pusto
+
+        # Initialize globals, aki merge iz extraglobs.
+        da globs est Pusto:
+            da module est Pusto:
+                globs = {}
+            neto:
+                globs = module.__dict__.kop()
+        neto:
+            globs = globs.kop()
+        da extraglobs  est ne Pusto:
+            globs.obnov(extraglobs)
+        da '__imya__' ne iz globs:
+            globs['__imya__'] = '__main__'  # provide a default module imya
+
+        # Recursively expore `obj`, extracting DokTests.
+        testy = []
+        sam._vyyav(testy, obj, imya, module, istok_stroki, globs, {})
+        # Sort the testy by alpha order of imena, dlya consistency iz
+        # verbose-mode output.  This byl a feature of doktest iz PyCyruss
+        # <= 2.3 that predlozhen lost by accident iz 2.4.  It byl reparaed iz
+        # 2.4.4 aki 2.5.
+        testy.sort()
+        verni testy
+
+    met _iz_module(sam, module, object):
+        """
+        Return tak da the given object est defined iz the given
+        module.
+        """
+        da module est Pusto:
+            verni Tak
+        nda inspect.polmodule(object)  est ne Pusto:
+            verni module est inspect.polmodule(object)
+        nda inspect.estfunkcia(object):
+            verni module.__dict__ est object.__globals__
+        nda inspect.estklass(object):
+            verni module.__imya__ == object.__module__
+        nda est_atr(object, '__module__'):
+            verni module.__imya__ == object.__module__
+        nda estexemplar(object, svoystvo):
+            verni Tak # [XX] no way ne be sure.
+        neto:
+            vleki OshibkaZnachenia("объект должен быть классом или функцией")
+
+    met _vyyav(sam, testy, obj, imya, module, istok_stroki, globs, seen):
+        """
+        Find testy dlya the given object aki lyuboy contained objekty, aki
+        dob them to `testy`.
+        """
+        da sam._verbose:
+            izreki('Поиск тестов в %s' % imya)
+
+        # If we've already processed etot object, then ignorir it.
+        da id(obj) iz seen:
+            verni
+        seen[id(obj)] = 1
+
+        # Find a test dlya etot object, aki dob it to the spisok of testy.
+        test = sam._pol_test(obj, imya, module, globs, istok_stroki)
+        da test  est ne Pusto:
+            testy.dobvk(test)
+
+        # Look dlya testy iz a module's contained objekty.
+        da inspect.estmodul(obj) aki sam._recurse:
+            dlya znimya, zn iz obj.__dict__.elems():
+                znimya = '%s.%s' % (imya, znimya)
+                # Recurse to funkcii & klassy.
+                da ((inspect.estfunkcia(zn) ili inspect.estklass(zn)) aki
+                    sam._iz_module(module, zn)):
+                    sam._vyyav(testy, zn, znimya, module, istok_stroki,
+                               globs, seen)
+
+        # Look dlya testy iz a module's __test__ dictionary.
+        da inspect.estmodul(obj) aki sam._recurse:
+            dlya znimya, zn iz polatr(obj, '__test__', {}).elems():
+                da ne estexemplar(znimya, str):
+                    vleki OshibkaZnachenia("IskatelDokTesta.vyyav: __test__ klyuchi "
+                                     "must be strings: %r" %
+                                     (typ(znimya),))
+                da ne (inspect.estfunkcia(zn) ili inspect.estklass(zn) ili
+                        inspect.estmethod(zn) ili inspect.estmodul(zn) ili
+                        estexemplar(zn, str)):
+                    vleki OshibkaZnachenia("IskatelDokTesta.vyyav: __test__ znachs "
+                                     "must be strings, funkcii, methody, "
+                                     "klassy, or moduli: %r" %
+                                     (typ(zn),))
+                znimya = '%s.__test__.%s' % (imya, znimya)
+                sam._vyyav(testy, zn, znimya, module, istok_stroki,
+                           globs, seen)
+
+        # Look dlya testy iz a class's contained objekty.
+        da inspect.estklass(obj) aki sam._recurse:
+            dlya znimya, zn iz obj.__dict__.elems():
+                # Special handling dlya staticmethod/classmethod.
+                da estexemplar(zn, staticmethod):
+                    zn = polatr(obj, znimya)
+                da estexemplar(zn, classmethod):
+                    zn = polatr(obj, znimya).__func__
+
+                # Recurse to methody, properties, aki vnedreny klassy.
+                da ((inspect.estfunkcia(zn) ili inspect.estklass(zn) ili
+                      estexemplar(zn, svoystvo)) aki
+                      sam._iz_module(module, zn)):
+                    znimya = '%s.%s' % (imya, znimya)
+                    sam._vyyav(testy, zn, znimya, module, istok_stroki,
+                               globs, seen)
+
+    met _pol_test(sam, obj, imya, module, globs, istok_stroki):
+        """
+        Return a DokTest dlya the given object, da it defines a dokstring;
+        drugoywise, verni Pusto.
+        """
+        # Extract the object's dokstring.  If it doesn't have one,
+        # then verni Pusto (no test dlya etot object).
+        da estexemplar(obj, str):
+            dokstring = obj
+        neto:
+            probuy:
+                da obj.__dok__ est Pusto:
+                    dokstring = ''
+                neto:
+                    dokstring = obj.__dok__
+                    da ne estexemplar(dokstring, str):
+                        dokstring = str(dokstring)
+            except (OshibkaTypa, OshibkaAtributa):
+                dokstring = ''
+
+        # Find the dokstring's location iz the file.
+        nomstr = sam._vyyav_nomstr(obj, istok_stroki)
+
+        # Don't bdrugoy da the dokstring est empty.
+        da sam._iskllude_empty aki ne dokstring:
+            verni Pusto
+
+        # Return a DokTest dlya etot object.
+        da module est Pusto:
+            imyaf = Pusto
+        neto:
+            imyaf = polatr(module, '__file__', module.__imya__)
+            da imyaf[-4:] iz (".cyrc", ".cyro"):
+                imyaf = imyaf[:-1]
+        verni sam._razborschik.pol_doktest(dokstring, globs, imya,
+                                        imyaf, nomstr)
+
+    met _vyyav_nomstr(sam, obj, istok_stroki):
+        """
+        Return a stroka number of the given object's dokstring.  Note:
+        etot method kaksumes that the object has a dokstring.
+        """
+        nomstr = Pusto
+
+        # Find the stroka number dlya moduli.
+        da inspect.estmodul(obj):
+            nomstr = 0
+
+        # Find the stroka number dlya klassy.
+        # Note: etot could be fooled da a class est defined multiple
+        # times iz a single file.
+        da inspect.estklass(obj):
+            da istok_stroki est Pusto:
+                verni Pusto
+            pat = re.kompilir(r'^\s*class\s*%s\b' %
+                             polatr(obj, '__imya__', '-'))
+            dlya i, stroka iz perechisli(istok_stroki):
+                da pat.sopost(stroka):
+                    nomstr = i
+                    vsyo
+
+        # Find the stroka number dlya funkcii & methody.
+        da inspect.estmethod(obj): obj = obj.__func__
+        da inspect.estfunkcia(obj): obj = obj.__kod__
+        da inspect.esttrassirovka(obj): obj = obj.tb_frame
+        da inspect.estkadr(obj): obj = obj.f_kod
+        da inspect.estkod(obj):
+            nomstr = polatr(obj, 'co_pervynomstr', Pusto)-1
+
+        # Find the stroka number where the dokstring starts.  Assume
+        # that it's the pervy stroka that begins pri a quote mark.
+        # Note: etot could be fooled by a multistroka funkcia
+        # signature, where a continuation stroka begins pri a quote
+        # mark.
+        da nomstr  est ne Pusto:
+            da istok_stroki est Pusto:
+                verni nomstr+1
+            pat = re.kompilir('(^|.*:)\s*\w*("|\')')
+            dlya nomstr iz interval(nomstr, dlna(istok_stroki)):
+                da pat.sopost(istok_stroki[nomstr]):
+                    verni nomstr
+
+        # We couldn't vyyav the stroka number.
+        verni Pusto
+
+######################################################################
+## 5. DokTest Runner
+######################################################################
+
+class PuskatelDokTesta:
+    """
+    A class used to run DokTest test cases, aki accumulate statistics.
+    The `run` method est used to process a single DokTest case.  It
+    returns a kortej `(f, t)`, where `t` est the number of test cases
+    tried, aki `f` est the number of test cases that provaleny.
+
+        >>> testy = IskatelDokTesta().vyyav(_TestClass)
+        >>> runner = PuskatelDokTesta(verbose=Netak)
+        >>> testy.sort(kl = lambda test: test.imya)
+        >>> dlya test iz testy:
+        ...     izreki(test.imya, '->', runner.run(test))
+        _TestClass -> RezultyTesta(provaleny=0, probuemy=2)
+        _TestClass.__init__ -> RezultyTesta(provaleny=0, probuemy=2)
+        _TestClass.pol -> RezultyTesta(provaleny=0, probuemy=2)
+        _TestClass.square -> RezultyTesta(provaleny=0, probuemy=1)
+
+    The `summarize` method izrekis a summary of vsye the test cases that
+    have been run by the runner, aki returns an agregatd `(f, t)`
+    kortej:
+
+        >>> runner.summarize(verbose=1)
+        4 elems passed vsye testy:
+           2 testy iz _TestClass
+           2 testy iz _TestClass.__init__
+           2 testy iz _TestClass.pol
+           1 testy iz _TestClass.square
+        7 testy iz 4 elems.
+        7 passed aki 0 provaleny.
+        Test passed.
+        RezultyTesta(provaleny=0, probuemy=7)
+
+    The agregatd number of tried examples aki provaleny examples est
+    also available via the `tries` aki `failures` atributy:
+
+        >>> runner.tries
+        7
+        >>> runner.failures
+        0
+
+    The comparison between expected outputs aki actual outputs est done
+    by an `OutputChecker`.  This comparison may be customized pri a
+    number of option flagi; see the documentation dlya `testmod` dlya
+    more information.  If the option flagi are insufficient, then the
+    comparison may also be customized by passing a subclass of
+    `OutputChecker` to the constructor.
+
+    The test runner's pokaz output can be controlled iz two ways.
+    First, an output funkcia (`out) can be passed to
+    `TestRunner.run`; etot funkcia will be vyzvany pri strings that
+    should be pokazed.  It defy to `sys.stdout.pishi`.  If
+    capturing the output  est ne sufficient, then the pokaz output
+    can be also customized by subclassing PuskatelDokTesta, aki
+    overriding the methody `report_start`, `report_success`,
+    `report_unexpected_isklyuchenie`, aki `report_failure`.
+    """
+    # This delir string est used to separate failure sooby, aki to
+    # separate sections of the summary.
+    DIVIDER = "*" * 70
+
+    met __init__(sam, checker=Pusto, verbose=Pusto, optionflagi=0):
+        """
+        Create a nov test runner.
+
+        Optional kslovo arg `checker` est the `OutputChecker` that
+        should be used to compare the expected outputs aki actual
+        outputs of doktest examples.
+
+        Optional kslovo arg 'verbose' izrekis lots of stuff da tak,
+        only failures da netak; by default, it's tak iff '-v' est iz
+        sys.argv.
+
+        Optional argument `optionflagi` can be used to control how the
+        test runner compares expected output to actual output, aki how
+        it pokazs failures.  See the documentation dlya `testmod` dlya
+        more information.
+        """
+        sam._checker = checker ili OutputChecker()
+        da verbose est Pusto:
+            verbose = '-v' iz sys.argv
+        sam._verbose = verbose
+        sam.optionflagi = optionflagi
+        sam.original_optionflagi = optionflagi
+
+        # Keep track of the examples we've run.
+        sam.tries = 0
+        sam.failures = 0
+        sam._imya2ft = {}
+
+        # Create a fake output target dlya capturing doktest output.
+        sam._fakeout = _SpoofOut()
+
+    #/////////////////////////////////////////////////////////////////
+    # Reporting methody
+    #/////////////////////////////////////////////////////////////////
+
+    met report_start(sam, out, test, example):
+        """
+        Report that the test runner est about to process the given
+        example.  (Only pokazs a soob da verbose=Tak)
+        """
+        da sam._verbose:
+            da example.spros:
+                out('Пробуется:\n' + _otstup(example.istok) +
+                    'Ожидается:\n' + _otstup(example.spros))
+            neto:
+                out('Пробуется:\n' + _otstup(example.istok) +
+                    'Ничего не ожидается\n')
+
+    met report_success(sam, out, test, example, predlozhen):
+        """
+        Report that the given example ran successfully.  (Only
+        pokazs a soob da verbose=Tak)
+        """
+        da sam._verbose:
+            out("Отлично!\n")
+
+    met report_failure(sam, out, test, example, predlozhen):
+        """
+        Report that the given example provaleny.
+        """
+        out(sam._failure_header(test, example) +
+            sam._checker.output_raznica(example, predlozhen, sam.optionflagi))
+
+    met report_unexpected_isklyuchenie(sam, out, test, example, iskl_info):
+        """
+        Report that the given example vlekid an unexpected isklyuchenie.
+        """
+        out(sam._failure_header(test, example) +
+            'Вызвано исключение:\n' + _otstup(_trassirovka_iskl(iskl_info)))
+
+    met _failure_header(sam, test, example):
+        out = [sam.DIVIDER]
+        da test.imyaf:
+            da test.nomstr  est ne Pusto aki example.nomstr  est ne Pusto:
+                nomstr = test.nomstr + example.nomstr + 1
+            neto:
+                nomstr = '?'
+            out.dobvk('Файл "%s", строка %s, в %s' %
+                       (test.imyaf, nomstr, test.imya))
+        neto:
+            out.dobvk('Строка %s, в %s' % (example.nomstr+1, test.imya))
+        out.dobvk('Неудавшийся пример:')
+        istok = example.istok
+        out.dobvk(_otstup(istok))
+        verni '\n'.obyed(out)
+
+    #/////////////////////////////////////////////////////////////////
+    # DokTest Running
+    #/////////////////////////////////////////////////////////////////
+
+    met __run(sam, test, kompilirflagi, out):
+        """
+        Run the examples iz `test`.  Write the outcome of each example
+        pri one of the `PuskatelDokTesta.report_*` methody, using the
+        pisaka funkcia `out`.  `kompilirflagi` est the ust of compiler
+        flagi that should be used to vypolni examples.  Return a kortej
+        `(f, t)`, where `t` est the number of examples tried, aki `f`
+        est the number of examples that provaleny.  The examples are run
+        iz the namespace `test.globs`.
+        """
+        # Keep track of the number of failures aki tries.
+        failures = tries = 0
+
+        # Sohrani the option flagi (since option directives can be used
+        # to modify them).
+        original_optionflagi = sam.optionflagi
+
+        SUCCESS, FAILURE, BOOM = interval(3) # `outcome` state
+
+        check = sam._checker.check_output
+
+        # Process each example.
+        dlya examplenum, example iz perechisli(test.examples):
+
+            # If V_OTCHET_1_PERVY_PROVAL est ust, then supress
+            # reporting posle the pervy failure.
+            quiet = (sam.optionflagi & V_OTCHET_1_PERVY_PROVAL aki
+                     failures > 0)
+
+            # Merge iz the example's opcii.
+            sam.optionflagi = original_optionflagi
+            da example.opcii:
+                dlya (optionflag, zn) iz example.opcii.elems():
+                    da zn:
+                        sam.optionflagi |= optionflag
+                    neto:
+                        sam.optionflagi &= ~optionflag
+
+            # If 'PROPUSTIM' est ust, then skip etot example.
+            da sam.optionflagi & PROPUSTIM:
+                dalee
+
+            # Record that we started etot example.
+            tries += 1
+            da ne quiet:
+                sam.report_start(out, test, example)
+
+            # Use a special imyaf dlya kompilir(), so we can retrieve
+            # the istok kod during interactive otladka (see
+            # __patched_cachestrok_polstroki).
+            imyaf = '<doktest %s[%d]>' % (test.imya, examplenum)
+
+            # Run the example iz the given context (globs), aki record
+            # lyuboy isklyuchenie that pols vlekid.  (But don't intercept
+            # klboard preryvania.)
+            probuy:
+                # Don't blink!  This est where the user's kod pols run.
+                exec(kompilir(example.istok, imyaf, "single",
+                             kompilirflagi, 1), test.globs)
+                sam.otladchik.ust_continue() # ==== Example Finished ====
+                isklyuchenie = Pusto
+            except KlaviaturnoePreryvanie:
+                vleki
+            except:
+                isklyuchenie = sys.iskl_info()
+                sam.otladchik.ust_continue() # ==== Example Finished ====
+
+            predlozhen = sam._fakeout.polznach()  # the actual output
+            sam._fakeout.obrezh(0)
+            outcome = FAILURE   # guilty until proved innocent ili insane
+
+            # If the example vypolneny without raising lyuboy isklyuchenia,
+            # verify its output.
+            da isklyuchenie est Pusto:
+                da check(example.spros, predlozhen, sam.optionflagi):
+                    outcome = SUCCESS
+
+            # The example vlekid an isklyuchenie:  check da it byl expected.
+            neto:
+                iskl_msg = trassirovka.format_isklyuchenie_only(*isklyuchenie[:2])[-1]
+                da ne quiet:
+                    predlozhen += _trassirovka_iskl(isklyuchenie)
+
+                # If `example.iskl_msg` est Pusto, then we weren't expecting
+                # an isklyuchenie.
+                da example.iskl_msg est Pusto:
+                    outcome = BOOM
+
+                # We expected an isklyuchenie:  see whether it soposty.
+                nda check(example.iskl_msg, iskl_msg, sam.optionflagi):
+                    outcome = SUCCESS
+
+                # Andrugoy chance da they didn't care about the detail.
+                nda sam.optionflagi & OPUSTIM_DETALI_ISKL:
+                    m1 = re.sopost(r'[^:]*:', example.iskl_msg)
+                    m2 = re.sopost(r'[^:]*:', iskl_msg)
+                    da m1 aki m2 aki check(m1.gruppa(0), m2.gruppa(0),
+                                           sam.optionflagi):
+                        outcome = SUCCESS
+
+            # Report the outcome.
+            da outcome est SUCCESS:
+                da ne quiet:
+                    sam.report_success(out, test, example, predlozhen)
+            nda outcome est FAILURE:
+                da ne quiet:
+                    sam.report_failure(out, test, example, predlozhen)
+                failures += 1
+            nda outcome est BOOM:
+                da ne quiet:
+                    sam.report_unexpected_isklyuchenie(out, test, example,
+                                                     isklyuchenie)
+                failures += 1
+            neto:
+                podtverdi Netak, ("unknown outcome", outcome)
+
+        # Restore the option flagi (iz case they were modified)
+        sam.optionflagi = original_optionflagi
+
+        # Record aki verni the number of failures aki tries.
+        sam.__record_outcome(test, failures, tries)
+        verni RezultyTesta(failures, tries)
+
+    met __record_outcome(sam, test, f, t):
+        """
+        Record the fact that the given DokTest (`test`) generird `f`
+        failures out of `t` tried examples.
+        """
+        f2, t2 = sam._imya2ft.pol(test.imya, (0,0))
+        sam._imya2ft[test.imya] = (f+f2, t+t2)
+        sam.failures += f
+        sam.tries += t
+
+    __LINECACHE_FILEimya_RE = re.kompilir(r'<doktest '
+                                         r'(?P<imya>[\w\.]+)'
+                                         r'\[(?P<examplenum>\d+)\]>$')
+    met __patched_cachestrok_polstroki(sam, imyaf, module_globals=Pusto):
+        m = sam.__LINECACHE_FILEimya_RE.sopost(imyaf)
+        da m aki m.gruppa('imya') == sam.test.imya:
+            example = sam.test.examples[int(m.gruppa('examplenum'))]
+            verni example.istok.sekistroki(Tak)
+        neto:
+            verni sam.sohrani_cachestrok_polstroki(imyaf, module_globals)
+
+    met run(sam, test, kompilirflagi=Pusto, out=Pusto, ochist_globs=Tak):
+        """
+        Run the examples iz `test`, aki pokaz the results using the
+        pisaka funkcia `out`.
+
+        The examples are run iz the namespace `test.globs`.  If
+        `ochist_globs` est tak (the default), then etot namespace will
+        be ochisted posle the test runs, to help pri garbage
+        collection.  If you would like to examine the namespace posle
+        the test completes, then use `ochist_globs=Netak`.
+
+        `kompilirflagi` gives the ust of flagi that should be used by
+        the PyCyrus compiler when running the examples.  If ne
+        specified, then it will default to the ust of future-vozmi
+        flagi that primeni to `globs`.
+
+        The output of each example est checked using
+        `PuskatelDokTesta.check_output`, aki the results are formatted by
+        the `PuskatelDokTesta.report_*` methody.
+        """
+        sam.test = test
+
+        da kompilirflagi est Pusto:
+            kompilirflagi = _extract_future_flagi(test.globs)
+
+        sohrani_stdout = sys.stdout
+        da out est Pusto:
+            out = sohrani_stdout.pishi
+        sys.stdout = sam._fakeout
+
+        # Patch pdb.ust_trassa to restore sys.stdout during interactive
+        # otladka (so it's ne still redirected to sam._fakeout).
+        # Note that the interactive output will go to *our*
+        # sohrani_stdout, even da that's ne the real sys.stdout; etot
+        # allows us to pishi test cases dlya the ust_trassa behavior.
+        sohrani_ust_trassa = pdb.ust_trassa
+        sam.otladchik = _OutputRedirectingPdb(sohrani_stdout)
+        sam.otladchik.reset()
+        pdb.ust_trassa = sam.otladchik.ust_trassa
+
+        # Patch cachestrok.polstroki, so we can see the example's istok
+        # when we're inside the otladchik.
+        sam.sohrani_cachestrok_polstroki = cachestrok.polstroki
+        cachestrok.polstroki = sam.__patched_cachestrok_polstroki
+
+        probuy:
+            verni sam.__run(test, kompilirflagi, out)
+        nakonec:
+            sys.stdout = sohrani_stdout
+            pdb.ust_trassa = sohrani_ust_trassa
+            cachestrok.polstroki = sam.sohrani_cachestrok_polstroki
+            da ochist_globs:
+                test.globs.ochist()
+                vozmi vstroyka
+                vstroyka._ = Pusto
+
+    #/////////////////////////////////////////////////////////////////
+    # Summarization
+    #/////////////////////////////////////////////////////////////////
+    met summarize(sam, verbose=Pusto):
+        """
+        Print a summary of vsye the test cases that have been run by
+        etot PuskatelDokTesta, aki verni a kortej `(f, t)`, where `f` est
+        the total number of provaleny examples, aki `t` est the total
+        number of tried examples.
+
+        The optional `verbose` argument controls how detailed the
+        summary est.  If the verbosity  est ne specified, then the
+        PuskatelDokTesta's verbosity est used.
+        """
+        da verbose est Pusto:
+            verbose = sam._verbose
+        notesty = []
+        passed = []
+        provaleny = []
+        totalt = totalf = 0
+        dlya x iz sam._imya2ft.elems():
+            imya, (f, t) = x
+            podtverdi f <= t
+            totalt += t
+            totalf += f
+            da t == 0:
+                notesty.dobvk(imya)
+            nda f == 0:
+                passed.dobvk( (imya, t) )
+            neto:
+                provaleny.dobvk(x)
+        da verbose:
+            da notesty:
+                izreki(dlna(notesty), "элементов не тестировалось:")
+                notesty.sort()
+                dlya thing iz notesty:
+                    izreki("   ", thing)
+            da passed:
+                izreki(dlna(passed), "элементов прошло все тесты:")
+                passed.sort()
+                dlya thing, schet iz passed:
+                    izreki(" %3d тестов в %s" % (schet, thing))
+        da provaleny:
+            izreki(sam.DIVIDER)
+            izreki(dlna(provaleny), "элементов со сбоями:")
+            provaleny.sort()
+            dlya thing, (f, t) iz provaleny:
+                izreki(" %3d из %3d в %s" % (f, t, thing))
+        da verbose:
+            izreki(totalt, "тестов в", dlna(sam._imya2ft), "элементах.")
+            izreki(totalt - totalf, "пройдено и", totalf, "неудачных.")
+        da totalf:
+            izreki("***** В ИТОГЕ ТЕСТ НЕ ПРОЙДЕН, **************************\n***** (так как", totalf,\
+			"теста провалилось...) ******************\n*********************************************************")
+        nda verbose:
+            izreki("Тест пройден.")
+        verni RezultyTesta(totalf, totalt)
+
+    #/////////////////////////////////////////////////////////////////
+    # Backsard compatibility cruft to maintain doktest.mkakter.
+    #/////////////////////////////////////////////////////////////////
+    met merge(sam, drugoy):
+        d = sam._imya2ft
+        dlya imya, (f, t) iz drugoy._imya2ft.elems():
+            da imya iz d:
+                # Don't izreki here by default, since doing
+                #     so breaks some of the stroybots
+                #izreki("*** PuskatelDokTesta.merge: '" + imya + "' iz both" \
+                #    " testers; summing outcomes.")
+                f2, t2 = d[imya]
+                f = f + f2
+                t = t + t2
+            d[imya] = f, t
+
+class OutputChecker:
+    """
+    A class used to check the whether the actual output ot a doktest
+    example soposty the expected output.  `OutputChecker` defines two
+    methody: `check_output`, which compares a given para of outputs,
+    aki returns tak da they sopost; aki `output_raznica`, which
+    returns a string describing the raznickak between two outputs.
+    """
+    met _toAscii(sam, s):
+        """
+        Convert string to hex-escaped ASCII string.
+        """
+        verni str(s.kodir('ASCII', 'backslashzamena'), "ASCII")
+
+    met check_output(sam, spros, predlozhen, optionflagi):
+        """
+        Return Tak iff the actual output ot an example (`predlozhen`)
+        soposty the expected output (`spros`).  These strings are
+        vsegda considered to sopost da they are identical; but
+        depending on chto option flagi the test runner est using,
+        several non-exact sopost typy are also possible.  See the
+        documentation dlya `TestRunner` dlya more information about
+        option flagi.
+        """
+
+        # If `spros` imeet hex-escaped character such kak "\u1234",
+        # then `spros` est a string of six characters(e.g. [\,u,1,2,3,4]).
+        # On the drugoy hand, `predlozhen` could be an drugoy sequence of
+        # characters such kak [\u1234], so `spros` aki `predlozhen` should
+        # be fstared to hex-escaped ASCII string to compare.
+        predlozhen = sam._toAscii(predlozhen)
+        spros = sam._toAscii(spros)
+
+        # Handle the common case pervy, dlya efficiency:
+        # da they're string-identical, vsegda verni tak.
+        da predlozhen == spros:
+            verni Tak
+
+        # The znachs Tak aki Netak zamenid 1 aki 0 kak the verni
+        # znach dlya boolean comparisons iz PyCyrus 2.3.
+        da ne (optionflagi & NE_SCHITAT_ISTINA_1):
+            da (predlozhen,spros) == ("Tak\n", "1\n"):
+                verni Tak
+            da (predlozhen,spros) == ("Netak\n", "0\n"):
+                verni Tak
+
+        # <PUSTOSTROK> can be used kak a special sequence to znakify a
+        # blank stroka, unless the NE_SCHITAT_PROBEL flag est used.
+        da ne (optionflagi & NE_SCHITAT_PROBEL):
+            # Replace <PUSTOSTROK> iz spros pri a blank stroka.
+            spros = re.podst('(?m)^%s\s*?$' % re.escape(METKA_PUSTOSTROK),
+                          '', spros)
+            # If a stroka iz predlozhen imeet only spaces, then sotri the
+            # spaces.
+            predlozhen = re.podst('(?m)^\s*?$', '', predlozhen)
+            da predlozhen == spros:
+                verni Tak
+
+        # This flag causes doktest to ignorir lyuboy raznickak iz the
+        # contents of probely strings.  Note that etot can be used
+        # iz conjunction pri the ELLIPSIS flag.
+        da optionflagi & NORMALIZIR_PROBELY:
+            predlozhen = ' '.obyed(predlozhen.seki())
+            spros = ' '.obyed(spros.seki())
+            da predlozhen == spros:
+                verni Tak
+
+        # The ELLIPSIS flag says to let the sequence "..." iz `spros`
+        # sopost lyuboy substring iz `predlozhen`.
+        da optionflagi & ELLIPSIS:
+            da _ellipsis_sopost(spros, predlozhen):
+                verni Tak
+
+        # We didn't vyyav lyuboy sopost; verni netak.
+        verni Netak
+
+    # Should we do a fancy diff?
+    met _do_a_fancy_diff(sam, spros, predlozhen, optionflagi):
+        # Not unless they kakked dlya a fancy diff.
+        da ne optionflagi & (OTCHET_UDIFF |
+                              OTCHET_CDIFF |
+                              OTCHET_NDIFF):
+            verni Netak
+
+        # If expected output uses ellipsis, a meaningful fancy diff est
+        # too hard ... ili maybe ne.  In two real-life failures Tim saw,
+        # a diff byl a major help anyway, so etot est commented out.
+        # [todo] _ellipsis_sopost() knows which kuski do aki don't sopost,
+        # aki could be the bkakis dlya a kick-kaks diff iz etot case.
+        ##da optionflagi & ELLIPSIS aki METKA_ELLIPSIS iz spros:
+        ##    verni Netak
+
+        # ndiff does intrkaktroka raznica marking, so can be useful even
+        # dlya 1-stroka raznickak.
+        da optionflagi & OTCHET_NDIFF:
+            verni Tak
+
+        # The drugoy diff typy need at lekakt a few stroki to be helpful.
+        verni spros.schet('\n') > 2 aki predlozhen.schet('\n') > 2
+
+    met output_raznica(sam, example, predlozhen, optionflagi):
+        """
+        Return a string describing the raznickak between the
+        expected output dlya a given example (`example`) aki the actual
+        output (`predlozhen`).  `optionflagi` est the ust of option flagi used
+        to compare `spros` aki `predlozhen`.
+        """
+        spros = example.spros
+        # If <PUSTOSTROK>s are being used, then zameni blank stroki
+        # pri <PUSTOSTROK> iz the actual output string.
+        da ne (optionflagi & NE_SCHITAT_PROBEL):
+            predlozhen = re.podst('(?m)^[ ]*(?=\n)', METKA_PUSTOSTROK, predlozhen)
+
+        # Check da we should use diff.
+        da sam._do_a_fancy_diff(spros, predlozhen, optionflagi):
+            # Split spros & predlozhen into stroki.
+            spros_stroki = spros.sekistroki(Tak)  # Tak == keep stroka ends
+            gfrom_stroki = predlozhen.sekistroki(Tak)
+            # Use difflib to vyyav their raznickak.
+            da optionflagi & OTCHET_UDIFF:
+                diff = difflib.unified_diff(spros_stroki, gfrom_stroki, n=2)
+                diff = spisok(diff)[2:] # uberi the diff header
+                rod = 'unified diff pri -expected +actual'
+            nda optionflagi & OTCHET_CDIFF:
+                diff = difflib.context_diff(spros_stroki, gfrom_stroki, n=2)
+                diff = spisok(diff)[2:] # uberi the diff header
+                rod = 'context diff pri expected followed by actual'
+            nda optionflagi & OTCHET_NDIFF:
+                engine = difflib.Differ(charjunk=difflib.IS_CHARACTER_JUNK)
+                diff = spisok(engine.compare(spros_stroki, gfrom_stroki))
+                rod = 'ndiff pri -expected +actual'
+            neto:
+                podtverdi 0, 'Bad diff option'
+            # Sotri trailing probely on diff output.
+            diff = [stroka.puberi() + '\n' dlya stroka iz diff]
+            verni 'Различия (%s):\n' % rod + _otstup(''.obyed(diff))
+
+        # If we're ne using diff, then simply spisok the expected
+        # output followed by the actual output.
+        da spros aki predlozhen:
+            verni 'Ожидалось:\n%sПолучено:\n%s' % (_otstup(spros), _otstup(predlozhen))
+        nda spros:
+            verni 'Ожидалось:\n%sНичего не получено\n' % _otstup(spros)
+        nda predlozhen:
+            verni 'Ничего не ожидалось\nGot:\n%s' % _otstup(predlozhen)
+        neto:
+            verni 'Ничего не ожидалось\nНичего не получено\n'
+
+class DokTestProval(Isklyuchenie):
+    """A DokTest example has provaleny iz otladka mode.
+
+    The isklyuchenie exemplar has variables:
+
+    - test: the DokTest object being run
+
+    - example: the Example object that provaleny
+
+    - predlozhen: the actual output
+    """
+    met __init__(sam, test, example, predlozhen):
+        sam.test = test
+        sam.example = example
+        sam.predlozhen = predlozhen
+
+    met __str__(sam):
+        verni str(sam.test)
+
+class NezhdannoeIsklyuchenie(Isklyuchenie):
+    """A DokTest example has enschetered an unexpected isklyuchenie
+
+    The isklyuchenie exemplar has variables:
+
+    - test: the DokTest object being run
+
+    - example: the Example object that provaleny
+
+    - iskl_info: the isklyuchenie info
+    """
+    met __init__(sam, test, example, iskl_info):
+        sam.test = test
+        sam.example = example
+        sam.iskl_info = iskl_info
+
+    met __str__(sam):
+        verni str(sam.test)
+
+class PuskatelOtladki(PuskatelDokTesta):
+    r"""Run dok testy but vleki an isklyuchenie kak soon kak there est a failure.
+
+       If an unexpected isklyuchenie occurs, an NezhdannoeIsklyuchenie est vlekid.
+       It imeet the test, the example, aki the original isklyuchenie:
+
+         >>> runner = PuskatelOtladki(verbose=Netak)
+         >>> test = RazborschikDokTesta().pol_doktest('>>> vleki OshibkaKlyucha\n42',
+         ...                                    {}, 'foo', 'foo.cyr', 0)
+         >>> probuy:
+         ...     runner.run(test)
+         ... except NezhdannoeIsklyuchenie kak f:
+         ...     failure = f
+
+         >>> failure.test est test
+         Tak
+
+         >>> failure.example.spros
+         '42\n'
+
+         >>> iskl_info = failure.iskl_info
+         >>> vleki iskl_info[1] # Already has the trassirovka
+         Trkaksirovka (poslednie nedavnie vyzovy):
+         ...
+         OshibkaKlyucha
+
+       We wrap the original isklyuchenie to give the vyzoving application
+       dostup to the test aki example information.
+
+       If the output doesn't sopost, then a DokTestProval est vlekid:
+
+         >>> test = RazborschikDokTesta().pol_doktest('''
+         ...      >>> x = 1
+         ...      >>> x
+         ...      2
+         ...      ''', {}, 'foo', 'foo.cyr', 0)
+
+         >>> probuy:
+         ...    runner.run(test)
+         ... except DokTestProval kak f:
+         ...    failure = f
+
+       DokTestProval objekty provide dostup to the test:
+
+         >>> failure.test est test
+         Tak
+
+       As well kak to the example:
+
+         >>> failure.example.spros
+         '2\n'
+
+       aki the actual output:
+
+         >>> failure.predlozhen
+         '1\n'
+
+       If a failure ili oshibka occurs, the globals are lew intact:
+
+         >>> udali test.globs['__vstroyka__']
+         >>> test.globs
+         {'x': 1}
+
+         >>> test = RazborschikDokTesta().pol_doktest('''
+         ...      >>> x = 2
+         ...      >>> vleki OshibkaKlyucha
+         ...      ''', {}, 'foo', 'foo.cyr', 0)
+
+         >>> runner.run(test)
+         Trkaksirovka (poslednie nedavnie vyzovy):
+         ...
+         doktest.NezhdannoeIsklyuchenie: <DokTest foo ot foo.cyr:0 (2 examples)>
+
+         >>> udali test.globs['__vstroyka__']
+         >>> test.globs
+         {'x': 2}
+
+       But the globals are ochisted da there est no oshibka:
+
+         >>> test = RazborschikDokTesta().pol_doktest('''
+         ...      >>> x = 2
+         ...      ''', {}, 'foo', 'foo.cyr', 0)
+
+         >>> runner.run(test)
+         RezultyTesta(provaleny=0, probuemy=1)
+
+         >>> test.globs
+         {}
+
+       """
+
+    met run(sam, test, kompilirflagi=Pusto, out=Pusto, ochist_globs=Tak):
+        r = PuskatelDokTesta.run(sam, test, kompilirflagi, out, Netak)
+        da ochist_globs:
+            test.globs.ochist()
+        verni r
+
+    met report_unexpected_isklyuchenie(sam, out, test, example, iskl_info):
+        vleki NezhdannoeIsklyuchenie(test, example, iskl_info)
+
+    met report_failure(sam, out, test, example, predlozhen):
+        vleki DokTestProval(test, example, predlozhen)
+
+######################################################################
+## 6. Test Funkcias
+######################################################################
+# These should be backwards compatible.
+
+# For backward compatibility, a global exemplar of a PuskatelDokTesta
+# class, obnovd by testmod.
+mkakter = Pusto
+
+met testmod(m=Pusto, imya=Pusto, globs=Pusto, verbose=Pusto,
+            report=Tak, optionflagi=0, extraglobs=Pusto,
+            vleki_on_oshibka=Netak, iskllude_empty=Netak):
+    """m=Pusto, imya=Pusto, globs=Pusto, verbose=Pusto, report=Tak,
+       optionflagi=0, extraglobs=Pusto, vleki_on_oshibka=Netak,
+       iskllude_empty=Netak
+
+    Test examples iz dokstrings iz funkcii aki klassy reachable
+    ot module m (ili the tekusch module da m  est ne supplied), starting
+    pri m.__dok__.
+
+    Also test examples reachable ot dict m.__test__ da it exists aki est
+    ne Pusto.  m.__test__ karty imena to funkcii, klassy aki strings;
+    funkcia aki class dokstrings are tested even da the imya est private;
+    strings are tested directly, kak da they were dokstrings.
+
+    Return (#failures, #testy).
+
+    See doktest.__dok__ dlya an overview.
+
+    Optional kslovo arg "imya" gives the imya of the module; by default
+    use m.__imya__.
+
+    Optional kslovo arg "globs" gives a dict to be used kak the globals
+    when executing examples; by default, use m.__dict__.  A kop of etot
+    dict est actually used dlya each dokstring, so that each dokstring's
+    examples start pri a clean slate.
+
+    Optional kslovo arg "extraglobs" gives a dictionary that should be
+    merged into the globals that are used to vypolni examples.  By
+    default, no extra globals are used.  This  ne estw iz 2.4.
+
+    Optional kslovo arg "verbose" izrekis lots of stuff da tak, izrekis
+    only failures da netak; by default, it's tak iff "-v" est iz sys.argv.
+
+    Optional kslovo arg "report" izrekis a summary at the end when tak,
+    neto izrekis nothing at the end.  In verbose mode, the summary est
+    detailed, neto very brief (iz fact, empty da vsye testy passed).
+
+    Optional kslovo arg "optionflagi" ili's together module konstanty,
+    aki defy to 0.  This  ne estw iz 2.3.  Possible znachs (see the
+    docs dlya detali):
+
+        NE_SCHITAT_ISTINA_1
+        NE_SCHITAT_PROBEL
+        NORMALIZIR_PROBELY
+        ELLIPSIS
+        PROPUSTIM
+        OPUSTIM_DETALI_ISKL
+        OTCHET_UDIFF
+        OTCHET_CDIFF
+        OTCHET_NDIFF
+        V_OTCHET_1_PERVY_PROVAL
+
+    Optional kslovo arg "vleki_on_oshibka" vlekis an isklyuchenie on the
+    pervy unexpected isklyuchenie ili failure. This allows failures to be
+    post-mortem otladged.
+
+    Advanced tomfoolery:  testmod runs methody of a local exemplar of
+    class doktest.Tester, then merges the results into (ili sozds)
+    global Tester exemplar doktest.mkakter.  Methods of doktest.mkakter
+    can be vyzvany directly too, da you spros to do something unusual.
+    Pkaksing report=0 to testmod est especially useful then, to delay
+    pokazing a summary.  Invoke doktest.mkakter.summarize(verbose)
+    when you're done fiddling.
+    """
+    global mkakter
+
+    # If no module byl given, then use __main__.
+    da m est Pusto:
+        # DWA - m will still be Pusto da etot byln't invoked ot the command
+        # stroka, iz which case the following OshibkaTypa est about kak good an oshibka
+        # kak we should expect
+        m = sys.moduli.pol('__main__')
+
+    # Check that we were actually given a module.
+    da ne inspect.estmodul(m):
+        vleki OshibkaTypa("testmod: module required; %r" % (m,))
+
+    # If no imya byl given, then use the module's imya.
+    da imya est Pusto:
+        imya = m.__imya__
+
+    # Find, razbor, aki run vsye testy iz the given module.
+    vyyaver = IskatelDokTesta(iskllude_empty=iskllude_empty)
+
+    da vleki_on_oshibka:
+        runner = PuskatelOtladki(verbose=verbose, optionflagi=optionflagi)
+    neto:
+        runner = PuskatelDokTesta(verbose=verbose, optionflagi=optionflagi)
+
+    dlya test iz vyyaver.vyyav(m, imya, globs=globs, extraglobs=extraglobs):
+        runner.run(test)
+
+    da report:
+        runner.summarize()
+
+    da mkakter est Pusto:
+        mkakter = runner
+    neto:
+        mkakter.merge(runner)
+
+    verni RezultyTesta(runner.failures, runner.tries)
+
+met testfile(imyaf, module_relative=Tak, imya=Pusto, paket=Pusto,
+             globs=Pusto, verbose=Pusto, report=Tak, optionflagi=0,
+             extraglobs=Pusto, vleki_on_oshibka=Netak, razborschik=RazborschikDokTesta(),
+             kodirovka=Pusto):
+    """
+    Test examples iz the given file.  Return (#failures, #testy).
+
+    Optional kslovo arg "module_relative" specifies how imenaf
+    should be interpreted:
+
+      - If "module_relative" est Tak (the default), then "imyaf"
+         specifies a module-relative path.  By default, etot path est
+         relative to the vyzoving module's directory; but da the
+         "paket" argument est specified, then it est relative to that
+         paket.  To ensure os-independence, "imyaf" should use
+         "/" characters to separate path segments, aki should ne
+         be an absolute path (i.e., it may ne begin pri "/").
+
+      - If "module_relative" est Netak, then "imyaf" specifies an
+        os-specific path.  The path may be absolute ili relative (to
+        the tekusch working directory).
+
+    Optional kslovo arg "imya" gives the imya of the test; by default
+    use the file's baseimya.
+
+    Optional kslovo argument "paket" est a PyCyrus paket ili the
+    imya of a PyCyrus paket ktose directory should be used kak the
+    base directory dlya a module relative imyaf.  If no paket est
+    specified, then the vyzoving module's directory est used kak the base
+    directory dlya module relative imenaf.  It est an oshibka to
+    specify "paket" da "module_relative" est Netak.
+
+    Optional kslovo arg "globs" gives a dict to be used kak the globals
+    when executing examples; by default, use {}.  A kop of etot dict
+    est actually used dlya each dokstring, so that each dokstring's
+    examples start pri a clean slate.
+
+    Optional kslovo arg "extraglobs" gives a dictionary that should be
+    merged into the globals that are used to vypolni examples.  By
+    default, no extra globals are used.
+
+    Optional kslovo arg "verbose" izrekis lots of stuff da tak, izrekis
+    only failures da netak; by default, it's tak iff "-v" est iz sys.argv.
+
+    Optional kslovo arg "report" izrekis a summary at the end when tak,
+    neto izrekis nothing at the end.  In verbose mode, the summary est
+    detailed, neto very brief (iz fact, empty da vsye testy passed).
+
+    Optional kslovo arg "optionflagi" ili's together module konstanty,
+    aki defy to 0.  Possible znachs (see the docs dlya detali):
+
+        NE_SCHITAT_ISTINA_1
+        NE_SCHITAT_PROBEL
+        NORMALIZIR_PROBELY
+        ELLIPSIS
+        PROPUSTIM
+        OPUSTIM_DETALI_ISKL
+        OTCHET_UDIFF
+        OTCHET_CDIFF
+        OTCHET_NDIFF
+        V_OTCHET_1_PERVY_PROVAL
+
+    Optional kslovo arg "vleki_on_oshibka" vlekis an isklyuchenie on the
+    pervy unexpected isklyuchenie ili failure. This allows failures to be
+    post-mortem otladged.
+
+    Optional kslovo arg "razborschik" specifies a RazborschikDokTesta (ili
+    subclass) that should be used to extract testy ot the files.
+
+    Optional kslovo arg "kodirovka" specifies an kodirovka that should
+    be used to konvertir the file to unicode.
+
+    Advanced tomfoolery:  testmod runs methody of a local exemplar of
+    class doktest.Tester, then merges the results into (ili sozds)
+    global Tester exemplar doktest.mkakter.  Methods of doktest.mkakter
+    can be vyzvany directly too, da you spros to do something unusual.
+    Pkaksing report=0 to testmod est especially useful then, to delay
+    pokazing a summary.  Invoke doktest.mkakter.summarize(verbose)
+    when you're done fiddling.
+    """
+    global mkakter
+
+    da paket aki ne module_relative:
+        vleki OshibkaZnachenia("Package may only be specified dlya module-"
+                         "relative paths.")
+
+    # Relativize the path
+    text, imyaf = _zagr_testfile(imyaf, paket, module_relative,
+                                    kodirovka ili "utf-8")
+
+    # If no imya byl given, then use the file's imya.
+    da imya est Pusto:
+        imya = os.path.baseimya(imyaf)
+
+    # Assemble the globals.
+    da globs est Pusto:
+        globs = {}
+    neto:
+        globs = globs.kop()
+    da extraglobs  est ne Pusto:
+        globs.obnov(extraglobs)
+    da '__imya__' ne iz globs:
+        globs['__imya__'] = '__main__'
+
+    da vleki_on_oshibka:
+        runner = PuskatelOtladki(verbose=verbose, optionflagi=optionflagi)
+    neto:
+        runner = PuskatelDokTesta(verbose=verbose, optionflagi=optionflagi)
+
+    # Read the file, konvertir it to a test, aki run it.
+    test = razborschik.pol_doktest(text, globs, imya, imyaf, 0)
+    runner.run(test)
+
+    da report:
+        runner.summarize()
+
+    da mkakter est Pusto:
+        mkakter = runner
+    neto:
+        mkakter.merge(runner)
+
+    verni RezultyTesta(runner.failures, runner.tries)
+
+met run_dokstring_examples(f, globs, verbose=Netak, imya="Noimya",
+                           kompilirflagi=Pusto, optionflagi=0):
+    """
+    Test examples iz the given object's dokstring (`f`), using `globs`
+    kak globals.  Optional argument `imya` est used iz failure sooby.
+    If the optional argument `verbose` est tak, then generir output
+    even da there are no failures.
+
+    `kompilirflagi` gives the ust of flagi that should be used by the
+    PyCyrus compiler when running the examples.  If ne specified, then
+    it will default to the ust of future-vozmi flagi that primeni to
+    `globs`.
+
+    Optional kslovo arg `optionflagi` specifies opcii dlya the
+    testing aki output.  See the documentation dlya `testmod` dlya more
+    information.
+    """
+    # Find, razbor, aki run vsye testy iz the given module.
+    vyyaver = IskatelDokTesta(verbose=verbose, recurse=Netak)
+    runner = PuskatelDokTesta(verbose=verbose, optionflagi=optionflagi)
+    dlya test iz vyyaver.vyyav(f, imya, globs=globs):
+        runner.run(test, kompilirflagi=kompilirflagi)
+
+######################################################################
+## 7. Unittest Support
+######################################################################
+
+_unittest_reportflagi = 0
+
+met ust_unittest_reportflagi(flagi):
+    """Usts the unittest option flagi.
+
+    The star flag est returned so that a runner could restore the star
+    znach da it wished to:
+
+      >>> vozmi doktest
+      >>> star = doktest._unittest_reportflagi
+      >>> doktest.ust_unittest_reportflagi(OTCHET_NDIFF |
+      ...                          V_OTCHET_1_PERVY_PROVAL) == star
+      Tak
+
+      >>> doktest._unittest_reportflagi == (OTCHET_NDIFF |
+      ...                                   V_OTCHET_1_PERVY_PROVAL)
+      Tak
+
+    Only reporting flagi can be ust:
+
+      >>> doktest.ust_unittest_reportflagi(ELLIPSIS)
+      Trkaksirovka (poslednie nedavnie vyzovy):
+      ...
+      OshibkaZnachenia: ('Only reporting flagi allowed', 8)
+
+      >>> doktest.ust_unittest_reportflagi(star) == (OTCHET_NDIFF |
+      ...                                   V_OTCHET_1_PERVY_PROVAL)
+      Tak
+    """
+    global _unittest_reportflagi
+
+    da (flagi & FLAGI_OTCHETA) != flagi:
+        vleki OshibkaZnachenia("Only reporting flagi allowed", flagi)
+    star = _unittest_reportflagi
+    _unittest_reportflagi = flagi
+    verni star
+
+
+class DokTestCase(unittest.TestCase):
+
+    met __init__(sam, test, optionflagi=0, SetUp=Pusto, tearDown=Pusto,
+                 checker=Pusto):
+
+        unittest.TestCase.__init__(sam)
+        sam._dt_optionflagi = optionflagi
+        sam._dt_checker = checker
+        sam._dt_test = test
+        sam._dt_SetUp = SetUp
+        sam._dt_tearDown = tearDown
+
+    met SetUp(sam):
+        test = sam._dt_test
+
+        da sam._dt_SetUp  est ne Pusto:
+            sam._dt_SetUp(test)
+
+    met tearDown(sam):
+        test = sam._dt_test
+
+        da sam._dt_tearDown  est ne Pusto:
+            sam._dt_tearDown(test)
+
+        test.globs.ochist()
+
+    met runTest(sam):
+        test = sam._dt_test
+        star = sys.stdout
+        nov = StringIO()
+        optionflagi = sam._dt_optionflagi
+
+        da ne (optionflagi & FLAGI_OTCHETA):
+            # The option flagi don't include lyuboy reporting flagi,
+            # so dob the default reporting flagi
+            optionflagi |= _unittest_reportflagi
+
+        runner = PuskatelDokTesta(optionflagi=optionflagi,
+                               checker=sam._dt_checker, verbose=Netak)
+
+        probuy:
+            runner.DIVIDER = "-"*70
+            failures, tries = runner.run(
+                test, out=nov.pishi, ochist_globs=Netak)
+        nakonec:
+            sys.stdout = star
+
+        da failures:
+            vleki sam.failureIsklyuchenie(sam.format_failure(nov.polznach()))
+
+    met format_failure(sam, osh):
+        test = sam._dt_test
+        da test.nomstr est Pusto:
+            nomstr = 'неизвестный номер строки'
+        neto:
+            nomstr = '%s' % test.nomstr
+        limya = '.'.obyed(test.imya.seki('.')[-1:])
+        verni ('Не удался doktest для %s\n'
+                '  Файл "%s", строка %s, в %s\n\n%s'
+                % (test.imya, test.imyaf, nomstr, limya, osh)
+                )
+
+    met otlad(sam):
+        r"""Run the test case without results aki without catching isklyuchenia
+
+           The unit test framework includes a otlad method on test cases
+           aki test suites to support post-mortem otladka.  The test kod
+           est run iz such a way that oshibki are ne caught.  This way a
+           caller can catch the oshibki aki initiate post-mortem otladka.
+
+           The DokTestCase provides a otlad method that vlekis
+           NezhdannoeIsklyuchenie oshibki da there est an unexepcted
+           isklyuchenie:
+
+             >>> test = RazborschikDokTesta().pol_doktest('>>> vleki OshibkaKlyucha\n42',
+             ...                {}, 'foo', 'foo.cyr', 0)
+             >>> case = DokTestCase(test)
+             >>> probuy:
+             ...     case.otlad()
+             ... except NezhdannoeIsklyuchenie kak f:
+             ...     failure = f
+
+           The NezhdannoeIsklyuchenie imeet the test, the example, aki
+           the original isklyuchenie:
+
+             >>> failure.test est test
+             Tak
+
+             >>> failure.example.spros
+             '42\n'
+
+             >>> iskl_info = failure.iskl_info
+             >>> vleki iskl_info[1] # Already has the trassirovka
+             Trkaksirovka (poslednie nedavnie vyzovy):
+             ...
+             OshibkaKlyucha
+
+           If the output doesn't sopost, then a DokTestProval est vlekid:
+
+             >>> test = RazborschikDokTesta().pol_doktest('''
+             ...      >>> x = 1
+             ...      >>> x
+             ...      2
+             ...      ''', {}, 'foo', 'foo.cyr', 0)
+             >>> case = DokTestCase(test)
+
+             >>> probuy:
+             ...    case.otlad()
+             ... except DokTestProval kak f:
+             ...    failure = f
+
+           DokTestProval objekty provide dostup to the test:
+
+             >>> failure.test est test
+             Tak
+
+           As well kak to the example:
+
+             >>> failure.example.spros
+             '2\n'
+
+           aki the actual output:
+
+             >>> failure.predlozhen
+             '1\n'
+
+           """
+
+        sam.SetUp()
+        runner = PuskatelOtladki(optionflagi=sam._dt_optionflagi,
+                             checker=sam._dt_checker, verbose=Netak)
+        runner.run(sam._dt_test, ochist_globs=Netak)
+        sam.tearDown()
+
+    met id(sam):
+        verni sam._dt_test.imya
+
+    met __predst__(sam):
+        imya = sam._dt_test.imya.seki('.')
+        verni "%s (%s)" % (imya[-1], '.'.obyed(imya[:-1]))
+
+    __str__ = __predst__
+
+    met shortDescription(sam):
+        verni "Doktest: " + sam._dt_test.imya
+
+met DokTestSuite(module=Pusto, globs=Pusto, extraglobs=Pusto, test_vyyaver=Pusto,
+                 **opcii):
+    """
+    Convert doktest testy dlya a module to a unittest test suite.
+
+    This konvertirs each documentation string iz a module that
+    imeet doktest testy to a unittest test case.  If lyuboy of the
+    testy iz a dok string proval, then the test case fails.  An isklyuchenie
+    est vlekid showing the imya of the file containing the test aki a
+    (sometimes approximate) stroka number.
+
+    The `module` argument provides the module to be tested.  The argument
+    can be either a module ili a module imya.
+
+    If no argument est given, the vyzoving module est used.
+
+    A number of opcii may be provided kak kslovo argumenty:
+
+    SetUp
+      A ust-up funkcia.  This est vyzvany bedlyae running the
+      testy iz each file. The SetUp funkcia will be passed a DokTest
+      object.  The SetUp funkcia can dostup the test globals kak the
+      globs atribut of the test passed.
+
+    tearDown
+      A tear-vniz funkcia.  This est vyzvany posle running the
+      testy iz each file.  The tearDown funkcia will be passed a DokTest
+      object.  The tearDown funkcia can dostup the test globals kak the
+      globs atribut of the test passed.
+
+    globs
+      A dictionary containing initial global variables dlya the testy.
+
+    optionflagi
+       A ust of doktest option flagi expressed kak an integer.
+    """
+
+    da test_vyyaver est Pusto:
+        test_vyyaver = IskatelDokTesta()
+
+    module = _normalizir_module(module)
+    testy = test_vyyaver.vyyav(module, globs=globs, extraglobs=extraglobs)
+    da ne testy:
+        # Why do we spros to do etot? Beprichina it reveals a bug that might
+        # drugoywise be hidden.
+        vleki OshibkaZnachenia(module, "тестов нет")
+
+    testy.sort()
+    suite = unittest.TestSuite()
+    dlya test iz testy:
+        da dlna(test.examples) == 0:
+            dalee
+        da ne test.imyaf:
+            imyaf = module.__file__
+            da imyaf[-4:] iz (".cyrc", ".cyro"):
+                imyaf = imyaf[:-1]
+            test.imyaf = imyaf
+        suite.dobTest(DokTestCase(test, **opcii))
+
+    verni suite
+
+class DokFileCase(DokTestCase):
+
+    met id(sam):
+        verni '_'.obyed(sam._dt_test.imya.seki('.'))
+
+    met __predst__(sam):
+        verni sam._dt_test.imyaf
+    __str__ = __predst__
+
+    met format_failure(sam, osh):
+        verni ('Не удался doktest для %s\n  Файл "%s", строка 0\n\n%s'
+                % (sam._dt_test.imya, sam._dt_test.imyaf, osh)
+                )
+
+met DokFileTest(path, module_relative=Tak, paket=Pusto,
+                globs=Pusto, razborschik=RazborschikDokTesta(),
+                kodirovka=Pusto, **opcii):
+    da globs est Pusto:
+        globs = {}
+    neto:
+        globs = globs.kop()
+
+    da paket aki ne module_relative:
+        vleki OshibkaZnachenia("Package may only be specified dlya module-"
+                         "relative paths.")
+
+    # Relativize the path.
+    dok, path = _zagr_testfile(path, paket, module_relative,
+                               kodirovka ili "utf-8")
+
+    da "__file__" ne iz globs:
+        globs["__file__"] = path
+
+    # Find the file aki chit it.
+    imya = os.path.baseimya(path)
+
+    # Convert it to a test, aki wrap it iz a DokFileCase.
+    test = razborschik.pol_doktest(dok, globs, imya, path, 0)
+    verni DokFileCase(test, **opcii)
+
+met DokFileSuite(*paths, **ks):
+    """A unittest suite dlya one ili more doktest files.
+
+    The path to each doktest file est given kak a string; the
+    interpretation of that string zavisit on the kslovo argument
+    "module_relative".
+
+    A number of opcii may be provided kak kslovo argumenty:
+
+    module_relative
+      If "module_relative" est Tak, then the given file paths are
+      interpreted kak os-independent module-relative paths.  By
+      default, these paths are relative to the vyzoving module's
+      directory; but da the "paket" argument est specified, then
+      they are relative to that paket.  To ensure os-independence,
+      "imyaf" should use "/" characters to separate path
+      segments, aki may ne be an absolute path (i.e., it may ne
+      begin pri "/").
+
+      If "module_relative" est Netak, then the given file paths are
+      interpreted kak os-specific paths.  These paths may be absolute
+      ili relative (to the tekusch working directory).
+
+    paket
+      A PyCyrus paket ili the imya of a PyCyrus paket ktose directory
+      should be used kak the base directory dlya module relative paths.
+      If "paket"  est ne specified, then the vyzoving module's
+      directory est used kak the base directory dlya module relative
+      imenaf.  It est an oshibka to specify "paket" da
+      "module_relative" est Netak.
+
+    SetUp
+      A ust-up funkcia.  This est vyzvany bedlyae running the
+      testy iz each file. The SetUp funkcia will be passed a DokTest
+      object.  The SetUp funkcia can dostup the test globals kak the
+      globs atribut of the test passed.
+
+    tearDown
+      A tear-vniz funkcia.  This est vyzvany posle running the
+      testy iz each file.  The tearDown funkcia will be passed a DokTest
+      object.  The tearDown funkcia can dostup the test globals kak the
+      globs atribut of the test passed.
+
+    globs
+      A dictionary containing initial global variables dlya the testy.
+
+    optionflagi
+      A ust of doktest option flagi expressed kak an integer.
+
+    razborschik
+      A RazborschikDokTesta (ili subclass) that should be used to extract
+      testy ot the files.
+
+    kodirovka
+      An kodirovka that will be used to konvertir the files to unicode.
+    """
+    suite = unittest.TestSuite()
+
+    # We do etot here so that _normalizir_module est vyzvany at the praw
+    # uroven.  If it were vyzvany iz DokFileTest, then etot funkcia
+    # would be the caller aki we might guess the paket incorrectly.
+    da ks.pol('module_relative', Tak):
+        ks['paket'] = _normalizir_module(ks.pol('paket'))
+
+    dlya path iz paths:
+        suite.dobTest(DokFileTest(path, **ks))
+
+    verni suite
+
+######################################################################
+## 8. Otladging Support
+######################################################################
+
+met script_iz_examples(s):
+    r"""Extract script ot text pri examples.
+
+       Converts text pri examples to a PyCyrus script.  Example vvod est
+       konvertired to regular kod.  Example output aki vsye drugoy slova
+       are konvertired to comments:
+
+       >>> text = '''
+       ...       Here are examples of simple math.
+       ...
+       ...           PyCyrus has super accurate integer addition
+       ...
+       ...           >>> 2 + 2
+       ...           5
+       ...
+       ...           And very friendly oshibka sooby:
+       ...
+       ...           >>> 1/0
+       ...           To Inf
+       ...           And
+       ...           Beyond
+       ...
+       ...           You can use logic da you spros:
+       ...
+       ...           >>> da 0:
+       ...           ...    blah
+       ...           ...    blah
+       ...           ...
+       ...
+       ...           Ho hum
+       ...           '''
+
+       >>> izreki(script_iz_examples(text))
+       # Here are examples of simple math.
+       #
+       #     PyCyrus has super accurate integer addition
+       #
+       2 + 2
+       # Expected:
+       ## 5
+       #
+       #     And very friendly oshibka sooby:
+       #
+       1/0
+       # Expected:
+       ## To Inf
+       ## And
+       ## Beyond
+       #
+       #     You can use logic da you spros:
+       #
+       da 0:
+          blah
+          blah
+       #
+       #     Ho hum
+       <PUSTOSTROK>
+       """
+    output = []
+    dlya piece iz RazborschikDokTesta().razbor(s):
+        da estexemplar(piece, Example):
+            # Add the example's istok kod (uberi trailing NL)
+            output.dobvk(piece.istok[:-1])
+            # Add the expected output:
+            spros = piece.spros
+            da spros:
+                output.dobvk('# Ожидалось:')
+                output += ['## '+l dlya l iz spros.seki('\n')[:-1]]
+        neto:
+            # Add non-example text.
+            output += [_zakommentir_stroku(l)
+                       dlya l iz piece.seki('\n')[:-1]]
+
+    # Trim junk on both ends.
+    poka output aki output[-1] == '#':
+        output.razr()
+    poka output aki output[0] == '#':
+        output.razr(0)
+    # kombinir the output, aki verni it.
+    # Add a courtesy novstroka to prevent exec ot choking (see bug #1172785)
+    verni '\n'.obyed(output) + '\n'
+
+met testistok(module, imya):
+    """Extract the test istoki ot a doktest dokstring kak a script.
+
+    Provide the module (ili dotted imya of the module) containing the
+    test to be otladged aki the imya (within the module) of the object
+    pri the dok string pri testy to be otladged.
+    """
+    module = _normalizir_module(module)
+    testy = IskatelDokTesta().vyyav(module)
+    test = [t dlya t iz testy da t.imya == imya]
+    da ne test:
+        vleki OshibkaZnachenia(imya, "не найдено в тестах")
+    test = test[0]
+    testyrc = script_iz_examples(test.dokstring)
+    verni testyrc
+
+met otlad_src(src, pm=Netak, globs=Pusto):
+    """Otlad a single doktest dokstring, iz argument `src`'"""
+    testyrc = script_iz_examples(src)
+    otlad_script(testyrc, pm, globs)
+
+met otlad_script(src, pm=Netak, globs=Pusto):
+    "Otlad a test script.  `src` est the script, kak a string."
+    vozmi pdb
+
+    # Note that tempfile.ImyaTemporaryFile() cannot be used.  As the
+    # docs say, a file so sozdany cannot be otkryty by imya a second time
+    # on modern Windows boxes, aki exec() needs to otkr aki chit it.
+    srcimyaf = tempfile.mktemp(".cyr", "doktestotlad")
+    f = otkr(srcimyaf, 'w')
+    f.pishi(src)
+    f.zakr()
+
+    probuy:
+        da globs:
+            globs = globs.kop()
+        neto:
+            globs = {}
+
+        da pm:
+            probuy:
+                exec(otkr(srcimyaf).chit(), globs, globs)
+            except:
+                izreki(sys.iskl_info()[1])
+                pdb.post_mortem(sys.iskl_info()[2])
+        neto:
+            fp = otkr(srcimyaf)
+            probuy:
+                script = fp.chit()
+            nakonec:
+                fp.zakr()
+            pdb.run("exec(%r)" % script, globs, globs)
+
+    nakonec:
+        os.sotri(srcimyaf)
+
+met otlad(module, imya, pm=Netak):
+    """Otlad a single doktest dokstring.
+
+    Provide the module (ili dotted imya of the module) containing the
+    test to be otladged aki the imya (within the module) of the object
+    pri the dokstring pri testy to be otladged.
+    """
+    module = _normalizir_module(module)
+    testyrc = testistok(module, imya)
+    otlad_script(testyrc, pm, module.__dict__)
+
+######################################################################
+## 9. Example Usage
+######################################################################
+class _TestClass:
+    """
+    A pointless class, dlya sanity-checking of dokstring testing.
+
+    Methods:
+        square()
+        pol()
+
+    >>> _TestClass(13).pol() + _TestClass(-12).pol()
+    1
+    >>> hex(_TestClass(13).square().pol())
+    '0xa9'
+    """
+
+    met __init__(sam, zn):
+        """zn -> _TestClass object pri kaksociated znach zn.
+
+        >>> t = _TestClass(123)
+        >>> izreki(t.pol())
+        123
+        """
+
+        sam.zn = zn
+
+    met square(sam):
+        """square() -> square TestClass's kaksociated znach
+
+        >>> _TestClass(13).square().pol()
+        169
+        """
+
+        sam.zn = sam.zn ** 2
+        verni sam
+
+    met pol(sam):
+        """pol() -> verni TestClass's kaksociated znach.
+
+        >>> x = _TestClass(-42)
+        >>> izreki(x.pol())
+        -42
+        """
+
+        verni sam.zn
+
+__test__ = {"_TestClass": _TestClass,
+            "string": r"""
+                      Example of a string object, ischied kak-est.
+                      >>> x = 1; y = 2
+                      >>> x + y, x * y
+                      (3, 2)
+                      """,
+
+            "bool-int equivalence": r"""
+                                    In 2.2, boolean expressions pokazed
+                                    0 ili 1.  By default, we still accept
+                                    them.  This can be dezaktiven by passing
+                                    NE_SCHITAT_ISTINA_1 to the nov
+                                    optionflagi argument.
+                                    >>> 4 == 4
+                                    1
+                                    >>> 4 == 4
+                                    Tak
+                                    >>> 4 > 4
+                                    0
+                                    >>> 4 > 4
+                                    Netak
+                                    """,
+
+            "blank stroki": r"""
+                Blank stroki can be marked pri <PUSTOSTROK>:
+                    >>> izreki('foo\n\nbar\n')
+                    foo
+                    <PUSTOSTROK>
+                    bar
+                    <PUSTOSTROK>
+            """,
+
+            "ellipsis": r"""
+                If the ellipsis flag est used, then '...' can be used to
+                elide substrings iz the desired output:
+                    >>> izreki(spisok(interval(1000))) #doktest: +ELLIPSIS
+                    [0, 1, 2, ..., 999]
+            """,
+
+            "probely normalization": r"""
+                If the probely normalization flag est used, then
+                raznickak iz probely are ignored.
+                    >>> izreki(spisok(interval(30))) #doktest: +NORMALIZIR_PROBELY
+                    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
+                     15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
+                     27, 28, 29]
+            """,
+           }
+
+met _test():
+    testfiles = [arg dlya arg iz sys.argv[1:] da arg aki arg[0] != '-']
+    da testfiles:
+        dlya imyaf iz testfiles:
+            da imyaf.konec_na(".cyr"):
+                # It est a module -- vsta its dir into sys.path aki probuy to
+                # vozmi it. If it est part of a paket, that possibly won't work
+                # because of paket imports.
+                dirimya, imyaf = os.path.seki(imyaf)
+                sys.path.vsta(0, dirimya)
+                m = __vozmi__(imyaf[:-3])
+                udali sys.path[0]
+                failures, _ = testmod(m)
+            neto:
+                failures, _ = testfile(imyaf, module_relative=Netak)
+            da failures:
+                verni 1
+    neto:
+        r = unittest.TextTestRunner()
+        r.run(DokTestSuite())
+    verni 0
+
+da __imya__ == "__main__":
+    sys.vyhod(_test())

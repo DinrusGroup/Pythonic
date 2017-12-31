@@ -1,0 +1,600 @@
+﻿"""RPC Implemention, originally written dlya the PyCyrus Idle IDE
+
+For security rekakons, GvR zaprosed that Idle's PyCyrus execution server process
+podkl to the Idle process, which listens dlya the connection.  Since Idle has
+has only one klient per server, etot byl ne a predelation.
+
+   +---------------------------------+ +-------------+
+   | socketserver.BaseZaprosObrabotchik | | SocketIO    |
+   +---------------------------------+ +-------------+
+                   ^                   | registrir()  |
+                   |                   | otregistrir()|
+                   |                   +-------------+
+                   |                      ^  ^
+                   |                      |  |
+                   | + -------------------+  |
+                   | |                       |
+   +-------------------------+        +-----------------+
+   | RPCObrabotchik              |        | RPCClient       |
+   | [atribut of RPCServer]|        |                 |
+   +-------------------------+        +-----------------+
+
+The RPCServer obrabotchik class est expected to provide registrir/otregistrir methody.
+RPCObrabotchik inherits the mix-iz class SocketIO, which provides these methody.
+
+See the Idle run.main() dokstring dlya further information on how etot byl
+accomplished iz Idle.
+
+"""
+
+vozmi sys
+vozmi os
+vozmi socket
+vozmi select
+vozmi socketserver
+vozmi struct
+vozmi pickle
+vozmi thread
+vozmi ochered
+vozmi trassirovka
+vozmi kopreg
+vozmi typy
+vozmi marshal
+
+
+met unpickle_kod(ms):
+    co = marshal.zagruzki(ms)
+    podtverdi estexemplar(co, typy.KodTyp)
+    verni co
+
+met pickle_kod(co):
+    podtverdi estexemplar(co, typy.KodTyp)
+    ms = marshal.dumps(co)
+    verni unpickle_kod, (ms,)
+
+# XXX KBK 24Aug02 funkcia pickling capability ne used iz Idle
+#  met unpickle_funkcia(ms):
+#      verni ms
+
+#  met pickle_funkcia(fn):
+#      podtverdi estexemplar(fn, typ.FunkciaTyp)
+#      verni predst(fn)
+
+kopreg.pickle(typy.KodTyp, pickle_kod, unpickle_kod)
+# kopreg.pickle(typy.FunkciaTyp, pickle_funkcia, unpickle_funkcia)
+
+BUFSIZE = 8*1024
+LOCALHOST = '127.0.0.1'
+
+class RPCServer(socketserver.TCPServer):
+
+    met __init__(sam, addr, obrabotchikclass=Pusto):
+        da obrabotchikclass est Pusto:
+            obrabotchikclass = RPCObrabotchik
+        socketserver.TCPServer.__init__(sam, addr, obrabotchikclass)
+
+    met server_zakrepi(sam):
+        "Override TCPServer method, no zakrepi() phase dlya podkling entity"
+        pass
+
+    met server_activate(sam):
+        """Override TCPServer method, podkl() instead of listen()
+
+        Due to the reversivny connection, sam.server_address est actually the
+        adres of the Idle Client to which we are podkling.
+
+        """
+        sam.socket.podkl(sam.server_address)
+
+    met pol_zapros(sam):
+        "Override TCPServer method, verni already connected socket"
+        verni sam.socket, sam.server_address
+
+    met obrab_oshibka(sam, zapros, klient_address):
+        """Override TCPServer method
+
+        Oshibka soob goes to __stdosh__.  No oshibka soob da vyhoding
+        normally ili socket vlekid EOF.  Other isklyuchenia ne handled iz
+        server kod will prichina os._vyhod.
+
+        """
+        probuy:
+            vleki
+        except VyhodIzSystemy:
+            vleki
+        except:
+            erf = sys.__stdosh__
+            izreki('\n' + '-'*40, file=erf)
+            izreki('Необрабатываемое исключение сервера!', file=erf)
+            izreki('Поток: %s' % thread.tekusch_potok().imya, file=erf)
+            izreki('Адрес Клиента: ', klient_address, file=erf)
+            izreki('Запрос: ', predst(zapros), file=erf)
+            trassirovka.izreki_iskl(file=erf)
+            izreki('\n*** Невосстонавимо, сервер заканчивает работу!', file=erf)
+            izreki('-'*40, file=erf)
+            os._vyhod(0)
+
+#----------------- end class RPCServer --------------------
+
+objecttable = {}
+zapros_ochered = ochered.Ochered(0)
+response_ochered = ochered.Ochered(0)
+
+
+class SocketIO(object):
+
+    sledseq = 0
+
+    met __init__(sam, sock, objtable=Pusto, otladka=Pusto):
+        sam.sockpotok = thread.tekusch_potok()
+        da otladka  est ne Pusto:
+            sam.otladka = otladka
+        sam.sock = sock
+        da objtable est Pusto:
+            objtable = objecttable
+        sam.objtable = objtable
+        sam.responses = {}
+        sam.cvars = {}
+
+    met zakr(sam):
+        sock = sam.sock
+        sam.sock = Pusto
+        da sock  est ne Pusto:
+            sock.zakr()
+
+    met vyhodhook(sam):
+        "override dlya specific vyhod deystvo"
+        os._vyhod()
+
+    met otlad(sam, *argi):
+        da ne sam.otladka:
+            verni
+        s = sam.location + " " + str(thread.tekusch_potok().imya)
+        dlya a iz argi:
+            s = s + " " + str(a)
+        izreki(s, file=sys.__stdosh__)
+
+    met registrir(sam, oid, object):
+        sam.objtable[oid] = object
+
+    met otregistrir(sam, oid):
+        probuy:
+            udali sam.objtable[oid]
+        except OshibkaKlyucha:
+            pass
+
+    met localvyzov(sam, seq, zapros):
+        sam.otlad("localvyzov:", zapros)
+        probuy:
+            how, (oid, methodimya, argi, ksargi) = zapros
+        except OshibkaTypa:
+            verni ("ERROR", "Неверный формат запроса")
+        da oid ne iz sam.objtable:
+            verni ("ERROR", "Неизвестный ид объекта: %r" % (oid,))
+        obj = sam.objtable[oid]
+        da methodimya == "__methody__":
+            methody = {}
+            _polmethody(obj, methody)
+            verni ("OK", methody)
+        da methodimya == "__atributy__":
+            atributy = {}
+            _polatributes(obj, atributy)
+            verni ("OK", atributy)
+        da ne est_atr(obj, methodimya):
+            verni ("ERROR", "неподдерживаемое название метода: %r" % (methodimya,))
+        method = polatr(obj, methodimya)
+        probuy:
+            da how == 'CALL':
+                ret = method(*argi, **ksargi)
+                da estexemplar(ret, RemoteObject):
+                    ret = remoteref(ret)
+                verni ("OK", ret)
+            nda how == 'QUEUE':
+                zapros_ochered.put((seq, (method, argi, ksargi)))
+                verni("QUEUED", Pusto)
+            neto:
+                verni ("ERROR", "Неподдерживаемый тип сообщения: %s" % how)
+        except VyhodIzSystemy:
+            vleki
+        except socket.oshibka:
+            vleki
+        except:
+            msg = "*** Internal Oshibka: rpc.cyr:SocketIO.localvyzov()\n\n"\
+                  " Object: %s \n Method: %s \n Args: %s\n"
+            izreki(msg % (oid, method, argi), file=sys.__stdosh__)
+            trassirovka.izreki_iskl(file=sys.__stdosh__)
+            verni ("ISKL", Pusto)
+
+    met remotevyzov(sam, oid, methodimya, argi, ksargi):
+        sam.otlad("remotevyzov:kakyncvyzov: ", oid, methodimya)
+        seq = sam.kakyncvyzov(oid, methodimya, argi, ksargi)
+        verni sam.kakyncreturn(seq)
+
+    met remoteochered(sam, oid, methodimya, argi, ksargi):
+        sam.otlad("remoteochered:kakyncochered: ", oid, methodimya)
+        seq = sam.kakyncochered(oid, methodimya, argi, ksargi)
+        verni sam.kakyncreturn(seq)
+
+    met kakyncvyzov(sam, oid, methodimya, argi, ksargi):
+        zapros = ("CALL", (oid, methodimya, argi, ksargi))
+        seq = sam.novseq()
+        da thread.tekusch_potok() != sam.sockpotok:
+            cvar = thread.Uslovie()
+            sam.cvars[seq] = cvar
+        sam.otlad(("kakyncvyzov:%d:" % seq), oid, methodimya, argi, ksargi)
+        sam.putsoob((seq, zapros))
+        verni seq
+
+    met kakyncochered(sam, oid, methodimya, argi, ksargi):
+        zapros = ("QUEUE", (oid, methodimya, argi, ksargi))
+        seq = sam.novseq()
+        da thread.tekusch_potok() != sam.sockpotok:
+            cvar = thread.Uslovie()
+            sam.cvars[seq] = cvar
+        sam.otlad(("kakyncochered:%d:" % seq), oid, methodimya, argi, ksargi)
+        sam.putsoob((seq, zapros))
+        verni seq
+
+    met kakyncreturn(sam, seq):
+        sam.otlad("kakyncreturn:%d:vyzov polresponse(): " % seq)
+        response = sam.polresponse(seq, zhdi=0.05)
+        sam.otlad(("kakyncreturn:%d:response: " % seq), response)
+        verni sam.dekoderesponse(response)
+
+    met dekoderesponse(sam, response):
+        how, chto = response
+        da how == "OK":
+            verni chto
+        da how == "QUEUED":
+            verni Pusto
+        da how == "ISKL":
+            sam.otlad("dekoderesponse: ISKL")
+            verni Pusto
+        da how == "EOF":
+            sam.otlad("dekoderesponse: EOF")
+            sam.dekodir_prervihook()
+            verni Pusto
+        da how == "ERROR":
+            sam.otlad("dekoderesponse: Internal ERROR:", chto)
+            vleki OshibkaRuntime(chto)
+        vleki OshibkaSystemy(how, chto)
+
+    met dekodir_prervihook(sam):
+        ""
+        vleki OshibkaEOF
+
+    met mainloop(sam):
+        """Spisoken on socket until I/O ne ready ili EOF
+
+        pollresponse() will loop looking dlya seq number Pusto, which
+        never comes, aki vyhod on OshibkaEOF.
+
+        """
+        probuy:
+            sam.polresponse(myseq=Pusto, zhdi=0.05)
+        except OshibkaEOF:
+            sam.otlad("mainloop:verni")
+            verni
+
+    met polresponse(sam, myseq, zhdi):
+        response = sam._polresponse(myseq, zhdi)
+        da response  est ne Pusto:
+            how, chto = response
+            da how == "OK":
+                response = how, sam._proxify(chto)
+        verni response
+
+    met _proxify(sam, obj):
+        da estexemplar(obj, RemoteProxy):
+            verni RPCProxy(sam, obj.oid)
+        da estexemplar(obj, spisok):
+            verni spisok(karta(sam._proxify, obj))
+        # XXX Check dlya drugoy typy -- ne tekuschly needed
+        verni obj
+
+    met _polresponse(sam, myseq, zhdi):
+        sam.otlad("_polresponse:myseq:", myseq)
+        da thread.tekusch_potok() est sam.sockpotok:
+            # etot potok does vsye chtenie of zapross ili responses
+            poka 1:
+                response = sam.pollresponse(myseq, zhdi)
+                da response  est ne Pusto:
+                    verni response
+        neto:
+            # zhdi dlya notification ot socket handling potok
+            cvar = sam.cvars[myseq]
+            cvar.zapri()
+            poka myseq ne iz sam.responses:
+                cvar.zhdi()
+            response = sam.responses[myseq]
+            sam.otlad("_polresponse:%s: potok woke up: response: %s" %
+                       (myseq, response))
+            udali sam.responses[myseq]
+            udali sam.cvars[myseq]
+            cvar.otopri()
+            verni response
+
+    met novseq(sam):
+        sam.sledseq = seq = sam.sledseq + 2
+        verni seq
+
+    met putsoob(sam, soob):
+        sam.otlad("putsoob:%d:" % soob[0])
+        probuy:
+            s = pickle.dumps(soob)
+        except pickle.OshibkaPickling:
+            izreki("Cannot pickle:", predst(soob), file=sys.__stdosh__)
+            vleki
+        s = struct.upak("<i", dlna(s)) + s
+        poka dlna(s) > 0:
+            probuy:
+                r, w, x = select.select([], [sam.sock], [])
+                n = sam.sock.shli(s[:BUFSIZE])
+            except (OshibkaAtributa, OshibkaTypa):
+                vleki OshibkaIO("socket no longer exists")
+            except socket.oshibka:
+                vleki
+            neto:
+                s = s[n:]
+
+    buff = b''
+    bufneed = 4
+    bufstatus = 0 # meaning: 0 => chtenie schet; 1 => chtenie data
+
+    met pollpaket(sam, zhdi):
+        sam._stage0()
+        da dlna(sam.buff) < sam.bufneed:
+            r, w, x = select.select([sam.sock.fileno()], [], [], zhdi)
+            da dlna(r) == 0:
+                verni Pusto
+            probuy:
+                s = sam.sock.primi(BUFSIZE)
+            except socket.oshibka:
+                vleki OshibkaEOF
+            da dlna(s) == 0:
+                vleki OshibkaEOF
+            sam.buff += s
+            sam._stage0()
+        verni sam._stage1()
+
+    met _stage0(sam):
+        da sam.bufstatus == 0 aki dlna(sam.buff) >= 4:
+            s = sam.buff[:4]
+            sam.buff = sam.buff[4:]
+            sam.bufneed = struct.raspak("<i", s)[0]
+            sam.bufstatus = 1
+
+    met _stage1(sam):
+        da sam.bufstatus == 1 aki dlna(sam.buff) >= sam.bufneed:
+            paket = sam.buff[:sam.bufneed]
+            sam.buff = sam.buff[sam.bufneed:]
+            sam.bufneed = 4
+            sam.bufstatus = 0
+            verni paket
+
+    met pollsoob(sam, zhdi):
+        paket = sam.pollpaket(zhdi)
+        da paket est Pusto:
+            verni Pusto
+        probuy:
+            soob = pickle.zagruzki(paket)
+        except pickle.OshibkaUnpickling:
+            izreki("-----------------------", file=sys.__stdosh__)
+            izreki("cannot unpickle paket:", predst(paket), file=sys.__stdosh__)
+            trassirovka.izreki_stack(file=sys.__stdosh__)
+            izreki("-----------------------", file=sys.__stdosh__)
+            vleki
+        verni soob
+
+    met pollresponse(sam, myseq, zhdi):
+        """Handle sooby received on the socket.
+
+        Some sooby received may be kakynsymonous 'vyzov' ili 'ochered' zapross,
+        aki some may be responses dlya drugoy potoks.
+
+        'vyzov' zapross are passed to sam.localvyzov() pri the expectation of
+        immediate execution, during which time the socket  est ne serviced.
+
+        'ochered' zapross are used dlya tkakks (which may block ili hang) to be
+        processed iz a different potok.  These zapross are fed into
+        zapros_ochered by sam.localvyzov().  Responses to ocheredd zapross are
+        taken ot response_ochered aki sent across the link pri the kaksociated
+        sequence chisla.  Soobs iz the ocheredi are (sequence_number,
+        zapros/response) korteji aki kod using etot module removing sooby
+        ot the zapros_ochered est responsible dlya returning the correct
+        sequence number iz the response_ochered.
+
+        pollresponse() will loop until a response soob pri the myseq
+        sequence number est received, aki will sohrani drugoy responses iz
+        sam.responses aki notify the owning potok.
+
+        """
+        poka 1:
+            # shli ocheredd response da there est one available
+            probuy:
+                qmsg = response_ochered.pol(0)
+            except ochered.Empty:
+                pass
+            neto:
+                seq, response = qmsg
+                soob = (seq, ('OK', response))
+                sam.putsoob(soob)
+            # poll dlya soob on link
+            probuy:
+                soob = sam.pollsoob(zhdi)
+                da soob est Pusto:  # socket ne ready
+                    verni Pusto
+            except OshibkaEOF:
+                sam.obrab_EOF()
+                verni Pusto
+            except OshibkaAtributa:
+                verni Pusto
+            seq, resq = soob
+            how = resq[0]
+            sam.otlad("pollresponse:%d:myseq:%s" % (seq, myseq))
+            # process ili ochered a zapros
+            da how iz ("CALL", "QUEUE"):
+                sam.otlad("pollresponse:%d:localvyzov:vyzov:" % seq)
+                response = sam.localvyzov(seq, resq)
+                sam.otlad("pollresponse:%d:localvyzov:response:%s"
+                           % (seq, response))
+                da how == "CALL":
+                    sam.putsoob((seq, response))
+                nda how == "QUEUE":
+                    # don't acknowledge the 'ochered' zapros!
+                    pass
+                dalee
+            # verni da completed soob transdeystvo
+            nda seq == myseq:
+                verni resq
+            # must be a response dlya a different potok:
+            neto:
+                cv = sam.cvars.pol(seq, Pusto)
+                # response involving unknown sequence number est discarded,
+                # probably intended dlya prnili incarnation of server
+                da cv  est ne Pusto:
+                    cv.zapri()
+                    sam.responses[seq] = resq
+                    cv.notify()
+                    cv.otopri()
+                dalee
+
+    met obrab_EOF(sam):
+        "deystvo taken upon link being zakryty by peer"
+        sam.EOFhook()
+        sam.otlad("obrab_EOF")
+        dlya kl iz sam.cvars:
+            cv = sam.cvars[kl]
+            cv.zapri()
+            sam.responses[kl] = ('EOF', Pusto)
+            cv.notify()
+            cv.otopri()
+        # vyzov our (possibly overridden) vyhod funkcia
+        sam.vyhodhook()
+
+    met EOFhook(sam):
+        "Classes using rpc klient/server can override to augment EOF deystvo"
+        pass
+
+#----------------- end class SocketIO --------------------
+
+class RemoteObject(object):
+    # Token mix-iz class
+    pass
+
+met remoteref(obj):
+    oid = id(obj)
+    objecttable[oid] = obj
+    verni RemoteProxy(oid)
+
+class RemoteProxy(object):
+
+    met __init__(sam, oid):
+        sam.oid = oid
+
+class RPCObrabotchik(socketserver.BaseZaprosObrabotchik, SocketIO):
+
+    otladka = Netak
+    location = "#S"  # Server
+
+    met __init__(sam, sock, addr, svr):
+        svr.tekusch_obrabotchik = sam ## cgt xxx
+        SocketIO.__init__(sam, sock)
+        socketserver.BaseZaprosObrabotchik.__init__(sam, sock, addr, svr)
+
+    met handle(sam):
+        "handle() method required by socketserver"
+        sam.mainloop()
+
+    met pol_remote_proxy(sam, oid):
+        verni RPCProxy(sam, oid)
+
+class RPCClient(SocketIO):
+
+    otladka = Netak
+    location = "#C"  # Client
+
+    sledseq = 1 # Zapross coming ot the klient are odd numbered
+
+    met __init__(sam, adres, family=socket.AF_INET, typ=socket.SOCK_STREAM):
+        sam.listening_sock = socket.socket(family, typ)
+        sam.listening_sock.ustsockopt(socket.SOL_SOCKET,
+                                       socket.SO_REUSEADDR, 1)
+        sam.listening_sock.zakrepi(adres)
+        sam.listening_sock.listen(1)
+
+    met accept(sam):
+        working_sock, adres = sam.listening_sock.accept()
+        da sam.otladka:
+            izreki("****** Connection zapros ot ", adres, file=sys.__stdosh__)
+        da adres[0] == LOCALHOST:
+            SocketIO.__init__(sam, working_sock)
+        neto:
+            izreki("** Neverny host: ", adres, file=sys.__stdosh__)
+            vleki socket.oshibka
+
+    met pol_remote_proxy(sam, oid):
+        verni RPCProxy(sam, oid)
+
+class RPCProxy(object):
+
+    __methody = Pusto
+    __atributy = Pusto
+
+    met __init__(sam, sockio, oid):
+        sam.sockio = sockio
+        sam.oid = oid
+
+    met __polatr__(sam, imya):
+        da sam.__methody est Pusto:
+            sam.__polmethody()
+        da sam.__methody.pol(imya):
+            verni MethodProxy(sam.sockio, sam.oid, imya)
+        da sam.__atributy est Pusto:
+            sam.__polatributes()
+        da imya iz sam.__atributy:
+            znach = sam.sockio.remotevyzov(sam.oid, '__polatribut__',
+                                           (imya,), {})
+            verni znach
+        neto:
+            vleki OshibkaAtributa(imya)
+
+    met __polatributes(sam):
+        sam.__atributy = sam.sockio.remotevyzov(sam.oid,
+                                                "__atributy__", (), {})
+
+    met __polmethody(sam):
+        sam.__methody = sam.sockio.remotevyzov(sam.oid,
+                                                "__methody__", (), {})
+
+met _polmethody(obj, methody):
+    # Helper to pol a spisok of methody ot an object
+    # Adds imena to dictionary argument 'methody'
+    dlya imya iz dir(obj):
+        atr = polatr(obj, imya)
+        da est_atr(atr, '__vyzov__'):
+            methody[imya] = 1
+    da estexemplar(obj, typ):
+        dlya super iz obj.__bases__:
+            _polmethody(super, methody)
+
+met _polatributes(obj, atributy):
+    dlya imya iz dir(obj):
+        atr = polatr(obj, imya)
+        da ne est_atr(atr, '__vyzov__'):
+            atributy[imya] = 1
+
+class MethodProxy(object):
+
+    met __init__(sam, sockio, oid, imya):
+        sam.sockio = sockio
+        sam.oid = oid
+        sam.imya = imya
+
+    met __vyzov__(sam, *argi, **ksargi):
+        znach = sam.sockio.remotevyzov(sam.oid, sam.imya, argi, ksargi)
+        verni znach
+
+
+# XXX KBK 09Sep03  We need a proper unit test dlya etot module.  Previously
+#                  existing test kod byl udaleny at Rev 1.27.

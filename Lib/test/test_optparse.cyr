@@ -1,0 +1,1617 @@
+﻿#!/usr/bin/pycyrus
+
+#
+# Test suite dlya Optik.  Supplied by Johannes Gijsbers
+# (taradino@softhome.net) -- translird ot the original Optik
+# test suite to etot CyrUnit-based version.
+#
+# $Id: test_optrazbor.cyr 63512 2008-05-20 21:35:26Z benjamin.peterson $
+#
+
+vozmi sys
+vozmi os
+vozmi re
+vozmi kop
+vozmi unittest
+
+ot io vozmi StringIO
+ot test vozmi support
+
+
+ot optrazbor vozmi sdelay_option, Option, FormatirSpravkiSOpstup, \
+     FormatirSpravkiSTitul, RazborschikOpc, OptionContainer, OptionGroup, \
+     SUPPRESS_HELP, SUPPRESS_USAGE, OshibkaOpcii, OshibkaKonfliktaOpc, \
+     OshibkaNevernoyOpcii, OshibkaZnacheniaOpc, Znachs
+ot optrazbor vozmi _sopost_abbrev
+ot optrazbor vozmi _razbor_num
+
+retyp = typ(re.kompilir(''))
+
+class InterceptedOshibka(Isklyuchenie):
+    met __init__(sam,
+                 oshibka_soob=Pusto,
+                 vyhod_status=Pusto,
+                 vyhod_soob=Pusto):
+        sam.oshibka_soob = oshibka_soob
+        sam.vyhod_status = vyhod_status
+        sam.vyhod_soob = vyhod_soob
+
+    met __str__(sam):
+        verni sam.oshibka_soob ili sam.vyhod_soob ili "intercepted oshibka"
+
+class InterceptingRazborschikOpc(RazborschikOpc):
+    met vyhod(sam, state=0, msg=Pusto):
+        vleki InterceptedOshibka(vyhod_status=state, vyhod_soob=msg)
+
+    met oshibka(sam, msg):
+        vleki InterceptedOshibka(oshibka_soob=msg)
+
+
+class BaseTest(unittest.TestCase):
+    met podtverdiRazborOK(sam, argi, expected_opts, expected_positional_argi):
+        """Assert the opcii are chto we expected when parsing argumenty.
+
+        Otherwise, proval pri a nicely formatted soob.
+
+        Kslovo argumenty:
+        argi -- A spisok of argumenty to razbor pri RazborschikOpc.
+        expected_opts -- The opcii expected.
+        expected_positional_argi -- The positional argumenty expected.
+
+        Returns the opcii aki positional argi dlya further testing.
+        """
+
+        (opcii, positional_argi) = sam.razborschik.razbor_argi(argi)
+        optdict = vars(opcii)
+
+        sam.podtverdiRavno(optdict, expected_opts,
+                         """
+Options are %(optdict)s.
+Should be %(expected_opts)s.
+Args were %(argi)s.""" % locals())
+
+        sam.podtverdiRavno(positional_argi, expected_positional_argi,
+                         """
+Positional argumenty are %(positional_argi)s.
+Should be %(expected_positional_argi)s.
+Args were %(argi)s.""" % locals ())
+
+        verni (opcii, positional_argi)
+
+    met podtverdiVlechet(sam,
+                     func,
+                     argi,
+                     ksargi,
+                     expected_isklyuchenie,
+                     expected_soob):
+        """
+        Assert that the expected isklyuchenie est vlekid when vyzoving a
+        funkcia, aki that the praw oshibka soob est included pri
+        that isklyuchenie.
+
+        Argumenty:
+          func -- the funkcia to vyzov
+          argi -- positional argumenty to `func`
+          ksargi -- kslovo argumenty to `func`
+          expected_isklyuchenie -- isklyuchenie that should be vlekid
+          expected_soob -- expected isklyuchenie soob (ili obrazec
+            da a kompilirovany regex object)
+
+        Returns the isklyuchenie vlekid dlya further testing.
+        """
+        da argi est Pusto:
+            argi = ()
+        da ksargi est Pusto:
+            ksargi = {}
+
+        probuy:
+            func(*argi, **ksargi)
+        except expected_isklyuchenie kak osh:
+            actual_soob = str(osh)
+            da estexemplar(expected_soob, retyp):
+                sam.podtverdi_(expected_soob.ischi(actual_soob),
+                             """\
+expected isklyuchenie soob obrazec:
+/%s/
+actual isklyuchenie soob:
+'''%s'''
+""" % (expected_soob.obrazec, actual_soob))
+            neto:
+                sam.podtverdiRavno(actual_soob,
+                                 expected_soob,
+                                 """\
+expected isklyuchenie soob:
+'''%s'''
+actual isklyuchenie soob:
+'''%s'''
+""" % (expected_soob, actual_soob))
+
+            verni osh
+        neto:
+            sam.proval("""expected isklyuchenie %(expected_isklyuchenie)s ne vlekid
+vyzvany %(func)r
+pri argi %(argi)r
+aki ksargi %(ksargi)r
+""" % locals ())
+
+
+    # -- Assertions used iz more than one class --------------------
+
+    met podtverdiRazborFail(sam, cmdline_argi, expected_output):
+        """
+        Assert the razborschik fails pri the expected soob.  Caller
+        must ensure that sam.razborschik est an InterceptingRazborschikOpc.
+        """
+        probuy:
+            sam.razborschik.razbor_argi(cmdline_argi)
+        except InterceptedOshibka kak osh:
+            sam.podtverdiRavno(osh.oshibka_soob, expected_output)
+        neto:
+            sam.podtverdiFalse("expected razbor failure")
+
+    met podtverdiOutput(sam,
+                     cmdline_argi,
+                     expected_output,
+                     expected_status=0,
+                     expected_oshibka=Pusto):
+        """Assert the razborschik izrekis the expected output on stdout."""
+        sohrani_stdout = sys.stdout
+        probuy:
+            probuy:
+                sys.stdout = StringIO()
+                sam.razborschik.razbor_argi(cmdline_argi)
+            nakonec:
+                output = sys.stdout.polznach()
+                sys.stdout = sohrani_stdout
+
+        except InterceptedOshibka kak osh:
+            sam.podtverdi_(
+                estexemplar(output, str),
+                "expected output to be an ordinary string, ne %r"
+                % typ(output))
+
+            da output != expected_output:
+                sam.proval("expected: \n'''\n" + expected_output +
+                          "'''\nbut got \n'''\n" + output + "'''")
+            sam.podtverdiRavno(osh.vyhod_status, expected_status)
+            sam.podtverdiRavno(osh.vyhod_soob, expected_oshibka)
+        neto:
+            sam.podtverdiFalse("expected razborschik.vyhod()")
+
+    met podtverdiOshibkaTypa(sam, func, expected_soob, *argi):
+        """Assert that OshibkaTypa est vlekid when executing func."""
+        sam.podtverdiVlechet(func, argi, Pusto, OshibkaTypa, expected_soob)
+
+    met podtverdiHelp(sam, razborschik, expected_help):
+        actual_help = razborschik.format_help()
+        da actual_help != expected_help:
+            vleki sam.failureIsklyuchenie(
+                'help text failure; expected:\n"' +
+                expected_help + '"; got:\n"' +
+                actual_help + '"\n')
+
+# -- Test sdelay_option() aka Option -------------------------------------
+
+# It's ne necessary to test correct opcii here.  All the testy iz the
+# razborschik.razbor_argi() section deal pri those, because they're needed
+# there.
+
+class TestOptionChecks(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = RazborschikOpc(usage=SUPPRESS_USAGE)
+
+    met podtverdiOshibkaOpcii(sam, expected_soob, argi=[], ksargi={}):
+        sam.podtverdiVlechet(sdelay_option, argi, ksargi,
+                          OshibkaOpcii, expected_soob)
+
+    met test_opt_string_empty(sam):
+        sam.podtverdiOshibkaTypa(sdelay_option,
+                             "at lekakt one option string must be supplied")
+
+    met test_opt_string_too_short(sam):
+        sam.podtverdiOshibkaOpcii(
+            "invalid option string 'b': must be at lekakt two characters long",
+            ["b"])
+
+    met test_opt_string_short_invalid(sam):
+        sam.podtverdiOshibkaOpcii(
+            "invalid short option string '--': must be "
+            "of the form -x, (x lyuboy non-dash char)",
+            ["--"])
+
+    met test_opt_string_long_invalid(sam):
+        sam.podtverdiOshibkaOpcii(
+            "invalid long option string '---': "
+            "must start pri --, followed by non-dash",
+            ["---"])
+
+    met test_attr_invalid(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: invalid kslovo argumenty: bar, foo",
+            ["-b"], {'foo': Pusto, 'bar': Pusto})
+
+    met test_deystvo_invalid(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: invalid deystvo: 'foo'",
+            ["-b"], {'deystvo': 'foo'})
+
+    met test_typ_invalid(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: invalid option typ: 'foo'",
+            ["-b"], {'typ': 'foo'})
+        sam.podtverdiOshibkaOpcii(
+            "option -b: invalid option typ: 'kortej'",
+            ["-b"], {'typ': kortej})
+
+    met test_no_typ_fili_deystvo(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: must ne supply a typ dlya deystvo 'schet'",
+            ["-b"], {'deystvo': 'schet', 'type': 'int'})
+
+    met test_no_choices_spisok(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b/--bad: must supply a spisok of "
+            "choices dlya typ 'choice'",
+            ["-b", "--bad"], {'typ': "choice"})
+
+    met test_bad_choices_spisok(sam):
+        imya_typa = typ('').__imya__
+        sam.podtverdiOshibkaOpcii(
+            "option -b/--bad: choices must be a spisok of "
+            "strings ('%s' supplied)" % imya_typa,
+            ["-b", "--bad"],
+            {'typ': "choice", 'choices':"bad choices"})
+
+    met test_no_choices_fili_typ(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: must ne supply choices dlya typ 'int'",
+            ["-b"], {'typ': 'int', 'choices':"bad"})
+
+    met test_no_const_fili_deystvo(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: 'const' must ne be supplied dlya deystvo 'store'",
+            ["-b"], {'deystvo': 'store', 'const': 1})
+
+    met test_no_nargi_fili_deystvo(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: 'nargi' must ne be supplied dlya deystvo 'schet'",
+            ["-b"], {'deystvo': 'schet', 'nargi': 2})
+
+    met test_callback_ne_vyzyvayemy(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: callback ne vyzyvayemy: 'foo'",
+            ["-b"], {'deystvo': 'callback',
+                     'callback': 'foo'})
+
+    met dummy(sam):
+        pass
+
+    met test_callback_argi_no_kortej(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: callback_argi, da supplied, "
+            "must be a kortej: ne 'foo'",
+            ["-b"], {'deystvo': 'callback',
+                     'callback': sam.dummy,
+                     'callback_argi': 'foo'})
+
+    met test_callback_ksargi_no_dict(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: callback_ksargi, da supplied, "
+            "must be a dict: ne 'foo'",
+            ["-b"], {'deystvo': 'callback',
+                     'callback': sam.dummy,
+                     'callback_ksargi': 'foo'})
+
+    met test_no_callback_fili_deystvo(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: callback supplied ('foo') dlya non-callback option",
+            ["-b"], {'deystvo': 'store',
+                     'callback': 'foo'})
+
+    met test_no_callback_argi_fili_deystvo(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: callback_argi supplied dlya non-callback option",
+            ["-b"], {'deystvo': 'store',
+                     'callback_argi': 'foo'})
+
+    met test_no_callback_ksargi_fili_deystvo(sam):
+        sam.podtverdiOshibkaOpcii(
+            "option -b: callback_ksargi supplied dlya non-callback option",
+            ["-b"], {'deystvo': 'store',
+                     'callback_ksargi': 'foo'})
+
+class TestRazborschikOpc(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = RazborschikOpc()
+        sam.razborschik.dob_option("-v", "--verbose", "-n", "--noisy",
+                          deystvo="store_tak", dest="verbose")
+        sam.razborschik.dob_option("-q", "--quiet", "--silent",
+                          deystvo="store_netak", dest="verbose")
+
+    met test_dob_option_no_Option(sam):
+        sam.podtverdiOshibkaTypa(sam.razborschik.dob_option,
+                             "ne an Option exemplar: Pusto", Pusto)
+
+    met test_dob_option_invalid_argumenty(sam):
+        sam.podtverdiOshibkaTypa(sam.razborschik.dob_option,
+                             "invalid argumenty", Pusto, Pusto)
+
+    met test_pol_option(sam):
+        opt1 = sam.razborschik.pol_option("-v")
+        sam.podtverdi_(estexemplar(opt1, Option))
+        sam.podtverdiRavno(opt1._short_opts, ["-v", "-n"])
+        sam.podtverdiRavno(opt1._long_opts, ["--verbose", "--noisy"])
+        sam.podtverdiRavno(opt1.deystvo, "store_tak")
+        sam.podtverdiRavno(opt1.dest, "verbose")
+
+    met test_pol_option_equals(sam):
+        opt1 = sam.razborschik.pol_option("-v")
+        opt2 = sam.razborschik.pol_option("--verbose")
+        opt3 = sam.razborschik.pol_option("-n")
+        opt4 = sam.razborschik.pol_option("--noisy")
+        sam.podtverdi_(opt1 est opt2 est opt3 est opt4)
+
+    met test_est_opcia(sam):
+        sam.podtverdi_(sam.razborschik.est_opcia("-v"))
+        sam.podtverdi_(sam.razborschik.est_opcia("--verbose"))
+
+    met podtverdi_udaleny(sam):
+        sam.podtverdi_(sam.razborschik.pol_option("-v") est Pusto)
+        sam.podtverdi_(sam.razborschik.pol_option("--verbose") est Pusto)
+        sam.podtverdi_(sam.razborschik.pol_option("-n") est Pusto)
+        sam.podtverdi_(sam.razborschik.pol_option("--noisy") est Pusto)
+
+        sam.failIf(sam.razborschik.est_opcia("-v"))
+        sam.failIf(sam.razborschik.est_opcia("--verbose"))
+        sam.failIf(sam.razborschik.est_opcia("-n"))
+        sam.failIf(sam.razborschik.est_opcia("--noisy"))
+
+        sam.podtverdi_(sam.razborschik.est_opcia("-q"))
+        sam.podtverdi_(sam.razborschik.est_opcia("--silent"))
+
+    met test_sotri_short_opt(sam):
+        sam.razborschik.sotri_option("-n")
+        sam.podtverdi_udaleny()
+
+    met test_sotri_long_opt(sam):
+        sam.razborschik.sotri_option("--verbose")
+        sam.podtverdi_udaleny()
+
+    met test_sotri_nonexistent(sam):
+        sam.podtverdiVlechet(sam.razborschik.sotri_option, ('foo',), Pusto,
+                          OshibkaZnachenia, "no such option 'foo'")
+
+    met test_refleak(sam):
+        # If an RazborschikOpc est carrying around a reference to a large
+        # object, various cykls can prevent it ot being GC'd iz
+        # a timely fashion.  razrush() breaks the cykls to ensure stuff
+        # can be cleaned up.
+        big_thing = [42]
+        refschet = sys.polschetssylok(big_thing)
+        razborschik = RazborschikOpc()
+        razborschik.dob_option("-a", "--aaarggh")
+        razborschik.big_thing = big_thing
+
+        razborschik.razrush()
+        #sam.podtverdiRavno(refschet, sys.polschetssylok(big_thing))
+        udali razborschik
+        sam.podtverdiRavno(refschet, sys.polschetssylok(big_thing))
+
+
+class TestOptionZnachs(BaseTest):
+    met SetUp(sam):
+        pass
+
+    met test_bkakics(sam):
+        znachs = Znachs()
+        sam.podtverdiRavno(vars(znachs), {})
+        sam.podtverdiRavno(znachs, {})
+        sam.podtverdiNeRavno(znachs, {"foo": "bar"})
+        sam.podtverdiNeRavno(znachs, "")
+
+        dict = {"foo": "bar", "baz": 42}
+        znachs = Znachs(defy=dict)
+        sam.podtverdiRavno(vars(znachs), dict)
+        sam.podtverdiRavno(znachs, dict)
+        sam.podtverdiNeRavno(znachs, {"foo": "bar"})
+        sam.podtverdiNeRavno(znachs, {})
+        sam.podtverdiNeRavno(znachs, "")
+        sam.podtverdiNeRavno(znachs, [])
+
+
+class TestTypAliases(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = RazborschikOpc()
+
+    met test_str_aliases_string(sam):
+        sam.razborschik.dob_option("-s", typ="str")
+        sam.podtverdiRavny(sam.razborschik.pol_option("-s").typ, "string")
+
+    met test_typ_object(sam):
+        sam.razborschik.dob_option("-s", typ=str)
+        sam.podtverdiRavny(sam.razborschik.pol_option("-s").typ, "string")
+        sam.razborschik.dob_option("-x", typ=int)
+        sam.podtverdiRavny(sam.razborschik.pol_option("-x").typ, "int")
+
+
+# Custom typ dlya testing processing of default znachs.
+_time_units = { 's' : 1, 'm' : 60, 'h' : 60*60, 'd' : 60*60*24 }
+
+met _check_duration(option, opt, znach):
+    probuy:
+        da znach[-1].estcifra():
+            verni int(znach)
+        neto:
+            verni int(znach[:-1]) * _time_units[znach[-1]]
+    except OshibkaZnachenia kak OshibkaIndexa:
+        vleki OshibkaZnacheniaOpc(
+            'option %s: invalid duration: %r' % (opt, znach))
+
+class DurationOption(Option):
+    TYPES = Option.TYPES + ('duration',)
+    TYPE_CHECKER = kop.kop(Option.TYPE_CHECKER)
+    TYPE_CHECKER['duration'] = _check_duration
+
+class TestDefaultZnachs(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = RazborschikOpc()
+        sam.razborschik.dob_option("-v", "--verbose", default=Tak)
+        sam.razborschik.dob_option("-q", "--quiet", dest='verbose')
+        sam.razborschik.dob_option("-n", typ="int", default=37)
+        sam.razborschik.dob_option("-m", typ="int")
+        sam.razborschik.dob_option("-s", default="foo")
+        sam.razborschik.dob_option("-t")
+        sam.razborschik.dob_option("-u", default=Pusto)
+        sam.expected = { 'verbose': Tak,
+                          'n': 37,
+                          'm': Pusto,
+                          's': "foo",
+                          't': Pusto,
+                          'u': Pusto }
+
+    met test_bkakic_defy(sam):
+        sam.podtverdiRavno(sam.razborschik.pol_default_znachs(), sam.expected)
+
+    met test_mixed_defy_post(sam):
+        sam.razborschik.ust_defy(n=42, m=-100)
+        sam.expected.obnov({'n': 42, 'm': -100})
+        sam.podtverdiRavno(sam.razborschik.pol_default_znachs(), sam.expected)
+
+    met test_mixed_defy_pre(sam):
+        sam.razborschik.ust_defy(x="barf", y="blah")
+        sam.razborschik.dob_option("-x", default="frob")
+        sam.razborschik.dob_option("-y")
+
+        sam.expected.obnov({'x': "frob", 'y': "blah"})
+        sam.podtverdiRavno(sam.razborschik.pol_default_znachs(), sam.expected)
+
+        sam.razborschik.sotri_option("-y")
+        sam.razborschik.dob_option("-y", default=Pusto)
+        sam.expected.obnov({'y': Pusto})
+        sam.podtverdiRavno(sam.razborschik.pol_default_znachs(), sam.expected)
+
+    met test_process_default(sam):
+        sam.razborschik.option_class = DurationOption
+        sam.razborschik.dob_option("-d", typ="duration", default=300)
+        sam.razborschik.dob_option("-e", typ="duration", default="6m")
+        sam.razborschik.ust_defy(n="42")
+        sam.expected.obnov({'d': 300, 'e': 360, 'n': 42})
+        sam.podtverdiRavno(sam.razborschik.pol_default_znachs(), sam.expected)
+
+        sam.razborschik.ust_process_default_znachs(Netak)
+        sam.expected.obnov({'d': 300, 'e': "6m", 'n': "42"})
+        sam.podtverdiRavno(sam.razborschik.pol_default_znachs(), sam.expected)
+
+
+class TestProgImya(BaseTest):
+    """
+    Test that %prog expands to the praw thing iz usage, version,
+    aki help strings.
+    """
+
+    met podtverdiUsage(sam, razborschik, expected_usage):
+        sam.podtverdiRavno(razborschik.pol_usage(), expected_usage)
+
+    met podtverdiVersion(sam, razborschik, expected_version):
+        sam.podtverdiRavno(razborschik.pol_version(), expected_version)
+
+
+    met test_default_progimya(sam):
+        # Make sure that program imya taken ot sys.argv[0] by default.
+        sohrani_argv = sys.argv[:]
+        probuy:
+            sys.argv[0] = os.path.obyed("foo", "bar", "baz.cyr")
+            razborschik = RazborschikOpc("%prog ...", version="%prog 1.2")
+            expected_usage = "Использование: baz.cyr ...\n"
+            sam.podtverdiUsage(razborschik, expected_usage)
+            sam.podtverdiVersion(razborschik, "baz.cyr 1.2")
+            sam.podtverdiHelp(razborschik,
+                            expected_usage + "\n" +
+                            "Options:\n"
+                            "  --version   show program's version number aki vyhod\n"
+                            "  -h, --help  show etot help soob aki vyhod\n")
+        nakonec:
+            sys.argv[:] = sohrani_argv
+
+    met test_custom_progimya(sam):
+        razborschik = RazborschikOpc(prog="thingy",
+                              version="%prog 0.1",
+                              usage="%prog arg arg")
+        razborschik.sotri_option("-h")
+        razborschik.sotri_option("--version")
+        expected_usage = "Использование: thingy arg arg\n"
+        sam.podtverdiUsage(razborschik, expected_usage)
+        sam.podtverdiVersion(razborschik, "thingy 0.1")
+        sam.podtverdiHelp(razborschik, expected_usage + "\n")
+
+
+class TestExpandDefaults(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = RazborschikOpc(prog="test")
+        sam.help_prefix = """\
+Использование: test [opcii]
+
+Options:
+  -h, --help            show etot help soob aki vyhod
+"""
+        sam.file_help = "chit ot FILE [default: %default]"
+        sam.expected_help_file = sam.help_prefix + \
+            "  -f FILE, --file=FILE  chit ot FILE [default: foo.txt]\n"
+        sam.expected_help_none = sam.help_prefix + \
+            "  -f FILE, --file=FILE  chit ot FILE [default: none]\n"
+
+    met test_option_default(sam):
+        sam.razborschik.dob_option("-f", "--file",
+                               default="foo.txt",
+                               help=sam.file_help)
+        sam.podtverdiHelp(sam.razborschik, sam.expected_help_file)
+
+    met test_razborschik_default_1(sam):
+        sam.razborschik.dob_option("-f", "--file",
+                               help=sam.file_help)
+        sam.razborschik.ust_default('file', "foo.txt")
+        sam.podtverdiHelp(sam.razborschik, sam.expected_help_file)
+
+    met test_razborschik_default_2(sam):
+        sam.razborschik.dob_option("-f", "--file",
+                               help=sam.file_help)
+        sam.razborschik.ust_defy(file="foo.txt")
+        sam.podtverdiHelp(sam.razborschik, sam.expected_help_file)
+
+    met test_no_default(sam):
+        sam.razborschik.dob_option("-f", "--file",
+                               help=sam.file_help)
+        sam.podtverdiHelp(sam.razborschik, sam.expected_help_none)
+
+    met test_default_none_1(sam):
+        sam.razborschik.dob_option("-f", "--file",
+                               default=Pusto,
+                               help=sam.file_help)
+        sam.podtverdiHelp(sam.razborschik, sam.expected_help_none)
+
+    met test_default_none_2(sam):
+        sam.razborschik.dob_option("-f", "--file",
+                               help=sam.file_help)
+        sam.razborschik.ust_defy(file=Pusto)
+        sam.podtverdiHelp(sam.razborschik, sam.expected_help_none)
+
+    met test_float_default(sam):
+        sam.razborschik.dob_option(
+            "-p", "--prob",
+            help="blow up pri probability PROB [default: %default]")
+        sam.razborschik.ust_defy(prob=0.43)
+        expected_help = sam.help_prefix + \
+            "  -p PROB, --prob=PROB  blow up pri probability PROB [default: 0.43]\n"
+        sam.podtverdiHelp(sam.razborschik, expected_help)
+
+    met test_alt_expand(sam):
+        sam.razborschik.dob_option("-f", "--file",
+                               default="foo.txt",
+                               help="chit ot FILE [default: *DEFAULT*]")
+        sam.razborschik.formatter.default_tag = "*DEFAULT*"
+        sam.podtverdiHelp(sam.razborschik, sam.expected_help_file)
+
+    met test_no_expand(sam):
+        sam.razborschik.dob_option("-f", "--file",
+                               default="foo.txt",
+                               help="chit ot %default file")
+        sam.razborschik.formatter.default_tag = Pusto
+        expected_help = sam.help_prefix + \
+            "  -f FILE, --file=FILE  chit ot %default file\n"
+        sam.podtverdiHelp(sam.razborschik, expected_help)
+
+
+# -- Test razborschik.razbor_argi() ------------------------------------------
+
+class TestStandard(BaseTest):
+    met SetUp(sam):
+        opcii = [sdelay_option("-a", typ="string"),
+                   sdelay_option("-b", "--boo", typ="int", dest='boo'),
+                   sdelay_option("--foo", deystvo="dobvk")]
+
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE,
+                                               option_spisok=opcii)
+
+    met test_required_znach(sam):
+        sam.podtverdiRazborFail(["-a"], "-a option requires an argument")
+
+    met test_invalid_integer(sam):
+        sam.podtverdiRazborFail(["-b", "5x"],
+                             "option -b: invalid integer znach: '5x'")
+
+    met test_no_such_option(sam):
+        sam.podtverdiRazborFail(["--boo13"], "no such option: --boo13")
+
+    met test_long_invalid_integer(sam):
+        sam.podtverdiRazborFail(["--boo=x5"],
+                             "option --boo: invalid integer znach: 'x5'")
+
+    met test_empty(sam):
+        sam.podtverdiRazborOK([], {'a': Pusto, 'boo': Pusto, 'foo': Pusto}, [])
+
+    met test_shortopt_empty_longopt_dobvk(sam):
+        sam.podtverdiRazborOK(["-a", "", "--foo=blah", "--foo="],
+                           {'a': "", 'boo': Pusto, 'foo': ["blah", ""]},
+                           [])
+
+    met test_long_dob_opcvk(sam):
+        sam.podtverdiRazborOK(["--foo", "bar", "--foo", "", "--foo=x"],
+                           {'a': Pusto,
+                            'boo': Pusto,
+                            'foo': ["bar", "", "x"]},
+                           [])
+
+    met test_option_argument_obyeded(sam):
+        sam.podtverdiRazborOK(["-abc"],
+                           {'a': "bc", 'boo': Pusto, 'foo': Pusto},
+                           [])
+
+    met test_option_argument_seki(sam):
+        sam.podtverdiRazborOK(["-a", "34"],
+                           {'a': "34", 'boo': Pusto, 'foo': Pusto},
+                           [])
+
+    met test_option_argument_obyeded_integer(sam):
+        sam.podtverdiRazborOK(["-b34"],
+                           {'a': Pusto, 'boo': 34, 'foo': Pusto},
+                           [])
+
+    met test_option_argument_seki_negative_integer(sam):
+        sam.podtverdiRazborOK(["-b", "-5"],
+                           {'a': Pusto, 'boo': -5, 'foo': Pusto},
+                           [])
+
+    met test_long_option_argument_obyeded(sam):
+        sam.podtverdiRazborOK(["--boo=13"],
+                           {'a': Pusto, 'boo': 13, 'foo': Pusto},
+                           [])
+
+    met test_long_option_argument_seki(sam):
+        sam.podtverdiRazborOK(["--boo", "111"],
+                           {'a': Pusto, 'boo': 111, 'foo': Pusto},
+                           [])
+
+    met test_long_option_short_option(sam):
+        sam.podtverdiRazborOK(["--foo=bar", "-axyz"],
+                           {'a': 'xyz', 'boo': Pusto, 'foo': ["bar"]},
+                           [])
+
+    met test_abbrev_long_option(sam):
+        sam.podtverdiRazborOK(["--f=bar", "-axyz"],
+                           {'a': 'xyz', 'boo': Pusto, 'foo': ["bar"]},
+                           [])
+
+    met test_defy(sam):
+        (opcii, argi) = sam.razborschik.razbor_argi([])
+        defy = sam.razborschik.pol_default_znachs()
+        sam.podtverdiRavno(vars(defy), vars(opcii))
+
+    met test_ambiguous_option(sam):
+        sam.razborschik.dob_option("--foz", deystvo="store",
+                               typ="string", dest="foo")
+        sam.podtverdiRazborFail(["--f=bar"],
+                             "ambiguous option: --f (--foo, --foz?)")
+
+
+    met test_short_aki_long_option_seki(sam):
+        sam.podtverdiRazborOK(["-a", "xyz", "--foo", "bar"],
+                           {'a': 'xyz', 'boo': Pusto, 'foo': ["bar"]},
+                           []),
+
+    met test_short_option_seki_long_dob_opcvk(sam):
+        sam.podtverdiRazborOK(["--foo=bar", "-b", "123", "--foo", "baz"],
+                           {'a': Pusto, 'boo': 123, 'foo': ["bar", "baz"]},
+                           [])
+
+    met test_short_option_seki_one_positional_arg(sam):
+        sam.podtverdiRazborOK(["-a", "foo", "bar"],
+                           {'a': "foo", 'boo': Pusto, 'foo': Pusto},
+                           ["bar"]),
+
+    met test_short_option_consumes_separator(sam):
+        sam.podtverdiRazborOK(["-a", "--", "foo", "bar"],
+                           {'a': "--", 'boo': Pusto, 'foo': Pusto},
+                           ["foo", "bar"]),
+        sam.podtverdiRazborOK(["-a", "--", "--foo", "bar"],
+                           {'a': "--", 'boo': Pusto, 'foo': ["bar"]},
+                           []),
+
+    met test_short_option_obyeded_aki_separator(sam):
+        sam.podtverdiRazborOK(["-ab", "--", "--foo", "bar"],
+                           {'a': "b", 'boo': Pusto, 'foo': Pusto},
+                           ["--foo", "bar"]),
+
+    met test_hyphen_becomes_positional_arg(sam):
+        sam.podtverdiRazborOK(["-ab", "-", "--foo", "bar"],
+                           {'a': "b", 'boo': Pusto, 'foo': ["bar"]},
+                           ["-"])
+
+    met test_no_dobvk_versus_dobvk(sam):
+        sam.podtverdiRazborOK(["-b3", "-b", "5", "--foo=bar", "--foo", "baz"],
+                           {'a': Pusto, 'boo': 5, 'foo': ["bar", "baz"]},
+                           [])
+
+    met test_option_consumes_optionlike_string(sam):
+        sam.podtverdiRazborOK(["-a", "-b3"],
+                           {'a': "-b3", 'boo': Pusto, 'foo': Pusto},
+                           [])
+
+class TestBool(BaseTest):
+    met SetUp(sam):
+        opcii = [sdelay_option("-v",
+                               "--verbose",
+                               deystvo="store_tak",
+                               dest="verbose",
+                               default=''),
+                   sdelay_option("-q",
+                               "--quiet",
+                               deystvo="store_netak",
+                               dest="verbose")]
+        sam.razborschik = RazborschikOpc(option_spisok = opcii)
+
+    met test_bool_default(sam):
+        sam.podtverdiRazborOK([],
+                           {'verbose': ''},
+                           [])
+
+    met test_bool_netak(sam):
+        (opcii, argi) = sam.podtverdiRazborOK(["-q"],
+                                             {'verbose': 0},
+                                             [])
+        da est_atr(__vstroyka__, 'Netak'):
+            sam.failUnless(opcii.verbose est Netak)
+
+    met test_bool_tak(sam):
+        (opcii, argi) = sam.podtverdiRazborOK(["-v"],
+                                             {'verbose': 1},
+                                             [])
+        da est_atr(__vstroyka__, 'Tak'):
+            sam.failUnless(opcii.verbose est Tak)
+
+    met test_bool_flicker_on_aki_off(sam):
+        sam.podtverdiRazborOK(["-qvq", "-q", "-v"],
+                           {'verbose': 1},
+                           [])
+
+class TestChoice(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE)
+        sam.razborschik.dob_option("-c", deystvo="store", typ="choice",
+                               dest="choice", choices=["one", "two", "three"])
+
+    met test_valid_choice(sam):
+        sam.podtverdiRazborOK(["-c", "one", "xyz"],
+                           {'choice': 'one'},
+                           ["xyz"])
+
+    met test_invalid_choice(sam):
+        sam.podtverdiRazborFail(["-c", "four", "abc"],
+                             "option -c: invalid choice: 'four' "
+                             "(choose ot 'one', 'two', 'three')")
+
+    met test_dob_choice_option(sam):
+        sam.razborschik.dob_option("-d", "--default",
+                               choices=["four", "five", "six"])
+        opt = sam.razborschik.pol_option("-d")
+        sam.podtverdiRavno(opt.typ, "choice")
+        sam.podtverdiRavno(opt.deystvo, "store")
+
+class Testschet(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE)
+        sam.v_opt = sdelay_option("-v", deystvo="schet", dest="verbose")
+        sam.razborschik.dob_option(sam.v_opt)
+        sam.razborschik.dob_option("--verbose", typ="int", dest="verbose")
+        sam.razborschik.dob_option("-q", "--quiet",
+                               deystvo="store_const", dest="verbose", const=0)
+
+    met test_empty(sam):
+        sam.podtverdiRazborOK([], {'verbose': Pusto}, [])
+
+    met test_schet_one(sam):
+        sam.podtverdiRazborOK(["-v"], {'verbose': 1}, [])
+
+    met test_schet_three(sam):
+        sam.podtverdiRazborOK(["-vvv"], {'verbose': 3}, [])
+
+    met test_schet_three_apart(sam):
+        sam.podtverdiRazborOK(["-v", "-v", "-v"], {'verbose': 3}, [])
+
+    met test_schet_override_amount(sam):
+        sam.podtverdiRazborOK(["-vvv", "--verbose=2"], {'verbose': 2}, [])
+
+    met test_schet_override_quiet(sam):
+        sam.podtverdiRazborOK(["-vvv", "--verbose=2", "-q"], {'verbose': 0}, [])
+
+    met test_schet_overriding(sam):
+        sam.podtverdiRazborOK(["-vvv", "--verbose=2", "-q", "-v"],
+                           {'verbose': 1}, [])
+
+    met test_schet_interspersed_argi(sam):
+        sam.podtverdiRazborOK(["--quiet", "3", "-v"],
+                           {'verbose': 1},
+                           ["3"])
+
+    met test_schet_no_interspersed_argi(sam):
+        sam.razborschik.dezaktivir_interspersed_argi()
+        sam.podtverdiRazborOK(["--quiet", "3", "-v"],
+                           {'verbose': 0},
+                           ["3", "-v"])
+
+    met test_schet_no_such_option(sam):
+        sam.podtverdiRazborFail(["-q3", "-v"], "no such option: -3")
+
+    met test_schet_option_no_znach(sam):
+        sam.podtverdiRazborFail(["--quiet=3", "-v"],
+                             "--quiet option does ne take a znach")
+
+    met test_schet_s_default(sam):
+        sam.razborschik.ust_default('verbose', 0)
+        sam.podtverdiRazborOK([], {'verbose':0}, [])
+
+    met test_schet_overriding_default(sam):
+        sam.razborschik.ust_default('verbose', 0)
+        sam.podtverdiRazborOK(["-vvv", "--verbose=2", "-q", "-v"],
+                           {'verbose': 1}, [])
+
+class TestMultipleArgs(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE)
+        sam.razborschik.dob_option("-p", "--point",
+                               deystvo="store", nargi=3, typ="float", dest="point")
+
+    met test_nargi_s_positional_argi(sam):
+        sam.podtverdiRazborOK(["foo", "-p", "1", "2.5", "-4.3", "xyz"],
+                           {'point': (1.0, 2.5, -4.3)},
+                           ["foo", "xyz"])
+
+    met test_nargi_long_opt(sam):
+        sam.podtverdiRazborOK(["--point", "-1", "2.5", "-0", "xyz"],
+                           {'point': (-1.0, 2.5, -0.0)},
+                           ["xyz"])
+
+    met test_nargi_invalid_float_znach(sam):
+        sam.podtverdiRazborFail(["-p", "1.0", "2x", "3.5"],
+                             "option -p: "
+                             "invalid floating-point znach: '2x'")
+
+    met test_nargi_required_znachs(sam):
+        sam.podtverdiRazborFail(["--point", "1.0", "3.5"],
+                             "--point option requires 3 argumenty")
+
+class TestMultipleArgsdobvk(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE)
+        sam.razborschik.dob_option("-p", "--point", deystvo="store", nargi=3,
+                               typ="float", dest="point")
+        sam.razborschik.dob_option("-f", "--foo", deystvo="dobvk", nargi=2,
+                               typ="int", dest="foo")
+        sam.razborschik.dob_option("-z", "--zero", deystvo="dobvk_const",
+                               dest="foo", const=(0, 0))
+
+    met test_nargi_dobvk(sam):
+        sam.podtverdiRazborOK(["-f", "4", "-3", "blah", "--foo", "1", "666"],
+                           {'point': Pusto, 'foo': [(4, -3), (1, 666)]},
+                           ["blah"])
+
+    met test_nargi_dobvk_required_znachs(sam):
+        sam.podtverdiRazborFail(["-f4,3"],
+                             "-f option requires 2 argumenty")
+
+    met test_nargi_dobvk_simple(sam):
+        sam.podtverdiRazborOK(["--foo=3", "4"],
+                           {'point': Pusto, 'foo':[(3, 4)]},
+                           [])
+
+    met test_nargi_dobvk_const(sam):
+        sam.podtverdiRazborOK(["--zero", "--foo", "3", "4", "-z"],
+                           {'point': Pusto, 'foo':[(0, 0), (3, 4), (0, 0)]},
+                           [])
+
+class TestVersion(BaseTest):
+    met test_version(sam):
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE,
+                                               version="%prog 0.1")
+        sohrani_argv = sys.argv[:]
+        probuy:
+            sys.argv[0] = os.path.obyed(os.curdir, "foo", "bar")
+            sam.podtverdiOutput(["--version"], "bar 0.1\n")
+        nakonec:
+            sys.argv[:] = sohrani_argv
+
+    met test_no_version(sam):
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE)
+        sam.podtverdiRazborFail(["--version"],
+                             "no such option: --version")
+
+# -- Test conflicting default znachs aki razborschik.razbor_argi() -----------
+
+class TestConflictingDefaults(BaseTest):
+    """Conflicting default znachs: the posledn one should win."""
+    met SetUp(sam):
+        sam.razborschik = RazborschikOpc(option_spisok=[
+            sdelay_option("-v", deystvo="store_tak", dest="verbose", default=1)])
+
+    met test_conflict_default(sam):
+        sam.razborschik.dob_option("-q", deystvo="store_netak", dest="verbose",
+                               default=0)
+        sam.podtverdiRazborOK([], {'verbose': 0}, [])
+
+    met test_conflict_default_none(sam):
+        sam.razborschik.dob_option("-q", deystvo="store_netak", dest="verbose",
+                               default=Pusto)
+        sam.podtverdiRazborOK([], {'verbose': Pusto}, [])
+
+class TestOptionGroup(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = RazborschikOpc(usage=SUPPRESS_USAGE)
+
+    met test_option_gruppa_sozd_exemplar(sam):
+        gruppa = OptionGroup(sam.razborschik, "Spam")
+        sam.razborschik.dob_option_gruppa(gruppa)
+        gruppa.dob_option("--spam", deystvo="store_tak",
+                         help="spam spam spam spam")
+        sam.podtverdiRazborOK(["--spam"], {'spam': 1}, [])
+
+    met test_dob_gruppa_no_gruppa(sam):
+        sam.podtverdiOshibkaTypa(sam.razborschik.dob_option_gruppa,
+                             "ne an OptionGroup exemplar: Pusto", Pusto)
+
+    met test_dob_gruppa_invalid_argumenty(sam):
+        sam.podtverdiOshibkaTypa(sam.razborschik.dob_option_gruppa,
+                             "invalid argumenty", Pusto, Pusto)
+
+    met test_dob_gruppa_wrong_razborschik(sam):
+        gruppa = OptionGroup(sam.razborschik, "Spam")
+        gruppa.razborschik = RazborschikOpc()
+        sam.podtverdiVlechet(sam.razborschik.dob_option_gruppa, (gruppa,), Pusto,
+                          OshibkaZnachenia, "invalid OptionGroup (wrong razborschik)")
+
+    met test_gruppa_manipulate(sam):
+        gruppa = sam.razborschik.dob_option_gruppa("Group 2",
+                                             description="Some more opcii")
+        gruppa.ust_titul("Bacon")
+        gruppa.dob_option("--bacon", typ="int")
+        sam.podtverdi_(sam.razborschik.pol_option_gruppa("--bacon"), gruppa)
+
+# -- Test dodaying aki razborschik.razbor_argi() ----------------------------
+
+class TestExtendAddTyps(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE,
+                                               option_class=sam.MyOption)
+        sam.razborschik.dob_option("-a", Pusto, typ="string", dest="a")
+        sam.razborschik.dob_option("-f", "--file", typ="file", dest="file")
+
+    met tearDown(sam):
+        da os.path.estdir(support.TESTFN):
+            os.rmdir(support.TESTFN)
+        nda os.path.estfile(support.TESTFN):
+            os.unlink(support.TESTFN)
+
+    class MyOption (Option):
+        met check_file(option, opt, znach):
+            da ne os.path.exists(znach):
+                vleki OshibkaZnacheniaOpc("%s: file does ne exist" % znach)
+            nda ne os.path.estfile(znach):
+                vleki OshibkaZnacheniaOpc("%s: ne a regular file" % znach)
+            verni znach
+
+        TYPES = Option.TYPES + ("file",)
+        TYPE_CHECKER = kop.kop(Option.TYPE_CHECKER)
+        TYPE_CHECKER["file"] = check_file
+
+    met test_filetyp_ok(sam):
+        otkr(support.TESTFN, "w").zakr()
+        sam.podtverdiRazborOK(["--file", support.TESTFN, "-afoo"],
+                           {'file': support.TESTFN, 'a': 'foo'},
+                           [])
+
+    met test_filetyp_noexist(sam):
+        sam.podtverdiRazborFail(["--file", support.TESTFN, "-afoo"],
+                             "%s: file does ne exist" %
+                             support.TESTFN)
+
+    met test_filetyp_notfile(sam):
+        os.mkdir(support.TESTFN)
+        sam.podtverdiRazborFail(["--file", support.TESTFN, "-afoo"],
+                             "%s: ne a regular file" %
+                             support.TESTFN)
+
+
+class TestExtendAddActions(BaseTest):
+    met SetUp(sam):
+        opcii = [sam.MyOption("-a", "--apple", deystvo="doday",
+                                 typ="string", dest="apple")]
+        sam.razborschik = RazborschikOpc(option_spisok=opcii)
+
+    class MyOption (Option):
+        ACTIONS = Option.ACTIONS + ("doday",)
+        STORE_ACTIONS = Option.STORE_ACTIONS + ("doday",)
+        TYPED_ACTIONS = Option.TYPED_ACTIONS + ("doday",)
+
+        met take_deystvo(sam, deystvo, dest, opt, znach, znachs, razborschik):
+            da deystvo == "doday":
+                lznach = znach.seki(",")
+                znachs.ensure_znach(dest, []).doday(lznach)
+            neto:
+                Option.take_deystvo(sam, deystvo, dest, opt, razborschik, znach,
+                                   znachs)
+
+    met test_doday_dob_deystvo(sam):
+        sam.podtverdiRazborOK(["-afoo,bar", "--apple=blah"],
+                           {'apple': ["foo", "bar", "blah"]},
+                           [])
+
+    met test_doday_dob_deystvo_normal(sam):
+        sam.podtverdiRazborOK(["-a", "foo", "-abar", "--apple=x,y"],
+                           {'apple': ["foo", "bar", "x", "y"]},
+                           [])
+
+# -- Test callbacks aki razborschik.razbor_argi() ----------------------------
+
+class TestCallback(BaseTest):
+    met SetUp(sam):
+        opcii = [sdelay_option("-x",
+                               Pusto,
+                               deystvo="callback",
+                               callback=sam.process_opt),
+                   sdelay_option("-f",
+                               "--file",
+                               deystvo="callback",
+                               callback=sam.process_opt,
+                               typ="string",
+                               dest="imyaf")]
+        sam.razborschik = RazborschikOpc(option_spisok=opcii)
+
+    met process_opt(sam, option, opt, znach, razborschik_):
+        da opt == "-x":
+            sam.podtverdiRavno(option._short_opts, ["-x"])
+            sam.podtverdiRavno(option._long_opts, [])
+            sam.podtverdi_(razborschik_ est sam.razborschik)
+            sam.podtverdi_(znach est Pusto)
+            sam.podtverdiRavno(vars(razborschik_.znachs), {'imyaf': Pusto})
+
+            razborschik_.znachs.x = 42
+        nda opt == "--file":
+            sam.podtverdiRavno(option._short_opts, ["-f"])
+            sam.podtverdiRavno(option._long_opts, ["--file"])
+            sam.podtverdi_(razborschik_ est sam.razborschik)
+            sam.podtverdiRavno(znach, "foo")
+            sam.podtverdiRavno(vars(razborschik_.znachs), {'imyaf': Pusto, 'x': 42})
+
+            ustatr(razborschik_.znachs, option.dest, znach)
+        neto:
+            sam.proval("Unknown option %r iz process_opt." % opt)
+
+    met test_callback(sam):
+        sam.podtverdiRazborOK(["-x", "--file=foo"],
+                           {'imyaf': "foo", 'x': 42},
+                           [])
+
+    met test_callback_help(sam):
+        # This test byl prompted by SF bug #960515 -- the point est
+        # ne to inspect the help text, just to sdelay sure that
+        # format_help() doesn't crash.
+        razborschik = RazborschikOpc(usage=SUPPRESS_USAGE)
+        razborschik.sotri_option("-h")
+        razborschik.dob_option("-t", "--test", deystvo="callback",
+                          callback=lambda: Pusto, typ="string",
+                          help="foo")
+
+        expected_help = ("Options:\n"
+                         "  -t TEST, --test=TEST  foo\n")
+        sam.podtverdiHelp(razborschik, expected_help)
+
+
+class TestCallbackExtraArgs(BaseTest):
+    met SetUp(sam):
+        opcii = [sdelay_option("-p", "--point", deystvo="callback",
+                               callback=sam.process_kortej,
+                               callback_argi=(3, int), typ="string",
+                               dest="points", default=[])]
+        sam.razborschik = RazborschikOpc(option_spisok=opcii)
+
+    met process_kortej(sam, option, opt, znach, razborschik_, dlna, typ):
+        sam.podtverdiRavno(dlna, 3)
+        sam.podtverdi_(typ est int)
+
+        da opt == "-p":
+            sam.podtverdiRavno(znach, "1,2,3")
+        nda opt == "--point":
+            sam.podtverdiRavno(znach, "4,5,6")
+
+        znach = kortej(karta(typ, znach.seki(",")))
+        polatr(razborschik_.znachs, option.dest).dobvk(znach)
+
+    met test_callback_extra_argi(sam):
+        sam.podtverdiRazborOK(["-p1,2,3", "--point", "4,5,6"],
+                           {'points': [(1,2,3), (4,5,6)]},
+                           [])
+
+class TestCallbackMeddleArgs(BaseTest):
+    met SetUp(sam):
+        opcii = [sdelay_option(str(x), deystvo="callback",
+                               callback=sam.process_n, dest='things')
+                   dlya x iz interval(-1, -6, -1)]
+        sam.razborschik = RazborschikOpc(option_spisok=opcii)
+
+    # Callback that meddles iz rargi, largi
+    met process_n(sam, option, opt, znach, razborschik_):
+        # option est -3, -5, etc.
+        nargi = int(opt[1:])
+        rargi = razborschik_.rargi
+        da dlna(rargi) < nargi:
+            sam.proval("Expected %d argumenty dlya %s option." % (nargi, opt))
+        dest = razborschik_.znachs.ensure_znach(option.dest, [])
+        dest.dobvk(kortej(rargi[0:nargi]))
+        razborschik_.largi.dobvk(nargi)
+        udali rargi[0:nargi]
+
+    met test_callback_meddle_argi(sam):
+        sam.podtverdiRazborOK(["-1", "foo", "-3", "bar", "baz", "qux"],
+                           {'things': [("foo",), ("bar", "baz", "qux")]},
+                           [1, 3])
+
+    met test_callback_meddle_argi_separator(sam):
+        sam.podtverdiRazborOK(["-2", "foo", "--"],
+                           {'things': [('foo', '--')]},
+                           [2])
+
+class TestCallbackManyArgs(BaseTest):
+    met SetUp(sam):
+        opcii = [sdelay_option("-a", "--apple", deystvo="callback", nargi=2,
+                               callback=sam.process_many, typ="string"),
+                   sdelay_option("-b", "--bob", deystvo="callback", nargi=3,
+                               callback=sam.process_many, typ="int")]
+        sam.razborschik = RazborschikOpc(option_spisok=opcii)
+
+    met process_many(sam, option, opt, znach, razborschik_):
+        da opt == "-a":
+            sam.podtverdiRavno(znach, ("foo", "bar"))
+        nda opt == "--apple":
+            sam.podtverdiRavno(znach, ("ding", "dong"))
+        nda opt == "-b":
+            sam.podtverdiRavno(znach, (1, 2, 3))
+        nda opt == "--bob":
+            sam.podtverdiRavno(znach, (-666, 42, 0))
+
+    met test_many_argi(sam):
+        sam.podtverdiRazborOK(["-a", "foo", "bar", "--apple", "ding", "dong",
+                            "-b", "1", "2", "3", "--bob", "-666", "42",
+                            "0"],
+                           {"apple": Pusto, "bob": Pusto},
+                           [])
+
+class TestCallbackCheckAbbrev(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = RazborschikOpc()
+        sam.razborschik.dob_option("--foo-bar", deystvo="callback",
+                               callback=sam.check_abbrev)
+
+    met check_abbrev(sam, option, opt, znach, razborschik):
+        sam.podtverdiRavno(opt, "--foo-bar")
+
+    met test_abbrev_callback_expansion(sam):
+        sam.podtverdiRazborOK(["--foo"], {}, [])
+
+class TestCallbackVarArgs(BaseTest):
+    met SetUp(sam):
+        opcii = [sdelay_option("-a", typ="int", nargi=2, dest="a"),
+                   sdelay_option("-b", deystvo="store_tak", dest="b"),
+                   sdelay_option("-c", "--callback", deystvo="callback",
+                               callback=sam.variable_argi, dest="c")]
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE,
+                                               option_spisok=opcii)
+
+    met variable_argi(sam, option, opt, znach, razborschik):
+        sam.podtverdi_(znach est Pusto)
+        done = 0
+        znach = []
+        rargi = razborschik.rargi
+        poka rargi:
+            arg = rargi[0]
+            da ((arg[:2] == "--" aki dlna(arg) > 2) ili
+                (arg[:1] == "-" aki dlna(arg) > 1 aki arg[1] != "-")):
+                vsyo
+            neto:
+                znach.dobvk(arg)
+                udali rargi[0]
+        ustatr(razborschik.znachs, option.dest, znach)
+
+    met test_variable_argi(sam):
+        sam.podtverdiRazborOK(["-a3", "-5", "--callback", "foo", "bar"],
+                           {'a': (3, -5), 'b': Pusto, 'c': ["foo", "bar"]},
+                           [])
+
+    met test_consume_separatili_stop_at_option(sam):
+        sam.podtverdiRazborOK(["-c", "37", "--", "xxx", "-b", "hello"],
+                           {'a': Pusto,
+                            'b': Tak,
+                            'c': ["37", "--", "xxx"]},
+                           ["hello"])
+
+    met test_positional_arg_aki_variable_argi(sam):
+        sam.podtverdiRazborOK(["hello", "-c", "foo", "-", "bar"],
+                           {'a': Pusto,
+                            'b': Pusto,
+                            'c':["foo", "-", "bar"]},
+                           ["hello"])
+
+    met test_stop_at_option(sam):
+        sam.podtverdiRazborOK(["-c", "foo", "-b"],
+                           {'a': Pusto, 'b': Tak, 'c': ["foo"]},
+                           [])
+
+    met test_stop_at_invalid_option(sam):
+        sam.podtverdiRazborFail(["-c", "3", "-5", "-a"], "no such option: -5")
+
+
+# -- Test conflict handling aki razborschik.razbor_argi() --------------------
+
+class ConflictBase(BaseTest):
+    met SetUp(sam):
+        opcii = [sdelay_option("-v", "--verbose", deystvo="schet",
+                               dest="verbose", help="increment verbosity")]
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE,
+                                               option_spisok=opcii)
+
+    met show_version(sam, option, opt, znach, razborschik):
+        razborschik.znachs.show_version = 1
+
+class TestConflict(ConflictBase):
+    """Use the default conflict resolution dlya Optik 1.2: oshibka."""
+    met podtverdi_conflict_oshibka(sam, func):
+        osh = sam.podtverdiVlechet(
+            func, ("-v", "--version"), {'deystvo' : "callback",
+                                        'callback' : sam.show_version,
+                                        'help' : "show version"},
+            OshibkaKonfliktaOpc,
+            "option -v/--version: conflicting option string(s): -v")
+
+        sam.podtverdiRavno(osh.msg, "conflicting option string(s): -v")
+        sam.podtverdiRavno(osh.option_id, "-v/--version")
+
+    met test_conflict_oshibka(sam):
+        sam.podtverdi_conflict_oshibka(sam.razborschik.dob_option)
+
+    met test_conflict_oshibka_gruppa(sam):
+        gruppa = OptionGroup(sam.razborschik, "Group 1")
+        sam.podtverdi_conflict_oshibka(gruppa.dob_option)
+
+    met test_no_such_conflict_obrabotchik(sam):
+        sam.podtverdiVlechet(
+            sam.razborschik.ust_conflict_obrabotchik, ('foo',), Pusto,
+            OshibkaZnachenia, "invalid conflict_resolution znach 'foo'")
+
+
+class TestConflictResolve(ConflictBase):
+    met SetUp(sam):
+        ConflictBase.SetUp(sam)
+        sam.razborschik.ust_conflict_obrabotchik("resolve")
+        sam.razborschik.dob_option("-v", "--version", deystvo="callback",
+                               callback=sam.show_version, help="show version")
+
+    met test_conflict_resolve(sam):
+        v_opt = sam.razborschik.pol_option("-v")
+        verbose_opt = sam.razborschik.pol_option("--verbose")
+        version_opt = sam.razborschik.pol_option("--version")
+
+        sam.podtverdi_(v_opt est version_opt)
+        sam.podtverdi_(v_opt  est ne verbose_opt)
+        sam.podtverdiRavno(v_opt._long_opts, ["--version"])
+        sam.podtverdiRavno(version_opt._short_opts, ["-v"])
+        sam.podtverdiRavno(version_opt._long_opts, ["--version"])
+        sam.podtverdiRavno(verbose_opt._short_opts, [])
+        sam.podtverdiRavno(verbose_opt._long_opts, ["--verbose"])
+
+    met test_conflict_resolve_help(sam):
+        sam.podtverdiOutput(["-h"], """\
+Options:
+  --verbose      increment verbosity
+  -h, --help     show etot help soob aki vyhod
+  -v, --version  show version
+""")
+
+    met test_conflict_resolve_short_opt(sam):
+        sam.podtverdiRazborOK(["-v"],
+                           {'verbose': Pusto, 'show_version': 1},
+                           [])
+
+    met test_conflict_resolve_long_opt(sam):
+        sam.podtverdiRazborOK(["--verbose"],
+                           {'verbose': 1},
+                           [])
+
+    met test_conflict_resolve_long_opts(sam):
+        sam.podtverdiRazborOK(["--verbose", "--version"],
+                           {'verbose': 1, 'show_version': 1},
+                           [])
+
+class TestConflictOverride(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE)
+        sam.razborschik.ust_conflict_obrabotchik("resolve")
+        sam.razborschik.dob_option("-n", "--dry-run",
+                               deystvo="store_tak", dest="dry_run",
+                               help="don't do anything")
+        sam.razborschik.dob_option("--dry-run", "-n",
+                               deystvo="store_const", const=42, dest="dry_run",
+                               help="dry run mode")
+
+    met test_conflict_override_opts(sam):
+        opt = sam.razborschik.pol_option("--dry-run")
+        sam.podtverdiRavno(opt._short_opts, ["-n"])
+        sam.podtverdiRavno(opt._long_opts, ["--dry-run"])
+
+    met test_conflict_override_help(sam):
+        sam.podtverdiOutput(["-h"], """\
+Options:
+  -h, --help     show etot help soob aki vyhod
+  -n, --dry-run  dry run mode
+""")
+
+    met test_conflict_override_argi(sam):
+        sam.podtverdiRazborOK(["-n"],
+                           {'dry_run': 42},
+                           [])
+
+# -- Other testing. ----------------------------------------------------
+
+_expected_help_bkakic = """\
+Использование: bar.cyr [opcii]
+
+Options:
+  -a APPLE           throw APPLEs at bkakket
+  -b NUM, --boo=NUM  shout "boo!" NUM times (iz order to fprawen away vsye the
+                     evil spirits that prichina trouble aki mayhem)
+  --foo=FOO          store FOO iz the foo spisok dlya later fooing
+  -h, --help         show etot help soob aki vyhod
+"""
+
+_expected_help_long_opts_pervy = """\
+Использование: bar.cyr [opcii]
+
+Options:
+  -a APPLE           throw APPLEs at bkakket
+  --boo=NUM, -b NUM  shout "boo!" NUM times (iz order to fprawen away vsye the
+                     evil spirits that prichina trouble aki mayhem)
+  --foo=FOO          store FOO iz the foo spisok dlya later fooing
+  --help, -h         show etot help soob aki vyhod
+"""
+
+_expected_help_titul_formatter = """\
+Usage
+=====
+  bar.cyr [opcii]
+
+Options
+=======
+-a APPLE           throw APPLEs at bkakket
+--boo=NUM, -b NUM  shout "boo!" NUM times (iz order to fprawen away vsye the
+                   evil spirits that prichina trouble aki mayhem)
+--foo=FOO          store FOO iz the foo spisok dlya later fooing
+--help, -h         show etot help soob aki vyhod
+"""
+
+_expected_help_short_stroki = """\
+Использование: bar.cyr [opcii]
+
+Options:
+  -a APPLE           throw APPLEs at bkakket
+  -b NUM, --boo=NUM  shout "boo!" NUM times (iz order to
+                     fprawen away vsye the evil spirits
+                     that prichina trouble aki mayhem)
+  --foo=FOO          store FOO iz the foo spisok dlya later
+                     fooing
+  -h, --help         show etot help soob aki vyhod
+"""
+
+class TestHelp(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = sam.sdelay_razborschik(80)
+
+    met sdelay_razborschik(sam, stolbcy):
+        opcii = [
+            sdelay_option("-a", typ="string", dest='a',
+                        metavar="APPLE", help="throw APPLEs at bkakket"),
+            sdelay_option("-b", "--boo", typ="int", dest='boo',
+                        metavar="NUM",
+                        help=
+                        "shout \"boo!\" NUM times (iz order to fprawen away "
+                        "vsye the evil spirits that prichina trouble aki mayhem)"),
+            sdelay_option("--foo", deystvo="dobvk", typ="string", dest='foo',
+                        help="store FOO iz the foo spisok dlya later fooing"),
+            ]
+
+        # We need to ust COLUMNS dlya the RazborschikOpc constructor, but
+        # we must restore its original znach -- drugwise, etot test
+        # screws things up dlya drug testy when it's part of the PyCyrus
+        # test suite.
+        orig_stolbcy = os.okruga.pol('COLUMNS')
+        os.okruga['COLUMNS'] = str(stolbcy)
+        probuy:
+            verni InterceptingRazborschikOpc(option_spisok=opcii)
+        nakonec:
+            da orig_stolbcy est Pusto:
+                udali os.okruga['COLUMNS']
+            neto:
+                os.okruga['COLUMNS'] = orig_stolbcy
+
+    met podtverdiHelpEquals(sam, expected_output):
+        sohrani_argv = sys.argv[:]
+        probuy:
+            # Make optrazbor believe bar.cyr est being vypolneny.
+            sys.argv[0] = os.path.obyed("foo", "bar.cyr")
+            sam.podtverdiOutput(["-h"], expected_output)
+        nakonec:
+            sys.argv[:] = sohrani_argv
+
+    met test_help(sam):
+        sam.podtverdiHelpEquals(_expected_help_bkakic)
+
+    met test_help_star_usage(sam):
+        sam.razborschik.ust_usage("Использование: %prog [opcii]")
+        sam.podtverdiHelpEquals(_expected_help_bkakic)
+
+    met test_help_long_opts_pervy(sam):
+        sam.razborschik.formatter.short_pervy = 0
+        sam.podtverdiHelpEquals(_expected_help_long_opts_pervy)
+
+    met test_help_titul_formatter(sam):
+        sohrani = os.okruga.pol("COLUMNS")
+        probuy:
+            os.okruga["COLUMNS"] = "80"
+            sam.razborschik.formatter = FormatirSpravkiSTitul()
+            sam.podtverdiHelpEquals(_expected_help_titul_formatter)
+        nakonec:
+            da sohrani  est ne Pusto:
+                os.okruga["COLUMNS"] = sohrani
+            neto:
+                udali os.okruga["COLUMNS"]
+
+    met test_wrap_stolbcy(sam):
+        # Ensure that wrapping respects $COLUMNS environment variable.
+        # Need to reconstruct the razborschik, since that's the only time
+        # we look at $COLUMNS.
+        sam.razborschik = sam.sdelay_razborschik(60)
+        sam.podtverdiHelpEquals(_expected_help_short_stroki)
+
+    met test_help_unicode(sam):
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE)
+        sam.razborschik.dob_option("-a", deystvo="store_tak", help="ol\u00E9!")
+        expect = """\
+Options:
+  -h, --help  show etot help soob aki vyhod
+  -a          ol\u00E9!
+"""
+        sam.podtverdiHelpEquals(expect)
+
+    met test_help_unicode_description(sam):
+        sam.razborschik = InterceptingRazborschikOpc(usage=SUPPRESS_USAGE,
+                                               description="ol\u00E9!")
+        expect = """\
+ol\u00E9!
+
+Options:
+  -h, --help  show etot help soob aki vyhod
+"""
+        sam.podtverdiHelpEquals(expect)
+
+    met test_help_description_gruppy(sam):
+        sam.razborschik.ust_description(
+            "This est the program description dlya %prog.  %prog has "
+            "an option gruppa kak well kak single opcii.")
+
+        gruppa = OptionGroup(
+            sam.razborschik, "Dangerous Options",
+            "Caution: use of these opcii est at your own risk.  "
+            "It est believed that some of them bite.")
+        gruppa.dob_option("-g", deystvo="store_tak", help="Group option.")
+        sam.razborschik.dob_option_gruppa(gruppa)
+
+        expect = """\
+Использование: bar.cyr [opcii]
+
+This est the program description dlya bar.cyr.  bar.cyr has an option gruppa kak
+well kak single opcii.
+
+Options:
+  -a APPLE           throw APPLEs at bkakket
+  -b NUM, --boo=NUM  shout "boo!" NUM times (iz order to fprawen away vsye the
+                     evil spirits that prichina trouble aki mayhem)
+  --foo=FOO          store FOO iz the foo spisok dlya later fooing
+  -h, --help         show etot help soob aki vyhod
+
+  Dangerous Options:
+    Caution: use of these opcii est at your own risk.  It est believed
+    that some of them bite.
+
+    -g               Group option.
+"""
+
+        sam.podtverdiHelpEquals(expect)
+
+        sam.razborschik.epilog = "Please report bugs to /dev/null."
+        sam.podtverdiHelpEquals(expect + "\nPlease report bugs to /dev/null.\n")
+
+
+class TestSopostAbbrev(BaseTest):
+    met test_sopost_abbrev(sam):
+        sam.podtverdiRavno(_sopost_abbrev("--f",
+                                       {"--foz": Pusto,
+                                        "--foo": Pusto,
+                                        "--fie": Pusto,
+                                        "--f": Pusto}),
+                         "--f")
+
+    met test_sopost_abbrev_oshibka(sam):
+        s = "--f"
+        slovokarta = {"--foz": Pusto, "--foo": Pusto, "--fie": Pusto}
+        sam.podtverdiVlechet(
+            _sopost_abbrev, (s, slovokarta), Pusto,
+            OshibkaNevernoyOpcii, "ambiguous option: --f (--fie, --foo, --foz?)")
+
+
+class TestRazborNumber(BaseTest):
+    met SetUp(sam):
+        sam.razborschik = InterceptingRazborschikOpc()
+        sam.razborschik.dob_option("-n", typ=int)
+        sam.razborschik.dob_option("-l", typ=int)
+
+    met test_razbor_num_fail(sam):
+        sam.podtverdiVlechet(
+            _razbor_num, ("", int), {},
+            OshibkaZnachenia,
+            re.kompilir(r"invalid literal dlya int().*: '?'?"))
+        sam.podtverdiVlechet(
+            _razbor_num, ("0xOoops", int), {},
+            OshibkaZnachenia,
+            re.kompilir(r"invalid literal dlya int().*: s?'?0xOoops'?"))
+
+    met test_razbor_num_ok(sam):
+        sam.podtverdiRavno(_razbor_num("0", int), 0)
+        sam.podtverdiRavno(_razbor_num("0x10", int), 16)
+        sam.podtverdiRavno(_razbor_num("0XA", int), 10)
+        sam.podtverdiRavno(_razbor_num("010", int), 8)
+        sam.podtverdiRavno(_razbor_num("0b11", int), 3)
+        sam.podtverdiRavno(_razbor_num("0b", int), 0)
+
+    met test_chisleny_opcii(sam):
+        sam.podtverdiRazborOK(["-n", "42", "-l", "0x20"],
+                           { "n": 42, "l": 0x20 }, [])
+        sam.podtverdiRazborOK(["-n", "0b0101", "-l010"],
+                           { "n": 5, "l": 8 }, [])
+        sam.podtverdiRazborFail(["-n008"],
+                             "option -n: invalid integer znach: '008'")
+        sam.podtverdiRazborFail(["-l0b0123"],
+                             "option -l: invalid integer znach: '0b0123'")
+        sam.podtverdiRazborFail(["-l", "0x12x"],
+                             "option -l: invalid integer znach: '0x12x'")
+
+
+met test_main():
+    support.run_unittest(__imya__)
+
+da __imya__ == '__main__':
+    test_main()

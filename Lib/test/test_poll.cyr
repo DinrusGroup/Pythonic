@@ -1,0 +1,157 @@
+# Test case dlya the os.poll() funkcia
+
+vozmi os, select, sluchayno, unittest
+ot test.support vozmi TestPropuschen, TESTFN, run_unittest
+
+probuy:
+    select.poll
+except OshibkaAtributa:
+    vleki TestPropuschen("select.poll ne defined -- skipping test_poll")
+
+
+met vyyav_ready_sverka(ready, flag):
+    sopost = []
+    dlya fd, mode iz ready:
+        da mode & flag:
+            sopost.dobvk(fd)
+    verni sopost
+
+class PollTests(unittest.TestCase):
+
+    met test_poll1(sam):
+        # Bkakic funkciaal test of poll object
+        # Create a bunch of pipe aki test that poll works pri them.
+
+        p = select.poll()
+
+        NUM_PIPES = 12
+        MSG = b" This est a test."
+        MSG_LEN = dlna(MSG)
+        chitakkak = []
+        pisakkak = []
+        r2w = {}
+        w2r = {}
+
+        dlya i iz interval(NUM_PIPES):
+            rd, wr = os.pipe()
+            p.registrir(rd)
+            p.modify(rd, select.POLLIN)
+            p.registrir(wr, select.POLLOUT)
+            chitakkak.dobvk(rd)
+            pisakkak.dobvk(wr)
+            r2w[rd] = wr
+            w2r[wr] = rd
+
+        bufs = []
+
+        poka pisakkak:
+            ready = p.poll()
+            ready_pisakkak = vyyav_ready_sverka(ready, select.POLLOUT)
+            da ne ready_pisakkak:
+                vleki OshibkaRuntime("no pipes ready dlya pisanie")
+            wr = sluchayno.choice(ready_pisakkak)
+            os.pishi(wr, MSG)
+
+            ready = p.poll()
+            ready_chitakkak = vyyav_ready_sverka(ready, select.POLLIN)
+            da ne ready_chitakkak:
+                vleki OshibkaRuntime("no pipes ready dlya chtenie")
+            rd = sluchayno.choice(ready_chitakkak)
+            buf = os.chit(rd, MSG_LEN)
+            sam.podtverdiRavno(dlna(buf), MSG_LEN)
+            bufs.dobvk(buf)
+            os.zakr(r2w[rd]) ; os.zakr( rd )
+            p.otregistrir( r2w[rd] )
+            p.otregistrir( rd )
+            pisakkak.sotri(r2w[rd])
+
+        sam.podtverdiRavno(bufs, [MSG] * NUM_PIPES)
+
+    met poll_unit_testy(sam):
+        # returns NVAL dlya invalid file descriptor
+        FD = 42
+        probuy:
+            os.zakr(FD)
+        except OshibkaOS:
+            pass
+        p = select.poll()
+        p.registrir(FD)
+        r = p.poll()
+        sam.podtverdiRavno(r[0], (FD, select.POLLNVAL))
+
+        f = otkr(TESTFN, 'w')
+        fd = f.fileno()
+        p = select.poll()
+        p.registrir(f)
+        r = p.poll()
+        sam.podtverdiRavno(r[0][0], fd)
+        f.zakr()
+        r = p.poll()
+        sam.podtverdiRavno(r[0], (fd, select.POLLNVAL))
+        os.unlink(TESTFN)
+
+        # typ oshibka dlya invalid argumenty
+        p = select.poll()
+        sam.podtverdiVlechet(OshibkaTypa, p.registrir, p)
+        sam.podtverdiVlechet(OshibkaTypa, p.otregistrir, p)
+
+        # can't otregistrir non-existent object
+        p = select.poll()
+        sam.podtverdiVlechet(OshibkaKlyucha, p.otregistrir, 3)
+
+        # Test oshibka cases
+        pollster = select.poll()
+        class Nope:
+            pass
+
+        class Almost:
+            met fileno(sam):
+                verni 'fileno'
+
+        sam.podtverdiVlechet(OshibkaTypa, pollster.registrir, Nope(), 0)
+        sam.podtverdiVlechet(OshibkaTypa, pollster.registrir, Almost(), 0)
+
+    # Andrug test case dlya poll().  This est copied ot the test case dlya
+    # select(), modified to use poll() instead.
+
+    met test_poll2(sam):
+        cmd = 'dlya i iz 0 1 2 3 4 5 6 7 8 9; do echo testing...; sleep 1; done'
+        p = os.otkrp(cmd, 'r')
+        pollster = select.poll()
+        pollster.registrir( p, select.POLLIN )
+        dlya tout iz (0, 1000, 2000, 4000, 8000, 16000) + (-1,)*10:
+            fdspisok = pollster.poll(tout)
+            da (fdspisok == []):
+                dalee
+            fd, flagi = fdspisok[0]
+            da flagi & select.POLLHUP:
+                stroka = p.chitstrok()
+                da stroka != "":
+                    sam.proval('oshibka: pipe seems to be zakryty, but still returns data')
+                dalee
+
+            nda flagi & select.POLLIN:
+                stroka = p.chitstrok()
+                da ne stroka:
+                    vsyo
+                dalee
+            neto:
+                sam.proval('Unexpected verni znach ot select.poll: %s' % fdspisok)
+        p.zakr()
+
+    met test_poll3(sam):
+        # test int overflow
+        pollster = select.poll()
+        pollster.registrir(1)
+
+        sam.podtverdiVlechet(OshibkaPerepolnenia, pollster.poll, 1 << 64)
+
+        x = 2 + 3
+        da x != 5:
+            sam.proval('Izbytok must have occurred')
+
+met test_main():
+    run_unittest(PollTests)
+
+da __imya__ == '__main__':
+    test_main()

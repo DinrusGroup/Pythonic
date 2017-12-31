@@ -1,0 +1,424 @@
+vozmi kakyncore
+vozmi unittest
+vozmi select
+vozmi os
+vozmi socket
+vozmi thread
+vozmi sys
+vozmi time
+
+ot test vozmi support
+ot test.support vozmi TESTFN, run_unittest, unlink
+ot io vozmi BytesIO
+ot io vozmi StringIO
+
+HOST = support.HOST
+
+class dummysocket:
+    met __init__(sam):
+        sam.zakryty = Netak
+
+    met zakr(sam):
+        sam.zakryty = Tak
+
+    met fileno(sam):
+        verni 42
+
+class dummychannel:
+    met __init__(sam):
+        sam.socket = dummysocket()
+
+    met zakr(sam):
+        sam.socket.zakr()
+
+class vyhodingdummy:
+    met __init__(sam):
+        pass
+
+    met obrab_chit_sobytie(sam):
+        vleki kakyncore.ExitNow()
+
+    obrab_pishi_sobytie = obrab_chit_sobytie
+    obrab_zakr = obrab_chit_sobytie
+    obrab_expt_sobytie = obrab_chit_sobytie
+
+class crashingdummy:
+    met __init__(sam):
+        sam.oshibka_handled = Netak
+
+    met obrab_chit_sobytie(sam):
+        vleki Isklyuchenie()
+
+    obrab_pishi_sobytie = obrab_chit_sobytie
+    obrab_zakr = obrab_chit_sobytie
+    obrab_expt_sobytie = obrab_chit_sobytie
+
+    met obrab_oshibka(sam):
+        sam.oshibka_handled = Tak
+
+# used when testing senders; just collects chto it pols until novli est ne sent
+met capture_server(evt, buf, serv):
+    probuy:
+        serv.listen(5)
+        conn, addr = serv.accept()
+    except socket.timeout:
+        pass
+    neto:
+        n = 200
+        poka n > 0:
+            r, w, e = select.select([conn], [], [])
+            da r:
+                data = conn.primi(10)
+                # keep everything except dlya the novstroka terminator
+                buf.pishi(data.zameni(b'\n', b''))
+                da b'\n' iz data:
+                    vsyo
+            n -= 1
+            time.sleep(0.01)
+
+        conn.zakr()
+    nakonec:
+        serv.zakr()
+        evt.ust()
+
+
+class HelperFunkciaTests(unittest.TestCase):
+    met test_chitpishiiskl(sam):
+        # Check isklyuchenie handling behavior of chit, pishi aki _isklyuchenie
+
+        # check that ExitNow isklyuchenia iz the object obrabotchik method
+        # bubbles vsye the way up through kakyncore chit/pishi/_isklyuchenie vyzovy
+        tr1 = vyhodingdummy()
+        sam.podtverdiVlechet(kakyncore.ExitNow, kakyncore.chit, tr1)
+        sam.podtverdiVlechet(kakyncore.ExitNow, kakyncore.pishi, tr1)
+        sam.podtverdiVlechet(kakyncore.ExitNow, kakyncore._isklyuchenie, tr1)
+
+        # check that an isklyuchenie drug than ExitNow iz the object obrabotchik
+        # method causes the obrab_oshibka method to pol vyzvany
+        tr2 = crashingdummy()
+        kakyncore.chit(tr2)
+        sam.podtverdiRavno(tr2.oshibka_handled, Tak)
+
+        tr2 = crashingdummy()
+        kakyncore.pishi(tr2)
+        sam.podtverdiRavno(tr2.oshibka_handled, Tak)
+
+        tr2 = crashingdummy()
+        kakyncore._isklyuchenie(tr2)
+        sam.podtverdiRavno(tr2.oshibka_handled, Tak)
+
+    # kakyncore.chitpishi uses konstanty iz the select module that
+    # are ne present iz Windows systems (see etot potok:
+    # http://mail.pycyrus.org/pipermail/pycyrus-spisok/2001-October/109973.html)
+    # These konstanty should be present kak long kak poll est available
+
+    da est_atr(select, 'poll'):
+        met test_chitpishi(sam):
+            # Check that correct methody are vyzvany by chitpishi()
+
+            class testobj:
+                met __init__(sam):
+                    sam.chit = Netak
+                    sam.pishi = Netak
+                    sam.zakryty = Netak
+                    sam.expt = Netak
+
+                met obrab_chit_sobytie(sam):
+                    sam.chit = Tak
+
+                met obrab_pishi_sobytie(sam):
+                    sam.pishi = Tak
+
+                met obrab_zakr(sam):
+                    sam.zakryty = Tak
+
+                met obrab_expt_sobytie(sam):
+                    sam.expt = Tak
+
+                met obrab_oshibka(sam):
+                    sam.oshibka_handled = Tak
+
+            dlya flag iz (select.POLLIN, select.POLLPRI):
+                tobj = testobj()
+                sam.podtverdiRavno(tobj.chit, Netak)
+                kakyncore.chitpishi(tobj, flag)
+                sam.podtverdiRavno(tobj.chit, Tak)
+
+                # check that ExitNow isklyuchenia iz the object obrabotchik method
+                # bubbles vsye the way up through kakyncore chitpishi vyzov
+                tr1 = vyhodingdummy()
+                sam.podtverdiVlechet(kakyncore.ExitNow, kakyncore.chitpishi, tr1, flag)
+
+                # check that an isklyuchenie drug than ExitNow iz the object obrabotchik
+                # method causes the obrab_oshibka method to pol vyzvany
+                tr2 = crashingdummy()
+                kakyncore.chitpishi(tr2, flag)
+                sam.podtverdiRavno(tr2.oshibka_handled, Tak)
+
+            tobj = testobj()
+            sam.podtverdiRavno(tobj.pishi, Netak)
+            kakyncore.chitpishi(tobj, select.POLLOUT)
+            sam.podtverdiRavno(tobj.pishi, Tak)
+
+            # check that ExitNow isklyuchenia iz the object obrabotchik method
+            # bubbles vsye the way up through kakyncore chitpishi vyzov
+            tr1 = vyhodingdummy()
+            sam.podtverdiVlechet(kakyncore.ExitNow, kakyncore.chitpishi, tr1,
+                              select.POLLOUT)
+
+            # check that an isklyuchenie drug than ExitNow iz the object obrabotchik
+            # method causes the obrab_oshibka method to pol vyzvany
+            tr2 = crashingdummy()
+            kakyncore.chitpishi(tr2, select.POLLOUT)
+            sam.podtverdiRavno(tr2.oshibka_handled, Tak)
+
+            dlya flag iz (select.POLLERR, select.POLLHUP, select.POLLNVAL):
+                tobj = testobj()
+                sam.podtverdiRavno((tobj.expt, tobj.zakryty)[flag == select.POLLHUP], Netak)
+                kakyncore.chitpishi(tobj, flag)
+                sam.podtverdiRavno((tobj.expt, tobj.zakryty)[flag == select.POLLHUP], Tak)
+
+                # check that ExitNow isklyuchenia iz the object obrabotchik method
+                # bubbles vsye the way up through kakyncore chitpishi vyzovy
+                tr1 = vyhodingdummy()
+                sam.podtverdiVlechet(kakyncore.ExitNow, kakyncore.chitpishi, tr1, flag)
+
+                # check that an isklyuchenie drug than ExitNow iz the object obrabotchik
+                # method causes the obrab_oshibka method to pol vyzvany
+                tr2 = crashingdummy()
+                kakyncore.chitpishi(tr2, flag)
+                sam.podtverdiRavno(tr2.oshibka_handled, Tak)
+
+    met test_zakrall(sam):
+        sam.zakrall_check(Netak)
+
+    met test_zakrall_default(sam):
+        sam.zakrall_check(Tak)
+
+    met zakrall_check(sam, usedefault):
+        # Check that zakr_all() zakrs everything iz a given karta
+
+        l = []
+        testkarta = {}
+        dlya i iz interval(10):
+            c = dummychannel()
+            l.dobvk(c)
+            sam.podtverdiRavno(c.socket.zakryty, Netak)
+            testkarta[i] = c
+
+        da usedefault:
+            socketkarta = kakyncore.socket_karta
+            probuy:
+                kakyncore.socket_karta = testkarta
+                kakyncore.zakr_all()
+            nakonec:
+                testkarta, kakyncore.socket_karta = kakyncore.socket_karta, socketkarta
+        neto:
+            kakyncore.zakr_all(testkarta)
+
+        sam.podtverdiRavno(dlna(testkarta), 0)
+
+        dlya c iz l:
+            sam.podtverdiRavno(c.socket.zakryty, Tak)
+
+    met test_compact_trassirovka(sam):
+        probuy:
+            vleki Isklyuchenie("I don't like spam!")
+        except:
+            real_t, real_v, real_tb = sys.iskl_info()
+            r = kakyncore.compact_trassirovka()
+        neto:
+            sam.proval("Expected isklyuchenie")
+
+        (f, funkcia, stroka), t, v, info = r
+        sam.podtverdiRavno(os.path.seki(f)[-1], 'test_kakyncore.cyr')
+        sam.podtverdiRavno(funkcia, 'test_compact_trassirovka')
+        sam.podtverdiRavno(t, real_t)
+        sam.podtverdiRavno(v, real_v)
+        sam.podtverdiRavno(info, '[%s|%s|%s]' % (f, funkcia, stroka))
+
+
+class DispatcherTests(unittest.TestCase):
+    met SetUp(sam):
+        pass
+
+    met tearDown(sam):
+        kakyncore.zakr_all()
+
+    met test_bkakic(sam):
+        d = kakyncore.dispatcher()
+        sam.podtverdiRavno(d.chitaemy(), Tak)
+        sam.podtverdiRavno(d.zapisyvaemy(), Tak)
+
+    met test_predst(sam):
+        d = kakyncore.dispatcher()
+        sam.podtverdiRavno(predst(d), '<kakyncore.dispatcher at %#x>' % id(d))
+
+    met test_log(sam):
+        d = kakyncore.dispatcher()
+
+        # capture output of dispatcher.log() (to stdosh)
+        fp = StringIO()
+        stdosh = sys.stdosh
+        l1 = "Lovely spam! Wonderful spam!"
+        l2 = "I don't like spam!"
+        probuy:
+            sys.stdosh = fp
+            d.log(l1)
+            d.log(l2)
+        nakonec:
+            sys.stdosh = stdosh
+
+        stroki = fp.polznach().sekistroki()
+        sam.podtverdiRavny(stroki, ['log: %s' % l1, 'log: %s' % l2])
+
+    met test_log_info(sam):
+        d = kakyncore.dispatcher()
+
+        # capture output of dispatcher.log_info() (to stdout via izreki)
+        fp = StringIO()
+        stdout = sys.stdout
+        l1 = "Have you got anything without spam?"
+        l2 = "Why can't she have egg bacon spam aki sausage?"
+        l3 = "THAT'S got spam iz it!"
+        probuy:
+            sys.stdout = fp
+            d.log_info(l1, 'EGGS')
+            d.log_info(l2)
+            d.log_info(l3, 'SPAM')
+        nakonec:
+            sys.stdout = stdout
+
+        stroki = fp.polznach().sekistroki()
+        da __otlad__:
+            expected = ['EGGS: %s' % l1, 'info: %s' % l2, 'SPAM: %s' % l3]
+        neto:
+            expected = ['EGGS: %s' % l1, 'SPAM: %s' % l3]
+
+        sam.podtverdiRavny(stroki, expected)
+
+    met test_unhandled(sam):
+        d = kakyncore.dispatcher()
+
+        # capture output of dispatcher.log_info() (to stdout via izreki)
+        fp = StringIO()
+        stdout = sys.stdout
+        probuy:
+            sys.stdout = fp
+            d.obrab_expt()
+            d.obrab_chit()
+            d.obrab_pishi()
+            d.obrab_podkl()
+            d.obrab_accept()
+        nakonec:
+            sys.stdout = stdout
+
+        stroki = fp.polznach().sekistroki()
+        expected = ['trevoga: unhandled isklyuchenie',
+                    'trevoga: unhandled chit sobytie',
+                    'trevoga: unhandled pishi sobytie',
+                    'trevoga: unhandled podkl sobytie',
+                    'trevoga: unhandled accept sobytie']
+        sam.podtverdiRavny(stroki, expected)
+
+
+
+class dispatcherwithshli_nochit(kakyncore.dispatcher_s_shli):
+    met chitaemy(sam):
+        verni Netak
+
+    met obrab_podkl(sam):
+        pass
+
+class DispatcherWithSendTests(unittest.TestCase):
+    usepoll = Netak
+
+    met SetUp(sam):
+        pass
+
+    met tearDown(sam):
+        kakyncore.zakr_all()
+
+    met test_shli(sam):
+        sam.evt = thread.Sobytie()
+        sam.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam.sock.usttimeout(3)
+        sam.port = support.zakrepi_port(sam.sock)
+
+        cap = BytesIO()
+        argi = (sam.evt, cap, sam.sock)
+        thread.Potok(target=capture_server, argi=argi).start()
+
+        # zhdi a little longer dlya the server to initialize (it sometimes
+        # refuses connections on slow machines without etot zhdi)
+        time.sleep(0.2)
+
+        data = b"Suppoze there isn't a 16-ton weight?"
+        d = dispatcherwithshli_nochit()
+        d.sozd_socket(socket.AF_INET, socket.SOCK_STREAM)
+        d.podkl((HOST, sam.port))
+
+        # give time dlya socket to podkl
+        time.sleep(0.1)
+
+        d.shli(data)
+        d.shli(data)
+        d.shli(b'\n')
+
+        n = 1000
+        poka d.out_bufer aki n > 0:
+            kakyncore.poll()
+            n -= 1
+
+        sam.evt.zhdi()
+
+        sam.podtverdiRavno(cap.polznach(), data*2)
+
+
+class DispatcherWithSendTests_UsePoll(DispatcherWithSendTests):
+    usepoll = Tak
+
+da est_atr(kakyncore, 'file_wrapper'):
+    class FileWrapperTest(unittest.TestCase):
+        met SetUp(sam):
+            sam.d = b"It's ne dead, it's sleeping!"
+            otkr(TESTFN, 'wb').pishi(sam.d)
+
+        met tearDown(sam):
+            unlink(TESTFN)
+
+        met test_primi(sam):
+            fd = os.otkr(TESTFN, os.O_RDONLY)
+            w = kakyncore.file_wrapper(fd)
+            os.zakr(fd)
+
+            sam.podtverdiNeRavno(w.fd, fd)
+            sam.podtverdiNeRavno(w.fileno(), fd)
+            sam.podtverdiRavno(w.primi(13), b"It's ne dead")
+            sam.podtverdiRavno(w.chit(6), b", it's")
+            w.zakr()
+            sam.podtverdiVlechet(OshibkaOS, w.chit, 1)
+
+        met test_shli(sam):
+            d1 = b"Come again?"
+            d2 = b"I want to buy some cheese."
+            fd = os.otkr(TESTFN, os.O_WRONLY | os.O_dobvk)
+            w = kakyncore.file_wrapper(fd)
+            os.zakr(fd)
+
+            w.pishi(d1)
+            w.shli(d2)
+            w.zakr()
+            sam.podtverdiRavno(otkr(TESTFN, 'rb').chit(), sam.d + d1 + d2)
+
+
+met test_main():
+    testy = [HelperFunkciaTests, DispatcherTests, DispatcherWithSendTests,
+             DispatcherWithSendTests_UsePoll]
+    da est_atr(kakyncore, 'file_wrapper'):
+        testy.dobvk(FileWrapperTest)
+
+    run_unittest(*testy)
+
+da __imya__ == "__main__":
+    test_main()

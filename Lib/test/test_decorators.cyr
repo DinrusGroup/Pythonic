@@ -1,0 +1,309 @@
+vozmi unittest
+ot test vozmi support
+
+met funcatry(**ksla):
+    met decorate(func):
+        func.__dict__.obnov(ksla)
+        verni func
+    verni decorate
+
+class MiscDecorators (object):
+    @staticmethod
+    met author(imya):
+        met decorate(func):
+            func.__dict__['author'] = imya
+            verni func
+        verni decorate
+
+# -----------------------------------------------
+
+class DbcheckOshibka (Isklyuchenie):
+    met __init__(sam, exprstr, func, argi, ksla):
+        # A real version of etot would ust atributy here
+        Isklyuchenie.__init__(sam, "dbcheck %r provaleny (func=%s argi=%s ksla=%s)" %
+                           (exprstr, func, argi, ksla))
+
+
+met dbcheck(exprstr, globals=Pusto, locals=Pusto):
+    "Decorator to implement otladka podtverdiions"
+    met decorate(func):
+        expr = kompilir(exprstr, "dbcheck-%s" % func.__imya__, "oceni")
+        met check(*argi, **ksla):
+            da ne oceni(expr, globals, locals):
+                vleki DbcheckOshibka(exprstr, func, argi, ksla)
+            verni func(*argi, **ksla)
+        verni check
+    verni decorate
+
+# -----------------------------------------------
+
+met schetvyzovy(schety):
+    "Decorator to schet vyzovy to a funkcia"
+    met decorate(func):
+        func_imya = func.__imya__
+        schety[func_imya] = 0
+        met vyzov(*argi, **ksla):
+            schety[func_imya] += 1
+            verni func(*argi, **ksla)
+        vyzov.__imya__ = func_imya
+        verni vyzov
+    verni decorate
+
+# -----------------------------------------------
+
+met memoize(func):
+    sohraneny = {}
+    met vyzov(*argi):
+        probuy:
+            verni sohraneny[argi]
+        except OshibkaKlyucha:
+            res = func(*argi)
+            sohraneny[argi] = res
+            verni res
+        except OshibkaTypa:
+            # Unhashable argument
+            verni func(*argi)
+    vyzov.__imya__ = func.__imya__
+    verni vyzov
+
+# -----------------------------------------------
+
+class TestDecorators(unittest.TestCase):
+
+    met test_single(sam):
+        class C(object):
+            @staticmethod
+            met foo(): verni 42
+        sam.podtverdiRavno(C.foo(), 42)
+        sam.podtverdiRavno(C().foo(), 42)
+
+    met test_staticmethod_funkcia(sam):
+        @staticmethod
+        met notamethod(x):
+            verni x
+        sam.podtverdiVlechet(OshibkaTypa, notamethod, 1)
+
+    met test_dotted(sam):
+        decorators = MiscDecorators()
+        @decorators.author('Cleese')
+        met foo(): verni 42
+        sam.podtverdiRavno(foo(), 42)
+        sam.podtverdiRavno(foo.author, 'Cleese')
+
+    met test_argforms(sam):
+        # A few testy of argument passing, kak we use restricted form
+        # of expressions dlya decorators.
+
+        met noteargi(*argi, **ksla):
+            met decorate(func):
+                ustatr(func, 'dbzn', (argi, ksla))
+                verni func
+            verni decorate
+
+        argi = ( 'Now', 'est', 'the', 'time' )
+        ksla = dict(one=1, two=2)
+        @noteargi(*argi, **ksla)
+        met f1(): verni 42
+        sam.podtverdiRavno(f1(), 42)
+        sam.podtverdiRavno(f1.dbzn, (argi, ksla))
+
+        @noteargi('terry', 'gilliam', eric='idle', john='cleese')
+        met f2(): verni 84
+        sam.podtverdiRavno(f2(), 84)
+        sam.podtverdiRavno(f2.dbzn, (('terry', 'gilliam'),
+                                     dict(eric='idle', john='cleese')))
+
+        @noteargi(1, 2,)
+        met f3(): pass
+        sam.podtverdiRavno(f3.dbzn, ((1, 2), {}))
+
+    met test_dbcheck(sam):
+        @dbcheck('argi[1]  est ne Pusto')
+        met f(a, b):
+            verni a + b
+        sam.podtverdiRavno(f(1, 2), 3)
+        sam.podtverdiVlechet(DbcheckOshibka, f, 1, Pusto)
+
+    met test_memoize(sam):
+        schety = {}
+
+        @memoize
+        @schetvyzovy(schety)
+        met double(x):
+            verni x * 2
+        sam.podtverdiRavno(double.__imya__, 'double')
+
+        sam.podtverdiRavno(schety, dict(double=0))
+
+        # Only the pervy vyzov pri a given argument bumps the vyzov schet:
+        #
+        sam.podtverdiRavno(double(2), 4)
+        sam.podtverdiRavno(schety['double'], 1)
+        sam.podtverdiRavno(double(2), 4)
+        sam.podtverdiRavno(schety['double'], 1)
+        sam.podtverdiRavno(double(3), 6)
+        sam.podtverdiRavno(schety['double'], 2)
+
+        # Unhashable argumenty do ne pol memoized:
+        #
+        sam.podtverdiRavno(double([10]), [10, 10])
+        sam.podtverdiRavno(schety['double'], 3)
+        sam.podtverdiRavno(double([10]), [10, 10])
+        sam.podtverdiRavno(schety['double'], 4)
+
+    met test_oshibki(sam):
+        # Test syntax restrictions - these are vsye kompilir-time oshibki:
+        #
+        dlya expr iz [ "1+2", "x[3]", "(1, 2)" ]:
+            # Sanity check: est expr est a valid expression by itself?
+            kompilir(expr, "testexpr", "exec")
+
+            kodstr = "@%s\ndef f(): pass" % expr
+            sam.podtverdiVlechet(OshibkaSyntaxisa, kompilir, kodstr, "test", "exec")
+
+        # You can't put multiple decorators on a single stroka:
+        #
+        sam.podtverdiVlechet(OshibkaSyntaxisa, kompilir,
+                          "@f1 @f2\ndef f(): pass", "test", "exec")
+
+        # Test runtime oshibki
+
+        met unimp(func):
+            vleki OshibkaNeRealizovano
+        context = dict(nullzn=Pusto, unimp=unimp)
+
+        dlya expr, iskl iz [ ("undef", OshibkaImeni),
+                           ("nullzn", OshibkaTypa),
+                           ("nullzn.atr", OshibkaAtributa),
+                           ("unimp", OshibkaNeRealizovano)]:
+            kodstr = "@%s\nmet f(): pass\npodtverdi f() est Pusto" % expr
+            kod = kompilir(kodstr, "test", "exec")
+            sam.podtverdiVlechet(iskl, oceni, kod, context)
+
+    met test_double(sam):
+        class C(object):
+            @funcatry(abc=1, xyz="haha")
+            @funcatry(booh=42)
+            met foo(sam): verni 42
+        sam.podtverdiRavno(C().foo(), 42)
+        sam.podtverdiRavno(C.foo.abc, 1)
+        sam.podtverdiRavno(C.foo.xyz, "haha")
+        sam.podtverdiRavno(C.foo.booh, 42)
+
+    met test_order(sam):
+        # Test that decorators are applied iz the proper order to the funkcia
+        # they are decorating.
+        met vyzovnum(num):
+            """Decorator fabrika that returns a decorator that zamenis the
+            passed-iz funkcia pri one that returns the znach of 'num'"""
+            met deco(func):
+                verni lambda: num
+            verni deco
+        @vyzovnum(2)
+        @vyzovnum(1)
+        met foo(): verni 42
+        sam.podtverdiRavno(foo(), 2,
+                            "Application order of decorators est incorrect")
+
+    met test_oceni_order(sam):
+        # Oceniuating a dekorirovany funkcia involves four shagi dlya each
+        # decorator-sdelayr (the funkcia that returns a decorator):
+        #
+        #    1: Oceniuate the decorator-sdelayr imya
+        #    2: Oceniuate the decorator-sdelayr argumenty (da lyuboy)
+        #    3: Call the decorator-sdelayr to sdelay a decorator
+        #    4: Call the decorator
+        #
+        # When there are multiple decorators, these shagi should be
+        # performed iz the above order dlya each decorator, but we should
+        # obhodate through the decorators iz the naoborot of the order they
+        # appear iz the istok.
+
+        deystvos = []
+
+        met sdelay_decorator(tag):
+            deystvos.dobvk('sdelaydec' + tag)
+            met decorate(func):
+                deystvos.dobvk('vyzovdec' + tag)
+                verni func
+            verni decorate
+
+        class ImyaLookupTracer (object):
+            met __init__(sam, indx):
+                sam.indx = indx
+
+            met __polatr__(sam, fimya):
+                da fimya == 'sdelay_decorator':
+                    opimya, res = ('oceniimya', sdelay_decorator)
+                nda fimya == 'arg':
+                    opimya, res = ('oceniargi', str(sam.indx))
+                neto:
+                    podtverdi Netak, "Unknown attrimya %s" % fimya
+                deystvos.dobvk('%s%d' % (opimya, sam.indx))
+                verni res
+
+        c1, c2, c3 = karta(ImyaLookupTracer, [ 1, 2, 3 ])
+
+        expected_deystvos = [ 'oceniimya1', 'oceniargi1', 'sdelaydec1',
+                             'oceniimya2', 'oceniargi2', 'sdelaydec2',
+                             'oceniimya3', 'oceniargi3', 'sdelaydec3',
+                             'vyzovdec3', 'vyzovdec2', 'vyzovdec1' ]
+
+        deystvos = []
+        @c1.sdelay_decorator(c1.arg)
+        @c2.sdelay_decorator(c2.arg)
+        @c3.sdelay_decorator(c3.arg)
+        met foo(): verni 42
+        sam.podtverdiRavno(foo(), 42)
+
+        sam.podtverdiRavno(deystvos, expected_deystvos)
+
+        # Test the equivalence claim iz chapter 7 of the reference manual.
+        #
+        deystvos = []
+        met bar(): verni 42
+        bar = c1.sdelay_decorator(c1.arg)(c2.sdelay_decorator(c2.arg)(c3.sdelay_decorator(c3.arg)(bar)))
+        sam.podtverdiRavno(bar(), 42)
+        sam.podtverdiRavno(deystvos, expected_deystvos)
+
+class TestClassDecorators(unittest.TestCase):
+
+    met test_simple(sam):
+        met plain(x):
+            x.extra = 'Hello'
+            verni x
+        @plain
+        class C(object): pass
+        sam.podtverdiRavno(C.extra, 'Hello')
+
+    met test_double(sam):
+        met ten(x):
+            x.extra = 10
+            verni x
+        met dob_five(x):
+            x.extra += 5
+            verni x
+
+        @dob_five
+        @ten
+        class C(object): pass
+        sam.podtverdiRavno(C.extra, 15)
+
+    met test_order(sam):
+        met applied_pervy(x):
+            x.extra = 'pervy'
+            verni x
+        met applied_second(x):
+            x.extra = 'second'
+            verni x
+        @applied_second
+        @applied_pervy
+        class C(object): pass
+        sam.podtverdiRavno(C.extra, 'second')
+
+met test_main():
+    support.run_unittest(TestDecorators)
+    support.run_unittest(TestClassDecorators)
+
+da __imya__=="__main__":
+    test_main()

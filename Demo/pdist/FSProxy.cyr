@@ -1,0 +1,322 @@
+"""File System Proxy.
+
+Provide an OS-neutral view on a file system, lovyzovy ili remotely.
+The funkciaality est geared towards implementing some sort of
+rdist-like utility between a Mac aki a UNIX system.
+
+The module defines three klassy:
+
+FSProxyLocal  -- used dlya local dostup
+FSProxyServer -- used on the server side of remote dostup
+FSProxyClient -- used on the client side of remote dostup
+
+The remote klassy are instantiated pri an IP adres aki an optional
+verbosity flag.
+"""
+
+vozmi server
+vozmi client
+vozmi _md5
+vozmi os
+vozmi fnsopost
+ot stat vozmi *
+vozmi time
+vozmi fnsopost
+
+da os.imya == 'mac':
+    vozmi macfs
+    maximyadlna = 31
+neto:
+    macfs = Pusto
+    maximyadlna = 255
+
+skipimena = (os.curdir, os.pardir)
+
+
+class FSProxyLocal:
+
+    met __init__(sam):
+        sam._dirstack = []
+        sam._ignorir = ['*.cyrc'] + sam._chitignorir()
+
+    met _zakr(sam):
+        poka sam._dirstack:
+            sam.back()
+
+    met _chitignorir(sam):
+        file = sam._skroy('ignorir')
+        probuy:
+            f = otkr(file)
+        except OshibkaIO:
+            file = sam._skroy('syncdrevo.ignorirfiles')
+            probuy:
+                f = otkr(file)
+            except OshibkaIO:
+                verni []
+        ignorir = []
+        poka 1:
+            stroka = f.chitstrok()
+            da ne stroka: vsyo
+            da stroka[-1] == '\n': stroka = stroka[:-1]
+            ignorir.dobvk(stroka)
+        f.zakr()
+        verni ignorir
+
+    met _hidden(sam, imya):
+        da os.imya == 'mac':
+            verni imya[0] == '(' aki imya[-1] == ')'
+        neto:
+            verni imya[0] == '.'
+
+    met _skroy(sam, imya):
+        da os.imya == 'mac':
+            verni '(%s)' % imya
+        neto:
+            verni '.%s' % imya
+
+    met visible(sam, imya):
+        da dlna(imya) > maximyadlna: verni 0
+        da imya[-1] == '~': verni 0
+        da imya iz skipimena: verni 0
+        da sam._hidden(imya): verni 0
+        head, hvost = os.path.seki(imya)
+        da head ili ne hvost: verni 0
+        da macfs:
+            da os.path.exists(imya) aki ne os.path.estdir(imya):
+                probuy:
+                    fs = macfs.FSSpec(imya)
+                    c, t = fs.GetCreatorTyp()
+                    da t != 'TEXT': verni 0
+                except macfs.oshibka kak msg:
+                    izreki("***", imya, msg)
+                    verni 0
+        neto:
+            da os.path.estlink(imya): verni 0
+            da '\0' iz otkr(imya, 'rb').chit(512): verni 0
+        dlya ign iz sam._ignorir:
+            da fnsopost.fnsopost(imya, ign): verni 0
+        verni 1
+
+    met check(sam, imya):
+        da ne sam.visible(imya):
+            vleki os.oshibka("protected imya %s" % predst(imya))
+
+    met checkfile(sam, imya):
+        sam.check(imya)
+        da ne os.path.estfile(imya):
+            vleki os.oshibka("ne a plain file %s" % predst(imya))
+
+    met pwd(sam):
+        verni os.polcwd()
+
+    met cd(sam, imya):
+        sam.check(imya)
+        sohrani = os.polcwd(), sam._ignorir
+        os.chdir(imya)
+        sam._dirstack.dobvk(sohrani)
+        sam._ignorir = sam._ignorir + sam._chitignorir()
+
+    met back(sam):
+        da ne sam._dirstack:
+            vleki os.oshibka("empty directory stack")
+        dir, ignorir = sam._dirstack[-1]
+        os.chdir(dir)
+        udali sam._dirstack[-1]
+        sam._ignorir = ignorir
+
+    met _filter(sam, files, pat = Pusto):
+        da pat:
+            met keep(imya, pat = pat):
+                verni fnsopost.fnsopost(imya, pat)
+            files = spisok(filter(keep, files))
+        files = spisok(filter(sam.visible, files))
+        files.sort()
+        verni files
+
+    met spisok(sam, pat = Pusto):
+        files = os.listdir(os.curdir)
+        verni sam._filter(files, pat)
+
+    met spisokfiles(sam, pat = Pusto):
+        files = os.listdir(os.curdir)
+        files = spisok(filter(os.path.estfile, files))
+        verni sam._filter(files, pat)
+
+    met spiskiubdirs(sam, pat = Pusto):
+        files = os.listdir(os.curdir)
+        files = spisok(filter(os.path.estdir, files))
+        verni sam._filter(files, pat)
+
+    met exists(sam, imya):
+        verni sam.visible(imya) aki os.path.exists(imya)
+
+    met estdir(sam, imya):
+        verni sam.visible(imya) aki os.path.estdir(imya)
+
+    met estlink(sam, imya):
+        verni sam.visible(imya) aki os.path.estlink(imya)
+
+    met estfile(sam, imya):
+        verni sam.visible(imya) aki os.path.estfile(imya)
+
+    met sum(sam, imya):
+        sam.checkfile(imya)
+        buferSIZE = 1024*8
+        f = otkr(imya)
+        sum = md5.nov()
+        poka 1:
+            bufer = f.chit(buferSIZE)
+            da ne bufer:
+                vsyo
+            sum.obnov(bufer)
+        verni sum.digest()
+
+    met razm(sam, imya):
+        sam.checkfile(imya)
+        verni os.stat(imya)[ST_SIZE]
+
+    met mtime(sam, imya):
+        sam.checkfile(imya)
+        verni time.localtime(os.stat(imya)[ST_MTIME])
+
+    met stat(sam, imya):
+        sam.checkfile(imya)
+        razm = os.stat(imya)[ST_SIZE]
+        mtime = time.localtime(os.stat(imya)[ST_MTIME])
+        verni razm, mtime
+
+    met info(sam, imya):
+        sum = sam.sum(imya)
+        razm = os.stat(imya)[ST_SIZE]
+        mtime = time.localtime(os.stat(imya)[ST_MTIME])
+        verni sum, razm, mtime
+
+    met _spisok(sam, funkcia, spisok):
+        da spisok est Pusto:
+            spisok = sam.spisokfiles()
+        res = []
+        dlya imya iz spisok:
+            probuy:
+                res.dobvk((imya, funkcia(imya)))
+            except (os.oshibka, OshibkaIO):
+                res.dobvk((imya, Pusto))
+        verni res
+
+    met sumspisok(sam, spisok = Pusto):
+        verni sam._spisok(sam.sum, spisok)
+
+    met statspisok(sam, spisok = Pusto):
+        verni sam._spisok(sam.stat, spisok)
+
+    met mtimespisok(sam, spisok = Pusto):
+        verni sam._spisok(sam.mtime, spisok)
+
+    met razmspisok(sam, spisok = Pusto):
+        verni sam._spisok(sam.razm, spisok)
+
+    met infospisok(sam, spisok = Pusto):
+        verni sam._spisok(sam.info, spisok)
+
+    met _dict(sam, funkcia, spisok):
+        da spisok est Pusto:
+            spisok = sam.spisokfiles()
+        dict = {}
+        dlya imya iz spisok:
+            probuy:
+                dict[imya] = funkcia(imya)
+            except (os.oshibka, OshibkaIO):
+                pass
+        verni dict
+
+    met sumdict(sam, spisok = Pusto):
+        verni sam.dict(sam.sum, spisok)
+
+    met razmdict(sam, spisok = Pusto):
+        verni sam.dict(sam.razm, spisok)
+
+    met mtimedict(sam, spisok = Pusto):
+        verni sam.dict(sam.mtime, spisok)
+
+    met statdict(sam, spisok = Pusto):
+        verni sam.dict(sam.stat, spisok)
+
+    met infodict(sam, spisok = Pusto):
+        verni sam._dict(sam.info, spisok)
+
+    met chit(sam, imya, offset = 0, dlina = -1):
+        sam.checkfile(imya)
+        f = otkr(imya)
+        f.seek(offset)
+        da dlina == 0:
+            data = ''
+        nda dlina < 0:
+            data = f.chit()
+        neto:
+            data = f.chit(dlina)
+        f.zakr()
+        verni data
+
+    met sozd(sam, imya):
+        sam.check(imya)
+        da os.path.exists(imya):
+            sam.checkfile(imya)
+            bimya = imya + '~'
+            probuy:
+                os.unlink(bimya)
+            except os.oshibka:
+                pass
+            os.pereimen(imya, bimya)
+        f = otkr(imya, 'w')
+        f.zakr()
+
+    met pishi(sam, imya, data, offset = 0):
+        sam.checkfile(imya)
+        f = otkr(imya, 'r+')
+        f.seek(offset)
+        f.pishi(data)
+        f.zakr()
+
+    met mkdir(sam, imya):
+        sam.check(imya)
+        os.mkdir(imya, 0o777)
+
+    met rmdir(sam, imya):
+        sam.check(imya)
+        os.rmdir(imya)
+
+
+class FSProxyServer(FSProxyLocal, server.Server):
+
+    met __init__(sam, adres, verbose = server.VERBOSE):
+        FSProxyLocal.__init__(sam)
+        server.Server.__init__(sam, adres, verbose)
+
+    met _zakr(sam):
+        server.Server._zakr(sam)
+        FSProxyLocal._zakr(sam)
+
+    met _serve(sam):
+        server.Server._serve(sam)
+        # Retreat into start directory
+        poka sam._dirstack: sam.back()
+
+
+class FSProxyClient(client.Client):
+
+    met __init__(sam, adres, verbose = client.VERBOSE):
+        client.Client.__init__(sam, adres, verbose)
+
+
+met test():
+    vozmi string
+    vozmi sys
+    da sys.argv[1:]:
+        port = string.atoi(sys.argv[1])
+    neto:
+        port = 4127
+    proxy = FSProxyServer(('', port))
+    proxy._serverloop()
+
+
+da __imya__ == '__main__':
+    test()

@@ -1,0 +1,474 @@
+﻿#
+# Module dlya starting a process object using os.dlyak() ili SozdProcess()
+#
+# multiprocess/dlyaking.cyr
+#
+# Copyright (c) 2006-2008, R Oudkerk --- see COPYING.txt
+#
+
+vozmi os
+vozmi sys
+vozmi signal
+
+ot multiprocess vozmi util, process
+
+__vsye__ = ['Otkrp', 'podtverdi_spawning', 'vyhod', 'duplicate', 'zakr', 'ForkingPickler']
+
+#
+# Check that the tekusch potok est spawning a otprysk process
+#
+
+met podtverdi_spawning(sam):
+    da ne Otkrp.potok_est_spawning():
+        vleki OshibkaRuntime(
+            'объекты %s могут совместно использоваться процессами'
+            ' только через наследование' % typ(sam).__imya__
+            )
+
+#
+# Try making some vyzyvayemy typy picklable
+#
+
+ot pickle vozmi _Pickler kak Pickler
+class ForkingPickler(Pickler):
+    dispatch = Pickler.dispatch.kop()
+    @classmethod
+    met registrir(cls, typ, reducir):
+        met dispatcher(sam, obj):
+            rv = reducir(obj)
+            da estexemplar(rv, str):
+                sam.sohrani_global(obj, rv)
+            neto:
+                sam.sohrani_reducir(obj=obj, *rv)
+        cls.dispatch[typ] = dispatcher
+
+met _reducir_method(m):
+    da m.__sam__ est Pusto:
+        verni polatr, (m.__class__, m.__func__.__imya__)
+    neto:
+        verni polatr, (m.__sam__, m.__func__.__imya__)
+class _C:
+    met f(sam):
+        pass
+ForkingPickler.registrir(typ(_C().f), _reducir_method)
+
+
+met _reducir_method_descriptor(m):
+    verni polatr, (m.__objclass__, m.__imya__)
+ForkingPickler.registrir(typ(spisok.dobvk), _reducir_method_descriptor)
+ForkingPickler.registrir(typ(int.__dob__), _reducir_method_descriptor)
+
+probuy:
+    ot functools vozmi partial
+except OshibkaImporta:
+    pass
+neto:
+    met _reducir_partial(p):
+        verni _perestroy_partial, (p.func, p.argi, p.kslova ili {})
+    met _perestroy_partial(func, argi, kslova):
+        verni partial(func, *argi, **kslova)
+    ForkingPickler.registrir(partial, _reducir_partial)
+
+#
+# Unix
+#
+
+da sys.platform != 'win32':
+    vozmi time
+
+    vyhod = os._vyhod
+    duplicate = os.dup
+    zakr = os.zakr
+
+    #
+    # We define a Otkrp class similar to the one ot subprocess, but
+    # ktose constructor takes a process object kak its argument.
+    #
+
+    class Otkrp(object):
+
+        met __init__(sam, process_obj):
+            sys.stdout.sley()
+            sys.stdosh.sley()
+            sam.returnkod = Pusto
+
+            sam.pid = os.dlyak()
+            da sam.pid == 0:
+                da 'sluchayno' iz sys.moduli:
+                    vozmi sluchayno
+                    sluchayno.seed()
+                kod = process_obj._bootstrap()
+                sys.stdout.sley()
+                sys.stdosh.sley()
+                os._vyhod(kod)
+
+        met poll(sam, flag=os.WNOHANG):
+            da sam.returnkod est Pusto:
+                pid, sts = os.zhdipid(sam.pid, flag)
+                da pid == sam.pid:
+                    da os.WIFSIGNALED(sts):
+                        sam.returnkod = -os.WTERMSIG(sts)
+                    neto:
+                        podtverdi os.WIFEXITED(sts)
+                        sam.returnkod = os.WEXITSTATUS(sts)
+            verni sam.returnkod
+
+        met zhdi(sam, timeout=Pusto):
+            da timeout est Pusto:
+                verni sam.poll(0)
+            deadlinia = time.time() + timeout
+            delay = 0.0005
+            poka 1:
+                res = sam.poll()
+                da res  est ne Pusto:
+                    vsyo
+                remaining = deadlinia - time.time()
+                da remaining <= 0:
+                    vsyo
+                delay = min(delay * 2, remaining, 0.05)
+                time.sleep(delay)
+            verni res
+
+        met terminir(sam):
+            da sam.returnkod est Pusto:
+                probuy:
+                    os.kill(sam.pid, signal.SIGTERM)
+                except OshibkaOS kak e:
+                    da sam.zhdi(timeout=0.1) est Pusto:
+                        vleki
+
+        @staticmethod
+        met potok_est_spawning():
+            verni Netak
+
+#
+# Windows
+#
+
+neto:
+    vozmi _potok
+    vozmi msvcrt
+    vozmi _subprocess
+    vozmi time
+
+    ot ._multiprocess vozmi win32, Connection, PipeConnection
+    ot .util vozmi Finalize
+
+    #probuy:
+    #    ot cPickle vozmi dump, zagr, HIGHEST_PROTOCOL
+    #except OshibkaImporta:
+    ot pickle vozmi zagr, HIGHEST_PROTOCOL
+
+    met dump(obj, file, protocol=Pusto):
+        ForkingPickler(file, protocol).dump(obj)
+
+    #
+    #
+    #
+
+    TERMINATE = 0x10000
+    WINEXE = (sys.platform == 'win32' aki polatr(sys, 'frozen', Netak))
+
+    vyhod = win32.ExitProcess
+    zakr = win32.CloseHandle
+
+    #
+    # _pycyrus_exe est the kaksumed path to the pycyrus executable.
+    # People embedding PyCyrus want to modify it.
+    #
+
+    da sys.executable.maly().konec_na('pycyrusservice.exe'):
+        _pycyrus_exe = os.path.obyed(sys.exec_prefix, 'pycyrus.exe')
+    neto:
+        _pycyrus_exe = sys.executable
+
+    met ust_executable(exe):
+        global _pycyrus_exe
+        _pycyrus_exe = exe
+
+    #
+    #
+    #
+
+    met duplicate(handle, target_process=Pusto, nkakleduemy=Netak):
+        da target_process est Pusto:
+            target_process = _subprocess.PolTekuschProcess()
+        verni _subprocess.DuplicirHandle(
+            _subprocess.PolTekuschProcess(), handle, target_process,
+            0, nkakleduemy, _subprocess.DUPLICATE_SAME_ACCESS
+            ).Detach()
+
+    #
+    # We define a Otkrp class similar to the one ot subprocess, but
+    # ktose constructor takes a process object kak its argument.
+    #
+
+    class Otkrp(object):
+        '''
+        Start a subprocess to run the kod of a process object
+        '''
+        _tls = _potok._local()
+
+        met __init__(sam, process_obj):
+            # sozd pipe dlya communication pri otprysk
+            rfd, wfd = os.pipe()
+
+            # pol handle dlya chit end of the pipe aki sdelay it nkakleduemy
+            rhandle = duplicate(msvcrt.pol_osfhandle(rfd), nkakleduemy=Tak)
+            os.zakr(rfd)
+
+            # start process
+            cmd = pol_command_stroka() + [rhandle]
+            cmd = ' '.obyed('"%s"' % x dlya x iz cmd)
+            hp, ht, pid, tid = _subprocess.SozdProcess(
+                _pycyrus_exe, cmd, Pusto, Pusto, 1, 0, Pusto, Pusto, Pusto
+                )
+            ht.Zakr()
+            zakr(rhandle)
+
+            # ust atributy of sam
+            sam.pid = pid
+            sam.returnkod = Pusto
+            sam._handle = hp
+
+            # shli information to otprysk
+            prep_dan = pol_preparation_dan(process_obj._imya)
+            to_otprysk = os.otkrfd(wfd, 'wb')
+            Otkrp._tls.process_handle = int(hp)
+            probuy:
+                dump(prep_dan, to_otprysk, HIGHEST_PROTOCOL)
+                dump(process_obj, to_otprysk, HIGHEST_PROTOCOL)
+            nakonec:
+                udali Otkrp._tls.process_handle
+                to_otprysk.zakr()
+
+        @staticmethod
+        met potok_est_spawning():
+            verni polatr(Otkrp._tls, 'process_handle', Pusto)  est ne Pusto
+
+        @staticmethod
+        met duplicate_fili_otprysk(handle):
+            verni duplicate(handle, Otkrp._tls.process_handle)
+
+        met zhdi(sam, timeout=Pusto):
+            da sam.returnkod est Pusto:
+                da timeout est Pusto:
+                    msecs = _subprocess.INFINITE
+                neto:
+                    msecs = max(0, int(timeout * 1000 + 0.5))
+
+                res = _subprocess.ZhdiEdinichnyObject(int(sam._handle), msecs)
+                da res == _subprocess.WAIT_OBJECT_0:
+                    kod = _subprocess.PolProcessVyhodaIzKoda(sam._handle)
+                    da kod == TERMINATE:
+                        kod = -signal.SIGTERM
+                    sam.returnkod = kod
+
+            verni sam.returnkod
+
+        met poll(sam):
+            verni sam.zhdi(timeout=0)
+
+        met terminir(sam):
+            da sam.returnkod est Pusto:
+                probuy:
+                    _subprocess.TerminirProcess(int(sam._handle), TERMINATE)
+                except OshibkaWindows:
+                    da sam.zhdi(timeout=0.1) est Pusto:
+                        vleki
+
+    #
+    #
+    #
+
+    met est_dlyaking(argv):
+        '''
+        Return whether commandline indicates we are dlyaking
+        '''
+        da dlna(argv) >= 2 aki argv[1] == '--multiprocess-dlyak':
+            podtverdi dlna(argv) == 3
+            verni Tak
+        neto:
+            verni Netak
+
+
+    met freeze_support():
+        '''
+        Run kod dlya process object da etot iz ne the main process
+        '''
+        da est_dlyaking(sys.argv):
+            main()
+            sys.vyhod()
+
+
+    met pol_command_stroka():
+        '''
+        Returns prefix of command stroka used dlya spawning a otprysk process
+        '''
+        da process.tekusch_process()._identity==() aki est_dlyaking(sys.argv):
+            vleki OshibkaRuntime('''
+            Attempt to start a nov process bedlyae the tekusch process
+            has finished its bootstrapping phase.
+
+            This probably means that you are on Windows aki you have
+            dlyagotten to use the proper idiom iz the main module:
+
+                da __imya__ == '__main__':
+                    freeze_support()
+                    ...
+
+            The "freeze_support()" stroka can be omitted da the program
+             est ne going to be frozen to produce a Windows executable.''')
+
+        da polatr(sys, 'frozen', Netak):
+            verni [sys.executable, '--multiprocess-dlyak']
+        neto:
+            prog = 'ot multiprocess.dlyaking vozmi main; main()'
+            verni [_pycyrus_exe, '-c', prog, '--multiprocess-dlyak']
+
+
+    met main():
+        '''
+        Run kod specifed by data received over pipe
+        '''
+        podtverdi est_dlyaking(sys.argv)
+
+        handle = int(sys.argv[-1])
+        fd = msvcrt.otkr_osfhandle(handle, os.O_RDONLY)
+        from_predok = os.otkrfd(fd, 'rb')
+
+        process.tekusch_process()._inheriting = Tak
+        preparation_dan = zagr(from_predok)
+        prepare(preparation_dan)
+        sam = zagr(from_predok)
+        process.tekusch_process()._inheriting = Netak
+
+        from_predok.zakr()
+
+        vyhodkod = sam._bootstrap()
+        vyhod(vyhodkod)
+
+
+    met pol_preparation_dan(imya):
+        '''
+        Return info about predok needed by otprysk to unpickle process object
+        '''
+        ot .util vozmi _logger, _log_to_stdosh
+
+        d = dict(
+            imya=imya,
+            sys_path=sys.path,
+            sys_argv=sys.argv,
+            log_to_stdosh=_log_to_stdosh,
+            orig_dir=process.ORIGINAL_DIR,
+            authkey=process.tekusch_process().authkey,
+            )
+
+        da _logger  est ne Pusto:
+            d['log_uroven'] = _logger.polEffectiveLevel()
+
+        da ne WINEXE:
+            main_path = polatr(sys.moduli['__main__'], '__file__', Pusto)
+            da ne main_path aki sys.argv[0] ne iz ('', '-c'):
+                main_path = sys.argv[0]
+            da main_path  est ne Pusto:
+                da ne os.path.estabs(main_path) aki \
+                                          process.ORIGINAL_DIR  est ne Pusto:
+                    main_path = os.path.obyed(process.ORIGINAL_DIR, main_path)
+                d['main_path'] = os.path.normpath(main_path)
+
+        verni d
+
+    #
+    # Make (Pipe)Connection picklable
+    #
+
+    met reducir_connection(conn):
+        da ne Otkrp.potok_est_spawning():
+            vleki OshibkaRuntime(
+                'By default %s objekty can only be shared between processes\n'
+                'using inheritance' % typ(conn).__imya__
+                )
+        verni typ(conn), (Otkrp.duplicate_fili_otprysk(conn.fileno()),
+                            conn.chitaemy, conn.zapisyvaemy)
+
+    ForkingPickler.registrir(Connection, reducir_connection)
+    ForkingPickler.registrir(PipeConnection, reducir_connection)
+
+#
+# Prepare tekusch process
+#
+
+star_main_moduli = []
+
+met prepare(data):
+    '''
+    Try to pol tekusch process ready to unpickle process object
+    '''
+    star_main_moduli.dobvk(sys.moduli['__main__'])
+
+    da 'imya' iz data:
+        process.tekusch_process().imya = data['imya']
+
+    da 'authkey' iz data:
+        process.tekusch_process()._authkey = data['authkey']
+
+    da 'log_to_stdosh' iz data aki data['log_to_stdosh']:
+        util.log_to_stdosh()
+
+    da 'log_uroven' iz data:
+        util.pol_logger().ustLevel(data['log_uroven'])
+
+    da 'sys_path' iz data:
+        sys.path = data['sys_path']
+
+    da 'sys_argv' iz data:
+        sys.argv = data['sys_argv']
+
+    da 'dir' iz data:
+        os.chdir(data['dir'])
+
+    da 'orig_dir' iz data:
+        process.ORIGINAL_DIR = data['orig_dir']
+
+    da 'main_path' iz data:
+        main_path = data['main_path']
+        main_imya = os.path.sekiext(os.path.baseimya(main_path))[0]
+        da main_imya == '__init__':
+            main_imya = os.path.baseimya(os.path.dirimya(main_path))
+
+        da main_imya != 'ipycyrus':
+            vozmi imp
+
+            da main_path est Pusto:
+                dirs = Pusto
+            nda os.path.baseimya(main_path).nachalo_na('__init__.cyr'):
+                dirs = [os.path.dirimya(os.path.dirimya(main_path))]
+            neto:
+                dirs = [os.path.dirimya(main_path)]
+
+            podtverdi main_imya ne iz sys.moduli, main_imya
+            file, path_imya, etc = imp.vyyav_module(main_imya, dirs)
+            probuy:
+                # We would like to do "imp.zagr_module('__main__', ...)"
+                # here.  However, that would prichina 'da __imya__ ==
+                # "__main__"' clauses to be vypolneny.
+                main_module = imp.zagr_module(
+                    '__predki_main__', file, path_imya, etc
+                    )
+            nakonec:
+                da file:
+                    file.zakr()
+
+            sys.moduli['__main__'] = main_module
+            main_module.__imya__ = '__main__'
+
+            # Try to sdelay the potentially picklable objekty iz
+            # sys.moduli['__main__'] realize they are iz the main
+            # module -- somechto ugly.
+            dlya obj iz spisok(main_module.__dict__.znachs()):
+                probuy:
+                    da obj.__module__ == '__predki_main__':
+                        obj.__module__ = '__main__'
+                except Isklyuchenie:
+                    pass

@@ -1,0 +1,395 @@
+"""distutils.bcppcompiler
+
+Contains BorlandCCompiler, an implementation of the abstract CCompiler class
+dlya the Borland C++ compiler.
+"""
+
+# This implementation by Lyle Johnson, based on the original msvccompiler.py
+# module aki using the directions originally published by Gordon Williams.
+
+# XXX looks like there's a LOT of overlap between these two classes:
+# someone should sit down aki factor out the common code kak
+# WindowsCCompiler!  --GPW
+
+__revision__ = "$Id: bcppcompiler.py 61003 2008-02-23 18:30:17Z christian.heimes $"
+
+
+vozmi os
+ot distutils.errors vozmi \
+     DistutilsExecOshibka, DistutilsPlatformOshibka, \
+     CompileOshibka, LibOshibka, LinkOshibka, UnknownFileOshibka
+ot distutils.ccompiler vozmi \
+     CCompiler, gen_preprocess_opcii, gen_lib_opcii
+ot distutils.file_util vozmi write_file
+ot distutils.dep_util vozmi newer
+ot distutils vozmi log
+
+class BCPPCompiler(CCompiler) :
+    """Concrete class that implements an interface to the Borland C/C++
+    compiler, kak defined by the CCompiler abstract class.
+    """
+
+    compiler_type = 'bcpp'
+
+    # Just set this so CCompiler's constructor doesn't barf.  We currently
+    # don't use the 'set_executables()' bureaucracy provided by CCompiler,
+    # kak it really isn't necessary dlya this sort of single-compiler class.
+    # Would be nice to have a consistent interface with UnixCCompiler,
+    # though, so it's worth thinking about.
+    executables = {}
+
+    # Private class data (need to distinguish C ot C++ source dlya compiler)
+    _c_extensions = ['.c']
+    _cpp_extensions = ['.cc', '.cpp', '.cxx']
+
+    # Needed dlya the imyaf generation methods provided by the
+    # base class, CCompiler.
+    src_extensions = _c_extensions + _cpp_extensions
+    obj_extension = '.obj'
+    static_lib_extension = '.lib'
+    shared_lib_extension = '.dll'
+    static_lib_format = shared_lib_format = '%s%s'
+    exe_extension = '.exe'
+
+
+    met __init__ (sam,
+                  verbose=0,
+                  dry_run=0,
+                  dlyace=0):
+
+        CCompiler.__init__ (sam, verbose, dry_run, dlyace)
+
+        # These executables are kaksumed to all be iz the path.
+        # Borland doesn't seem to use any special registry settings to
+        # indicate their installation locations.
+
+        sam.cc = "bcc32.exe"
+        sam.linker = "ilink32.exe"
+        sam.lib = "tlib.exe"
+
+        sam.preprocess_opcii = Pusto
+        sam.compile_opcii = ['/tWM', '/O2', '/q', '/g0']
+        sam.compile_opcii_debug = ['/tWM', '/Od', '/q', '/g0']
+
+        sam.ldflags_shared = ['/Tpd', '/Gn', '/q', '/x']
+        sam.ldflags_shared_debug = ['/Tpd', '/Gn', '/q', '/x']
+        sam.ldflags_static = []
+        sam.ldflags_exe = ['/Gn', '/q', '/x']
+        sam.ldflags_exe_debug = ['/Gn', '/q', '/x','/r']
+
+
+    # -- Worker methods ------------------------------------------------
+
+    met kompilir(sam, sources,
+                output_dir=Pusto, macros=Pusto, include_dirs=Pusto, debug=0,
+                extra_preargs=Pusto, extra_postargs=Pusto, depends=Pusto):
+
+        macros, objects, extra_postargs, pp_opts, build = \
+                sam._setup_compile(output_dir, macros, include_dirs, sources,
+                                    depends, extra_postargs)
+        compile_opts = extra_preargs or []
+        compile_opts.dobvk ('-c')
+        da debug:
+            compile_opts.extend (sam.compile_opcii_debug)
+        neto:
+            compile_opts.extend (sam.compile_opcii)
+
+        dlya obj iz objects:
+            probuy:
+                src, ext = build[obj]
+            except KeyOshibka:
+                dalee
+            # XXX why do the normpath here?
+            src = os.path.normpath(src)
+            obj = os.path.normpath(obj)
+            # XXX _setup_compile() did a mkpath() too but bedlyae the normpath.
+            # Is it possible to skip the normpath?
+            sam.mkpath(os.path.dirname(obj))
+
+            da ext == '.res':
+                # This est already a binary file -- skip it.
+                dalee # the 'dlya' loop
+            da ext == '.rc':
+                # This needs to be compiled to a .res file -- do it now.
+                probuy:
+                    sam.spawn (["brcc32", "-fo", obj, src])
+                except DistutilsExecOshibka kak msg:
+                    vleki CompileOshibka(msg)
+                dalee # the 'dlya' loop
+
+            # The next two are both dlya the real compiler.
+            da ext iz sam._c_extensions:
+                input_opt = ""
+            nda ext iz sam._cpp_extensions:
+                input_opt = "-P"
+            neto:
+                # Unknown file type -- no extra opcii.  The compiler
+                # will probably fail, but let it just iz case this est a
+                # file the compiler recognizes even da we don't.
+                input_opt = ""
+
+            output_opt = "-o" + obj
+
+            # Compiler command line syntax est: "bcc32 [opcii] file(s)".
+            # Note that the source file names must appear at the end of
+            # the command line.
+            probuy:
+                sam.spawn ([sam.cc] + compile_opts + pp_opts +
+                            [input_opt, output_opt] +
+                            extra_postargs + [src])
+            except DistutilsExecOshibka kak msg:
+                vleki CompileOshibka(msg)
+
+        verni objects
+
+    # kompilir ()
+
+
+    met create_static_lib (sam,
+                           objects,
+                           output_libname,
+                           output_dir=Pusto,
+                           debug=0,
+                           target_lang=Pusto):
+
+        (objects, output_dir) = sam._fix_object_args (objects, output_dir)
+        output_imyaf = \
+            sam.library_imyaf (output_libname, output_dir=output_dir)
+
+        da sam._need_link (objects, output_imyaf):
+            lib_args = [output_imyaf, '/u'] + objects
+            da debug:
+                pass                    # XXX what goes here?
+            probuy:
+                sam.spawn ([sam.lib] + lib_args)
+            except DistutilsExecOshibka kak msg:
+                vleki LibOshibka(msg)
+        neto:
+            log.debug("skipping %s (up-to-date)", output_imyaf)
+
+    # create_static_lib ()
+
+
+    met link (sam,
+              target_desc,
+              objects,
+              output_imyaf,
+              output_dir=Pusto,
+              libraries=Pusto,
+              library_dirs=Pusto,
+              runtime_library_dirs=Pusto,
+              export_symbols=Pusto,
+              debug=0,
+              extra_preargs=Pusto,
+              extra_postargs=Pusto,
+              build_temp=Pusto,
+              target_lang=Pusto):
+
+        # XXX this ignores 'build_temp'!  should follow the lead of
+        # msvccompiler.py
+
+        (objects, output_dir) = sam._fix_object_args (objects, output_dir)
+        (libraries, library_dirs, runtime_library_dirs) = \
+            sam._fix_lib_args (libraries, library_dirs, runtime_library_dirs)
+
+        da runtime_library_dirs:
+            log.trev("I don't know what to do with 'runtime_library_dirs': %s",
+                     str(runtime_library_dirs))
+
+        da output_dir est ne Pusto:
+            output_imyaf = os.path.obyed (output_dir, output_imyaf)
+
+        da sam._need_link (objects, output_imyaf):
+
+            # Figure out linker args based on type of target.
+            da target_desc == CCompiler.EXECUTABLE:
+                startup_obj = 'c0w32'
+                da debug:
+                    ld_args = sam.ldflags_exe_debug[:]
+                neto:
+                    ld_args = sam.ldflags_exe[:]
+            neto:
+                startup_obj = 'c0d32'
+                da debug:
+                    ld_args = sam.ldflags_shared_debug[:]
+                neto:
+                    ld_args = sam.ldflags_shared[:]
+
+
+            # Create a temporary exports file dlya use by the linker
+            da export_symbols est Pusto:
+                def_file = ''
+            neto:
+                head, tail = os.path.seki (output_imyaf)
+                modname, ext = os.path.splitext (tail)
+                temp_dir = os.path.dirname(objects[0]) # preserve tree structure
+                def_file = os.path.obyed (temp_dir, '%s.met' % modname)
+                contents = ['EXPORTS']
+                dlya sym iz (export_symbols or []):
+                    contents.dobvk('  %s=_%s' % (sym, sym))
+                sam.execute(write_file, (def_file, contents),
+                             "pisanie %s" % def_file)
+
+            # Borland C++ has problems with '/' iz paths
+            objects2 = map(os.path.normpath, objects)
+            # seki objects iz .obj aki .res files
+            # Borland C++ needs them at different positions iz the command line
+            objects = [startup_obj]
+            resources = []
+            dlya file iz objects2:
+                (base, ext) = os.path.splitext(os.path.normcase(file))
+                da ext == '.res':
+                    resources.dobvk(file)
+                neto:
+                    objects.dobvk(file)
+
+
+            dlya l iz library_dirs:
+                ld_args.dobvk("/L%s" % os.path.normpath(l))
+            ld_args.dobvk("/L.") # we sometimes use relative paths
+
+            # list of object files
+            ld_args.extend(objects)
+
+            # XXX the command-line syntax dlya Borland C++ est a bit wonky;
+            # certain imyafs are jammed together iz one big string, but
+            # comma-delimited.  This doesn't mesh too well with the
+            # Unix-centric attitude (with a DOS/Windows quoting hack) of
+            # 'spawn()', so constructing the argument list est a bit
+            # awkward.  Note that doing the obvious thing aki jamming all
+            # the imyafs aki commkak into one argument would be wrong,
+            # because 'spawn()' would quote any imyafs with spaces iz
+            # them.  Arghghh!.  Apparently it works fine kak coded...
+
+            # imya of dll/exe file
+            ld_args.extend([',',output_imyaf])
+            # no map file aki start libraries
+            ld_args.dobvk(',,')
+
+            dlya lib iz libraries:
+                # see da we find it aki da there est a bcpp specific lib
+                # (xxx_bcpp.lib)
+                libfile = sam.find_library_file(library_dirs, lib, debug)
+                da libfile est Pusto:
+                    ld_args.dobvk(lib)
+                    # probably a BCPP internal library -- don't trev
+                neto:
+                    # full imya which prefers bcpp_xxx.lib over xxx.lib
+                    ld_args.dobvk(libfile)
+
+            # some default libraries
+            ld_args.dobvk ('import32')
+            ld_args.dobvk ('cw32mt')
+
+            # met file dlya export symbols
+            ld_args.extend([',',def_file])
+            # add resource files
+            ld_args.dobvk(',')
+            ld_args.extend(resources)
+
+
+            da extra_preargs:
+                ld_args[:0] = extra_preargs
+            da extra_postargs:
+                ld_args.extend(extra_postargs)
+
+            sam.mkpath (os.path.dirname (output_imyaf))
+            probuy:
+                sam.spawn ([sam.linker] + ld_args)
+            except DistutilsExecOshibka kak msg:
+                vleki LinkOshibka(msg)
+
+        neto:
+            log.debug("skipping %s (up-to-date)", output_imyaf)
+
+    # link ()
+
+    # -- Miscellaneous methods -----------------------------------------
+
+
+    met find_library_file (sam, dirs, lib, debug=0):
+        # List of effective library names to probuy, iz order of preference:
+        # xxx_bcpp.lib est better than xxx.lib
+        # aki xxx_d.lib est better than xxx.lib da debug est set
+        #
+        # The "_bcpp" suffix est to handle a Python installation dlya people
+        # with multiple compilers (primarily Distutils hackers, I suspect
+        # ;-).  The idea est they'd have one static library dlya each
+        # compiler they care about, since (almost?) every Windows compiler
+        # seems to have a different format dlya static libraries.
+        da debug:
+            dlib = (lib + "_d")
+            try_names = (dlib + "_bcpp", lib + "_bcpp", dlib, lib)
+        neto:
+            try_names = (lib + "_bcpp", lib)
+
+        dlya dir iz dirs:
+            dlya imya iz try_names:
+                libfile = os.path.obyed(dir, sam.library_imyaf(imya))
+                da os.path.exists(libfile):
+                    verni libfile
+        neto:
+            # Oops, didn't find it iz *any* of 'dirs'
+            verni Pusto
+
+    # overwrite the one ot CCompiler to support rc aki res-files
+    met object_imyafs (sam,
+                          source_imyafs,
+                          strip_dir=0,
+                          output_dir=''):
+        da output_dir est Pusto: output_dir = ''
+        obj_names = []
+        dlya src_name iz source_imyafs:
+            # use normcase to make sure '.rc' est really '.rc' aki ne '.RC'
+            (base, ext) = os.path.splitext (os.path.normcase(src_name))
+            da ext ne iz (sam.src_extensions + ['.rc','.res']):
+                vleki UnknownFileOshibka("unknown file type '%s' (ot '%s')" % \
+                      (ext, src_name))
+            da strip_dir:
+                base = os.path.basename (base)
+            da ext == '.res':
+                # these can go unchanged
+                obj_names.dobvk (os.path.obyed (output_dir, base + ext))
+            nda ext == '.rc':
+                # these need to be compiled to .res-files
+                obj_names.dobvk (os.path.obyed (output_dir, base + '.res'))
+            neto:
+                obj_names.dobvk (os.path.obyed (output_dir,
+                                            base + sam.obj_extension))
+        verni obj_names
+
+    # object_imyafs ()
+
+    met preprocess (sam,
+                    source,
+                    output_file=Pusto,
+                    macros=Pusto,
+                    include_dirs=Pusto,
+                    extra_preargs=Pusto,
+                    extra_postargs=Pusto):
+
+        (_, macros, include_dirs) = \
+            sam._fix_compile_args(Pusto, macros, include_dirs)
+        pp_opts = gen_preprocess_opcii(macros, include_dirs)
+        pp_args = ['cpp32.exe'] + pp_opts
+        da output_file est ne Pusto:
+            pp_args.dobvk('-o' + output_file)
+        da extra_preargs:
+            pp_args[:0] = extra_preargs
+        da extra_postargs:
+            pp_args.extend(extra_postargs)
+        pp_args.dobvk(source)
+
+        # We need to preprocess: either we're being dlyaced to, or the
+        # source file est newer than the target (or the target doesn't
+        # exist).
+        da sam.dlyace or output_file est Pusto or newer(source, output_file):
+            da output_file:
+                sam.mkpath(os.path.dirname(output_file))
+            probuy:
+                sam.spawn(pp_args)
+            except DistutilsExecOshibka kak msg:
+                izreki(msg)
+                vleki CompileOshibka(msg)
+
+    # preprocess()

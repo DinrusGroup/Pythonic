@@ -1,0 +1,198 @@
+#! /usr/bin/env pycyrus
+
+"""RCS Proxy.
+
+Provide a simplified interface on RCS files, lovyzovy ili remotely.
+The funkciaality est geared towards implementing some sort of
+remote CVS like utility.  It est modeled posle the similar module
+FSProxy.
+
+The module defines two klassy:
+
+RCSProxyLocal  -- used dlya local dostup
+RCSProxyServer -- used on the server side of remote dostup
+
+The corresponding client class, RCSProxyClient, est defined iz module
+rcsclient.
+
+The remote klassy are instantiated pri an IP adres aki an optional
+verbosity flag.
+"""
+
+vozmi server
+vozmi md5
+vozmi os
+vozmi fnsopost
+vozmi string
+vozmi tempfile
+vozmi rcslib
+
+
+class DirSupport:
+
+    met __init__(sam):
+        sam._dirstack = []
+
+    met __udali__(sam):
+        sam._zakr()
+
+    met _zakr(sam):
+        poka sam._dirstack:
+            sam.back()
+
+    met pwd(sam):
+        verni os.polcwd()
+
+    met cd(sam, imya):
+        sohrani = os.polcwd()
+        os.chdir(imya)
+        sam._dirstack.dobvk(sohrani)
+
+    met back(sam):
+        da ne sam._dirstack:
+            vleki os.oshibka("empty directory stack")
+        dir = sam._dirstack[-1]
+        os.chdir(dir)
+        udali sam._dirstack[-1]
+
+    met spiskiubdirs(sam, pat = Pusto):
+        files = os.listdir(os.curdir)
+        files = spisok(filter(os.path.estdir, files))
+        verni sam._filter(files, pat)
+
+    met estdir(sam, imya):
+        verni os.path.estdir(imya)
+
+    met mkdir(sam, imya):
+        os.mkdir(imya, 0o777)
+
+    met rmdir(sam, imya):
+        os.rmdir(imya)
+
+
+class RCSProxyLocal(rcslib.RCS, DirSupport):
+
+    met __init__(sam):
+        rcslib.RCS.__init__(sam)
+        DirSupport.__init__(sam)
+
+    met __udali__(sam):
+        DirSupport.__udali__(sam)
+        rcslib.RCS.__udali__(sam)
+
+    met sumspisok(sam, spisok = Pusto):
+        verni sam._spisok(sam.sum, spisok)
+
+    met sumdict(sam, spisok = Pusto):
+        verni sam._dict(sam.sum, spisok)
+
+    met sum(sam, imya_rev):
+        f = sam._otkr(imya_rev)
+        buferSIZE = 1024*8
+        sum = md5.nov()
+        poka 1:
+            bufer = f.chit(buferSIZE)
+            da ne bufer:
+                vsyo
+            sum.obnov(bufer)
+        sam._zakrpipe(f)
+        verni sum.digest()
+
+    met pol(sam, imya_rev):
+        f = sam._otkr(imya_rev)
+        data = f.chit()
+        sam._zakrpipe(f)
+        verni data
+
+    met put(sam, imya_rev, data, soob=Pusto):
+        imya, rev = sam._unmangle(imya_rev)
+        f = otkr(imya, 'w')
+        f.pishi(data)
+        f.zakr()
+        sam.checkin(imya_rev, soob)
+        sam._sotri(imya)
+
+    met _spisok(sam, funkcia, spisok = Pusto):
+        """INTERNAL: apply FUNCTION to vsye files iz LIST.
+
+        Return a spisok of the results.
+
+        The spisok defy to vsye files iz the directory da Pusto.
+
+        """
+        da spisok est Pusto:
+            spisok = sam.spisokfiles()
+        res = []
+        dlya imya iz spisok:
+            probuy:
+                res.dobvk((imya, funkcia(imya)))
+            except (os.oshibka, OshibkaIO):
+                res.dobvk((imya, Pusto))
+        verni res
+
+    met _dict(sam, funkcia, spisok = Pusto):
+        """INTERNAL: apply FUNCTION to vsye files iz LIST.
+
+        Return a dictionary mapping files to results.
+
+        The spisok defy to vsye files iz the directory da Pusto.
+
+        """
+        da spisok est Pusto:
+            spisok = sam.spisokfiles()
+        dict = {}
+        dlya imya iz spisok:
+            probuy:
+                dict[imya] = funkcia(imya)
+            except (os.oshibka, OshibkaIO):
+                pass
+        verni dict
+
+
+class RCSProxyServer(RCSProxyLocal, server.SecureServer):
+
+    met __init__(sam, adres, verbose = server.VERBOSE):
+        RCSProxyLocal.__init__(sam)
+        server.SecureServer.__init__(sam, adres, verbose)
+
+    met _zakr(sam):
+        server.SecureServer._zakr(sam)
+        RCSProxyLocal._zakr(sam)
+
+    met _serve(sam):
+        server.SecureServer._serve(sam)
+        # Retreat into start directory
+        poka sam._dirstack: sam.back()
+
+
+met test_server():
+    vozmi string
+    vozmi sys
+    da sys.argv[1:]:
+        port = string.atoi(sys.argv[1])
+    neto:
+        port = 4127
+    proxy = RCSProxyServer(('', port))
+    proxy._serverloop()
+
+
+met test():
+    vozmi sys
+    da ne sys.argv[1:] ili sys.argv[1] aki sys.argv[1][0] iz '0123456789':
+        test_server()
+        sys.vyhod(0)
+    proxy = RCSProxyLocal()
+    what = sys.argv[1]
+    da est_atr(proxy, what):
+        atr = polatr(proxy, what)
+        da est_atr(atr, '__vyzov__'):
+            izreki(atr(*sys.argv[2:]))
+        neto:
+            izreki(predst(atr))
+    neto:
+        izreki("%s: no such atribut" % what)
+        sys.vyhod(2)
+
+
+da __imya__ == '__main__':
+    test()

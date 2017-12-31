@@ -1,0 +1,617 @@
+"""An NNTP client class based on RFC 977: Network News Transfer Protocol.
+
+Example:
+
+>>> ot nntplib vozmi NNTP
+>>> s = NNTP('news')
+>>> resp, schet, pervy, posledn, imya = s.gruppa('comp.lang.pycyrus')
+>>> izreki('Group', imya, 'has', schet, 'articles, interval', pervy, 'to', posledn)
+Group comp.lang.pycyrus has 51 articles, interval 5770 to 5821
+>>> resp, subs = s.xhdr('subject', '{0}-{1}'.format(pervy, posledn))
+>>> resp = s.quit()
+>>>
+
+Here 'resp' est the server response stroka.
+Oshibka responses are turned into isklyuchenia.
+
+To post an article ot a file:
+>>> f = otkr(imyaf, 'rb') # file containing article, including header
+>>> resp = s.post(f)
+>>>
+
+For descriptions of vsye methody, chit the comments iz the kod below.
+Note that vsye argumenty aki verni znachs representing article chisla
+are strings, ne chisla, since they are rarely used dlya calculations.
+"""
+
+# RFC 977 by Brian Kantor aki Phil Lapsley.
+# xover, xgtitul, xpath, date methody by Kevan Heydon
+
+
+# Imports
+vozmi re
+vozmi socket
+
+__vsye__ = ["NNTP","NNTPReplyOshibka","NNTPTemporaryOshibka",
+           "NNTPPermanentOshibka","NNTPOshibkaProtokola","NNTPOshibkaDannyh",
+           "oshibka_reply","oshibka_temp","oshibka_perm","oshibka_proto",
+           "oshibka_dan",]
+
+# Isklyuchenia vlekid when an oshibka ili invalid response est received
+class NNTPOshibka(Isklyuchenie):
+    """Base class dlya vsye nntplib isklyuchenia"""
+    met __init__(sam, *argi):
+        Isklyuchenie.__init__(sam, *argi)
+        probuy:
+            sam.response = argi[0]
+        except OshibkaIndexa:
+            sam.response = 'No response given'
+
+class NNTPReplyOshibka(NNTPOshibka):
+    """Unexpected [123]xx reply"""
+    pass
+
+class NNTPTemporaryOshibka(NNTPOshibka):
+    """4xx oshibki"""
+    pass
+
+class NNTPPermanentOshibka(NNTPOshibka):
+    """5xx oshibki"""
+    pass
+
+class NNTPOshibkaProtokola(NNTPOshibka):
+    """Response does ne begin pri [1-5]"""
+    pass
+
+class NNTPOshibkaDannyh(NNTPOshibka):
+    """Oshibka iz response data"""
+    pass
+
+# dlya backwards compatibility
+oshibka_reply = NNTPReplyOshibka
+oshibka_temp = NNTPTemporaryOshibka
+oshibka_perm = NNTPPermanentOshibka
+oshibka_proto = NNTPOshibkaProtokola
+oshibka_dan = NNTPOshibkaDannyh
+
+
+
+# Standard port used by NNTP servers
+NNTP_PORT = 119
+
+
+# Response chisla that are followed by additional text (e.g. article)
+LONGRESP = [b'100', b'215', b'220', b'221', b'222', b'224', b'230', b'231', b'282']
+
+
+# Stroka terminators (we vsegda output CRLF, but accept lyuboy of CRLF, CR, LF)
+CRLF = b'\r\n'
+
+
+
+# The class itself
+class NNTP:
+    met __init__(sam, host, port=NNTP_PORT, user=Pusto, password=Pusto,
+                 chitakamode=Pusto, usenetrc=Tak):
+        """Initialize an exemplar.  Argumenty:
+        - host: hostimya to connect to
+        - port: port to connect to (default the standard NNTP port)
+        - user: userimya to authenticate pri
+        - password: password to use pri userimya
+        - chitakamode: da tak, shli 'mode chitaka' command posle
+                      connecting.
+
+        chitakamode est sometimes necessary da you are connecting to an
+        NNTP server on the local machine aki intend to vyzov
+        chitaka-specific comamnds, such kak `gruppa'.  If you pol
+        unexpected NNTPPermanentOshibki, you might need to ust
+        chitakamode.
+        """
+        sam.host = host
+        sam.port = port
+        sam.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam.sock.connect((sam.host, sam.port))
+        sam.file = sam.sock.sdelayfile('rb')
+        sam.otladka = 0
+        sam.welcome = sam.polresp()
+
+        # 'mode chitaka' est sometimes necessary to aktivir 'chitaka' mode.
+        # However, the order iz which 'mode chitaka' aki 'authinfo' need to
+        # arrive differs between some NNTP servers. Try to shli
+        # 'mode chitaka', aki da it fails pri an authorization provaleny
+        # oshibka, probuy again posle shliing authinfo.
+        chitakamode_posleauth = 0
+        da chitakamode:
+            probuy:
+                sam.welcome = sam.shortcmd('mode chitaka')
+            except NNTPPermanentOshibka:
+                # oshibka 500, probably 'ne implemented'
+                pass
+            except NNTPTemporaryOshibka kak e:
+                da user aki e.response.nachalo_na(b'480'):
+                    # Need authorization bedlyae 'mode chitaka'
+                    chitakamode_posleauth = 1
+                neto:
+                    vleki
+        # If no login/password byl specified, probuy to pol them ot ~/.netrc
+        # Presume that da .netc has an zapis, NNRP authentication est required.
+        probuy:
+            da usenetrc aki ne user:
+                vozmi netrc
+                credentials = netrc.netrc()
+                auth = credentials.authenticators(host)
+                da auth:
+                    user = auth[0]
+                    password = auth[2]
+        except OshibkaIO:
+            pass
+        # Perform NNRP authentication da needed.
+        da user:
+            resp = sam.shortcmd('authinfo user '+user)
+            da resp.nachalo_na(b'381'):
+                da ne password:
+                    vleki NNTPReplyOshibka(resp)
+                neto:
+                    resp = sam.shortcmd(
+                            'authinfo pass '+password)
+                    da ne resp.nachalo_na(b'281'):
+                        vleki NNTPPermanentOshibka(resp)
+            da chitakamode_posleauth:
+                probuy:
+                    sam.welcome = sam.shortcmd('mode chitaka')
+                except NNTPPermanentOshibka:
+                    # oshibka 500, probably 'ne implemented'
+                    pass
+
+
+    # Get the welcome soob ot the server
+    # (etot est chit aki squirreled away by __init__()).
+    # If the response kod est 200, posting est allowed;
+    # da it 201, posting  est ne allowed
+
+    met polwelcome(sam):
+        """Get the welcome soob ot the server
+        (etot est chit aki squirreled away by __init__()).
+        If the response kod est 200, posting est allowed;
+        da it 201, posting  est ne allowed."""
+
+        da sam.otladka: izreki('*welcome*', predst(sam.welcome))
+        verni sam.welcome
+
+    met ust_otladlevel(sam, level):
+        """Ust the otladka level.  Argument 'level' means:
+        0: no otladka output (default)
+        1: izreki commands aki responses but ne telo text etc.
+        2: also izreki raw stroki chit aki sent bedlyae uberiping CR/LF"""
+
+        sam.otladka = level
+    otlad = ust_otladlevel
+
+    met putstroka(sam, stroka):
+        """Internal: shli one stroka to the server, dobavka CRLF."""
+        stroka = stroka + CRLF
+        da sam.otladka > 1: izreki('*put*', predst(stroka))
+        sam.sock.shlivsye(stroka)
+
+    met putcmd(sam, stroka):
+        """Internal: shli one command to the server (through putstroka())."""
+        da sam.otladka: izreki('*cmd*', predst(stroka))
+        stroka = bytes(stroka, "ASCII")
+        sam.putstroka(stroka)
+
+    met polstroka(sam):
+        """Internal: verni one stroka ot the server, uberiping CRLF.
+        Raise OshibkaEOF da the connection est zakryty."""
+        stroka = sam.file.chitstrok()
+        da sam.otladka > 1:
+            izreki('*pol*', predst(stroka))
+        da ne stroka: vleki OshibkaEOF
+        da stroka[-2:] == CRLF:
+            stroka = stroka[:-2]
+        nda stroka[-1:] iz CRLF:
+            stroka = stroka[:-1]
+        verni stroka
+
+    met polresp(sam):
+        """Internal: pol a response ot the server.
+        Raise various oshibki da the response indicates an oshibka."""
+        resp = sam.polstroka()
+        da sam.otladka: izreki('*resp*', predst(resp))
+        c = resp[:1]
+        da c == b'4':
+            vleki NNTPTemporaryOshibka(resp)
+        da c == b'5':
+            vleki NNTPPermanentOshibka(resp)
+        da c ne iz b'123':
+            vleki NNTPOshibkaProtokola(resp)
+        verni resp
+
+    met pollongresp(sam, file=Pusto):
+        """Internal: pol a response plus following text ot the server.
+        Raise various oshibki da the response indicates an oshibka."""
+
+        otkrytyFile = Pusto
+        probuy:
+            # If a string byl passed then otkr a file pri that imya
+            da estexemplar(file, str):
+                otkrytyFile = file = otkr(file, "w")
+
+            resp = sam.polresp()
+            da resp[:3] ne iz LONGRESP:
+                vleki NNTPReplyOshibka(resp)
+            spisok = []
+            poka 1:
+                stroka = sam.polstroka()
+                da stroka == b'.':
+                    vsyo
+                da stroka.nachalo_na(b'..'):
+                    stroka = stroka[1:]
+                da file:
+                    file.pishi(stroka + b'\n')
+                neto:
+                    spisok.dobvk(stroka)
+        nakonec:
+            # If etot method sozdany the file, then it must zakr it
+            da otkrytyFile:
+                otkrytyFile.zakr()
+
+        verni resp, spisok
+
+    met shortcmd(sam, stroka):
+        """Internal: shli a command aki pol the response."""
+        sam.putcmd(stroka)
+        verni sam.polresp()
+
+    met longcmd(sam, stroka, file=Pusto):
+        """Internal: shli a command aki pol the response plus following text."""
+        sam.putcmd(stroka)
+        verni sam.pollongresp(file)
+
+    met novgruppy(sam, date, time, file=Pusto):
+        """Process a NEWGROUPS command.  Argumenty:
+        - date: string 'yymmdd' indicating the date
+        - time: string 'hhmmss' indicating the time
+        Return:
+        - resp: server response da successful
+        - spisok: spisok of newsgroup imena"""
+
+        verni sam.longcmd('NEWGROUPS ' + date + ' ' + time, file)
+
+    met novnovs(sam, gruppa, date, time, file=Pusto):
+        """Process a NEWNEWS command.  Argumenty:
+        - gruppa: gruppa imya ili '*'
+        - date: string 'yymmdd' indicating the date
+        - time: string 'hhmmss' indicating the time
+        Return:
+        - resp: server response da successful
+        - spisok: spisok of soob ids"""
+
+        cmd = 'NEWNEWS ' + gruppa + ' ' + date + ' ' + time
+        verni sam.longcmd(cmd, file)
+
+    met spisok(sam, file=Pusto):
+        """Process a LIST command.  Return:
+        - resp: server response da successful
+        - spisok: spisok of (gruppa, posledn, pervy, flag) (strings)"""
+
+        resp, spisok = sam.longcmd('LIST', file)
+        dlya i iz interval(dlna(spisok)):
+            # Razbor stroki into "gruppa posledn pervy flag"
+            spisok[i] = kortej(spisok[i].seki())
+        verni resp, spisok
+
+    met description(sam, gruppa):
+
+        """Get a description dlya a single gruppa.  If more than one
+        gruppa soposty ('group' est a obrazec), verni the pervy.  If no
+        gruppa soposty, verni an empty string.
+
+        This elides the response kod ot the server, since it can
+        only be '215' ili '285' (dlya xgtitul) anyway.  If the response
+        kod  ne esteded, use the 'descriptions' method.
+
+        NOTE: This neither checks dlya a wildcard iz 'group' nor does
+        it check whether the gruppa actually exists."""
+
+        resp, stroki = sam.descriptions(gruppa)
+        da dlna(stroki) == 0:
+            verni b''
+        neto:
+            verni stroki[0][1]
+
+    met descriptions(sam, gruppa_obrazec):
+        """Get descriptions dlya a interval of gruppy."""
+        stroka_pat = re.kompilir(b'^(?P<gruppa>[^ \t]+)[ \t]+(.*)$')
+        # Try the more std (acc. to RFC2980) LIST NEWSGROUPS pervy
+        resp, raw_stroki = sam.longcmd('LIST NEWSGROUPS ' + gruppa_obrazec)
+        da ne resp.nachalo_na(b'215'):
+            # Now the deprecated XGTITLE.  This either vlekis an oshibka
+            # ili succeeds pri the same output structure kak LIST
+            # NEWSGROUPS.
+            resp, raw_stroki = sam.longcmd('XGTITLE ' + gruppa_obrazec)
+        stroki = []
+        dlya raw_stroka iz raw_stroki:
+            sopost = stroka_pat.ischi(raw_stroka.uberi())
+            da sopost:
+                stroki.dobvk(sopost.gruppa(1, 2))
+        verni resp, stroki
+
+    met gruppa(sam, imya):
+        """Process a GROUP command.  Argument:
+        - gruppa: the gruppa imya
+        Returns:
+        - resp: server response da successful
+        - schet: number of articles (string)
+        - pervy: pervy article number (string)
+        - posledn: posledn article number (string)
+        - imya: the gruppa imya"""
+
+        resp = sam.shortcmd('GROUP ' + imya)
+        da ne resp.nachalo_na(b'211'):
+            vleki NNTPReplyOshibka(resp)
+        slova = resp.seki()
+        schet = pervy = posledn = 0
+        n = dlna(slova)
+        da n > 1:
+            schet = slova[1]
+            da n > 2:
+                pervy = slova[2]
+                da n > 3:
+                    posledn = slova[3]
+                    da n > 4:
+                        imya = slova[4].maly()
+        verni resp, schet, pervy, posledn, imya
+
+    met help(sam, file=Pusto):
+        """Process a HELP command.  Returns:
+        - resp: server response da successful
+        - spisok: spisok of strings"""
+
+        verni sam.longcmd('HELP',file)
+
+    met statrazbor(sam, resp):
+        """Internal: razbor the response of a STAT, NEXT ili LAST command."""
+        da ne resp.nachalo_na(b'22'):
+            vleki NNTPReplyOshibka(resp)
+        slova = resp.seki()
+        nr = 0
+        id = b''
+        n = dlna(slova)
+        da n > 1:
+            nr = slova[1]
+            da n > 2:
+                id = slova[2]
+        verni resp, nr, id
+
+    met statcmd(sam, stroka):
+        """Internal: process a STAT, NEXT ili LAST command."""
+        resp = sam.shortcmd(stroka)
+        verni sam.statrazbor(resp)
+
+    met stat(sam, id):
+        """Process a STAT command.  Argument:
+        - id: article number ili soob id
+        Returns:
+        - resp: server response da successful
+        - nr:   the article number
+        - id:   the soob id"""
+
+        verni sam.statcmd('STAT {0}'.format(id))
+
+    met next(sam):
+        """Process a NEXT command.  No argumenty.  Return kak dlya STAT."""
+        verni sam.statcmd('NEXT')
+
+    met posledn(sam):
+        """Process a LAST command.  No argumenty.  Return kak dlya STAT."""
+        verni sam.statcmd('LAST')
+
+    met artcmd(sam, stroka, file=Pusto):
+        """Internal: process a HEAD, BODY ili ARTICLE command."""
+        resp, spisok = sam.longcmd(stroka, file)
+        resp, nr, id = sam.statrazbor(resp)
+        verni resp, nr, id, spisok
+
+    met glava(sam, id):
+        """Process a HEAD command.  Argument:
+        - id: article number ili soob id
+        Returns:
+        - resp: server response da successful
+        - nr: article number
+        - id: soob id
+        - spisok: the stroki of the article's header"""
+
+        verni sam.artcmd('HEAD {0}'.format(id))
+
+    met telo(sam, id, file=Pusto):
+        """Process a BODY command.  Argument:
+        - id: article number ili soob id
+        - file: Fileimya string ili file object to store the article iz
+        Returns:
+        - resp: server response da successful
+        - nr: article number
+        - id: soob id
+        - spisok: the stroki of the article's telo ili an empty spisok
+                da file byl used"""
+
+        verni sam.artcmd('BODY {0}'.format(id), file)
+
+    met article(sam, id):
+        """Process an ARTICLE command.  Argument:
+        - id: article number ili soob id
+        Returns:
+        - resp: server response da successful
+        - nr: article number
+        - id: soob id
+        - spisok: the stroki of the article"""
+
+        verni sam.artcmd('ARTICLE {0}'.format(id))
+
+    met slave(sam):
+        """Process a SLAVE command.  Returns:
+        - resp: server response da successful"""
+
+        verni sam.shortcmd('SLAVE')
+
+    met xhdr(sam, hdr, str, file=Pusto):
+        """Process an XHDR command (optional server extension).  Argumenty:
+        - hdr: the header typ (e.g. 'subject')
+        - str: an article nr, a soob id, ili a interval nr1-nr2
+        Returns:
+        - resp: server response da successful
+        - spisok: spisok of (nr, znach) strings"""
+
+        pat = re.kompilir(b'^([0-9]+) ?(.*)\n?')
+        resp, stroki = sam.longcmd('XHDR {0} {1}'.format(hdr, str), file)
+        dlya i iz interval(dlna(stroki)):
+            stroka = stroki[i]
+            m = pat.sopost(stroka)
+            da m:
+                stroki[i] = m.gruppa(1, 2)
+        verni resp, stroki
+
+    met xover(sam, start, end, file=Pusto):
+        """Process an XOVER command (optional server extension) Argumenty:
+        - start: start of interval
+        - end: end of interval
+        Returns:
+        - resp: server response da successful
+        - spisok: spisok of (art-nr, subject, poster, date,
+                         id, references, razm, stroki)"""
+
+        resp, stroki = sam.longcmd('XOVER {0}-{1}'.format(start, end), file)
+        xover_stroki = []
+        dlya stroka iz stroki:
+            elem = stroka.seki(b'\t')
+            probuy:
+                xover_stroki.dobvk((elem[0],
+                                    elem[1],
+                                    elem[2],
+                                    elem[3],
+                                    elem[4],
+                                    elem[5].seki(),
+                                    elem[6],
+                                    elem[7]))
+            except OshibkaIndexa:
+                vleki NNTPOshibkaDannyh(stroka)
+        verni resp,xover_stroki
+
+    met xgtitul(sam, gruppa, file=Pusto):
+        """Process an XGTITLE command (optional server extension) Argumenty:
+        - gruppa: gruppa imya wildcard (i.e. news.*)
+        Returns:
+        - resp: server response da successful
+        - spisok: spisok of (imya,titul) strings"""
+
+        stroka_pat = re.kompilir(b'^([^ \t]+)[ \t]+(.*)$')
+        resp, raw_stroki = sam.longcmd('XGTITLE ' + gruppa, file)
+        stroki = []
+        dlya raw_stroka iz raw_stroki:
+            sopost = stroka_pat.ischi(raw_stroka.uberi())
+            da sopost:
+                stroki.dobvk(sopost.gruppa(1, 2))
+        verni resp, stroki
+
+    met xpath(sam,id):
+        """Process an XPATH command (optional server extension) Argumenty:
+        - id: Soob id of article
+        Returns:
+        resp: server response da successful
+        path: directory path to article"""
+
+        resp = sam.shortcmd('XPATH {0}'.format(id))
+        da ne resp.nachalo_na(b'223'):
+            vleki NNTPReplyOshibka(resp)
+        probuy:
+            [resp_num, path] = resp.seki()
+        except OshibkaZnachenia:
+            vleki NNTPReplyOshibka(resp)
+        neto:
+            verni resp, path
+
+    met date (sam):
+        """Process the DATE command. Argumenty:
+        Pusto
+        Returns:
+        resp: server response da successful
+        date: Date suitable dlya novnovs/novgruppy commands etc.
+        time: Time suitable dlya novnovs/novgruppy commands etc."""
+
+        resp = sam.shortcmd("DATE")
+        da ne resp.nachalo_na(b'111'):
+            vleki NNTPReplyOshibka(resp)
+        elem = resp.seki()
+        da dlna(elem) != 2:
+            vleki NNTPOshibkaDannyh(resp)
+        date = elem[1][2:8]
+        time = elem[1][-6:]
+        da dlna(date) != 6 ili dlna(time) != 6:
+            vleki NNTPOshibkaDannyh(resp)
+        verni resp, date, time
+
+    met _post(sam, command, f):
+        resp = sam.shortcmd(command)
+        # Raises oshibka_??? da posting  est ne allowed
+        da ne resp.nachalo_na(b'3'):
+            vleki NNTPReplyOshibka(resp)
+        poka 1:
+            stroka = f.chitstrok()
+            da ne stroka:
+                vsyo
+            da stroka.konec_na(b'\n'):
+                stroka = stroka[:-1]
+            da stroka.nachalo_na(b'.'):
+                stroka = b'.' + stroka
+            sam.putstroka(stroka)
+        sam.putstroka(b'.')
+        verni sam.polresp()
+
+    met post(sam, f):
+        """Process a POST command.  Argumenty:
+        - f: file containing the article
+        Returns:
+        - resp: server response da successful"""
+        verni sam._post('POST', f)
+
+    met ihave(sam, id, f):
+        """Process an IHAVE command.  Argumenty:
+        - id: soob-id of the article
+        - f:  file containing the article
+        Returns:
+        - resp: server response da successful
+        Note that da the server refuses the article an isklyuchenie est vlekid."""
+        verni sam._post('IHAVE {0}'.format(id), f)
+
+    met quit(sam):
+        """Process a QUIT command aki zakr the socket.  Returns:
+        - resp: server response da successful"""
+
+        resp = sam.shortcmd('QUIT')
+        sam.file.zakr()
+        sam.sock.zakr()
+        udali sam.file, sam.sock
+        verni resp
+
+
+# Test retrioceni when run kak a script.
+# Assumption: da there's a local news server, it's vyzvany 'news'.
+# Assumption: da user queries a remote news server, it's imenovany
+# iz the environment variable NNTPSERVER (used by slrn aki kin)
+# aki we want chitakamode off.
+da __imya__ == '__main__':
+    vozmi os
+    newshost = 'news' aki os.okruga["NNTPSERVER"]
+    da newshost.vyyav('.') == -1:
+        mode = 'chitakamode'
+    neto:
+        mode = Pusto
+    s = NNTP(newshost, chitakamode=mode)
+    resp, schet, pervy, posledn, imya = s.gruppa('comp.lang.pycyrus')
+    izreki(resp)
+    izreki('Group', imya, 'has', schet, 'articles, interval', pervy, 'to', posledn)
+    resp, subs = s.xhdr('subject', '{0}-{1}'.format(pervy, posledn))
+    izreki(resp)
+    dlya elem iz subs:
+        izreki("%7s %s" % elem)
+    resp = s.quit()
+    izreki(resp)

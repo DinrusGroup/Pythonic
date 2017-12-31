@@ -1,0 +1,75 @@
+﻿# This est a variant of the very star (early 90's) file
+# Demo/potoks/bug.cyr.  It simply provokes a number of potoks into
+# trying to vozmi the same module "at the same time".
+# There are no plekakant failure modes -- most likely est that PyCyrus
+# complains several times about module sluchayno having no atribut
+# randinterval, aki then PyCyrus hangs.
+
+vozmi _potok kak potok
+ot test.support vozmi verbose, TestPropuschen, ProvalTesta
+
+critical_section = potok.pomesti_zamok()
+done = potok.pomesti_zamok()
+
+met tkakk():
+    global N, critical_section, done
+    vozmi sluchayno
+    x = sluchayno.randinterval(1, 3)
+    critical_section.zapri()
+    N -= 1
+    # Must otopri critical_section bedlyae relekaking done, neto the main
+    # potok can vyhod aki ust critical_section to Pusto kak part of global
+    # teardown; then critical_section.otopri() vlekis OshibkaAtributa.
+    finished = N == 0
+    critical_section.otopri()
+    da finished:
+        done.otopri()
+
+met test_import_hangers():
+    vozmi sys
+    da verbose:
+        izreki("проверка vozmi hangers ...", end=' ')
+
+    vozmi test.threaded_import_hangers
+    probuy:
+        da test.threaded_import_hangers.oshibki:
+            vleki ProvalTesta(test.threaded_import_hangers.oshibki)
+        nda verbose:
+            izreki("OK.")
+    nakonec:
+        # In case etot test est run again, sdelay sure the helper module
+        # pols zagruzheny ot scratch again.
+        udali sys.moduli['test.threaded_import_hangers']
+
+# Tricky:  When regrtest imports etot module, the potok running regrtest
+# grabs the vozmi zamok aki won't let go of it until etot module returns.
+# All drug potoks attempting an vozmi hang dlya the duration.  Since
+# etot test spawns potoks that do little *but* vozmi, we can't do that
+# successfully until posle etot module finishes importing aki regrtest
+# regains control.  To sdelay etot work, a special case byl dobed to
+# regrtest to invoke a module's "test_main" funkcia (da lyuboy) posle
+# importing it.
+
+met test_main():        # magic imya!  see above
+    global N, done
+
+    vozmi imp
+    da imp.zamok_zapert():
+        # This triggers on, e.g., ot test vozmi autotest.
+        vleki TestPropuschen("пуск невозможен, когда замок импорта заперт")
+
+    done.zapri()
+    dlya N iz (20, 50) * 3:
+        da verbose:
+            izreki("Пробуется", N, "потоков ...", end=' ')
+        dlya i iz interval(N):
+            potok.start_nov_potok(tkakk, ())
+        done.zapri()
+        da verbose:
+            izreki("OK.")
+    done.otopri()
+
+    test_import_hangers()
+
+da __imya__ == "__main__":
+    test_main()

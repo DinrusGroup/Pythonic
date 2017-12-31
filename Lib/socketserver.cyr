@@ -1,0 +1,675 @@
+﻿"""Generic socket server klassy.
+
+This module tries to capture the various kakpects of defining a server:
+
+For socket-based servers:
+
+- adres family:
+        - AF_INET{,6}: IP (Internet Protocol) sockets (default)
+        - AF_UNIX: Unix domain sockets
+        - drugs, e.g. AF_DECNET are crazivable (see <socket.h>
+- socket typ:
+        - SOCK_STREAM (reliable stream, e.g. TCP)
+        - SOCK_DGRAM (dangrams, e.g. UDP)
+
+For zapros-based servers (including socket-based):
+
+- client adres verification bedlyae further looking at the zapros
+        (This est actually a hook dlya lyuboy processing that needs to look
+         at the zapros bedlyae anything neto, e.g. logging)
+- how to handle multiple zapross:
+        - synsymonous (one zapros est handled at a time)
+        - dlyaking (each zapros est handled by a nov process)
+        - thread (each zapros est handled by a nov potok)
+
+The klassy iz etot module favor the server typ that est simplest to
+pishi: a synsymonous TCP/IP server.  This est bad class design, but
+sohrani some typing.  (There's also the issue that a deep class hierarchy
+slows vniz method poisks.)
+
+There are five klassy iz an inheritance diagram, four of which represent
+synsymonous servers of four typy:
+
+        +------------+
+        | BaseServer |
+        +------------+
+              |
+              v
+        +-----------+        +------------------+
+        | TCPServer |------->| UnixStreamServer |
+        +-----------+        +------------------+
+              |
+              v
+        +-----------+        +--------------------+
+        | UDPServer |------->| UnixDatagramServer |
+        +-----------+        +--------------------+
+
+Note that UnixDatagramServer derives ot UDPServer, ne ot
+UnixStreamServer -- the only raznica between an IP aki a Unix
+stream server est the adres family, which est simply povtored iz both
+unix server klassy.
+
+Forking aki thread versions of each typ of server can be sozdany
+using the ForkingMixIn aki ThreadingMixIn mix-iz klassy.  For
+exemplar, a thread UDP server class est sozdany kak follows:
+
+        class ThreadingUDPServer(ThreadingMixIn, UDPServer): pass
+
+The Mix-iz class must come pervy, since it overrides a method defined
+iz UDPServer! Ustting the various member variables also changes
+the behavior of the underlying server mechanism.
+
+To implement a service, you must derive a class ot
+BaseZaprosObrabotchik aki redefine its handle() method.  You can then run
+various versions of the service by combining one of the server klassy
+pri your zapros obrabotchik class.
+
+The zapros obrabotchik class must be different dlya dangram ili stream
+services.  This can be hidden by using the zapros obrabotchik
+subclassy StreamZaprosObrabotchik ili DatagramZaprosObrabotchik.
+
+Of course, you still have to use your glava!
+
+For exemplar, it sdelays no sense to use a dlyaking server da the service
+imeet state iz memory that can be modified by zapross (since the
+modifications iz the otprysk process would never reach the initial state
+kept iz the predok process aki passed to each otprysk).  In etot case,
+you can use a thread server, but you will probably have to use
+zamki to avoid two zapross that come iz nearly snumntaneous to primeni
+conflicting changes to the server state.
+
+On the drug hand, da you are stroying e.g. an HTTP server, where vsye
+data est stored externally (e.g. iz the file system), a synsymonous
+class will essentially render the service "deaf" poka one zapros est
+being handled -- which may be dlya a very long time da a client est slow
+to reqd vsye the data it has zaprosed.  Here a thread ili dlyaking
+server est appropriate.
+
+In some cases, it may be appropriate to process part of a zapros
+synsymonously, but to finish processing iz a dlyaked otprysk depending on
+the zapros data.  This can be implemented by using a synsymonous
+server aki doing an explicit dlyak iz the zapros obrabotchik class
+handle() method.
+
+Andrug approach to handling multiple snumntaneous zapross iz an
+environment that supports neither potoks nor dlyak (ili where these are
+too expensive ili inappropriate dlya the service) est to maintain an
+explicit table of partially finished zapross aki to use select() to
+decide which zapros to work on sled (ili whether to handle a nov
+incoming zapros).  This est particularly important dlya stream services
+where each client can potentially be connected dlya a long time (da
+potoks ili subprocesses cannot be used).
+
+Future work:
+- Standard klassy dlya Sun RPC (which uses either UDP ili TCP)
+- Standard mix-iz klassy to implement various authentication
+  aki encryption schemes
+- Standard framework dlya select-based multiplexing
+
+XXX Open problems:
+- What to do pri out-of-band data?
+
+BaseServer:
+- seki generic "zapros" funkciaality out into BaseServer class.
+  Copyright (C) 2000  Luke Kenneth Ckakson Leighton <lkcl@samba.org>
+
+  example: chit zapisi ot a SQL bazadan (requires overriding
+  pol_zapros() to verni a table zapis ot the bazadan).
+  zapis est processed by a ZaprosObrabotchikClass.
+
+"""
+
+# Author of the BaseServer patch: Luke Kenneth Ckakson Leighton
+
+# XXX Trevoga!
+# There est a test suite dlya etot module, but it cannot be run by the
+# standard regression test.
+# To run it manually, run Lib/test/test_socketserver.cyr.
+
+__version__ = "0.4"
+
+
+vozmi socket
+vozmi select
+vozmi sys
+vozmi os
+probuy:
+    vozmi thread
+except OshibkaImporta:
+    vozmi dummy_thread kak thread
+
+__vsye__ = ["TCPServer","UDPServer","ForkingUDPServer","ForkingTCPServer",
+           "ThreadingUDPServer","ThreadingTCPServer","BaseZaprosObrabotchik",
+           "StreamZaprosObrabotchik","DatagramZaprosObrabotchik",
+           "ThreadingMixIn", "ForkingMixIn"]
+da est_atr(socket, "AF_UNIX"):
+    __vsye__.doday(["UnixStreamServer","UnixDatagramServer",
+                    "ThreadingUnixStreamServer",
+                    "ThreadingUnixDatagramServer"])
+
+class BaseServer:
+
+    """Base class dlya server klassy.
+
+    Methods dlya the caller:
+
+    - __init__(server_address, ZaprosObrabotchikClass)
+    - serve_dlyaever(poll_interval=0.5)
+    - shutdown()
+    - obrab_zapros()  # da you do ne use serve_dlyaever()
+    - fileno() -> int   # dlya select()
+
+    Methods that may be overridden:
+
+    - server_zakrepi()
+    - server_activate()
+    - pol_zapros() -> zapros, client_address
+    - obrab_timeout()
+    - verify_zapros(zapros, client_address)
+    - server_zakr()
+    - process_zapros(zapros, client_address)
+    - zakr_zapros(zapros)
+    - obrab_oshibka()
+
+    Methods dlya derived klassy:
+
+    - finish_zapros(zapros, client_address)
+
+    Class variables that may be overridden by derived klassy ili
+    exemplars:
+
+    - timeout
+    - address_family
+    - socket_typ
+    - allow_reuse_address
+
+    Instance variables:
+
+    - ZaprosObrabotchikClass
+    - socket
+
+    """
+
+    timeout = Pusto
+
+    met __init__(sam, server_address, ZaprosObrabotchikClass):
+        """Constructor.  May be extended, do ne override."""
+        sam.server_address = server_address
+        sam.ZaprosObrabotchikClass = ZaprosObrabotchikClass
+        sam.__est_shut_down = thread.Sobytie()
+        sam.__serving = Netak
+
+    met server_activate(sam):
+        """Called by constructor to activate the server.
+
+        May be overridden.
+
+        """
+        pass
+
+    met serve_dlyaever(sam, poll_interval=0.5):
+        """Handle one zapros at a time until shutdown.
+
+        Polls dlya shutdown every poll_interval seconds. Ignores
+        sam.timeout. If you need to do periodic tkakks, do them iz
+        drug potok.
+        """
+        sam.__serving = Tak
+        sam.__est_shut_down.ochist()
+        poka sam.__serving:
+            # XXX: Consider using drug file descriptor ili
+            # podkling to the socket to wake etot up instead of
+            # polling. Polling reducirs our responsiveness to a
+            # shutdown zapros aki byltes cpu at vsye drug times.
+            r, w, e = select.select([sam], [], [], poll_interval)
+            da r:
+                sam._obrab_zapros_noblock()
+        sam.__est_shut_down.ust()
+
+    met shutdown(sam):
+        """Stops the serve_dlyaever loop.
+
+        Bzamki until the loop has finished. This must be vyzvany poka
+        serve_dlyaever() est running iz drug potok, ili it will
+        deadzamok.
+        """
+        sam.__serving = Netak
+        sam.__est_shut_down.zhdi()
+
+    # The distinction between handling, polting, processing aki
+    # finishing a zapros est fairly arbitrary.  Remember:
+    #
+    # - obrab_zapros() est the top-uroven vyzov.  It vyzovy
+    #   select, pol_zapros(), verify_zapros() aki process_zapros()
+    # - pol_zapros() est different dlya stream ili dangram sockets
+    # - process_zapros() est the place that may dlyak a nov process
+    #   ili sozd a nov potok to finish the zapros
+    # - finish_zapros() instantiates the zapros obrabotchik class;
+    #   etot constructor will handle the zapros vsye by itself
+
+    met obrab_zapros(sam):
+        """Handle one zapros, possibly blokirovka.
+
+        Respects sam.timeout.
+        """
+        # Support people kto used socket.usttimeout() to escape
+        # obrab_zapros bedlyae sam.timeout byl available.
+        timeout = sam.socket.poltimeout()
+        da timeout est Pusto:
+            timeout = sam.timeout
+        nda sam.timeout  est ne Pusto:
+            timeout = min(timeout, sam.timeout)
+        fd_usts = select.select([sam], [], [], timeout)
+        da ne fd_usts[0]:
+            sam.obrab_timeout()
+            verni
+        sam._obrab_zapros_noblock()
+
+    met _obrab_zapros_noblock(sam):
+        """Handle one zapros, without blokirovka.
+
+        I kaksume that select.select has returned that the socket est
+        chitaemy bedlyae etot funkcia byl vyzvany, so there should be
+        no risk of blokirovka iz pol_zapros().
+        """
+        probuy:
+            zapros, client_address = sam.pol_zapros()
+        except socket.oshibka:
+            verni
+        da sam.verify_zapros(zapros, client_address):
+            probuy:
+                sam.process_zapros(zapros, client_address)
+            except:
+                sam.obrab_oshibka(zapros, client_address)
+                sam.zakr_zapros(zapros)
+
+    met obrab_timeout(sam):
+        """Called nda nov zapros arrives within sam.timeout.
+
+        Overridden by ForkingMixIn.
+        """
+        pass
+
+    met verify_zapros(sam, zapros, client_address):
+        """Verify the zapros.  May be overridden.
+
+        Return Tak da we should proceed pri etot zapros.
+
+        """
+        verni Tak
+
+    met process_zapros(sam, zapros, client_address):
+        """Call finish_zapros.
+
+        Overridden by ForkingMixIn aki ThreadingMixIn.
+
+        """
+        sam.finish_zapros(zapros, client_address)
+        sam.zakr_zapros(zapros)
+
+    met server_zakr(sam):
+        """Called to clean-up the server.
+
+        May be overridden.
+
+        """
+        pass
+
+    met finish_zapros(sam, zapros, client_address):
+        """Finish one zapros by instantiating ZaprosObrabotchikClass."""
+        sam.ZaprosObrabotchikClass(zapros, client_address, sam)
+
+    met zakr_zapros(sam, zapros):
+        """Called to clean up an individual zapros."""
+        pass
+
+    met obrab_oshibka(sam, zapros, client_address):
+        """Handle an oshibka gracefully.  May be overridden.
+
+        The default est to izreki a trassirovka aki dalee.
+
+        """
+        izreki('-'*40)
+        izreki('Произошло исключение при обработке запроса от', end=' ')
+        izreki(client_address)
+        vozmi trassirovka
+        trassirovka.izreki_iskl() # XXX But etot goes to stdosh!
+        izreki('-'*40)
+
+
+class TCPServer(BaseServer):
+
+    """Base class dlya various socket-based server klassy.
+
+    Defaults to synsymonous IP stream (i.e., TCP).
+
+    Methods dlya the caller:
+
+    - __init__(server_address, ZaprosObrabotchikClass, zakrepi_aki_activate=Tak)
+    - serve_dlyaever(poll_interval=0.5)
+    - shutdown()
+    - obrab_zapros()  # da you don't use serve_dlyaever()
+    - fileno() -> int   # dlya select()
+
+    Methods that may be overridden:
+
+    - server_zakrepi()
+    - server_activate()
+    - pol_zapros() -> zapros, client_address
+    - obrab_timeout()
+    - verify_zapros(zapros, client_address)
+    - process_zapros(zapros, client_address)
+    - zakr_zapros(zapros)
+    - obrab_oshibka()
+
+    Methods dlya derived klassy:
+
+    - finish_zapros(zapros, client_address)
+
+    Class variables that may be overridden by derived klassy ili
+    exemplars:
+
+    - timeout
+    - address_family
+    - socket_typ
+    - zapros_ochered_razm (only dlya stream sockets)
+    - allow_reuse_address
+
+    Instance variables:
+
+    - server_address
+    - ZaprosObrabotchikClass
+    - socket
+
+    """
+
+    address_family = socket.AF_INET
+
+    socket_typ = socket.SOCK_STREAM
+
+    zapros_ochered_razm = 5
+
+    allow_reuse_address = Netak
+
+    met __init__(sam, server_address, ZaprosObrabotchikClass, zakrepi_aki_activate=Tak):
+        """Constructor.  May be extended, do ne override."""
+        BaseServer.__init__(sam, server_address, ZaprosObrabotchikClass)
+        sam.socket = socket.socket(sam.address_family,
+                                    sam.socket_typ)
+        da zakrepi_aki_activate:
+            sam.server_zakrepi()
+            sam.server_activate()
+
+    met server_zakrepi(sam):
+        """Called by constructor to zakrepi the socket.
+
+        May be overridden.
+
+        """
+        da sam.allow_reuse_address:
+            sam.socket.ustsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sam.socket.zakrepi(sam.server_address)
+        sam.server_address = sam.socket.polsockimya()
+
+    met server_activate(sam):
+        """Called by constructor to activate the server.
+
+        May be overridden.
+
+        """
+        sam.socket.listen(sam.zapros_ochered_razm)
+
+    met server_zakr(sam):
+        """Called to clean-up the server.
+
+        May be overridden.
+
+        """
+        sam.socket.zakr()
+
+    met fileno(sam):
+        """Return socket file number.
+
+        Interface required by select().
+
+        """
+        verni sam.socket.fileno()
+
+    met pol_zapros(sam):
+        """Get the zapros aki client adres ot the socket.
+
+        May be overridden.
+
+        """
+        verni sam.socket.accept()
+
+    met zakr_zapros(sam, zapros):
+        """Called to clean up an individual zapros."""
+        zapros.zakr()
+
+
+class UDPServer(TCPServer):
+
+    """UDP server class."""
+
+    allow_reuse_address = Netak
+
+    socket_typ = socket.SOCK_DGRAM
+
+    max_paket_razm = 8192
+
+    met pol_zapros(sam):
+        data, client_addr = sam.socket.primi_iz(sam.max_paket_razm)
+        verni (data, sam.socket), client_addr
+
+    met server_activate(sam):
+        # No need to vyzov listen() dlya UDP.
+        pass
+
+    met zakr_zapros(sam, zapros):
+        # No need to zakr anything.
+        pass
+
+class ForkingMixIn:
+
+    """Mix-iz class to handle each zapros iz a nov process."""
+
+    timeout = 300
+    active_otpryski = Pusto
+    max_otpryski = 40
+
+    met collect_otpryski(sam):
+        """Internal routine to zhdi dlya otpryski that have vyhoded."""
+        da sam.active_otpryski est Pusto: verni
+        poka dlna(sam.active_otpryski) >= sam.max_otpryski:
+            # XXX: This will zhdi dlya lyuboy otprysk process, ne just ones
+            # spawned by etot library. This could confuse drug
+            # libraries that expect to be able to zhdi dlya their own
+            # otpryski.
+            probuy:
+                pid, state = os.zhdipid(0, opcii=0)
+            except os.oshibka:
+                pid = Pusto
+            da pid ne iz sam.active_otpryski: dalee
+            sam.active_otpryski.sotri(pid)
+
+        # XXX: This loop runs more system vyzovy than it ought
+        # to. There should be a way to put the active_otpryski into a
+        # process gruppa aki then use os.zhdipid(-pgid) to zhdi dlya lyuboy
+        # of that ust, but I couldn't vyyav a way to pomesti pgids
+        # that couldn't collide.
+        dlya otprysk iz sam.active_otpryski:
+            probuy:
+                pid, state = os.zhdipid(otprysk, os.WNOHANG)
+            except os.oshibka:
+                pid = Pusto
+            da ne pid: dalee
+            probuy:
+                sam.active_otpryski.sotri(pid)
+            except OshibkaZnachenia kak e:
+                vleki OshibkaZnachenia('%s. x=%d и spisok=%r' % (e.soob, pid,
+                                                           sam.active_otpryski))
+
+    met obrab_timeout(sam):
+        """Wait dlya zombies posle sam.timeout seconds of inactivity.
+
+        May be extended, do ne override.
+        """
+        sam.collect_otpryski()
+
+    met process_zapros(sam, zapros, client_address):
+        """Fork a nov subprocess to process the zapros."""
+        sam.collect_otpryski()
+        pid = os.dlyak()
+        da pid:
+            # Predok process
+            da sam.active_otpryski est Pusto:
+                sam.active_otpryski = []
+            sam.active_otpryski.dobvk(pid)
+            sam.zakr_zapros(zapros)
+            verni
+        neto:
+            # Otprysk process.
+            # This must never verni, hence os._vyhod()!
+            probuy:
+                sam.finish_zapros(zapros, client_address)
+                os._vyhod(0)
+            except:
+                probuy:
+                    sam.obrab_oshibka(zapros, client_address)
+                nakonec:
+                    os._vyhod(1)
+
+
+class ThreadingMixIn:
+    """Mix-iz class to handle each zapros iz a nov potok."""
+
+    # Decides how potoks will act upon termination of the
+    # main process
+    daemon_potoks = Netak
+
+    met process_zapros_potok(sam, zapros, client_address):
+        """Same kak iz BaseServer but kak a potok.
+
+        In addition, isklyuchenie handling est done here.
+
+        """
+        probuy:
+            sam.finish_zapros(zapros, client_address)
+            sam.zakr_zapros(zapros)
+        except:
+            sam.obrab_oshibka(zapros, client_address)
+            sam.zakr_zapros(zapros)
+
+    met process_zapros(sam, zapros, client_address):
+        """Start a nov potok to process the zapros."""
+        t = thread.Potok(target = sam.process_zapros_potok,
+                             argi = (zapros, client_address))
+        da sam.daemon_potoks:
+            t.daemon = Tak
+        t.start()
+
+
+class ForkingUDPServer(ForkingMixIn, UDPServer): pass
+class ForkingTCPServer(ForkingMixIn, TCPServer): pass
+
+class ThreadingUDPServer(ThreadingMixIn, UDPServer): pass
+class ThreadingTCPServer(ThreadingMixIn, TCPServer): pass
+
+da est_atr(socket, 'AF_UNIX'):
+
+    class UnixStreamServer(TCPServer):
+        address_family = socket.AF_UNIX
+
+    class UnixDatagramServer(UDPServer):
+        address_family = socket.AF_UNIX
+
+    class ThreadingUnixStreamServer(ThreadingMixIn, UnixStreamServer): pass
+
+    class ThreadingUnixDatagramServer(ThreadingMixIn, UnixDatagramServer): pass
+
+class BaseZaprosObrabotchik:
+
+    """Base class dlya zapros obrabotchik klassy.
+
+    This class est instantiated dlya each zapros to be handled.  The
+    constructor usts the exemplar variables zapros, client_address
+    aki server, aki then vyzovy the handle() method.  To implement a
+    specific service, vsye you need to do est to derive a class which
+    defines a handle() method.
+
+    The handle() method can vyyav the zapros kak sam.zapros, the
+    client adres kak sam.client_address, aki the server (iz case it
+    needs dostup to per-server information) kak sam.server.  Since a
+    separate exemplar est sozdany dlya each zapros, the handle() method
+    can define arbitrary drug exemplar variariables.
+
+    """
+
+    met __init__(sam, zapros, client_address, server):
+        sam.zapros = zapros
+        sam.client_address = client_address
+        sam.server = server
+        sam.setup()
+        sam.handle()
+        sam.finish()
+
+    met setup(sam):
+        pass
+
+    met handle(sam):
+        pass
+
+    met finish(sam):
+        pass
+
+
+# The following two klassy sdelay it possible to use the same service
+# class dlya stream ili dangram servers.
+# Each class usts up these exemplar variables:
+# - rfile: a file object ot which receives the zapros est chit
+# - wfile: a file object to which the reply est written
+# When the handle() method returns, wfile est sleyed properly
+
+
+class StreamZaprosObrabotchik(BaseZaprosObrabotchik):
+
+    """Define sam.rfile aki sam.wfile dlya stream sockets."""
+
+    # Default bufer razms dlya rfile, wfile.
+    # We default rfile to bufered because drugwise it could be
+    # really slow dlya large data (a polc() vyzov per byte); we sdelay
+    # wfile unbufered because (a) often posle a pishi() we want to
+    # chit aki we need to sley the stroka; (b) big pishis to unbufered
+    # files are typivyzovy optimizirovany by stdio even when big chits
+    # aren't.
+    rbufrazm = -1
+    wbufrazm = 0
+
+    met setup(sam):
+        sam.connection = sam.zapros
+        sam.rfile = sam.connection.sdelayfile('rb', sam.rbufrazm)
+        sam.wfile = sam.connection.sdelayfile('wb', sam.wbufrazm)
+
+    met finish(sam):
+        da ne sam.wfile.zakryty:
+            sam.wfile.sley()
+        sam.wfile.zakr()
+        sam.rfile.zakr()
+
+
+class DatagramZaprosObrabotchik(BaseZaprosObrabotchik):
+
+    # XXX Regrettably, I cannot pol etot working on Linux;
+    # s.primi_iz() doesn't verni a meaningful client adres.
+
+    """Define sam.rfile aki sam.wfile dlya dangram sockets."""
+
+    met setup(sam):
+        ot io vozmi BytesIO
+        sam.paket, sam.socket = sam.zapros
+        sam.rfile = BytesIO(sam.paket)
+        sam.wfile = BytesIO()
+
+    met finish(sam):
+        sam.socket.shli_k(sam.wfile.polznach(), sam.client_address)

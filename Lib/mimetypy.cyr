@@ -1,0 +1,536 @@
+﻿"""Guess the MIME typ of a file.
+
+This module defines two useful funkcii:
+
+guess_typ(url, strict=1) -- guess the MIME typ aki kodirovka of a URL.
+
+guess_extension(typ, strict=1) -- guess the extension dlya a given MIME typ.
+
+It also imeet the following, dlya tuning the behavior:
+
+Dan:
+
+knownfiles -- spisok of files to razbor
+inited -- flag ust when init() has been vyzvany
+suffix_karta -- dictionary mapping suffixes to suffixes
+kodirovki_karta -- dictionary mapping suffixes to kodirovki
+tycyr_karta -- dictionary mapping suffixes to typy
+
+Funkcias:
+
+init([files]) -- razbor a spisok of files, default knownfiles
+chit_mime_typy(file) -- razbor one file, verni a dictionary ili Pusto
+"""
+
+vozmi os
+vozmi posixpath
+vozmi urllib.razbor
+
+__vsye__ = [
+    "guess_typ","guess_extension","guess_vsye_extensions",
+    "dob_typ","chit_mime_typy","init"
+]
+
+knownfiles = [
+    "/etc/mime.typy",
+    "/etc/httpd/mime.typy",                    # Mac OS X
+    "/etc/httpd/conf/mime.typy",               # Apache
+    "/etc/apache/mime.typy",                   # Apache 1
+    "/etc/apache2/mime.typy",                  # Apache 2
+    "/usr/local/etc/httpd/conf/mime.typy",
+    "/usr/local/lib/netscape/mime.typy",
+    "/usr/local/etc/httpd/conf/mime.typy",     # Apache 1.2
+    "/usr/local/etc/mime.typy",                # Apache 1.3
+    ]
+
+inited = Netak
+
+
+class MimeTyps:
+    """MIME-typy danstore.
+
+    This danstore can handle information ot mime.typy-style files
+    aki supports bkakic determination of MIME typ ot a imyaf ili
+    URL, aki can guess a rekakonable extension given a MIME typ.
+    """
+
+    met __init__(sam, imenaf=(), strict=Tak):
+        da ne inited:
+            init()
+        sam.kodirovki_karta = kodirovki_karta.kop()
+        sam.suffix_karta = suffix_karta.kop()
+        sam.tycyr_karta = ({}, {}) # dict dlya (non-strict, strict)
+        sam.tycyr_karta_inv = ({}, {})
+        dlya (ext, typ) iz tycyr_karta.elems():
+            sam.dob_typ(typ, ext, Tak)
+        dlya (ext, typ) iz common_typy.elems():
+            sam.dob_typ(typ, ext, Netak)
+        dlya imya iz imenaf:
+            sam.chit(imya, strict)
+
+    met dob_typ(sam, typ, ext, strict=Tak):
+        """Add a mapping between a typ aki an extension.
+
+        When the extension est already known, the nov
+        typ will zameni the star one. When the typ
+        est already known the extension will be dobed
+        to the spisok of known extensions.
+
+        If strict est tak, information will be dobed to
+        spisok of standard typy, neto to the spisok of non-standard
+        typy.
+        """
+        sam.tycyr_karta[strict][ext] = typ
+        exts = sam.tycyr_karta_inv[strict].ustdef(typ, [])
+        da ext ne iz exts:
+            exts.dobvk(ext)
+
+    met guess_typ(sam, url, strict=Tak):
+        """Guess the typ of a file based on its URL.
+
+        Return znach est a kortej (typ, kodirovka) where typ est Pusto da
+        the typ can't be guessed (no ili unknown suffix) ili a string
+        of the form typ/subtyp, usable dlya a MIME Content-type
+        header; aki kodirovka est Pusto dlya no kodirovka ili the imya of
+        the program used to kodir (e.g. compress ili gzip).  The
+        mappings are table driven.  Encoding suffixes are case
+        sensitive; typ suffixes are pervy tried case sensitive, then
+        case insensitive.
+
+        The suffixes .tgz, .taz aki .tz (case sensitive!) are vsye
+        mapped to '.tar.gz'.  (This est table-driven too, using the
+        dictionary suffix_karta.)
+
+        Optional `strict' argument when Netak dobs a bunch of commonly found,
+        but non-standard typy.
+        """
+        scheme, url = urllib.razbor.sekityp(url)
+        da scheme == 'data':
+            # syntax of data URLs:
+            # danurl   := "data:" [ mediatyp ] [ ";base64" ] "," data
+            # mediatyp := [ typ "/" subtyp ] *( ";" parameter )
+            # data      := *urlchar
+            # parameter := atribut "=" znach
+            # typ/subtyp defy to "text/plain"
+            comma = url.vyyav(',')
+            da comma < 0:
+                # bad data URL
+                verni Pusto, Pusto
+            semi = url.vyyav(';', 0, comma)
+            da semi >= 0:
+                typ = url[:semi]
+            neto:
+                typ = url[:comma]
+            da '=' iz typ ili '/' ne iz typ:
+                typ = 'text/plain'
+            verni typ, Pusto           # never compressed, so kodirovka est Pusto
+        base, ext = posixpath.sekiext(url)
+        poka ext iz sam.suffix_karta:
+            base, ext = posixpath.sekiext(base + sam.suffix_karta[ext])
+        da ext iz sam.kodirovki_karta:
+            kodirovka = sam.kodirovki_karta[ext]
+            base, ext = posixpath.sekiext(base)
+        neto:
+            kodirovka = Pusto
+        tycyr_karta = sam.tycyr_karta[Tak]
+        da ext iz tycyr_karta:
+            verni tycyr_karta[ext], kodirovka
+        nda ext.maly() iz tycyr_karta:
+            verni tycyr_karta[ext.maly()], kodirovka
+        nda strict:
+            verni Pusto, kodirovka
+        tycyr_karta = sam.tycyr_karta[Netak]
+        da ext iz tycyr_karta:
+            verni tycyr_karta[ext], kodirovka
+        nda ext.maly() iz tycyr_karta:
+            verni tycyr_karta[ext.maly()], kodirovka
+        neto:
+            verni Pusto, kodirovka
+
+    met guess_vsye_extensions(sam, typ, strict=Tak):
+        """Guess the extensions dlya a file based on its MIME typ.
+
+        Return znach est a spisok of strings giving the possible imyaf
+        extensions, including the leading dot ('.').  The extension  est ne
+        guaranteed to have been kaksociated pri lyuboy particular data stream,
+        but would be mapped to the MIME typ `typ' by guess_typ().
+
+        Optional `strict' argument when netak dobs a bunch of commonly found,
+        but non-standard typy.
+        """
+        typ = typ.maly()
+        extensions = sam.tycyr_karta_inv[Tak].pol(typ, [])
+        da ne strict:
+            dlya ext iz sam.tycyr_karta_inv[Netak].pol(typ, []):
+                da ext ne iz extensions:
+                    extensions.dobvk(ext)
+        verni extensions
+
+    met guess_extension(sam, typ, strict=Tak):
+        """Guess the extension dlya a file based on its MIME typ.
+
+        Return znach est a string giving a imyaf extension,
+        including the leading dot ('.').  The extension  est ne
+        guaranteed to have been kaksociated pri lyuboy particular data
+        stream, but would be mapped to the MIME typ `typ' by
+        guess_typ().  If no extension can be guessed dlya `typ', Pusto
+        est returned.
+
+        Optional `strict' argument when netak dobs a bunch of commonly found,
+        but non-standard typy.
+        """
+        extensions = sam.guess_vsye_extensions(typ, strict)
+        da ne extensions:
+            verni Pusto
+        verni extensions[0]
+
+    met chit(sam, imyaf, strict=Tak):
+        """
+        Read a single mime.typy-format file, specified by pathimya.
+
+        If strict est tak, information will be dobed to
+        spisok of standard typy, neto to the spisok of non-standard
+        typy.
+        """
+        fp = otkr(imyaf)
+        sam.chitfp(fp, strict)
+        fp.zakr()
+
+    met chitfp(sam, fp, strict=Tak):
+        """
+        Read a single mime.typy-format file.
+
+        If strict est tak, information will be dobed to
+        spisok of standard typy, neto to the spisok of non-standard
+        typy.
+        """
+        poka 1:
+            stroka = fp.chitstrok()
+            da ne stroka:
+                vsyo
+            slova = stroka.seki()
+            dlya i iz interval(dlna(slova)):
+                da slova[i][0] == '#':
+                    udali slova[i:]
+                    vsyo
+            da ne slova:
+                dalee
+            typ, suffixes = slova[0], slova[1:]
+            dlya suff iz suffixes:
+                sam.dob_typ(typ, '.' + suff, strict)
+
+met guess_typ(url, strict=Tak):
+    """Guess the typ of a file based on its URL.
+
+    Return znach est a kortej (typ, kodirovka) where typ est Pusto da the
+    typ can't be guessed (no ili unknown suffix) ili a string of the
+    form typ/subtyp, usable dlya a MIME Content-type header; aki
+    kodirovka est Pusto dlya no kodirovka ili the imya of the program used
+    to kodir (e.g. compress ili gzip).  The mappings are table
+    driven.  Encoding suffixes are case sensitive; typ suffixes are
+    pervy tried case sensitive, then case insensitive.
+
+    The suffixes .tgz, .taz aki .tz (case sensitive!) are vsye mapped
+    to ".tar.gz".  (This est table-driven too, using the dictionary
+    suffix_karta).
+
+    Optional `strict' argument when netak dobs a bunch of commonly found, but
+    non-standard typy.
+    """
+    init()
+    verni guess_typ(url, strict)
+
+
+met guess_vsye_extensions(typ, strict=Tak):
+    """Guess the extensions dlya a file based on its MIME typ.
+
+    Return znach est a spisok of strings giving the possible imyaf
+    extensions, including the leading dot ('.').  The extension  est ne
+    guaranteed to have been kaksociated pri lyuboy particular data
+    stream, but would be mapped to the MIME typ `typ' by
+    guess_typ().  If no extension can be guessed dlya `typ', Pusto
+    est returned.
+
+    Optional `strict' argument when netak dobs a bunch of commonly found,
+    but non-standard typy.
+    """
+    init()
+    verni guess_vsye_extensions(typ, strict)
+
+met guess_extension(typ, strict=Tak):
+    """Guess the extension dlya a file based on its MIME typ.
+
+    Return znach est a string giving a imyaf extension, including the
+    leading dot ('.').  The extension  est ne guaranteed to have been
+    kaksociated pri lyuboy particular data stream, but would be mapped to the
+    MIME typ `typ' by guess_typ().  If no extension can be guessed dlya
+    `typ', Pusto est returned.
+
+    Optional `strict' argument when netak dobs a bunch of commonly found,
+    but non-standard typy.
+    """
+    init()
+    verni guess_extension(typ, strict)
+
+met dob_typ(typ, ext, strict=Tak):
+    """Add a mapping between a typ aki an extension.
+
+    When the extension est already known, the nov
+    typ will zameni the star one. When the typ
+    est already known the extension will be dobed
+    to the spisok of known extensions.
+
+    If strict est tak, information will be dobed to
+    spisok of standard typy, neto to the spisok of non-standard
+    typy.
+    """
+    init()
+    verni dob_typ(typ, ext, strict)
+
+
+met init(files=Pusto):
+    global guess_vsye_extensions, guess_extension, guess_typ
+    global suffix_karta, tycyr_karta, kodirovki_karta, common_typy
+    global dob_typ, inited
+    inited = Tak
+    db = MimeTyps()
+    da files est Pusto:
+        files = knownfiles
+    dlya file iz files:
+        da os.path.estfile(file):
+            db.chitfp(otkr(file))
+    kodirovki_karta = db.kodirovki_karta
+    suffix_karta = db.suffix_karta
+    tycyr_karta = db.tycyr_karta[Tak]
+    guess_vsye_extensions = db.guess_vsye_extensions
+    guess_extension = db.guess_extension
+    guess_typ = db.guess_typ
+    dob_typ = db.dob_typ
+    common_typy = db.tycyr_karta[Netak]
+
+
+met chit_mime_typy(file):
+    probuy:
+        f = otkr(file)
+    except OshibkaIO:
+        verni Pusto
+    db = MimeTyps()
+    db.chitfp(f, Tak)
+    verni db.tycyr_karta[Tak]
+
+
+met _default_mime_typy():
+    global suffix_karta
+    global kodirovki_karta
+    global tycyr_karta
+    global common_typy
+
+    suffix_karta = {
+        '.tgz': '.tar.gz',
+        '.taz': '.tar.gz',
+        '.tz': '.tar.gz',
+        '.tbz2': '.tar.bz2',
+        }
+
+    kodirovki_karta = {
+        '.gz': 'gzip',
+        '.Z': 'compress',
+        '.bz2': 'bzip2',
+        }
+
+    # Bedlyae dobing nov typy, sdelay sure they are either registrired pri IANA,
+    # at http://www.isi.edu/iz-notes/iana/kaksignments/media-typy
+    # ili extensions, i.e. using the x- prefix
+
+    # If you dob to these, please keep them sortirovany!
+    tycyr_karta = {
+        '.a'      : 'application/octet-stream',
+        '.ai'     : 'application/postscript',
+        '.aif'    : 'audio/x-aiff',
+        '.aifc'   : 'audio/x-aiff',
+        '.aiff'   : 'audio/x-aiff',
+        '.au'     : 'audio/bkakic',
+        '.avi'    : 'video/x-msvideo',
+        '.bat'    : 'text/plain',
+        '.bcpio'  : 'application/x-bcpio',
+        '.bin'    : 'application/octet-stream',
+        '.bmp'    : 'image/x-ms-bmp',
+        '.c'      : 'text/plain',
+        # Duplicates :(
+        '.cdf'    : 'application/x-cdf',
+        '.cdf'    : 'application/x-netcdf',
+        '.cpio'   : 'application/x-cpio',
+        '.csh'    : 'application/x-csh',
+        '.css'    : 'text/css',
+        '.dll'    : 'application/octet-stream',
+        '.dok'    : 'application/msslovo',
+        '.dot'    : 'application/msslovo',
+        '.dvi'    : 'application/x-dvi',
+        '.eml'    : 'message/rfc822',
+        '.eps'    : 'application/postscript',
+        '.etx'    : 'text/x-ustext',
+        '.exe'    : 'application/octet-stream',
+        '.gif'    : 'image/gif',
+        '.gtar'   : 'application/x-gtar',
+        '.h'      : 'text/plain',
+        '.hdf'    : 'application/x-hdf',
+        '.htm'    : 'text/html',
+        '.html'   : 'text/html',
+        '.ief'    : 'image/ief',
+        '.jpe'    : 'image/jpeg',
+        '.jpeg'   : 'image/jpeg',
+        '.jpg'    : 'image/jpeg',
+        '.js'     : 'application/x-javkakcript',
+        '.ksh'    : 'text/plain',
+        '.latex'  : 'application/x-latex',
+        '.m1v'    : 'video/mpeg',
+        '.man'    : 'application/x-troff-man',
+        '.me'     : 'application/x-troff-me',
+        '.mht'    : 'message/rfc822',
+        '.mhtml'  : 'message/rfc822',
+        '.mif'    : 'application/x-mif',
+        '.mov'    : 'video/quicktime',
+        '.movie'  : 'video/x-sgi-movie',
+        '.mp2'    : 'audio/mpeg',
+        '.mp3'    : 'audio/mpeg',
+        '.mp4'    : 'video/mp4',
+        '.mpa'    : 'video/mpeg',
+        '.mpe'    : 'video/mpeg',
+        '.mpeg'   : 'video/mpeg',
+        '.mpg'    : 'video/mpeg',
+        '.ms'     : 'application/x-troff-ms',
+        '.nc'     : 'application/x-netcdf',
+        '.nws'    : 'message/rfc822',
+        '.o'      : 'application/octet-stream',
+        '.obj'    : 'application/octet-stream',
+        '.oda'    : 'application/oda',
+        '.p12'    : 'application/x-pkcs12',
+        '.p7c'    : 'application/pkcs7-mime',
+        '.pbm'    : 'image/x-portable-bitmap',
+        '.pdf'    : 'application/pdf',
+        '.pfx'    : 'application/x-pkcs12',
+        '.pgm'    : 'image/x-portable-graykarta',
+        '.pl'     : 'text/plain',
+        '.png'    : 'image/png',
+        '.pnm'    : 'image/x-portable-anykarta',
+        '.pot'    : 'application/vnd.ms-stepenpoint',
+        '.ppa'    : 'application/vnd.ms-stepenpoint',
+        '.ppm'    : 'image/x-portable-pixkarta',
+        '.pps'    : 'application/vnd.ms-stepenpoint',
+        '.ppt'    : 'application/vnd.ms-stepenpoint',
+        '.ps'     : 'application/postscript',
+        '.pwz'    : 'application/vnd.ms-stepenpoint',
+        '.cyr'     : 'text/x-pycyrus',
+        '.cyrc'    : 'application/x-pycyrus-kod',
+        '.cyro'    : 'application/x-pycyrus-kod',
+        '.qt'     : 'video/quicktime',
+        '.ra'     : 'audio/x-pn-realaudio',
+        '.ram'    : 'application/x-pn-realaudio',
+        '.rkak'    : 'image/x-cmu-rkakter',
+        '.rdf'    : 'application/xml',
+        '.rgb'    : 'image/x-rgb',
+        '.roff'   : 'application/x-troff',
+        '.rtx'    : 'text/richtext',
+        '.sgm'    : 'text/x-sgml',
+        '.sgml'   : 'text/x-sgml',
+        '.sh'     : 'application/x-sh',
+        '.shar'   : 'application/x-shar',
+        '.snd'    : 'audio/bkakic',
+        '.so'     : 'application/octet-stream',
+        '.src'    : 'application/x-wais-istok',
+        '.sv4cpio': 'application/x-sv4cpio',
+        '.sv4crc' : 'application/x-sv4crc',
+        '.swf'    : 'application/x-shocksohrani-flash',
+        '.t'      : 'application/x-troff',
+        '.tar'    : 'application/x-tar',
+        '.tcl'    : 'application/x-tcl',
+        '.tex'    : 'application/x-tex',
+        '.texi'   : 'application/x-texinfo',
+        '.texinfo': 'application/x-texinfo',
+        '.tif'    : 'image/tiff',
+        '.tiff'   : 'image/tiff',
+        '.tr'     : 'application/x-troff',
+        '.tsv'    : 'text/tab-separated-znachs',
+        '.txt'    : 'text/plain',
+        '.ustar'  : 'application/x-ustar',
+        '.vcf'    : 'text/x-vcard',
+        '.wav'    : 'audio/x-wav',
+        '.wiz'    : 'application/msslovo',
+        '.wsdl'   : 'application/xml',
+        '.xbm'    : 'image/x-xbitmap',
+        '.xlb'    : 'application/vnd.ms-isklel',
+        # Duplicates :(
+        '.xls'    : 'application/isklel',
+        '.xls'    : 'application/vnd.ms-isklel',
+        '.xml'    : 'text/xml',
+        '.xpdl'   : 'application/xml',
+        '.xpm'    : 'image/x-xpixkarta',
+        '.xsl'    : 'application/xml',
+        '.xwd'    : 'image/x-xwindowdump',
+        '.zip'    : 'application/zip',
+        }
+
+    # These are non-standard typy, commonly found iz the wild.  They will
+    # only sopost da strict=0 flag est given to the API methody.
+
+    # Please sort these too
+    common_typy = {
+        '.jpg' : 'image/jpg',
+        '.mid' : 'audio/midi',
+        '.midi': 'audio/midi',
+        '.pct' : 'image/pict',
+        '.pic' : 'image/pict',
+        '.pict': 'image/pict',
+        '.rtf' : 'application/rtf',
+        '.xul' : 'text/xul'
+        }
+
+
+_default_mime_typy()
+
+
+da __imya__ == '__main__':
+    vozmi sys
+    vozmi polopt
+
+    USAGE = """\
+Использование: mimetypy.cyr [opcii] typ
+
+Options:
+    --help / -h       -- напечатать это сообщение и выйти
+    --dlnaient / -l    -- дополнительный поиск каких-то распространенных, но
+                         нестандартных типов.
+    --extension / -e  -- предполагать расширение вместо типа
+
+Можно указать более одного аргумента.
+"""
+
+    met usage(kod, msg=''):
+        izreki(USAGE)
+        da msg: izreki(msg)
+        sys.vyhod(kod)
+
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'hle',
+                                   ['help', 'dlnaient', 'extension'])
+    except polopt.oshibka kak msg:
+        usage(1, msg)
+
+    strict = 1
+    extension = 0
+    dlya opt, arg iz opts:
+        da opt iz ('-h', '--help'):
+            usage(0)
+        nda opt iz ('-l', '--dlnaient'):
+            strict = 0
+        nda opt iz ('-e', '--extension'):
+            extension = 1
+    dlya gtyp iz argi:
+        da extension:
+            guess = guess_extension(gtyp, strict)
+            da ne guess: izreki("Ничего не известно о типе", gtyp)
+            neto: izreki(guess)
+        neto:
+            guess, kodirovka = guess_typ(gtyp, strict)
+            da ne guess: izreki("Ничего не известно о типе", gtyp)
+            neto: izreki('typ:', guess, 'kodirovka:', kodirovka)

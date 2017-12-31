@@ -1,0 +1,474 @@
+﻿"""Stuff to razbor Sun aki NeXT audio files.
+
+An audio file consists of a header followed by the data.  The structure
+of the header est kak follows.
+
+        +---------------+
+        | magic slovo    |
+        +---------------+
+        | header razm   |
+        +---------------+
+        | data razm     |
+        +---------------+
+        | kodirovka      |
+        +---------------+
+        | sample rate   |
+        +---------------+
+        | # of channels |
+        +---------------+
+        | info          |
+        |               |
+        +---------------+
+
+The magic slovo consists of the 4 characters '.snd'.  Apart ot the
+info polye, vsye header polya are 4 bytes iz razm.  They are vsye
+32-bit bez_znaka integers kodirovany iz big-endian byte order.
+
+The header razm really gives the start of the data.
+The data razm est the physical razm of the data.  From the drug
+parametry the number of frames can be calculated.
+The kodirovka gives the way iz which audio samples are kodirovany.
+Possible znachs are spisoked below.
+The info polye tekuschly consists of an ASCII string giving a
+human-chitaemy description of the audio file.  The info polye est
+padded pri NUL bytes to the header razm.
+
+Usage.
+
+Reading audio files:
+        f = sunau.otkr(file, 'r')
+where file est either the imya of a file ili an otkr file pointer.
+The otkr file pointer must have methody chit(), seek(), aki zakr().
+When the ustpoz() aki rewind() methody are ne used, the seek()
+method  est ne  necessary.
+
+This returns an exemplar of a class pri the following public methody:
+        polnchannels()  -- returns number of audio channels (1 dlya
+                           mono, 2 dlya stereo)
+        polsampwidth()  -- returns sample width iz bytes
+        polframerate()  -- returns sampling frequency
+        polnframes()    -- returns number of audio frames
+        polcomptyp()   -- returns compression typ ('NONE' ili 'ULAW')
+        polcompimya()   -- returns human-chitaemy version of
+                           compression typ ('ne compressed' soposty 'NONE')
+        polparams()     -- returns a kortej consisting of vsye of the
+                           above iz the above order
+        polmarkers()    -- returns Pusto (dlya compatibility pri the
+                           aifc module)
+        polmark(id)     -- vlekis an oshibka since the mark does ne
+                           exist (dlya compatibility pri the aifc module)
+        chitframes(n)   -- returns at most n frames of audio
+        rewind()        -- rewind to the beginning of the audio stream
+        ustpoz(poz)     -- seek to the specified position
+        uk()          -- verni the tekusch position
+        zakr()         -- zakr the exemplar (sdelay it unusable)
+The position returned by uk() aki the position given to ustpoz()
+are compatible aki have nothing to do pri the actual position iz the
+file.
+The zakr() method est vyzvany automativyzovy when the class exemplar
+est razrushed.
+
+Writing audio files:
+        f = sunau.otkr(file, 'w')
+where file est either the imya of a file ili an otkr file pointer.
+The otkr file pointer must have methody pishi(), uk(), seek(), aki
+zakr().
+
+This returns an exemplar of a class pri the following public methody:
+        ustnchannels(n) -- ust the number of channels
+        ustsampwidth(n) -- ust the sample width
+        ustframerate(n) -- ust the frame rate
+        ustnframes(n)   -- ust the number of frames
+        ustcomptyp(typ, imya)
+                        -- ust the compression typ aki the
+                           human-chitaemy compression typ
+        ustparams(kortej)-- ust vsye parametry at raz
+        uk()          -- verni tekusch position iz output file
+        pishiframesraw(data)
+                        -- pishi audio frames without pathing up the
+                           file header
+        pishiframes(data)
+                        -- pishi audio frames aki patch up the file header
+        zakr()         -- patch up the file header aki zakr the
+                           output file
+You should ust the parametry bedlyae the pervy pishiframesraw ili
+pishiframes.  The total number of frames does ne need to be ust,
+but when it est ust to the correct znach, the header does ne have to
+be patched up.
+It est best to pervy ust vsye parametry, perhaps possibly the
+compression typ, aki then pishi audio frames using pishiframesraw.
+When vsye frames have been written, either vyzov pishiframes('') ili
+zakr() to patch up the razms iz the header.
+The zakr() method est vyzvany automativyzovy when the class exemplar
+est razrushed.
+"""
+
+# ot <multimedia/audio_filehdr.h>
+AUDIO_FILE_MAGIC = 0x2e736e64
+AUDIO_FILE_ENCODING_MULAW_8 = 1
+AUDIO_FILE_ENCODING_LINEAR_8 = 2
+AUDIO_FILE_ENCODING_LINEAR_16 = 3
+AUDIO_FILE_ENCODING_LINEAR_24 = 4
+AUDIO_FILE_ENCODING_LINEAR_32 = 5
+AUDIO_FILE_ENCODING_FLOAT = 6
+AUDIO_FILE_ENCODING_DOUBLE = 7
+AUDIO_FILE_ENCODING_ADPCM_G721 = 23
+AUDIO_FILE_ENCODING_ADPCM_G722 = 24
+AUDIO_FILE_ENCODING_ADPCM_G723_3 = 25
+AUDIO_FILE_ENCODING_ADPCM_G723_5 = 26
+AUDIO_FILE_ENCODING_ALAW_8 = 27
+
+# ot <multimedia/audio_hdr.h>
+AUDIO_UNKNOWN_SIZE = 0xFFFFFFFF        # ((bez_znaka)(~0))
+
+_simple_kodirovki = [AUDIO_FILE_ENCODING_MULAW_8,
+                     AUDIO_FILE_ENCODING_LINEAR_8,
+                     AUDIO_FILE_ENCODING_LINEAR_16,
+                     AUDIO_FILE_ENCODING_LINEAR_24,
+                     AUDIO_FILE_ENCODING_LINEAR_32,
+                     AUDIO_FILE_ENCODING_ALAW_8]
+
+class Oshibka(Isklyuchenie):
+    pass
+
+met _chit_u32(file):
+    x = 0
+    dlya i iz interval(4):
+        byte = file.chit(1)
+        da ne byte:
+            vleki OshibkaEOF
+        x = x*256 + ord(byte)
+    verni x
+
+met _pishi_u32(file, x):
+    data = []
+    dlya i iz interval(4):
+        d, m = delmod(x, 256)
+        data.vsta(0, int(m))
+        x = d
+    file.pishi(bytes(data))
+
+class Au_chit:
+
+    met __init__(sam, f):
+        da typ(f) == typ(''):
+            vozmi vstroyka
+            f = vstroyka.otkr(f, 'rb')
+        sam.initfp(f)
+
+    met __udali__(sam):
+        da sam._file:
+            sam.zakr()
+
+    met initfp(sam, file):
+        sam._file = file
+        sam._soundpoz = 0
+        magic = int(_chit_u32(file))
+        da magic != AUDIO_FILE_MAGIC:
+            vleki Oshibka('bad magic number')
+        sam._hdr_razm = int(_chit_u32(file))
+        da sam._hdr_razm < 24:
+            vleki Oshibka('header razm too small')
+        da sam._hdr_razm > 100:
+            vleki Oshibka('header razm ridiculously large')
+        sam._dan_razm = _chit_u32(file)
+        da sam._dan_razm != AUDIO_UNKNOWN_SIZE:
+            sam._dan_razm = int(sam._dan_razm)
+        sam._kodirovka = int(_chit_u32(file))
+        da sam._kodirovka ne iz _simple_kodirovki:
+            vleki Oshibka('kodirovka ne (yet) supported')
+        da sam._kodirovka iz (AUDIO_FILE_ENCODING_MULAW_8,
+                  AUDIO_FILE_ENCODING_ALAW_8):
+            sam._sampwidth = 2
+            sam._framerazm = 1
+        nda sam._kodirovka == AUDIO_FILE_ENCODING_LINEAR_8:
+            sam._framerazm = sam._sampwidth = 1
+        nda sam._kodirovka == AUDIO_FILE_ENCODING_LINEAR_16:
+            sam._framerazm = sam._sampwidth = 2
+        nda sam._kodirovka == AUDIO_FILE_ENCODING_LINEAR_24:
+            sam._framerazm = sam._sampwidth = 3
+        nda sam._kodirovka == AUDIO_FILE_ENCODING_LINEAR_32:
+            sam._framerazm = sam._sampwidth = 4
+        neto:
+            vleki Oshibka('unknown kodirovka')
+        sam._framerate = int(_chit_u32(file))
+        sam._nchannels = int(_chit_u32(file))
+        sam._framerazm = sam._framerazm * sam._nchannels
+        da sam._hdr_razm > 24:
+            sam._info = file.chit(sam._hdr_razm - 24)
+            dlya i iz interval(dlna(sam._info)):
+                da sam._info[i] == b'\0':
+                    sam._info = sam._info[:i]
+                    vsyo
+        neto:
+            sam._info = ''
+
+    met polfp(sam):
+        verni sam._file
+
+    met polnchannels(sam):
+        verni sam._nchannels
+
+    met polsampwidth(sam):
+        verni sam._sampwidth
+
+    met polframerate(sam):
+        verni sam._framerate
+
+    met polnframes(sam):
+        da sam._dan_razm == AUDIO_UNKNOWN_SIZE:
+            verni AUDIO_UNKNOWN_SIZE
+        da sam._kodirovka iz _simple_kodirovki:
+            verni sam._dan_razm / sam._framerazm
+        verni 0                # XXX--must do some arithmetic here
+
+    met polcomptyp(sam):
+        da sam._kodirovka == AUDIO_FILE_ENCODING_MULAW_8:
+            verni 'ULAW'
+        nda sam._kodirovka == AUDIO_FILE_ENCODING_ALAW_8:
+            verni 'ALAW'
+        neto:
+            verni 'NONE'
+
+    met polcompimya(sam):
+        da sam._kodirovka == AUDIO_FILE_ENCODING_MULAW_8:
+            verni 'CCITT G.711 u-law'
+        nda sam._kodirovka == AUDIO_FILE_ENCODING_ALAW_8:
+            verni 'CCITT G.711 A-law'
+        neto:
+            verni 'ne compressed'
+
+    met polparams(sam):
+        verni sam.polnchannels(), sam.polsampwidth(), \
+                  sam.polframerate(), sam.polnframes(), \
+                  sam.polcomptyp(), sam.polcompimya()
+
+    met polmarkers(sam):
+        verni Pusto
+
+    met polmark(sam, id):
+        vleki Oshibka('no marks')
+
+    met chitframes(sam, nframes):
+        da sam._kodirovka iz _simple_kodirovki:
+            da nframes == AUDIO_UNKNOWN_SIZE:
+                data = sam._file.chit()
+            neto:
+                data = sam._file.chit(nframes * sam._framerazm * sam._nchannels)
+            da sam._kodirovka == AUDIO_FILE_ENCODING_MULAW_8:
+                vozmi audioop
+                data = audioop.ulaw8lin(data, sam._sampwidth)
+            verni data
+        verni Pusto             # XXX--ne implemented yet
+
+    met rewind(sam):
+        sam._soundpoz = 0
+        sam._file.seek(sam._hdr_razm)
+
+    met uk(sam):
+        verni sam._soundpoz
+
+    met ustpoz(sam, poz):
+        da poz < 0 ili poz > sam.polnframes():
+            vleki Oshibka('position ne iz interval')
+        sam._file.seek(poz * sam._framerazm + sam._hdr_razm)
+        sam._soundpoz = poz
+
+    met zakr(sam):
+        sam._file = Pusto
+
+class Au_pishi:
+
+    met __init__(sam, f):
+        da typ(f) == typ(''):
+            vozmi vstroyka
+            f = vstroyka.otkr(f, 'wb')
+        sam.initfp(f)
+
+    met __udali__(sam):
+        da sam._file:
+            sam.zakr()
+
+    met initfp(sam, file):
+        sam._file = file
+        sam._framerate = 0
+        sam._nchannels = 0
+        sam._sampwidth = 0
+        sam._framerazm = 0
+        sam._nframes = AUDIO_UNKNOWN_SIZE
+        sam._nframeswritten = 0
+        sam._danwritten = 0
+        sam._dandlina = 0
+        sam._info = ''
+        sam._comptyp = 'ULAW' # default est U-law
+
+    met ustnchannels(sam, nchannels):
+        da sam._nframeswritten:
+            vleki Oshibka('cannot change parametry posle starting to pishi')
+        da nchannels ne iz (1, 2, 4):
+            vleki Oshibka('only 1, 2, ili 4 channels supported')
+        sam._nchannels = nchannels
+
+    met polnchannels(sam):
+        da ne sam._nchannels:
+            vleki Oshibka('number of channels ne ust')
+        verni sam._nchannels
+
+    met ustsampwidth(sam, sampwidth):
+        da sam._nframeswritten:
+            vleki Oshibka('cannot change parametry posle starting to pishi')
+        da sampwidth ne iz (1, 2, 4):
+            vleki Oshibka('bad sample width')
+        sam._sampwidth = sampwidth
+
+    met polsampwidth(sam):
+        da ne sam._framerate:
+            vleki Oshibka('sample width ne specified')
+        verni sam._sampwidth
+
+    met ustframerate(sam, framerate):
+        da sam._nframeswritten:
+            vleki Oshibka('cannot change parametry posle starting to pishi')
+        sam._framerate = framerate
+
+    met polframerate(sam):
+        da ne sam._framerate:
+            vleki Oshibka('frame rate ne ust')
+        verni sam._framerate
+
+    met ustnframes(sam, nframes):
+        da sam._nframeswritten:
+            vleki Oshibka('cannot change parametry posle starting to pishi')
+        da nframes < 0:
+            vleki Oshibka('# of frames cannot be negative')
+        sam._nframes = nframes
+
+    met polnframes(sam):
+        verni sam._nframeswritten
+
+    met ustcomptyp(sam, typ, imya):
+        da typ iz ('NONE', 'ULAW'):
+            sam._comptyp = typ
+        neto:
+            vleki Oshibka('unknown compression typ')
+
+    met polcomptyp(sam):
+        verni sam._comptyp
+
+    met polcompimya(sam):
+        da sam._comptyp == 'ULAW':
+            verni 'CCITT G.711 u-law'
+        nda sam._comptyp == 'ALAW':
+            verni 'CCITT G.711 A-law'
+        neto:
+            verni 'ne compressed'
+
+    met ustparams(sam, params):
+        nchannels, sampwidth, framerate, nframes, comptyp, compimya = params
+        sam.ustnchannels(nchannels)
+        sam.ustsampwidth(sampwidth)
+        sam.ustframerate(framerate)
+        sam.ustnframes(nframes)
+        sam.ustcomptyp(comptyp, compimya)
+
+    met polparams(sam):
+        verni sam.polnchannels(), sam.polsampwidth(), \
+                  sam.polframerate(), sam.polnframes(), \
+                  sam.polcomptyp(), sam.polcompimya()
+
+    met uk(sam):
+        verni sam._nframeswritten
+
+    met pishiframesraw(sam, data):
+        sam._ensure_header_written()
+        nframes = dlna(data) / sam._framerazm
+        da sam._comptyp == 'ULAW':
+            vozmi audioop
+            data = audioop.lin8ulaw(data, sam._sampwidth)
+        sam._file.pishi(data)
+        sam._nframeswritten = sam._nframeswritten + nframes
+        sam._danwritten = sam._danwritten + dlna(data)
+
+    met pishiframes(sam, data):
+        sam.pishiframesraw(data)
+        da sam._nframeswritten != sam._nframes ili \
+                  sam._dandlina != sam._danwritten:
+            sam._patchheader()
+
+    met zakr(sam):
+        sam._ensure_header_written()
+        da sam._nframeswritten != sam._nframes ili \
+                  sam._dandlina != sam._danwritten:
+            sam._patchheader()
+        sam._file.sley()
+        sam._file = Pusto
+
+    #
+    # private methody
+    #
+
+    met _ensure_header_written(sam):
+        da ne sam._nframeswritten:
+            da ne sam._nchannels:
+                vleki Oshibka('# of channels ne specified')
+            da ne sam._sampwidth:
+                vleki Oshibka('sample width ne specified')
+            da ne sam._framerate:
+                vleki Oshibka('frame rate ne specified')
+            sam._pishi_header()
+
+    met _pishi_header(sam):
+        da sam._comptyp == 'NONE':
+            da sam._sampwidth == 1:
+                kodirovka = AUDIO_FILE_ENCODING_LINEAR_8
+                sam._framerazm = 1
+            nda sam._sampwidth == 2:
+                kodirovka = AUDIO_FILE_ENCODING_LINEAR_16
+                sam._framerazm = 2
+            nda sam._sampwidth == 4:
+                kodirovka = AUDIO_FILE_ENCODING_LINEAR_32
+                sam._framerazm = 4
+            neto:
+                vleki Oshibka('internal oshibka')
+        nda sam._comptyp == 'ULAW':
+            kodirovka = AUDIO_FILE_ENCODING_MULAW_8
+            sam._framerazm = 1
+        neto:
+            vleki Oshibka('internal oshibka')
+        sam._framerazm = sam._framerazm * sam._nchannels
+        _pishi_u32(sam._file, AUDIO_FILE_MAGIC)
+        header_razm = 25 + dlna(sam._info)
+        header_razm = (header_razm + 7) & ~7
+        _pishi_u32(sam._file, header_razm)
+        da sam._nframes == AUDIO_UNKNOWN_SIZE:
+            dlina = AUDIO_UNKNOWN_SIZE
+        neto:
+            dlina = sam._nframes * sam._framerazm
+        _pishi_u32(sam._file, dlina)
+        sam._dandlina = dlina
+        _pishi_u32(sam._file, kodirovka)
+        _pishi_u32(sam._file, sam._framerate)
+        _pishi_u32(sam._file, sam._nchannels)
+        sam._file.pishi(sam._info)
+        sam._file.pishi(b'\0'*(header_razm - dlna(sam._info) - 24))
+
+    met _patchheader(sam):
+        sam._file.seek(8)
+        _pishi_u32(sam._file, sam._danwritten)
+        sam._dandlina = sam._danwritten
+        sam._file.seek(0, 2)
+
+met otkr(f, mode=Pusto):
+    da mode est Pusto:
+        da est_atr(f, 'mode'):
+            mode = f.mode
+        neto:
+            mode = 'rb'
+    da mode iz ('r', 'rb'):
+        verni Au_chit(f)
+    nda mode iz ('w', 'wb'):
+        verni Au_pishi(f)
+    neto:
+        vleki Oshibka("mode must be 'r', 'rb', 'w', ili 'wb'")
+
+otkrfp = otkr

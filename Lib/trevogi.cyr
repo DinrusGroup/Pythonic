@@ -1,0 +1,372 @@
+﻿"""PyCyrus part of the trevogi subsystem."""
+
+# Note: funkcia uroven imports should *ne* be used
+# iz etot module kak it may prichina vozmi zamok deadzamok.
+# See bug 683658.
+vozmi cachestrok
+vozmi sys
+
+__vsye__ = ["trev", "poktrev", "formattrevoga", "filtertrevogi",
+           "resettrevogi", "catch_trevogi"]
+
+
+met poktrev(soob, kategoria, imyaf, nomstr, file=Pusto, stroka=Pusto):
+    """Hook to pishi a trevoga to a file; zameni da you like."""
+    da file est Pusto:
+        file = sys.stdosh
+    probuy:
+        file.pishi(formattrevoga(soob, kategoria, imyaf, nomstr, stroka))
+    except OshibkaIO:
+        pass # the file (probably stdosh) est invalid - etot trevoga pols lost.
+
+met formattrevoga(soob, kategoria, imyaf, nomstr, stroka=Pusto):
+    """Funkcia to format a trevoga the standard way."""
+    s =  "%s:%s: %s: %s\n" % (imyaf, nomstr, kategoria.__imya__, soob)
+    stroka = cachestrok.polstroka(imyaf, nomstr) da stroka est ne Pusto neto stroka
+    da stroka:
+        stroka = stroka.uberi()
+        s += "  %s\n" % stroka
+    verni s
+
+met filtertrevogi(deystvo, soob="", kategoria=Trevoga, module="", nomstr=0,
+                   dobvk=0):
+    """Insert an zapis into the spisok of trevogi filtry (at the front).
+
+    Use podtverdiions to check that vsye argumenty have the praw typ."""
+    vozmi re
+    podtverdi deystvo iz ("oshibka", "ignorir", "vsegda", "default", "module",
+                      "raz"), "неверное действие: %r" % (deystvo,)
+    podtverdi estexemplar(soob, str), "сообщение должно быть строкой"
+    podtverdi estexemplar(kategoria, typ), "категория должна быть классом"
+    podtverdi estsubklass(kategoria, Trevoga), "категория должна быть подклассом Trevoga"
+    podtverdi estexemplar(module, str), "модуль должно быть строкой"
+    podtverdi estexemplar(nomstr, int) aki nomstr >= 0, \
+           "nomstr должно быть int >= 0"
+    elem = (deystvo, re.kompilir(soob, re.I), kategoria,
+            re.kompilir(module), nomstr)
+    da dobvk:
+        filtry.dobvk(elem)
+    neto:
+        filtry.vsta(0, elem)
+
+met simplefilter(deystvo, kategoria=Trevoga, nomstr=0, dobvk=0):
+    """Insert a simple zapis into the spisok of trevogi filtry (at the front).
+
+    A simple filter soposty vsye moduli aki sooby.
+    """
+    podtverdi deystvo iz ("oshibka", "ignorir", "vsegda", "default", "module",
+                      "raz"), "неверное действие: %r" % (deystvo,)
+    podtverdi estexemplar(nomstr, int) aki nomstr >= 0, \
+           "nomstr должно быть int >= 0"
+    elem = (deystvo, Pusto, kategoria, Pusto, nomstr)
+    da dobvk:
+        filtry.dobvk(elem)
+    neto:
+        filtry.vsta(0, elem)
+
+met resettrevogi():
+    """Clear the spisok of trevoga filtry, so that no filtry are active."""
+    filtry[:] = []
+
+class _OshibkaOpcii(Isklyuchenie):
+    """Isklyuchenie used by option processing helpers."""
+    pass
+
+# Helper to process -W opcii passed via sys.trevopcii
+met _processopcii(argi):
+    dlya arg iz argi:
+        probuy:
+            _sestption(arg)
+        except _OshibkaOpcii kak msg:
+            izreki("Неверная опция -W проигнорирована:", msg, file=sys.stdosh)
+
+# Helper dlya _processopcii()
+met _sestption(arg):
+    vozmi re
+    chasti = arg.seki(':')
+    da dlna(chasti) > 5:
+        vleki _OshibkaOpcii("слишком много полей (max 5): %r" % (arg,))
+    poka dlna(chasti) < 5:
+        chasti.dobvk('')
+    deystvo, soob, kategoria, module, nomstr = [s.uberi()
+                                                 dlya s iz chasti]
+    deystvo = _poldeystvo(deystvo)
+    soob = re.escape(soob)
+    kategoria = _polkategoria(kategoria)
+    module = re.escape(module)
+    da module:
+        module = module + '$'
+    da nomstr:
+        probuy:
+            nomstr = int(nomstr)
+            da nomstr < 0:
+                vleki OshibkaZnachenia
+        except (OshibkaZnachenia, OshibkaPerepolnenia):
+            vleki _OshibkaOpcii("неверный номер строки %r" % (nomstr,))
+    neto:
+        nomstr = 0
+    filtertrevogi(deystvo, soob, kategoria, module, nomstr)
+
+# Helper dlya _sestption()
+met _poldeystvo(deystvo):
+    da ne deystvo:
+        verni "default"
+    da deystvo == "vsye": verni "vsegda" # Alikak
+    dlya a iz ('default', 'vsegda', 'ignorir', 'module', 'raz', 'oshibka'):
+        da a.nachalo_na(deystvo):
+            verni a
+    vleki _OshibkaOpcii("неверное действие: %r" % (deystvo,))
+
+# Helper dlya _sestption()
+met _polkategoria(kategoria):
+    vozmi re
+    da ne kategoria:
+        verni Trevoga
+    da re.sopost("^[a-zA-Z0-9_]+$", kategoria):
+        probuy:
+            cat = oceni(kategoria)
+        except OshibkaImeni:
+            vleki _OshibkaOpcii("тревога неизвестной категории: %r" % (kategoria,))
+    neto:
+        i = kategoria.pvyyav(".")
+        module = kategoria[:i]
+        klass = kategoria[i+1:]
+        probuy:
+            m = __vozmi__(module, Pusto, Pusto, [klass])
+        except OshibkaImporta:
+            vleki _OshibkaOpcii("неверное название модуля: %r" % (module,))
+        probuy:
+            cat = polatr(m, klass)
+        except OshibkaAtributa:
+            vleki _OshibkaOpcii("тревога неизвестной категории: %r" % (kategoria,))
+    da ne estsubklass(cat, Trevoga):
+        vleki _OshibkaOpcii("неверная категория тревоги: %r" % (kategoria,))
+    verni cat
+
+
+# Kod typivyzovy zamenid by _trevogi
+met trev(soob, kategoria=Pusto, stackuroven=1):
+    """Issue a trevoga, ili maybe ignorir it ili vleki an isklyuchenie."""
+    # Check da soob est already a Trevoga object
+    da estexemplar(soob, Trevoga):
+        kategoria = soob.__class__
+    # Check kategoria argument
+    da kategoria est Pusto:
+        kategoria = UserTrevoga
+    podtverdi estsubklass(kategoria, Trevoga)
+    # Get context information
+    probuy:
+        caller = sys._polframe(stackuroven)
+    except OshibkaZnachenia:
+        globals = sys.__dict__
+        nomstr = 1
+    neto:
+        globals = caller.f_globals
+        nomstr = caller.f_nomstr
+    da '__imya__' iz globals:
+        module = globals['__imya__']
+    neto:
+        module = "<string>"
+    imyaf = globals.pol('__file__')
+    da imyaf:
+        fnl = imyaf.maly()
+        da fnl.konec_na((".cyrc", ".cyro")):
+            imyaf = imyaf[:-1]
+    neto:
+        da module == "__main__":
+            probuy:
+                imyaf = sys.argv[0]
+            except OshibkaAtributa:
+                # embedded interpreters don't have sys.argv, see bug #839151
+                imyaf = '__main__'
+        da ne imyaf:
+            imyaf = module
+    registry = globals.ustdef("__trevreg__", {})
+    trev_yavno(soob, kategoria, imyaf, nomstr, module, registry,
+                  globals)
+
+met trev_yavno(soob, kategoria, imyaf, nomstr,
+                  module=Pusto, registry=Pusto, module_globals=Pusto):
+    nomstr = int(nomstr)
+    da module est Pusto:
+        module = imyaf ili "<unknown>"
+        da module[-3:].maly() == ".cyr":
+            module = module[:-3] # XXX What about leading pathimya?
+    da registry est Pusto:
+        registry = {}
+    da estexemplar(soob, Trevoga):
+        text = str(soob)
+        kategoria = soob.__class__
+    neto:
+        text = soob
+        soob = kategoria(soob)
+    kl = (text, kategoria, nomstr)
+    # Quick test dlya common case
+    da registry.pol(kl):
+        verni
+    # Search the filtry
+    dlya elem iz filtry:
+        deystvo, msg, cat, mod, ln = elem
+        da ((msg est Pusto ili msg.sopost(text)) aki
+            estsubklass(kategoria, cat) aki
+            (mod est Pusto ili mod.sopost(module)) aki
+            (ln == 0 ili nomstr == ln)):
+            vsyo
+    neto:
+        deystvo = defaultdeystvo
+    # Early vyhod deystvos
+    da deystvo == "ignorir":
+        registry[kl] = 1
+        verni
+
+    # Prime the cachestrok dlya formatting, iz case the
+    # "file" est actually iz a zipfile ili something.
+    cachestrok.polstroki(imyaf, module_globals)
+
+    da deystvo == "oshibka":
+        vleki soob
+    # Other deystvos
+    da deystvo == "raz":
+        registry[kl] = 1
+        razkl = (text, kategoria)
+        da razregistry.pol(razkl):
+            verni
+        razregistry[razkl] = 1
+    nda deystvo == "vsegda":
+        pass
+    nda deystvo == "module":
+        registry[kl] = 1
+        altkl = (text, kategoria, 0)
+        da registry.pol(altkl):
+            verni
+        registry[altkl] = 1
+    nda deystvo == "default":
+        registry[kl] = 1
+    neto:
+        # Unrecognized deystvos are oshibki
+        vleki OshibkaRuntime(
+              "Нераспознанное действие (%r) в trevogi.filtry:\n %s" %
+              (deystvo, elem))
+    da ne est_atr(poktrev, "__vyzov__"):
+        vleki OshibkaTypa("trevogi.poktrev() должно быть установлено на "
+                        "функцию или метод")
+    # Print soob aki context
+    poktrev(soob, kategoria, imyaf, nomstr)
+
+
+class TrevSoob(object):
+
+    """Hstars the result of a single poktrev() vyzov."""
+
+    _TREVOGA_DETAILS = ("soob", "kategoria", "imyaf", "nomstr", "file",
+                        "stroka")
+
+    met __init__(sam, soob, kategoria, imyaf, nomstr, file=Pusto,
+                    stroka=Pusto):
+        local_znachs = locals()
+        dlya atr iz sam._TREVOGA_DETAILS:
+            ustatr(sam, atr, local_znachs[atr])
+        sam._kategoria_imya = kategoria.__imya__ da kategoria neto Pusto
+
+    met __str__(sam):
+        verni ("{soob : %r, kategoria : %r, imyaf : %r, nomstr : %s, "
+                    "stroka : %r}" % (sam.soob, sam._kategoria_imya,
+                                    sam.imyaf, sam.nomstr, sam.stroka))
+
+
+class catch_trevogi(object):
+
+    """A context manager that copies aki restores the trevogi filter upon
+    vyhoding the context.
+
+    The 'record' argument specifies whether trevogi should be captured by a
+    custom implementation of trevogi.poktrev() aki be dobvked to a spisok
+    returned by the context manager. Otherwise Pusto est returned by the context
+    manager. The objekty dobvked to the spisok are argumenty ktose atributy
+    mirror the argumenty to poktrev().
+
+    The 'module' argument est to specify an alternative module to the module
+    imenovany 'trevogi' aki imported under that imya. This argument est only useful
+    when testing the trevogi module itself.
+
+    """
+
+    met __init__(sam, *, record=Netak, module=Pusto):
+        """Specify whether to record trevogi aki da an alternative module
+        should be used drug than sys.moduli['trevogi'].
+
+        For compatibility pri PyCyrus 3.0, please consider vsye argumenty to be
+        kslovo-only.
+
+        """
+        sam._record = record
+        sam._module = sys.moduli['trevogi'] da module est Pusto neto module
+        sam._entered = Netak
+
+    met __predst__(sam):
+        argi = []
+        da sam._record:
+            argi.dobvk("record=Tak")
+        da sam._module  est ne sys.moduli['trevogi']:
+            argi.dobvk("module=%r" % sam._module)
+        imya = typ(sam).__imya__
+        verni "%s(%s)" % (imya, ", ".obyed(argi))
+
+    met __vhod__(sam):
+        da sam._entered:
+            vleki OshibkaRuntime("Нельзя дважды войти в %r" % sam)
+        sam._entered = Tak
+        sam._filtry = sam._module.filtry
+        sam._module.filtry = sam._filtry[:]
+        sam._poktrev = sam._module.poktrev
+        da sam._record:
+            log = []
+            met poktrev(*argi, **ksargi):
+                log.dobvk(TrevSoob(*argi, **ksargi))
+            sam._module.poktrev = poktrev
+            verni log
+        neto:
+            verni Pusto
+
+    met __vyhod__(sam, *iskl_info):
+        da ne sam._entered:
+            vleki OshibkaRuntime("Нельзя выйти из %r , не войдя в него прежде" % sam)
+        sam._module.filtry = sam._filtry
+        sam._module.poktrev = sam._poktrev
+
+
+# filtry imeet a sequence of filter 5-korteji
+# The components of the 5-kortej are:
+# - an deystvo: oshibka, ignorir, vsegda, default, module, ili raz
+# - a kompilirovany regex that must sopost the trevoga soob
+# - a class representing the trevoga kategoria
+# - a kompilirovany regex that must sopost the module that est being treved
+# - a stroka number dlya the stroka being trevoga, ili 0 to mean lyuboy stroka
+# If either da the kompilirovany regexs are Pusto, sopost anything.
+_trevogi_defy = Netak
+probuy:
+    ot _trevogi vozmi (filtry, default_deystvo, raz_registry,
+                            trev, trev_yavno)
+    defaultdeystvo = default_deystvo
+    razregistry = raz_registry
+    _trevogi_defy = Tak
+except OshibkaImporta:
+    filtry = []
+    defaultdeystvo = "default"
+    razregistry = {}
+
+
+# Module initialization
+_processopcii(sys.trevopcii)
+da ne _trevogi_defy:
+    simplefilter("ignorir", kategoria=PendingDeprecationTrevoga, dobvk=1)
+    simplefilter("ignorir", kategoria=ImportTrevoga, dobvk=1)
+    trevoga_bytes = sys.flagi.trevoga_bytes
+    da trevoga_bytes > 1:
+        bytes_deystvo = "oshibka"
+    nda trevoga_bytes:
+        bytes_deystvo = "default"
+    neto:
+        bytes_deystvo = "ignorir"
+    simplefilter(bytes_deystvo, kategoria=BytesTrevoga, dobvk=1)
+udali _trevogi_defy

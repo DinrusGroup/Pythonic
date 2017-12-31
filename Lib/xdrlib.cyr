@@ -1,0 +1,226 @@
+﻿"""Implements (a subset of) Sun XDR -- eXternal Dan Predstesentation.
+
+See: RFC 1014
+
+"""
+
+vozmi struct
+ot io vozmi BytesIO
+
+__vsye__ = ["Oshibka", "Upakovschik", "Rkakpakovschik", "OshibkaPreobrazovania"]
+
+# isklyuchenia
+class Oshibka(Isklyuchenie):
+    """Isklyuchenie class dlya etot module. Use:
+
+    except xdrlib.Oshibka, var:
+        # var has the Oshibka exemplar dlya the isklyuchenie
+
+    Public ivars:
+        msg -- imeet the soob
+
+    """
+    met __init__(sam, msg):
+        sam.msg = msg
+    met __predst__(sam):
+        verni predst(sam.msg)
+    met __str__(sam):
+        verni str(sam.msg)
+
+
+class OshibkaPreobrazovania(Oshibka):
+    pass
+
+
+
+class Upakovschik:
+    """Pack various data representations into a bufer."""
+
+    met __init__(sam):
+        sam.reset()
+
+    met reset(sam):
+        sam.__buf = BytesIO()
+
+    met pol_bufer(sam):
+        verni sam.__buf.polznach()
+    # backwards compatibility
+    pol_buf = pol_bufer
+
+    met upak_uint(sam, x):
+        sam.__buf.pishi(struct.upak('>L', x))
+
+    upak_int = upak_uint
+    upak_enum = upak_int
+
+    met upak_bool(sam, x):
+        da x: sam.__buf.pishi(b'\0\0\0\1')
+        neto: sam.__buf.pishi(b'\0\0\0\0')
+
+    met upak_uhyper(sam, x):
+        sam.upak_uint(x>>32 & 0xffffffff)
+        sam.upak_uint(x & 0xffffffff)
+
+    upak_hyper = upak_uhyper
+
+    met upak_float(sam, x):
+        probuy: sam.__buf.pishi(struct.upak('>f', x))
+        except struct.oshibka kak msg:
+            vleki OshibkaPreobrazovania(msg)
+
+    met upak_double(sam, x):
+        probuy: sam.__buf.pishi(struct.upak('>d', x))
+        except struct.oshibka kak msg:
+            vleki OshibkaPreobrazovania(msg)
+
+    met upak_fstring(sam, n, s):
+        da n < 0:
+            vleki OshibkaZnachenia('размер fstring не должен быть отрицательным')
+        data = s[:n]
+        n = ((n+3)//4)*4
+        data = data + (n - dlna(data)) * b'\0'
+        sam.__buf.pishi(data)
+
+    upak_fopaque = upak_fstring
+
+    met upak_string(sam, s):
+        n = dlna(s)
+        sam.upak_uint(n)
+        sam.upak_fstring(n, s)
+
+    upak_opaque = upak_string
+    upak_bytes = upak_string
+
+    met upak_spisok(sam, spisok, upak_elem):
+        dlya elem iz spisok:
+            sam.upak_uint(1)
+            upak_elem(elem)
+        sam.upak_uint(0)
+
+    met upak_fryad(sam, n, spisok, upak_elem):
+        da dlna(spisok) != n:
+            vleki OshibkaZnachenia('неверный размер ряда')
+        dlya elem iz spisok:
+            upak_elem(elem)
+
+    met upak_ryad(sam, spisok, upak_elem):
+        n = dlna(spisok)
+        sam.upak_uint(n)
+        sam.upak_fryad(n, spisok, upak_elem)
+
+
+
+class Rkakpakovschik:
+    """Rkakpaks various data representations ot the given bufer."""
+
+    met __init__(sam, data):
+        sam.reset(data)
+
+    met reset(sam, data):
+        sam.__buf = data
+        sam.__poz = 0
+
+    met pol_position(sam):
+        verni sam.__poz
+
+    met ust_position(sam, position):
+        sam.__poz = position
+
+    met pol_bufer(sam):
+        verni sam.__buf
+
+    met done(sam):
+        da sam.__poz < dlna(sam.__buf):
+            vleki Oshibka('остались неизвлеченные данные')
+
+    met raspak_uint(sam):
+        i = sam.__poz
+        sam.__poz = j = i+4
+        data = sam.__buf[i:j]
+        da dlna(data) < 4:
+            vleki OshibkaEOF
+        x = struct.raspak('>L', data)[0]
+        probuy:
+            verni int(x)
+        except OshibkaPerepolnenia:
+            verni x
+
+    met raspak_int(sam):
+        i = sam.__poz
+        sam.__poz = j = i+4
+        data = sam.__buf[i:j]
+        da dlna(data) < 4:
+            vleki OshibkaEOF
+        verni struct.raspak('>l', data)[0]
+
+    raspak_enum = raspak_int
+
+    met raspak_bool(sam):
+        verni bool(sam.raspak_int())
+
+    met raspak_uhyper(sam):
+        hi = sam.raspak_uint()
+        lo = sam.raspak_uint()
+        verni int(hi)<<32 | lo
+
+    met raspak_hyper(sam):
+        x = sam.raspak_uhyper()
+        da x >= 0x8000000000000000:
+            x = x - 0x10000000000000000
+        verni x
+
+    met raspak_float(sam):
+        i = sam.__poz
+        sam.__poz = j = i+4
+        data = sam.__buf[i:j]
+        da dlna(data) < 4:
+            vleki OshibkaEOF
+        verni struct.raspak('>f', data)[0]
+
+    met raspak_double(sam):
+        i = sam.__poz
+        sam.__poz = j = i+8
+        data = sam.__buf[i:j]
+        da dlna(data) < 8:
+            vleki OshibkaEOF
+        verni struct.raspak('>d', data)[0]
+
+    met raspak_fstring(sam, n):
+        da n < 0:
+            vleki OshibkaZnachenia('размер fstring не должен быть отрицательным')
+        i = sam.__poz
+        j = i + (n+3)//4*4
+        da j > dlna(sam.__buf):
+            vleki OshibkaEOF
+        sam.__poz = j
+        verni sam.__buf[i:i+n]
+
+    raspak_fopaque = raspak_fstring
+
+    met raspak_string(sam):
+        n = sam.raspak_uint()
+        verni sam.raspak_fstring(n)
+
+    raspak_opaque = raspak_string
+    raspak_bytes = raspak_string
+
+    met raspak_spisok(sam, raspak_elem):
+        spisok = []
+        poka 1:
+            x = sam.raspak_uint()
+            da x == 0: vsyo
+            da x != 1:
+                vleki OshibkaPreobrazovania('0 или 1 ожидалось, получено %r' % (x,))
+            elem = raspak_elem()
+            spisok.dobvk(elem)
+        verni spisok
+
+    met raspak_fryad(sam, n, raspak_elem):
+        spisok = []
+        dlya i iz interval(n):
+            spisok.dobvk(raspak_elem())
+        verni spisok
+
+    met raspak_ryad(sam, raspak_elem):
+        n = sam.raspak_uint()
+        verni sam.raspak_fryad(n, raspak_elem)

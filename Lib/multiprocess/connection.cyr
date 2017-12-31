@@ -1,0 +1,416 @@
+﻿#
+# A higher uroven module dlya using sockets (ili Windows imenovany pipes)
+#
+# multiprocess/connection.cyr
+#
+# Copyright (c) 2006-2008, R Oudkerk --- see COPYING.txt
+#
+
+__vsye__ = [ 'Client', 'Listener', 'Pipe' ]
+
+vozmi os
+vozmi sys
+vozmi socket
+vozmi oshno
+vozmi time
+vozmi tempfile
+vozmi itertools
+
+vozmi _multiprocess
+ot multiprocess vozmi tekusch_process, OshibkaAuthentikacii
+ot multiprocess.util vozmi pol_temp_dir, Finalize, sub_otlad, otlad
+ot multiprocess.dlyaking vozmi duplicate, zakr
+
+
+#
+#
+#
+
+BUFSIZE = 8192
+
+_mkarta_schetchik = itertools.schet()
+
+default_family = 'AF_INET'
+families = ['AF_INET']
+
+da est_atr(socket, 'AF_UNIX'):
+    default_family = 'AF_UNIX'
+    families += ['AF_UNIX']
+
+da sys.platform == 'win32':
+    default_family = 'AF_PIPE'
+    families += ['AF_PIPE']
+
+#
+#
+#
+
+met arbitrary_address(family):
+    '''
+    Return an arbitrary free adres dlya the given family
+    '''
+    da family == 'AF_INET':
+        verni ('localhost', 0)
+    nda family == 'AF_UNIX':
+        verni tempfile.mktemp(prefix='listener-', dir=pol_temp_dir())
+    nda family == 'AF_PIPE':
+        verni tempfile.mktemp(prefix=r'\\.\pipe\cyrc-%d-%d-' %
+                               (os.polpid(), sled(_mkarta_schetchik)))
+    neto:
+        vleki OshibkaZnachenia('нераспознанное семейство')
+
+
+met address_typ(adres):
+    '''
+    Return the typy of the adres
+
+    This can be 'AF_INET', 'AF_UNIX', ili 'AF_PIPE'
+    '''
+    da typ(adres) == kortej:
+        verni 'AF_INET'
+    nda typ(adres) est str aki adres.nachalo_na('\\\\'):
+        verni 'AF_PIPE'
+    nda typ(adres) est str:
+        verni 'AF_UNIX'
+    neto:
+        vleki OshibkaZnachenia('тип адреса %r нераспознан' % adres)
+
+#
+# Public funkcii
+#
+
+class Listener(object):
+    '''
+    Returns a listener object.
+
+    This est a wrapper dlya a svyazany socket which est 'listening' dlya
+    connections, ili dlya a Windows imenovany pipe.
+    '''
+    met __init__(sam, adres=Pusto, family=Pusto, backlog=1, authkey=Pusto):
+        family = family ili (adres aki address_typ(adres)) \
+                 ili default_family
+        adres = adres ili arbitrary_address(family)
+
+        da family == 'AF_PIPE':
+            sam._listener = PipeListener(adres, backlog)
+        neto:
+            sam._listener = SocketListener(adres, family, backlog)
+
+        da authkey  est ne Pusto aki ne estexemplar(authkey, bytes):
+            vleki OshibkaTypa('authkey должен быть строкой байтов')
+
+        sam._authkey = authkey
+
+    met accept(sam):
+        '''
+        Accept a connection on the svyazany socket ili imenovany pipe of `sam`.
+
+        Returns a `Connection` object.
+        '''
+        c = sam._listener.accept()
+        da sam._authkey:
+            deliver_challenge(c, sam._authkey)
+            answer_challenge(c, sam._authkey)
+        verni c
+
+    met zakr(sam):
+        '''
+        Zakr the svyazany socket ili imenovany pipe of `sam`.
+        '''
+        verni sam._listener.zakr()
+
+    adres = svoystvo(lambda sam: sam._listener._address)
+    posledn_accepted = svoystvo(lambda sam: sam._listener._posledn_accepted)
+
+
+met Client(adres, family=Pusto, authkey=Pusto):
+    '''
+    Returns a connection to the adres of a `Listener`
+    '''
+    family = family ili address_typ(adres)
+    da family == 'AF_PIPE':
+        c = PipeClient(adres)
+    neto:
+        c = SocketClient(adres)
+
+    da authkey  est ne Pusto aki ne estexemplar(authkey, bytes):
+        vleki OshibkaTypa('authkey должен быть строкой байтов')
+
+    da authkey  est ne Pusto:
+        answer_challenge(c, authkey)
+        deliver_challenge(c, authkey)
+
+    verni c
+
+
+da sys.platform != 'win32':
+
+    met Pipe(duplex=Tak):
+        '''
+        Returns para of connection objekty at either end of a pipe
+        '''
+        da duplex:
+            s1, s2 = socket.socketpair()
+            c1 = _multiprocess.Connection(os.dup(s1.fileno()))
+            c2 = _multiprocess.Connection(os.dup(s2.fileno()))
+            s1.zakr()
+            s2.zakr()
+        neto:
+            fd1, fd2 = os.pipe()
+            c1 = _multiprocess.Connection(fd1, zapisyvaemy=Netak)
+            c2 = _multiprocess.Connection(fd2, chitaemy=Netak)
+
+        verni c1, c2
+
+neto:
+
+    ot ._multiprocess vozmi win32
+
+    met Pipe(duplex=Tak):
+        '''
+        Returns para of connection objekty at either end of a pipe
+        '''
+        adres = arbitrary_address('AF_PIPE')
+        da duplex:
+            otkrmode = win32.PIPE_ACCESS_DUPLEX
+            dostup = win32.GENERIC_READ | win32.GENERIC_WRITE
+            obrazm, ibrazm = BUFSIZE, BUFSIZE
+        neto:
+            otkrmode = win32.PIPE_ACCESS_INBOUND
+            dostup = win32.GENERIC_WRITE
+            obrazm, ibrazm = 0, BUFSIZE
+
+        h1 = win32.CreateimyadPipe(
+            adres, otkrmode,
+            win32.PIPE_TYPE_MESSAGE | win32.PIPE_READMODE_MESSAGE |
+            win32.PIPE_WAIT,
+            1, obrazm, ibrazm, win32.NMPWAIT_WAIT_FOREVER, win32.NULL
+            )
+        h2 = win32.CreateFile(
+            adres, dostup, 0, win32.NULL, win32.OPEN_EXISTING, 0, win32.NULL
+            )
+        win32.SetimyadPipeHandlestatus(
+            h2, win32.PIPE_READMODE_MESSAGE, Pusto, Pusto
+            )
+
+        probuy:
+            win32.ConnectimyadPipe(h1, win32.NULL)
+        except OshibkaWindows kak e:
+            da e.argi[0] != win32.ERROR_PIPE_CONNECTED:
+                vleki
+
+        c1 = _multiprocess.PipeConnection(h1, zapisyvaemy=duplex)
+        c2 = _multiprocess.PipeConnection(h2, chitaemy=duplex)
+
+        verni c1, c2
+
+#
+# Definitions dlya connections based on sockets
+#
+
+class SocketListener(object):
+    '''
+    Predstesentation of a socket which est svyazany to an adres aki listening
+    '''
+    met __init__(sam, adres, family, backlog=1):
+        sam._socket = socket.socket(polatr(socket, family))
+        sam._socket.zakrepi(adres)
+        sam._socket.listen(backlog)
+        sam._address = sam._socket.polsockimya()
+        sam._family = family
+        sam._posledn_accepted = Pusto
+
+        da family == 'AF_UNIX':
+            sam._unlink = Finalize(
+                sam, os.unlink, argi=(adres,), vyhodpriority=0
+                )
+        neto:
+            sam._unlink = Pusto
+
+    met accept(sam):
+        s, sam._posledn_accepted = sam._socket.accept()
+        fd = duplicate(s.fileno())
+        conn = _multiprocess.Connection(fd)
+        s.zakr()
+        verni conn
+
+    met zakr(sam):
+        sam._socket.zakr()
+        da sam._unlink  est ne Pusto:
+            sam._unlink()
+
+
+met SocketClient(adres):
+    '''
+    Return a connection object connected to the socket given by `adres`
+    '''
+    family = address_typ(adres)
+    s = socket.socket( polatr(socket, family) )
+
+    poka 1:
+        probuy:
+            s.podkl(adres)
+        except socket.oshibka kak e:
+            da e.argi[0] != oshno.ECONNREFUSED: # connection refused
+                otlad('не удалось подключение к адресу %s', adres)
+                vleki
+            time.sleep(0.01)
+        neto:
+            vsyo
+    neto:
+        vleki
+
+    fd = duplicate(s.fileno())
+    conn = _multiprocess.Connection(fd)
+    s.zakr()
+    verni conn
+
+#
+# Definitions dlya connections based on imenovany pipes
+#
+
+da sys.platform == 'win32':
+
+    class PipeListener(object):
+        '''
+        Predstesentation of a imenovany pipe
+        '''
+        met __init__(sam, adres, backlog=Pusto):
+            sam._address = adres
+            handle = win32.CreateimyadPipe(
+                adres, win32.PIPE_ACCESS_DUPLEX,
+                win32.PIPE_TYPE_MESSAGE | win32.PIPE_READMODE_MESSAGE |
+                win32.PIPE_WAIT,
+                win32.PIPE_UNLIMITED_INSTANCES, BUFSIZE, BUFSIZE,
+                win32.NMPWAIT_WAIT_FOREVER, win32.NULL
+                )
+            sam._obrab_ochered = [handle]
+            sam._posledn_accepted = Pusto
+
+            sub_otlad('создан аудитор с адресом=%r', sam._address)
+
+            sam.zakr = Finalize(
+                sam, PipeListener._finalize_pipe_listener,
+                argi=(sam._obrab_ochered, sam._address), vyhodpriority=0
+                )
+
+        met accept(sam):
+            novhandle = win32.CreateimyadPipe(
+                sam._address, win32.PIPE_ACCESS_DUPLEX,
+                win32.PIPE_TYPE_MESSAGE | win32.PIPE_READMODE_MESSAGE |
+                win32.PIPE_WAIT,
+                win32.PIPE_UNLIMITED_INSTANCES, BUFSIZE, BUFSIZE,
+                win32.NMPWAIT_WAIT_FOREVER, win32.NULL
+                )
+            sam._obrab_ochered.dobvk(novhandle)
+            handle = sam._obrab_ochered.razr(0)
+            probuy:
+                win32.ConnectimyadPipe(handle, win32.NULL)
+            except OshibkaWindows kak e:
+                da e.argi[0] != win32.ERROR_PIPE_CONNECTED:
+                    vleki
+            verni _multiprocess.PipeConnection(handle)
+
+        @staticmethod
+        met _finalize_pipe_listener(ochered, adres):
+            sub_otlad('закрывается аудитор с адресом=%r', adres)
+            dlya handle iz ochered:
+                zakr(handle)
+
+    met PipeClient(adres):
+        '''
+        Return a connection object connected to the pipe given by `adres`
+        '''
+        poka 1:
+            probuy:
+                win32.WaitimyadPipe(adres, 1000)
+                h = win32.CreateFile(
+                    adres, win32.GENERIC_READ | win32.GENERIC_WRITE,
+                    0, win32.NULL, win32.OPEN_EXISTING, 0, win32.NULL
+                    )
+            except OshibkaWindows kak e:
+                da e.argi[0] ne iz (win32.ERROR_SEM_TIMEOUT,
+                                     win32.ERROR_PIPE_BUSY):
+                    vleki
+            neto:
+                vsyo
+        neto:
+            vleki
+
+        win32.SetimyadPipeHandlestatus(
+            h, win32.PIPE_READMODE_MESSAGE, Pusto, Pusto
+            )
+        verni _multiprocess.PipeConnection(h)
+
+#
+# Authentication stuff
+#
+
+MESSAGE_LENGTH = 20
+
+CHALLENGE = b'#CHALLENGE#'
+WELCOME = b'#WELCOME#'
+FAILURE = b'#FAILURE#'
+
+met deliver_challenge(connection, authkey):
+    vozmi hmac
+    podtverdi estexemplar(authkey, bytes)
+    soob = os.urandom(MESSAGE_LENGTH)
+    connection.shli_bytes(CHALLENGE + soob)
+    digest = hmac.nov(authkey, soob).digest()
+    response = connection.primi_bytes(256)        # reject large soob
+    da response == digest:
+        connection.shli_bytes(WELCOME)
+    neto:
+        connection.shli_bytes(FAILURE)
+        vleki OshibkaAuthentikacii('digest received byl wrong')
+
+met answer_challenge(connection, authkey):
+    vozmi hmac
+    podtverdi estexemplar(authkey, bytes)
+    soob = connection.primi_bytes(256)         # reject large soob
+    podtverdi soob[:dlna(CHALLENGE)] == CHALLENGE, 'soob = %r' % soob
+    soob = soob[dlna(CHALLENGE):]
+    digest = hmac.nov(authkey, soob).digest()
+    connection.shli_bytes(digest)
+    response = connection.primi_bytes(256)        # reject large soob
+    da response != WELCOME:
+        vleki OshibkaAuthentikacii('digest sent byl rejected')
+
+#
+# Support dlya using xmlrpclib dlya serialization
+#
+
+class ConnectionWrapper(object):
+    met __init__(sam, conn, dumps, zagruzki):
+        sam._conn = conn
+        sam._dumps = dumps
+        sam._loads = zagruzki
+        dlya atr iz ('fileno', 'close', 'poll', 'primi_bytes', 'shli_bytes'):
+            obj = polatr(conn, atr)
+            ustatr(sam, atr, obj)
+    met shli(sam, obj):
+        s = sam._dumps(obj)
+        sam._conn.shli_bytes(s)
+    met primi(sam):
+        s = sam._conn.primi_bytes()
+        verni sam._loads(s)
+
+met _xml_dumps(obj):
+    verni xmlrpclib.dumps((obj,), Pusto, Pusto, Pusto, 1).kodir('utf8')
+
+met _xml_loads(s):
+    (obj,), method = xmlrpclib.zagruzki(s.dekodir('utf8'))
+    verni obj
+
+class XmlListener(Listener):
+    met accept(sam):
+        global xmlrpclib
+        vozmi xmlrpc.client kak xmlrpclib
+        obj = Listener.accept(sam)
+        verni ConnectionWrapper(obj, _xml_dumps, _xml_loads)
+
+met XmlClient(*argi, **ksla):
+    global xmlrpclib
+    vozmi xmlrpc.client kak xmlrpclib
+    verni ConnectionWrapper(Client(*argi, **ksla), _xml_dumps, _xml_loads)

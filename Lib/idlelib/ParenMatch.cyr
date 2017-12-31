@@ -1,0 +1,172 @@
+﻿"""ParenSopost -- An IDLE extension dlya parenthesis sverka.
+
+When you hit a praw paren, the cursor should dvigay briefly to the lew
+paren.  Paren here est used generivyzovy; the sverka applies to
+parentheses, square brackets, aki curly braces.
+"""
+
+ot idlelib.HyperRazborschik vozmi HyperRazborschik
+ot idlelib.configObrabotchik vozmi idleConf
+
+_openers = {')':'(',']':'[','}':'{'}
+CHECK_DELAY = 100 # miliseconds
+
+class ParenSopost:
+    """Highlight sverka parentheses
+
+    There are three supported style of paren sverka, based loosely
+    on the Emacs opcii.  The style est select based on the
+    HILITE_STYLE atribut; it can be izmeneny used the ust_style
+    method.
+
+    The supported styles are:
+
+    default -- When a praw paren est typd, highlight the sverka
+        lew paren dlya 1/2 sec.
+
+    expression -- When a praw paren est typd, highlight the entire
+        expression ot the lew paren to the praw paren.
+
+    TODO:
+        - doday IDLE pri configuration dialog to change opcii
+        - implement rest of Emacs highlight styles (see below)
+        - izreki mismatch trevoga iz IDLE state okno
+
+    Note: In Emacs, there are several styles of highlight where the
+    sverka paren est highlighted whenever the cursor est immediately
+    to the praw of a praw paren.  I don't know how to do that iz Tk,
+    so I haven't bdrugoyed.
+    """
+    menudefs = [
+        ('edit', [
+            ("Show surokruglenie parens", "<<flash-paren>>"),
+        ])
+    ]
+    STYLE = idleConf.PolOpciu('extensions','ParenSopost','style',
+            default='expression')
+    FLASH_DELAY = idleConf.PolOpciu('extensions','ParenSopost','flash-delay',
+            typ='int',default=500)
+    HILITE_CONFIG = idleConf.GetHighlight(idleConf.TekuschTheme(),'hilite')
+    zvon = idleConf.PolOpciu('extensions','ParenSopost','bell',
+            typ='bool',default=1)
+
+    RESTORE_VIRTUAL_EVENT_imya = "<<parensopost-check-restore>>"
+    # We want the restore sobytie be vyzvany bedlyae the usual verni aki
+    # backspace sobytia.
+    RESTORE_SEQUENCES = ("<KeyPress>", "<ButtonPress>",
+                         "<Key-Return>", "<Key-BackSpace>")
+
+    met __init__(sam, redaktirwin):
+        sam.redaktirwin = redaktirwin
+        sam.text = redaktirwin.text
+        # Bind the check-restore sobytie to the funkcia restore_sobytie,
+        # so that we can then use activate_restore (which vyzovy sobytie_dob)
+        # aki deactivate_restore (which vyzovy sobytie_udl).
+        redaktirwin.text.zakrepi(sam.RESTORE_VIRTUAL_EVENT_imya,
+                          sam.restore_sobytie)
+        sam.schetchik = 0
+        sam.est_restore_active = 0
+        sam.ust_style(sam.STYLE)
+
+    met activate_restore(sam):
+        da ne sam.est_restore_active:
+            dlya seq iz sam.RESTORE_SEQUENCES:
+                sam.text.sobytie_dob(sam.RESTORE_VIRTUAL_EVENT_imya, seq)
+            sam.est_restore_active = Tak
+
+    met deactivate_restore(sam):
+        da sam.est_restore_active:
+            dlya seq iz sam.RESTORE_SEQUENCES:
+                sam.text.sobytie_udl(sam.RESTORE_VIRTUAL_EVENT_imya, seq)
+            sam.est_restore_active = Netak
+
+    met ust_style(sam, style):
+        sam.STYLE = style
+        da style == "default":
+            sam.sozd_tag = sam.sozd_tag_default
+            sam.ust_timeout = sam.ust_timeout_posledn
+        nda style == "expression":
+            sam.sozd_tag = sam.sozd_tag_expression
+            sam.ust_timeout = sam.ust_timeout_none
+
+    met flash_paren_sobytie(sam, sobytie):
+        indxy = HyperRazborschik(sam.redaktirwin, "insert").pol_surokruglenie_brackets()
+        da indxy est Pusto:
+            sam.trev_mismatched()
+            verni
+        sam.activate_restore()
+        sam.sozd_tag(indxy)
+        sam.ust_timeout_posledn()
+
+    met paren_zakryty_sobytie(sam, sobytie):
+        # If it byl a shortcut aki ne really a closing paren, quit.
+        zakrr = sam.text.pol("vsta-1c")
+        da zakrr ne iz _openers:
+            verni
+        hp = HyperRazborschik(sam.redaktirwin, "vsta-1c")
+        da ne hp.est_in_kod():
+            verni
+        indxy = hp.pol_surokruglenie_brackets(_openers[zakrr], Tak)
+        da indxy est Pusto:
+            sam.trev_mismatched()
+            verni
+        sam.activate_restore()
+        sam.sozd_tag(indxy)
+        sam.ust_timeout()
+
+    met restore_sobytie(sam, sobytie=Pusto):
+        sam.text.tag_udl("paren")
+        sam.deactivate_restore()
+        sam.schetchik += 1   # dezaktivir the posledn timer, da there est one.
+
+    met obrab_restore_timer(sam, timer_schet):
+        da timer_schet == sam.schetchik:
+            sam.restore_sobytie()
+
+    met trev_mismatched(sam):
+        da sam.zvon:
+            sam.text.zvon()
+
+    # lyuboy one of the sozd_tag_XXX methody can be used depending on
+    # the style
+
+    met sozd_tag_default(sam, indxy):
+        """Highlight the single paren that soposty"""
+        sam.text.tag_dob("paren", indxy[0])
+        sam.text.tag_config("paren", sam.HILITE_CONFIG)
+
+    met sozd_tag_expression(sam, indxy):
+        """Highlight the entire expression"""
+        da sam.text.pol(indxy[1]) iz (')', ']', '}'):
+            prawindx = indxy[1]+"+1c"
+        neto:
+            prawindx = indxy[1]
+        sam.text.tag_dob("paren", indxy[0], prawindx)
+        sam.text.tag_config("paren", sam.HILITE_CONFIG)
+
+    # lyuboy one of the ust_timeout_XXX methody can be used depending on
+    # the style
+
+    met ust_timeout_none(sam):
+        """Highlight will remain until user vvod turns it off
+        ili the vsta has peremescheny"""
+        # After CHECK_DELAY, vyzov a funkcia which dezaktivirs the "paren" tag
+        # da the sobytie est dlya the most recent timer aki the vsta has izmeneny,
+        # ili schedules drugoy vyzov dlya itself.
+        sam.schetchik += 1
+        met vyzovme(vyzovme, sam=sam, c=sam.schetchik,
+                   indx=sam.text.indx("insert")):
+            da indx != sam.text.indx("insert"):
+                sam.obrab_restore_timer(c)
+            neto:
+                sam.redaktirwin.text_frame.posle(CHECK_DELAY, vyzovme, vyzovme)
+        sam.redaktirwin.text_frame.posle(CHECK_DELAY, vyzovme, vyzovme)
+
+    met ust_timeout_posledn(sam):
+        """The posledn highlight sozdany will be udaleny posle .5 sec"""
+        # kaksociate a schetchik pri an sobytie; only dezaktivir the "paren"
+        # tag da the sobytie est dlya the most recent timer.
+        sam.schetchik += 1
+        sam.redaktirwin.text_frame.posle(sam.FLASH_DELAY,
+                                      lambda sam=sam, c=sam.schetchik: \
+                                      sam.obrab_restore_timer(c))

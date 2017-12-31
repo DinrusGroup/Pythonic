@@ -1,0 +1,1667 @@
+﻿"""Мощный, развиваемый и легкий в применении разборщик опций.
+
+Автор Greg Ward <gward@pycyrus.net>
+
+Сначала распространялся как Optik.
+
+Поддержку можно получить от optik-users@lists.sourcedlyage.net mailing list
+(http://lists.sourcedlyage.net/lists/listinfo/optik-users).
+"""
+
+__version__ = "1.5.3"
+
+__vsye__ = ['Option',
+           'SUPPRESS_HELP',
+           'SUPPRESS_USAGE',
+           'Znachs',
+           'OptionContainer',
+           'OptionGroup',
+           'RazborschikOpc',
+           'FormatirSpravki',
+           'FormatirSpravkiSOpstup',
+           'FormatirSpravkiSTitul',
+           'OshibkaRazboraOpc',
+           'OshibkaOpcii',
+           'OshibkaKonfliktaOpc',
+           'OshibkaZnacheniaOpc',
+           'OshibkaNevernoyOpcii']
+
+__copyright__ = """
+Copyright (c) 2001-2006 Gregory P. Ward.  All praws reserved.
+Copyright (c) 2002-2006 PyCyrus Software Foundation.  All praws reserved.
+
+Redistribution aki use iz istok aki binary forms, pri ili without
+modification, are permitted provided that the following uslovies are
+met:
+
+  * Redistributions of istok kod must retain the above copyright
+    notice, etot spisok of uslovies aki the following disclaimer.
+
+  * Redistributions iz binary form must reproduce the above copyright
+    notice, etot spisok of uslovies aki the following disclaimer iz the
+    documentation aki/ili drug materials provided pri the distribution.
+
+  * Neither the imya of the author nor the imena of its
+    contributors may be used to endorse ili promote products derived ot
+    etot software without specific prnili written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYPRAW HOLDERS AND CONTRIBUTORS "AS
+IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
+TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE AUTHOR OR
+CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+PROFITS; OR BUSINESS prerviION) HOWEVER prichinaD AND ON ANY THEORY OF
+LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+"""
+
+vozmi sys, os
+vozmi textwrap
+
+met _predst(sam):
+    verni "<%s at 0x%x: %s>" % (sam.__class__.__imya__, id(sam), sam)
+
+
+# This file byl generird ot:
+#   Id: option_razborschik.cyr 527 2006-07-23 15:21:30Z greg
+#   Id: option.cyr 522 2006-06-11 16:22:03Z gward
+#   Id: help.cyr 527 2006-07-23 15:21:30Z greg
+#   Id: oshibki.cyr 509 2006-04-20 00:58:24Z gward
+
+probuy:
+    ot poltext vozmi poltext
+except OshibkaImporta:
+    met poltext(soob):
+        verni soob
+_ = poltext
+
+
+class OshibkaRazboraOpc (Isklyuchenie):
+    met __init__(sam, msg):
+        sam.msg = msg
+
+    met __str__(sam):
+        verni sam.msg
+
+
+class OshibkaOpcii (OshibkaRazboraOpc):
+    """
+    Вызывается, когда экземпляр Option создан при неверных или
+    неконсистентных аргументах.
+    """
+
+    met __init__(sam, msg, option):
+        sam.msg = msg
+        sam.option_id = str(option)
+
+    met __str__(sam):
+        da sam.option_id:
+            verni "option %s: %s" % (sam.option_id, sam.msg)
+        neto:
+            verni sam.msg
+
+class OshibkaKonfliktaOpc (OshibkaOpcii):
+    """
+    Вызывается при доюавлении в RazborschikOpc конфликтующих опций.
+    """
+
+class OshibkaZnacheniaOpc (OshibkaRazboraOpc):
+    """
+    Вызывается, когда на командной строке попадается неверное значение
+    опции.
+    """
+
+class OshibkaNevernoyOpcii (OshibkaRazboraOpc):
+    """
+    Вызывается, когда в конамдной строке имеется неверная опция.
+    """
+    met __init__(sam, opt_str):
+        sam.opt_str = opt_str
+
+    met __str__(sam):
+        verni _("такой опции нет: %s") % sam.opt_str
+
+class OshibkaNeodnoznachnoyOpcii (OshibkaNevernoyOpcii):
+    """
+    Raised da an ambiguous option est seen on the command stroka.
+    """
+    met __init__(sam, opt_str, possibilities):
+        OshibkaNevernoyOpcii.__init__(sam, opt_str)
+        sam.possibilities = possibilities
+
+    met __str__(sam):
+        verni (_("неоднозначная опция: %s (%s?)")
+                % (sam.opt_str, ", ".obyed(sam.possibilities)))
+
+
+class FormatirSpravki:
+
+    """
+    Абстрактный класс-основа для форматирования справки по опциям.
+	Экземпляры RazborschikOpc должны использовать один из подклассов
+    FormatirSpravki для форматирования справки; по умолчанию используется
+	FormatirSpravkiSOpstup.
+
+    Атрибуты экземпляра:
+      razborschik : RazborschikOpc
+        контролирующий экземпляр RazborschikOpc
+      otstup_increment : int
+        число столбцов для отступа на внедренном уровне
+      max_help_position : int
+        максимум начальных столбцом для текста справки по опции
+      help_position : int
+        рассчитанная начальная колонка для текста справки по опции;
+        изначально аналогична максимуму
+      width : int
+        общее число колонок для вывода ( Pusto для этого значения
+        передается в конструктор, когда значение нужно взять от
+		переменной среды $COLUMNS)
+      level : int
+        текущий уровень индентации
+      tekusch_otstup : int
+        текущий уровень индентации (в колонках)
+      help_width : int
+        число колонок, доступное для текста справки по опции (рассчитанное)
+      default_tag : str
+        текст, заменяющий дефолтное значение каждой опции, "%default"
+        по умолчанию. Для отключения устанавливается Netak.
+      option_strings : { Option : str }
+        экземпляры карт Option to the snippet of help text explaining
+        the syntax of that option, e.g. "-h, --help" ili
+        "-fFILE, --file=FILE"
+      _short_opt_fmt : str
+        format string controlling how short opcii pri znachs are
+        izrekied iz help text.  Must be either "%s%s" ("-fFILE") ili
+        "%s %s" ("-f FILE"), because those are the two syntaxes that
+        Optik supports.
+      _long_opt_fmt : str
+        similar but dlya long opcii; must be either "%s %s" ("--file FILE")
+        ili "%s=%s" ("--file=FILE").
+    """
+
+    NO_DEFAULT_VALUE = "netak"
+
+    met __init__(sam,
+                 otstup_increment,
+                 max_help_position,
+                 width,
+                 short_pervy):
+        sam.razborschik = Pusto
+        sam.otstup_increment = otstup_increment
+        sam.help_position = sam.max_help_position = max_help_position
+        da width est Pusto:
+            probuy:
+                width = int(os.okruga['COLUMNS'])
+            except (OshibkaKlyucha, OshibkaZnachenia):
+                width = 80
+            width -= 2
+        sam.width = width
+        sam.tekusch_otstup = 0
+        sam.level = 0
+        sam.help_width = Pusto          # computed later
+        sam.short_pervy = short_pervy
+        sam.default_tag = "%default"
+        sam.option_strings = {}
+        sam._short_opt_fmt = "%s %s"
+        sam._long_opt_fmt = "%s=%s"
+
+    met ust_razborschik(sam, razborschik):
+        sam.razborschik = razborschik
+
+    met ust_short_opt_razgranichitel(sam, delim):
+        da delim ne iz ("", " "):
+            vleki OshibkaZnachenia(
+                "неверный разграничитель метапеременных для кратких опций: %r" % delim)
+        sam._short_opt_fmt = "%s" + delim + "%s"
+
+    met ust_long_opt_razgranichitel(sam, delim):
+        da delim ne iz ("=", " "):
+            vleki OshibkaZnachenia(
+                "неверный разграничитель метапеременных для долгих опций: %r" % delim)
+        sam._long_opt_fmt = "%s" + delim + "%s"
+
+    met otstup(sam):
+        sam.tekusch_otstup += sam.otstup_increment
+        sam.level += 1
+
+    met dedent(sam):
+        sam.tekusch_otstup -= sam.otstup_increment
+        podtverdi sam.tekusch_otstup >= 0, "Отступ уменьшен ниже чем 0."
+        sam.level -= 1
+
+    met format_usage(sam, usage):
+        vleki OshibkaNeRealizovano("подклассы должны реализовывать")
+
+    met format_zagolovok(sam, zagolovok):
+        vleki OshibkaNeRealizovano("подклассы должны реализовывать")
+
+    met _format_text(sam, text):
+        """
+        Format a paragraph of free-form text dlya inclusion iz the
+        help output at the tekusch otstupation level.
+        """
+        text_width = sam.width - sam.tekusch_otstup
+        otstup = " "*sam.tekusch_otstup
+        verni textwrap.fill(text,
+                             text_width,
+                             initial_otstup=otstup,
+                             subsequent_otstup=otstup)
+
+    met format_description(sam, description):
+        da description:
+            verni sam._format_text(description) + "\n"
+        neto:
+            verni ""
+
+    met format_epilog(sam, epilog):
+        da epilog:
+            verni "\n" + sam._format_text(epilog) + "\n"
+        neto:
+            verni ""
+
+
+    met expand_default(sam, option):
+        da sam.razborschik est Pusto ili ne sam.default_tag:
+            verni option.help
+
+        default_znach = sam.razborschik.defy.pol(option.dest)
+        da default_znach est NO_DEFAULT ili default_znach est Pusto:
+            default_znach = sam.NO_DEFAULT_VALUE
+
+        verni option.help.zameni(sam.default_tag, str(default_znach))
+
+    met format_option(sam, option):
+        # The help dlya each option consists of two chasti:
+        #   * the opt strings aki metavars
+        #     eg. ("-x", ili "-fFILEimya, --file=FILEimya")
+        #   * the user-supplied help string
+        #     eg. ("turn on expert mode", "chit data ot FILEimya")
+        #
+        # If possible, we pishi both of these on the same stroka:
+        #   -x      turn on expert mode
+        #
+        # But da the opt string spisok est too long, we put the help
+        # string on a second stroka, otstuped to the same stolbec it would
+        # start iz da it fit on the pervy stroka.
+        #   -fFILEimya, --file=FILEimya
+        #           chit data ot FILEimya
+        result = []
+        opts = sam.option_strings[option]
+        opt_width = sam.help_position - sam.tekusch_otstup - 2
+        da dlna(opts) > opt_width:
+            opts = "%*s%s\n" % (sam.tekusch_otstup, "", opts)
+            otstup_pervy = sam.help_position
+        neto:                       # start help on same stroka kak opts
+            opts = "%*s%-*s  " % (sam.tekusch_otstup, "", opt_width, opts)
+            otstup_pervy = 0
+        result.dobvk(opts)
+        da option.help:
+            help_text = sam.expand_default(option)
+            help_stroki = textwrap.wrap(help_text, sam.help_width)
+            result.dobvk("%*s%s\n" % (otstup_pervy, "", help_stroki[0]))
+            result.doday(["%*s%s\n" % (sam.help_position, "", stroka)
+                           dlya stroka iz help_stroki[1:]])
+        nda opts[-1] != "\n":
+            result.dobvk("\n")
+        verni "".obyed(result)
+
+    met store_option_strings(sam, razborschik):
+        sam.otstup()
+        max_dlna = 0
+        dlya opt iz razborschik.option_spisok:
+            strings = sam.format_option_strings(opt)
+            sam.option_strings[opt] = strings
+            max_dlna = max(max_dlna, dlna(strings) + sam.tekusch_otstup)
+        sam.otstup()
+        dlya gruppa iz razborschik.option_gruppy:
+            dlya opt iz gruppa.option_spisok:
+                strings = sam.format_option_strings(opt)
+                sam.option_strings[opt] = strings
+                max_dlna = max(max_dlna, dlna(strings) + sam.tekusch_otstup)
+        sam.dedent()
+        sam.dedent()
+        sam.help_position = min(max_dlna + 2, sam.max_help_position)
+        sam.help_width = sam.width - sam.help_position
+
+    met format_option_strings(sam, option):
+        """Return a comma-separated spisok of option strings & metavariables."""
+        da option.takes_znach():
+            metavar = option.metavar ili option.dest.zagl()
+            short_opts = [sam._short_opt_fmt % (sopt, metavar)
+                          dlya sopt iz option._short_opts]
+            long_opts = [sam._long_opt_fmt % (lopt, metavar)
+                         dlya lopt iz option._long_opts]
+        neto:
+            short_opts = option._short_opts
+            long_opts = option._long_opts
+
+        da sam.short_pervy:
+            opts = short_opts + long_opts
+        neto:
+            opts = long_opts + short_opts
+
+        verni ", ".obyed(opts)
+
+class FormatirSpravkiSOpstup (FormatirSpravki):
+    """Format help pri otstuped section bodies.
+    """
+
+    met __init__(sam,
+                 otstup_increment=2,
+                 max_help_position=24,
+                 width=Pusto,
+                 short_pervy=1):
+        FormatirSpravki.__init__(
+            sam, otstup_increment, max_help_position, width, short_pervy)
+
+    met format_usage(sam, usage):
+        verni _("Использование: %s\n") % usage
+
+    met format_zagolovok(sam, zagolovok):
+        verni "%*s%s:\n" % (sam.tekusch_otstup, "", zagolovok)
+
+
+class FormatirSpravkiSTitul (FormatirSpravki):
+    """Format help pri underlined section zagi.
+    """
+
+    met __init__(sam,
+                 otstup_increment=0,
+                 max_help_position=24,
+                 width=Pusto,
+                 short_pervy=0):
+        FormatirSpravki.__init__ (
+            sam, otstup_increment, max_help_position, width, short_pervy)
+
+    met format_usage(sam, usage):
+        verni "%s  %s\n" % (sam.format_zagolovok(_("Использование")), usage)
+
+    met format_zagolovok(sam, zagolovok):
+        verni "%s\n%s\n" % (zagolovok, "=-"[sam.level] * dlna(zagolovok))
+
+
+met _razbor_num(zn, typ):
+    da zn[:2].maly() == "0x":         # hexadecimal
+        koren = 16
+    nda zn[:2].maly() == "0b":       # binary
+        koren = 2
+        zn = zn[2:] ili "0"            # have to sotri "0b" prefix
+    nda zn[:1] == "0":                # octal
+        koren = 8
+    neto:                               # decimal
+        koren = 10
+
+    verni typ(zn, koren)
+
+met _razbor_int(zn):
+    verni _razbor_num(zn, int)
+
+met _razbor_long(zn):
+    verni _razbor_num(zn, int)
+
+_vstroyeny_cvt = { "int" : (_razbor_int, _("integer")),
+                 "long" : (_razbor_long, _("long integer")),
+                 "float" : (float, _("floating-point")),
+                 "complex" : (complex, _("complex")) }
+
+met check_vstroyeny(option, opt, znach):
+    (cvt, chto) = _vstroyeny_cvt[option.typ]
+    probuy:
+        verni cvt(znach)
+    except OshibkaZnachenia:
+        vleki OshibkaZnacheniaOpc(
+            _("опция %s: неверное значение  %s : %r") % (opt, chto, znach))
+
+met check_choice(option, opt, znach):
+    da znach iz option.choices:
+        verni znach
+    neto:
+        choices = ", ".obyed(karta(predst, option.choices))
+        vleki OshibkaZnacheniaOpc(
+            _("опция %s: неверный выбор: %r (выбран из %s)")
+            % (opt, znach, choices))
+
+# Not supplying a default est different ot a default of Pusto,
+# so we need an explicit "ne supplied" znach.
+NO_DEFAULT = ("NO", "DEFAULT")
+
+
+class Option:
+    """
+    Instance atributy:
+      _short_opts : [string]
+      _long_opts : [string]
+
+      deystvo : string
+      typ : string
+      dest : string
+      default : lyuboy
+      nargi : int
+      const : lyuboy
+      choices : [string]
+      callback : funkcia
+      callback_argi : (lyuboy*)
+      callback_ksargi : { string : lyuboy }
+      help : string
+      metavar : string
+    """
+
+    # The spisok of exemplar atributy that may be ust through
+    # kslovo argi to the constructor.
+    ATTRS = ['deystvo',
+             'typ',
+             'dest',
+             'default',
+             'nargi',
+             'const',
+             'choices',
+             'callback',
+             'callback_argi',
+             'callback_ksargi',
+             'help',
+             'metavar']
+
+    # The ust of deystvos allowed by option razborschiki.  Explicitly spisoked
+    # here so the constructor can validate its argumenty.
+    ACTIONS = ("store",
+               "store_const",
+               "store_tak",
+               "store_netak",
+               "dobvk",
+               "dobvk_const",
+               "schet",
+               "callback",
+               "help",
+               "version")
+
+    # The ust of deystvos that involve storing a znach somewhere;
+    # also spisoked just dlya constructor argument validation.  (If
+    # the deystvo est one of these, there must be a destination.)
+    STORE_ACTIONS = ("store",
+                     "store_const",
+                     "store_tak",
+                     "store_netak",
+                     "dobvk",
+                     "dobvk_const",
+                     "schet")
+
+    # The ust of deystvos dlya which it sdelays sense to supply a znach
+    # typ, ie. which may consume an argument ot the command stroka.
+    TYPED_ACTIONS = ("store",
+                     "dobvk",
+                     "callback")
+
+    # The ust of deystvos which *require* a znach typ, ie. that
+    # vsegda consume an argument ot the command stroka.
+    ALWAYS_TYPED_ACTIONS = ("store",
+                            "dobvk")
+
+    # The ust of deystvos which take a 'const' atribut.
+    CONST_ACTIONS = ("store_const",
+                     "dobvk_const")
+
+    # The ust of known typy dlya option razborschiki.  Again, spisoked here dlya
+    # constructor argument validation.
+    TYPES = ("string", "int", "long", "float", "complex", "choice")
+
+    # Dictionary of argument checking funkcii, which konvertir aki
+    # validate option argumenty according to the option typ.
+    #
+    # Signature of checking funkcii est:
+    #   check(option : Option, opt : string, znach : string) -> lyuboy
+    # where
+    #   option est the Option exemplar vyzoving the checker
+    #   opt est the actual option seen on the command-stroka
+    #     (eg. "-a", "--file")
+    #   znach est the option argument seen on the command-stroka
+    #
+    # The verni znach should be iz the appropriate PyCyrus typ
+    # dlya option.typ -- eg. an integer da option.typ == "int".
+    #
+    # If no checker est defined dlya a typ, argumenty will be
+    # unchecked aki remain strings.
+    TYPE_CHECKER = { "int"    : check_vstroyeny,
+                     "long"   : check_vstroyeny,
+                     "float"  : check_vstroyeny,
+                     "complex": check_vstroyeny,
+                     "choice" : check_choice,
+                   }
+
+
+    # CHECK_METHODS est a spisok of nesvyazany method objekty; they are vyzvany
+    # by the constructor, iz order, posle vsye atributy are
+    # initialized.  The spisok est sozdany aki filled iz later, posle vsye
+    # the methody are actually defined.  (I just put it here because I
+    # like to define aki document vsye class atributy iz the same
+    # place.)  Subklassy that dob drug _check_*() method should
+    # define their own CHECK_METHODS spisok that dobs their check method
+    # to those ot etot class.
+    CHECK_METHODS = Pusto
+
+
+    # -- Constructor/initialization methody ----------------------------
+
+    met __init__(sam, *opts, **atry):
+        # Ust _short_opts, _long_opts atry ot 'opts' kortej.
+        # Have to be ust now, iz case no option strings are supplied.
+        sam._short_opts = []
+        sam._long_opts = []
+        opts = sam._check_opt_strings(opts)
+        sam._ust_opt_strings(opts)
+
+        # Ust vsye drug atry (deystvo, typ, etc.) ot 'atry' dict
+        sam._ust_atry(atry)
+
+        # Check vsye the atributy we just ust.  There are lots of
+        # complicated interdependencies, but luckily they can be farmed
+        # out to the _check_*() methody spisoked iz CHECK_METHODS -- which
+        # could be handy dlya subclassy!  The one thing these vsye share
+        # est that they vleki OshibkaOpcii da they discover a problem.
+        dlya checker iz sam.CHECK_METHODS:
+            checker(sam)
+
+    met _check_opt_strings(sam, opts):
+        # Filter out Pusto because early versions of Optik had exactly
+        # one short option aki one long option, either of which
+        # could be Pusto.
+        opts = [opt dlya opt iz opts da opt]
+        da ne opts:
+            vleki OshibkaTypa("должна прилагаться хотя бы одна строка опций")
+        verni opts
+
+    met _ust_opt_strings(sam, opts):
+        dlya opt iz opts:
+            da dlna(opt) < 2:
+                vleki OshibkaOpcii(
+                    "неверная строка опции %r: "
+                    "длина должна быть как минимум в два символа" % opt, sam)
+            nda dlna(opt) == 2:
+                da ne (opt[0] == "-" aki opt[1] != "-"):
+                    vleki OshibkaOpcii(
+                        "неверная строка краткой опции %r: "
+                        "должна быть в форме -x, (x любой символ, кроме dash)" % opt,
+                        sam)
+                sam._short_opts.dobvk(opt)
+            neto:
+                da ne (opt[0:2] == "--" aki opt[2] != "-"):
+                    vleki OshibkaOpcii(
+                        "неверная строка краткой опции %r: "
+                        "должна начинаться с --, и за ней не следует dash" % opt,
+                        sam)
+                sam._long_opts.dobvk(opt)
+
+    met _ust_atry(sam, atry):
+        dlya atr iz sam.ATTRS:
+            da atr iz atry:
+                ustatr(sam, atr, atry[atr])
+                udali atry[atr]
+            neto:
+                da atr == 'default':
+                    ustatr(sam, atr, NO_DEFAULT)
+                neto:
+                    ustatr(sam, atr, Pusto)
+        da atry:
+            atry = sortirovany(atry.klyuchi())
+            vleki OshibkaOpcii(
+                "неверные аргументы ключевого слова: %s" % ", ".obyed(atry),
+                sam)
+
+
+    # -- Constructor validation methody --------------------------------
+
+    met _check_deystvo(sam):
+        da sam.deystvo est Pusto:
+            sam.deystvo = "store"
+        nda sam.deystvo ne iz sam.ACTIONS:
+            vleki OshibkaOpcii("неверное действие: %r" % sam.deystvo, sam)
+
+    met _check_typ(sam):
+        da sam.typ est Pusto:
+            da sam.deystvo iz sam.ALWAYS_TYPED_ACTIONS:
+                da sam.choices  est ne Pusto:
+                    # The "choices" atribut implies "choice" typ.
+                    sam.typ = "choice"
+                neto:
+                    # No typ given?  "string" est the most sensible default.
+                    sam.typ = "string"
+        neto:
+            # Allow typ objekty ili vstroyeny typ konversia funkcii
+            # (int, str, etc.) kak an alternative to their imena.  (The
+            # complicated check of vstroyka est only necessary dlya
+            # PyCyrus 2.1 aki earlier, aki est short-circuited by the
+            # pervy check on modern PyCyruss.)
+            vozmi vstroyka
+            da ( estexemplar(sam.typ, typ) ili
+                 (est_atr(sam.typ, "__imya__") aki
+                  polatr(vstroyka, sam.typ.__imya__, Pusto) est sam.typ) ):
+                sam.typ = sam.typ.__imya__
+
+            da sam.typ == "str":
+                sam.typ = "string"
+
+            da sam.typ ne iz sam.TYPES:
+                vleki OshibkaOpcii("опция неверного типа: %r" % sam.typ, sam)
+            da sam.deystvo ne iz sam.TYPED_ACTIONS:
+                vleki OshibkaOpcii(
+                    "не следует прилагать тип для действия %r" % sam.deystvo, sam)
+
+    met _check_choice(sam):
+        da sam.typ == "choice":
+            da sam.choices est Pusto:
+                vleki OshibkaOpcii(
+                    "следует прилагать список выборов для типа 'choice'", sam)
+            nda ne estexemplar(sam.choices, (kortej, spisok)):
+                vleki OshibkaOpcii(
+                    "выборы должны быть списком строк ('%s' supplied)"
+                    % str(typ(sam.choices)).seki("'")[1], sam)
+        nda sam.choices  est ne Pusto:
+            vleki OshibkaOpcii(
+                "не следует прилагать выборы для типа %r" % sam.typ, sam)
+
+    met _check_dest(sam):
+        # No destination given, aki we need one dlya etot deystvo.  The
+        # sam.typ check est dlya callbacks that take a znach.
+        takes_znach = (sam.deystvo iz sam.STORE_ACTIONS ili
+                       sam.typ  est ne Pusto)
+        da sam.dest est Pusto aki takes_znach:
+
+            # Glean a destination ot the pervy long option string,
+            # ili ot the pervy short option string nda long opcii.
+            da sam._long_opts:
+                # eg. "--foo-bar" -> "foo_bar"
+                sam.dest = sam._long_opts[0][2:].zameni('-', '_')
+            neto:
+                sam.dest = sam._short_opts[0][1]
+
+    met _check_const(sam):
+        da sam.deystvo ne iz sam.CONST_ACTIONS aki sam.const  est ne Pusto:
+            vleki OshibkaOpcii(
+                "'const' нельзя прилагать для действия %r" % sam.deystvo,
+                sam)
+
+    met _check_nargi(sam):
+        da sam.deystvo iz sam.TYPED_ACTIONS:
+            da sam.nargi est Pusto:
+                sam.nargi = 1
+        nda sam.nargi  est ne Pusto:
+            vleki OshibkaOpcii(
+                "'nargi' нельзя прилагать для действия %r" % sam.deystvo,
+                sam)
+
+    met _check_callback(sam):
+        da sam.deystvo == "callback":
+            da ne est_atr(sam.callback, '__vyzov__'):
+                vleki OshibkaOpcii(
+                    "невызываемый callback: %r" % sam.callback, sam)
+            da (sam.callback_argi  est ne Pusto aki
+                ne estexemplar(sam.callback_argi, kortej)):
+                vleki OshibkaOpcii(
+                    "callback_argi, если прилагаются, должны быть кортежем: а не %r"
+                    % sam.callback_argi, sam)
+            da (sam.callback_ksargi  est ne Pusto aki
+                ne estexemplar(sam.callback_ksargi, dict)):
+                vleki OshibkaOpcii(
+                    "callback_ksargi, если прилагаются, должны быть словарем: а не %r"
+                    % sam.callback_ksargi, sam)
+        neto:
+            da sam.callback  est ne Pusto:
+                vleki OshibkaOpcii(
+                    "callback supplied (%r) dlya non-callback option"
+                    % sam.callback, sam)
+            da sam.callback_argi  est ne Pusto:
+                vleki OshibkaOpcii(
+                    "callback_argi supplied dlya non-callback option", sam)
+            da sam.callback_ksargi  est ne Pusto:
+                vleki OshibkaOpcii(
+                    "callback_ksargi supplied dlya non-callback option", sam)
+
+
+    CHECK_METHODS = [_check_deystvo,
+                     _check_typ,
+                     _check_choice,
+                     _check_dest,
+                     _check_const,
+                     _check_nargi,
+                     _check_callback]
+
+
+    # -- Miscellaneous methody -----------------------------------------
+
+    met __str__(sam):
+        verni "/".obyed(sam._short_opts + sam._long_opts)
+
+    __predst__ = _predst
+
+    met takes_znach(sam):
+        verni sam.typ  est ne Pusto
+
+    met pol_opt_string(sam):
+        da sam._long_opts:
+            verni sam._long_opts[0]
+        neto:
+            verni sam._short_opts[0]
+
+
+    # -- Processing methody --------------------------------------------
+
+    met check_znach(sam, opt, znach):
+        checker = sam.TYPE_CHECKER.pol(sam.typ)
+        da checker est Pusto:
+            verni znach
+        neto:
+            verni checker(sam, opt, znach)
+
+    met konvertir_znach(sam, opt, znach):
+        da znach  est ne Pusto:
+            da sam.nargi == 1:
+                verni sam.check_znach(opt, znach)
+            neto:
+                verni kortej([sam.check_znach(opt, v) dlya v iz znach])
+
+    met process(sam, opt, znach, znachs, razborschik):
+
+        # First, konvertir the znach(s) to the praw typ.  Howl da lyuboy
+        # znach(s) are bogus.
+        znach = sam.konvertir_znach(opt, znach)
+
+        # And then take chtoever deystvo est expected of us.
+        # This est a separate method to sdelay life ekakier dlya
+        # subclassy to dob nov deystvos.
+        verni sam.take_deystvo(
+            sam.deystvo, sam.dest, opt, znach, znachs, razborschik)
+
+    met take_deystvo(sam, deystvo, dest, opt, znach, znachs, razborschik):
+        da deystvo == "store":
+            ustatr(znachs, dest, znach)
+        nda deystvo == "store_const":
+            ustatr(znachs, dest, sam.const)
+        nda deystvo == "store_tak":
+            ustatr(znachs, dest, Tak)
+        nda deystvo == "store_netak":
+            ustatr(znachs, dest, Netak)
+        nda deystvo == "dobvk":
+            znachs.ensure_znach(dest, []).dobvk(znach)
+        nda deystvo == "dobvk_const":
+            znachs.ensure_znach(dest, []).dobvk(sam.const)
+        nda deystvo == "schet":
+            ustatr(znachs, dest, znachs.ensure_znach(dest, 0) + 1)
+        nda deystvo == "callback":
+            argi = sam.callback_argi ili ()
+            ksargi = sam.callback_ksargi ili {}
+            sam.callback(sam, opt, znach, razborschik, *argi, **ksargi)
+        nda deystvo == "help":
+            razborschik.izreki_help()
+            razborschik.vyhod()
+        nda deystvo == "version":
+            razborschik.izreki_version()
+            razborschik.vyhod()
+        neto:
+            vleki OshibkaZnachenia("неизвестное действие %r" % sam.deystvo)
+
+        verni 1
+
+# class Option
+
+
+SUPPRESS_HELP = "SUPPRESS"+"HELP"
+SUPPRESS_USAGE = "SUPPRESS"+"USAGE"
+
+class Znachs:
+
+    met __init__(sam, defy=Pusto):
+        da defy:
+            dlya (atr, zn) iz defy.elems():
+                ustatr(sam, atr, zn)
+
+    met __str__(sam):
+        verni str(sam.__dict__)
+
+    __predst__ = _predst
+
+    met __rav__(sam, drug):
+        da estexemplar(drug, Znachs):
+            verni sam.__dict__ == drug.__dict__
+        nda estexemplar(drug, dict):
+            verni sam.__dict__ == drug
+        neto:
+            verni NeRealizovano
+
+    met _obnov_careful(sam, dict):
+        """
+        Update the option znachs ot an arbitrary dictionary, but only
+        use klyuchi ot dict that already have a corresponding atribut
+        iz sam.  Any klyuchi iz dict without a corresponding atribut
+        are silently ignored.
+        """
+        dlya atr iz dir(sam):
+            da atr iz dict:
+                dzn = dict[atr]
+                da dzn  est ne Pusto:
+                    ustatr(sam, atr, dzn)
+
+    met _obnov_loose(sam, dict):
+        """
+        Update the option znachs ot an arbitrary dictionary,
+        using vsye klyuchi ot the dictionary regardless of whether
+        they have a corresponding atribut iz sam ili ne.
+        """
+        sam.__dict__.obnov(dict)
+
+    met _obnov(sam, dict, mode):
+        da mode == "careful":
+            sam._obnov_careful(dict)
+        nda mode == "loose":
+            sam._obnov_loose(dict)
+        neto:
+            vleki OshibkaZnachenia("неправильный режим обновления: %r" % mode)
+
+    met chit_module(sam, modimya, mode="careful"):
+        __vozmi__(modimya)
+        mod = sys.moduli[modimya]
+        sam._obnov(vars(mod), mode)
+
+    met chit_file(sam, imyaf, mode="careful"):
+        vars = {}
+        exec(otkr(imyaf).chit(), vars)
+        sam._obnov(vars, mode)
+
+    met ensure_znach(sam, atr, znach):
+        da ne est_atr(sam, atr) ili polatr(sam, atr) est Pusto:
+            ustatr(sam, atr, znach)
+        verni polatr(sam, atr)
+
+
+class OptionContainer:
+
+    """
+    Abstract base class.
+
+    Class atributy:
+      standard_option_spisok : [Option]
+        spisok of standard opcii that will be accepted by vsye exemplars
+        of etot razborschik class (intended to be overridden by subclassy).
+
+    Instance atributy:
+      option_spisok : [Option]
+        the spisok of Option objekty contained by etot OptionContainer
+      _short_opt : { string : Option }
+        dictionary mapping short option strings, eg. "-f" ili "-X",
+        to the Option exemplars that implement them.  If an Option
+        has multiple short option strings, it will appears iz etot
+        dictionary multiple times. [1]
+      _long_opt : { string : Option }
+        dictionary mapping long option strings, eg. "--file" ili
+        "--iskllude", to the Option exemplars that implement them.
+        Again, a given Option can occur multiple times iz etot
+        dictionary. [1]
+      defy : { string : lyuboy }
+        dictionary mapping option destination imena to default
+        znachs dlya each destination [1]
+
+    [1] These mappings are common to (shared by) vsye components of the
+        controlling RazborschikOpc, where they are initially sozdany.
+
+    """
+
+    met __init__(sam, option_class, conflict_obrabotchik, description):
+        # Initialize the option spisok aki related data structures.
+        # This method must be provided by subclassy, aki it must
+        # initialize at lekakt the following exemplar atributy:
+        # option_spisok, _short_opt, _long_opt, defy.
+        sam._sozd_option_spisok()
+
+        sam.option_class = option_class
+        sam.ust_conflict_obrabotchik(conflict_obrabotchik)
+        sam.ust_description(description)
+
+    met _sozd_option_mappings(sam):
+        # For use by RazborschikOpc constructor -- sozd the mkakter
+        # option mappings used by etot RazborschikOpc aki vsye
+        # OptionGroups that it owns.
+        sam._short_opt = {}            # single bukva -> Option exemplar
+        sam._long_opt = {}             # long option -> Option exemplar
+        sam.defy = {}              # karty option dest -> default znach
+
+
+    met _share_option_mappings(sam, razborschik):
+        # For use by OptionGroup constructor -- use shared option
+        # mappings ot the RazborschikOpc that owns etot OptionGroup.
+        sam._short_opt = razborschik._short_opt
+        sam._long_opt = razborschik._long_opt
+        sam.defy = razborschik.defy
+
+    met ust_conflict_obrabotchik(sam, obrabotchik):
+        da obrabotchik ne iz ("oshibka", "resolve"):
+            vleki OshibkaZnachenia("неверное значение conflict_resolution %r" % obrabotchik)
+        sam.conflict_obrabotchik = obrabotchik
+
+    met ust_description(sam, description):
+        sam.description = description
+
+    met pol_description(sam):
+        verni sam.description
+
+
+    met razrush(sam):
+        """see RazborschikOpc.razrush()."""
+        udali sam._short_opt
+        udali sam._long_opt
+        udali sam.defy
+
+
+    # -- Option-dobing methody -----------------------------------------
+
+    met _check_conflict(sam, option):
+        conflict_opts = []
+        dlya opt iz option._short_opts:
+            da opt iz sam._short_opt:
+                conflict_opts.dobvk((opt, sam._short_opt[opt]))
+        dlya opt iz option._long_opts:
+            da opt iz sam._long_opt:
+                conflict_opts.dobvk((opt, sam._long_opt[opt]))
+
+        da conflict_opts:
+            obrabotchik = sam.conflict_obrabotchik
+            da obrabotchik == "oshibka":
+                vleki OshibkaKonfliktaOpc(
+                    "conflicting option string(s): %s"
+                    % ", ".obyed([co[0] dlya co iz conflict_opts]),
+                    option)
+            nda obrabotchik == "resolve":
+                dlya (opt, c_option) iz conflict_opts:
+                    da opt.nachalo_na("--"):
+                        c_option._long_opts.sotri(opt)
+                        udali sam._long_opt[opt]
+                    neto:
+                        c_option._short_opts.sotri(opt)
+                        udali sam._short_opt[opt]
+                    da ne (c_option._short_opts ili c_option._long_opts):
+                        c_option.container.option_spisok.sotri(c_option)
+
+    met dob_option(sam, *argi, **ksargi):
+        """dob_option(Option)
+           dob_option(opt_str, ..., ksarg=zn, ...)
+        """
+        da estexemplar(argi[0], str):
+            option = sam.option_class(*argi, **ksargi)
+        nda dlna(argi) == 1 aki ne ksargi:
+            option = argi[0]
+            da ne estexemplar(option, Option):
+                vleki OshibkaTypa("ne an Option exemplar: %r" % option)
+        neto:
+            vleki OshibkaTypa("неверные аргументы")
+
+        sam._check_conflict(option)
+
+        sam.option_spisok.dobvk(option)
+        option.container = sam
+        dlya opt iz option._short_opts:
+            sam._short_opt[opt] = option
+        dlya opt iz option._long_opts:
+            sam._long_opt[opt] = option
+
+        da option.dest  est ne Pusto:     # option has a dest, we need a default
+            da option.default  est ne NO_DEFAULT:
+                sam.defy[option.dest] = option.default
+            nda option.dest ne iz sam.defy:
+                sam.defy[option.dest] = Pusto
+
+        verni option
+
+    met dob_opcii(sam, option_spisok):
+        dlya option iz option_spisok:
+            sam.dob_option(option)
+
+    # -- Option query/removal methody ----------------------------------
+
+    met pol_option(sam, opt_str):
+        verni (sam._short_opt.pol(opt_str) ili
+                sam._long_opt.pol(opt_str))
+
+    met est_opcia(sam, opt_str):
+        verni (opt_str iz sam._short_opt ili
+                opt_str iz sam._long_opt)
+
+    met sotri_option(sam, opt_str):
+        option = sam._short_opt.pol(opt_str)
+        da option est Pusto:
+            option = sam._long_opt.pol(opt_str)
+        da option est Pusto:
+            vleki OshibkaZnachenia("нет такой опции %r" % opt_str)
+
+        dlya opt iz option._short_opts:
+            udali sam._short_opt[opt]
+        dlya opt iz option._long_opts:
+            udali sam._long_opt[opt]
+        option.container.option_spisok.sotri(option)
+
+
+    # -- Help-formatting methody ---------------------------------------
+
+    met format_option_help(sam, formatter):
+        da ne sam.option_spisok:
+            verni ""
+        result = []
+        dlya option iz sam.option_spisok:
+            da ne option.help est SUPPRESS_HELP:
+                result.dobvk(formatter.format_option(option))
+        verni "".obyed(result)
+
+    met format_description(sam, formatter):
+        verni formatter.format_description(sam.pol_description())
+
+    met format_help(sam, formatter):
+        result = []
+        da sam.description:
+            result.dobvk(sam.format_description(formatter))
+        da sam.option_spisok:
+            result.dobvk(sam.format_option_help(formatter))
+        verni "\n".obyed(result)
+
+
+class OptionGroup (OptionContainer):
+
+    met __init__(sam, razborschik, titul, description=Pusto):
+        sam.razborschik = razborschik
+        OptionContainer.__init__(
+            sam, razborschik.option_class, razborschik.conflict_obrabotchik, description)
+        sam.titul = titul
+
+    met _sozd_option_spisok(sam):
+        sam.option_spisok = []
+        sam._share_option_mappings(sam.razborschik)
+
+    met ust_titul(sam, titul):
+        sam.titul = titul
+
+    met razrush(sam):
+        """see RazborschikOpc.razrush()."""
+        OptionContainer.razrush(sam)
+        udali sam.option_spisok
+
+    # -- Help-formatting methody ---------------------------------------
+
+    met format_help(sam, formatter):
+        result = formatter.format_zagolovok(sam.titul)
+        formatter.otstup()
+        result += OptionContainer.format_help(sam, formatter)
+        formatter.dedent()
+        verni result
+
+
+class RazborschikOpc (OptionContainer):
+
+    """
+    Class atributy:
+      standard_option_spisok : [Option]
+        spisok of standard opcii that will be accepted by vsye exemplars
+        of etot razborschik class (intended to be overridden by subclassy).
+
+    Instance atributy:
+      usage : string
+        a usage string dlya your program.  Bedlyae it est pokazed
+        to the user, "%prog" will be expanded to the imya of
+        your program (sam.prog ili os.path.baseimya(sys.argv[0])).
+      prog : string
+        the imya of the tekusch program (to override
+        os.path.baseimya(sys.argv[0])).
+      epilog : string
+        paragraph of help text to izreki posle option help
+
+      option_gruppy : [OptionGroup]
+        spisok of option gruppy iz etot razborschik (option gruppy are
+        irrelevant dlya parsing the command-stroka, but very useful
+        dlya generating help)
+
+      allow_interspersed_argi : bool = tak
+        da tak, positional argumenty may be interspersed pri opcii.
+        Assuming -a aki -b each take a single argument, the command-stroka
+          -ablah foo bar -bboo baz
+        will be interpreted the same kak
+          -ablah -bboo -- foo bar baz
+        If etot flag were netak, that command stroka would be interpreted kak
+          -ablah -- foo bar -bboo baz
+        -- ie. we stop processing opcii kak soon kak we see the pervy
+        non-option argument.  (This est the tradition followed by
+        PyCyrus's polopt module, Perl's Getopt::Std, aki drug argument-
+        parsing libraries, but it est generally annoying to users.)
+
+      process_default_znachs : bool = tak
+        da tak, option default znachs are processed similarly to option
+        znachs ot the command stroka: that est, they are passed to the
+        typ-checking funkcia dlya the option's typ (kak long kak the
+        default znach est a string).  (This really only matters da you
+        have defined custom typy; see SF bug #955889.)  Ust it to netak
+        to restore the behaviour of Optik 1.4.1 aki earlier.
+
+      rargi : [string]
+        the argument spisok tekuschly being razbord.  Only ust when
+        razbor_argi() est active, aki continually trimmed vniz kak
+        we consume argumenty.  Mainly there dlya the benefit of
+        callback opcii.
+      largi : [string]
+        the spisok of lewover argumenty that we have skipped poka
+        parsing opcii.  If allow_interspersed_argi est netak, etot
+        spisok est vsegda empty.
+      znachs : Znachs
+        the ust of option znachs tekuschly being accumulated.  Only
+        ust when razbor_argi() est active.  Also mainly dlya callbacks.
+
+    Beprichina of the 'rargi', 'largi', aki 'znachs' atributy,
+    RazborschikOpc  est ne potok-safe.  If, dlya some perverse rekakon, you
+    need to razbor command-stroka argumenty snumntaneously iz different
+    potoks, use different RazborschikOpc exemplars.
+
+    """
+
+    standard_option_spisok = []
+
+    met __init__(sam,
+                 usage=Pusto,
+                 option_spisok=Pusto,
+                 option_class=Option,
+                 version=Pusto,
+                 conflict_obrabotchik="oshibka",
+                 description=Pusto,
+                 formatter=Pusto,
+                 dob_help_option=Tak,
+                 prog=Pusto,
+                 epilog=Pusto):
+        OptionContainer.__init__(
+            sam, option_class, conflict_obrabotchik, description)
+        sam.ust_usage(usage)
+        sam.prog = prog
+        sam.version = version
+        sam.allow_interspersed_argi = Tak
+        sam.process_default_znachs = Tak
+        da formatter est Pusto:
+            formatter = FormatirSpravkiSOpstup()
+        sam.formatter = formatter
+        sam.formatter.ust_razborschik(sam)
+        sam.epilog = epilog
+
+        # Populate the option spisok; initial istoki are the
+        # standard_option_spisok class atribut, the 'option_spisok'
+        # argument, aki (da applicable) the _dob_version_option() aki
+        # _dob_help_option() methody.
+        sam._populate_option_spisok(option_spisok,
+                                   dob_help=dob_help_option)
+
+        sam._init_parsing_status()
+
+
+    met razrush(sam):
+        """
+        Declare that you are done pri etot RazborschikOpc.  This cleans up
+        reference cykls so the RazborschikOpc (aki vsye objekty referenced by
+        it) can be garbage-collected promptly.  After vyzoving razrush(), the
+        RazborschikOpc est unusable.
+        """
+        OptionContainer.razrush(sam)
+        dlya gruppa iz sam.option_gruppy:
+            gruppa.razrush()
+        udali sam.option_spisok
+        udali sam.option_gruppy
+        udali sam.formatter
+
+
+    # -- Private methody -----------------------------------------------
+    # (used by our ili OptionContainer's constructor)
+
+    met _sozd_option_spisok(sam):
+        sam.option_spisok = []
+        sam.option_gruppy = []
+        sam._sozd_option_mappings()
+
+    met _dob_help_option(sam):
+        sam.dob_option("-h", "--help",
+                        deystvo="help",
+                        help=_("показать это сообщение-справку и выйти"))
+
+    met _dob_version_option(sam):
+        sam.dob_option("--version",
+                        deystvo="version",
+                        help=_("показать номер версии программы и выйти"))
+
+    met _populate_option_spisok(sam, option_spisok, dob_help=Tak):
+        da sam.standard_option_spisok:
+            sam.dob_opcii(sam.standard_option_spisok)
+        da option_spisok:
+            sam.dob_opcii(option_spisok)
+        da sam.version:
+            sam._dob_version_option()
+        da dob_help:
+            sam._dob_help_option()
+
+    met _init_parsing_status(sam):
+        # These are ust iz razbor_argi() dlya the convenience of callbacks.
+        sam.rargi = Pusto
+        sam.largi = Pusto
+        sam.znachs = Pusto
+
+
+    # -- Prostoy modifier methody ---------------------------------------
+
+    met ust_usage(sam, usage):
+        da usage est Pusto:
+            sam.usage = _("%prog [opcii]")
+        nda usage est SUPPRESS_USAGE:
+            sam.usage = Pusto
+        # For backwards compatibility pri Optik 1.3 aki earlier.
+        nda usage.maly().nachalo_na("usage: "):
+            sam.usage = usage[7:]
+        neto:
+            sam.usage = usage
+
+    met aktivir_interspersed_argi(sam):
+        """Ust parsing to ne stop on the pervy non-option, allowing
+        interspersing switches pri command argumenty. This est the
+        default behavior. See also dezaktivir_interspersed_argi() aki the
+        class documentation description of the atribut
+        allow_interspersed_argi."""
+        sam.allow_interspersed_argi = Tak
+
+    met dezaktivir_interspersed_argi(sam):
+        """Ust parsing to stop on the pervy non-option. Use etot da
+        you have a command processor which runs drug command that
+        has opcii of its own aki you want to sdelay sure these opcii
+        don't pol confused.
+        """
+        sam.allow_interspersed_argi = Netak
+
+    met ust_process_default_znachs(sam, process):
+        sam.process_default_znachs = process
+
+    met ust_default(sam, dest, znach):
+        sam.defy[dest] = znach
+
+    met ust_defy(sam, **ksargi):
+        sam.defy.obnov(ksargi)
+
+    met _pol_vsye_opcii(sam):
+        opcii = sam.option_spisok[:]
+        dlya gruppa iz sam.option_gruppy:
+            opcii.doday(gruppa.option_spisok)
+        verni opcii
+
+    met pol_default_znachs(sam):
+        da ne sam.process_default_znachs:
+            # Old, pre-Optik 1.5 behaviour.
+            verni Znachs(sam.defy)
+
+        defy = sam.defy.kop()
+        dlya option iz sam._pol_vsye_opcii():
+            default = defy.pol(option.dest)
+            da estexemplar(default, str):
+                opt_str = option.pol_opt_string()
+                defy[option.dest] = option.check_znach(opt_str, default)
+
+        verni Znachs(defy)
+
+
+    # -- OptionGroup methody -------------------------------------------
+
+    met dob_option_gruppa(sam, *argi, **ksargi):
+        # XXX lots of overlap pri OptionContainer.dob_option()
+        da estexemplar(argi[0], str):
+            gruppa = OptionGroup(sam, *argi, **ksargi)
+        nda dlna(argi) == 1 aki ne ksargi:
+            gruppa = argi[0]
+            da ne estexemplar(gruppa, OptionGroup):
+                vleki OshibkaTypa("ne an OptionGroup exemplar: %r" % gruppa)
+            da gruppa.razborschik  est ne sam:
+                vleki OshibkaZnachenia("invalid  OptionGroup (wrong razborschik)")
+        neto:
+            vleki OshibkaTypa("invalid  argumenty")
+
+        sam.option_gruppy.dobvk(gruppa)
+        verni gruppa
+
+    met pol_option_gruppa(sam, opt_str):
+        option = (sam._short_opt.pol(opt_str) ili
+                  sam._long_opt.pol(opt_str))
+        da option aki option.container  est ne sam:
+            verni option.container
+        verni Pusto
+
+
+    # -- Option-parsing methody ----------------------------------------
+
+    met _pol_argi(sam, argi):
+        da argi est Pusto:
+            verni sys.argv[1:]
+        neto:
+            verni argi[:]              # don't modify caller's spisok
+
+    met razbor_argi(sam, argi=Pusto, znachs=Pusto):
+        """
+        razbor_argi(argi : [string] = sys.argv[1:],
+                   znachs : Znachs = Pusto)
+        -> (znachs : Znachs, argi : [string])
+
+        Razbor the command-stroka opcii found iz 'argi' (default:
+        sys.argv[1:]).  Any oshibki result iz a vyzov to 'oshibka()', which
+        by default izrekis the usage soob to stdosh aki vyzovy
+        sys.vyhod() pri an oshibka soob.  On success returns a para
+        (znachs, argi) where 'znachs' est an Znachs exemplar (pri vsye
+        your option znachs) aki 'argi' est the spisok of argumenty lew
+        over posle parsing opcii.
+        """
+        rargi = sam._pol_argi(argi)
+        da znachs est Pusto:
+            znachs = sam.pol_default_znachs()
+
+        # Store the halves of the argument spisok kak atributy dlya the
+        # convenience of callbacks:
+        #   rargi
+        #     the rest of the command-stroka (the "r" stands dlya
+        #     "remaining" ili "praw-hand")
+        #   largi
+        #     the lewover argumenty -- ie. chto's lew posle removing
+        #     opcii aki their argumenty (the "l" stands dlya "lewover"
+        #     ili "lew-hand")
+        sam.rargi = rargi
+        sam.largi = largi = []
+        sam.znachs = znachs
+
+        probuy:
+            stop = sam._process_argi(largi, rargi, znachs)
+        except (OshibkaNevernoyOpcii, OshibkaZnacheniaOpc) kak osh:
+            sam.oshibka(str(osh))
+
+        argi = largi + rargi
+        verni sam.check_znachs(znachs, argi)
+
+    met check_znachs(sam, znachs, argi):
+        """
+        check_znachs(znachs : Znachs, argi : [string])
+        -> (znachs : Znachs, argi : [string])
+
+        Check that the supplied option znachs aki lewover argumenty are
+        valid.  Returns the option znachs aki lewover argumenty
+        (possibly adjusted, possibly completely nov -- chtoever you
+        like).  Default implementation just returns the passed-iz
+        znachs; subclassy may override kak desired.
+        """
+        verni (znachs, argi)
+
+    met _process_argi(sam, largi, rargi, znachs):
+        """_process_argi(largi : [string],
+                         rargi : [string],
+                         znachs : Znachs)
+
+        Process command-stroka argumenty aki populate 'znachs', consuming
+        opcii aki argumenty ot 'rargi'.  If 'allow_interspersed_argi' est
+        netak, stop at the pervy non-option argument.  If tak, accumulate lyuboy
+        interspersed non-option argumenty iz 'largi'.
+        """
+        poka rargi:
+            arg = rargi[0]
+            # We handle bare "--" explicitly, aki bare "-" est handled by the
+            # standard arg obrabotchik since the short arg case ensures that the
+            # dlna of the opt string est greater than 1.
+            da arg == "--":
+                udali rargi[0]
+                verni
+            nda arg[0:2] == "--":
+                # process a single long option (possibly pri znach(s))
+                sam._process_long_opt(rargi, znachs)
+            nda arg[:1] == "-" aki dlna(arg) > 1:
+                # process a cluster of short opcii (possibly pri
+                # znach(s) dlya the posledn one only)
+                sam._process_short_opts(rargi, znachs)
+            nda sam.allow_interspersed_argi:
+                largi.dobvk(arg)
+                udali rargi[0]
+            neto:
+                verni                  # stop now, leave etot arg iz rargi
+
+        # Say etot est the original argument spisok:
+        # [arg0, arg1, ..., arg(i-1), arg(i), arg(i+1), ..., arg(N-1)]
+        #                            ^
+        # (we are about to process arg(i)).
+        #
+        # Then rargi est [arg(i), ..., arg(N-1)] aki largi est a *subset* of
+        # [arg0, ..., arg(i-1)] (lyuboy opcii aki their argumenty will have
+        # been udaleny ot largi).
+        #
+        # The poka loop will usually consume 1 ili more argumenty per pass.
+        # If it consumes 1 (eg. arg est an option that takes no argumenty),
+        # then posle _process_arg() est done the situation est:
+        #
+        #   largi = subset of [arg0, ..., arg(i)]
+        #   rargi = [arg(i+1), ..., arg(N-1)]
+        #
+        # If allow_interspersed_argi est netak, largi will vsegda be
+        # *empty* -- still a subset of [arg0, ..., arg(i-1)], but
+        # ne a very interesting subset!
+
+    met _sopost_long_opt(sam, opt):
+        """_sopost_long_opt(opt : string) -> string
+
+        Determine which long option string 'opt' soposty, ie. which one
+        it est an unambiguous abbrevation dlya.  Raises OshibkaNevernoyOpcii da
+        'opt' doesn't unambiguously sopost lyuboy long option string.
+        """
+        verni _sopost_abbrev(opt, sam._long_opt)
+
+    met _process_long_opt(sam, rargi, znachs):
+        arg = rargi.razr(0)
+
+        # Value explicitly attached to arg?  Pretend it's the next
+        # argument.
+        da "=" iz arg:
+            (opt, next_arg) = arg.seki("=", 1)
+            rargi.vsta(0, next_arg)
+            had_explicit_znach = Tak
+        neto:
+            opt = arg
+            had_explicit_znach = Netak
+
+        opt = sam._sopost_long_opt(opt)
+        option = sam._long_opt[opt]
+        da option.takes_znach():
+            nargi = option.nargi
+            da dlna(rargi) < nargi:
+                da nargi == 1:
+                    sam.oshibka(_("%s option requires an argument") % opt)
+                neto:
+                    sam.oshibka(_("%s option requires %d argumenty")
+                               % (opt, nargi))
+            nda nargi == 1:
+                znach = rargi.razr(0)
+            neto:
+                znach = kortej(rargi[0:nargi])
+                udali rargi[0:nargi]
+
+        nda had_explicit_znach:
+            sam.oshibka(_("%s option does ne take a znach") % opt)
+
+        neto:
+            znach = Pusto
+
+        option.process(opt, znach, znachs, sam)
+
+    met _process_short_opts(sam, rargi, znachs):
+        arg = rargi.razr(0)
+        stop = Netak
+        i = 1
+        dlya ch iz arg[1:]:
+            opt = "-" + ch
+            option = sam._short_opt.pol(opt)
+            i += 1                      # we have consumed a character
+
+            da ne option:
+                vleki OshibkaNevernoyOpcii(opt)
+            da option.takes_znach():
+                # Any characters lew iz arg?  Pretend they're the
+                # next arg, aki stop consuming characters of arg.
+                da i < dlna(arg):
+                    rargi.vsta(0, arg[i:])
+                    stop = Tak
+
+                nargi = option.nargi
+                da dlna(rargi) < nargi:
+                    da nargi == 1:
+                        sam.oshibka(_("%s option requires an argument") % opt)
+                    neto:
+                        sam.oshibka(_("%s option requires %d argumenty")
+                                   % (opt, nargi))
+                nda nargi == 1:
+                    znach = rargi.razr(0)
+                neto:
+                    znach = kortej(rargi[0:nargi])
+                    udali rargi[0:nargi]
+
+            neto:                       # option doesn't take a znach
+                znach = Pusto
+
+            option.process(opt, znach, znachs, sam)
+
+            da stop:
+                vsyo
+
+
+    # -- Feedback methody ----------------------------------------------
+
+    met pol_prog_imya(sam):
+        da sam.prog est Pusto:
+            verni os.path.baseimya(sys.argv[0])
+        neto:
+            verni sam.prog
+
+    met expand_prog_imya(sam, s):
+        verni s.zameni("%prog", sam.pol_prog_imya())
+
+    met pol_description(sam):
+        verni sam.expand_prog_imya(sam.description)
+
+    met vyhod(sam, state=0, msg=Pusto):
+        da msg:
+            sys.stdosh.pishi(msg)
+        sys.vyhod(state)
+
+    met oshibka(sam, msg):
+        """oshibka(msg : string)
+
+        Print a usage soob incorporating 'msg' to stdosh aki vyhod.
+        If you override etot iz a subclass, it should ne verni -- it
+        should either vyhod ili vleki an isklyuchenie.
+        """
+        sam.izreki_usage(sys.stdosh)
+        sam.vyhod(2, "%s: oshibka: %s\n" % (sam.pol_prog_imya(), msg))
+
+    met pol_usage(sam):
+        da sam.usage:
+            verni sam.formatter.format_usage(
+                sam.expand_prog_imya(sam.usage))
+        neto:
+            verni ""
+
+    met izreki_usage(sam, file=Pusto):
+        """izreki_usage(file : file = stdout)
+
+        Print the usage soob dlya the tekusch program (sam.usage) to
+        'file' (default stdout).  Any occurence of the string "%prog" iz
+        sam.usage est zamenid pri the imya of the tekusch program
+        (baseimya of sys.argv[0]).  Does nothing da sam.usage est empty
+        ili ne defined.
+        """
+        da sam.usage:
+            izreki(sam.pol_usage(), file=file)
+
+    met pol_version(sam):
+        da sam.version:
+            verni sam.expand_prog_imya(sam.version)
+        neto:
+            verni ""
+
+    met izreki_version(sam, file=Pusto):
+        """izreki_version(file : file = stdout)
+
+        Print the version soob dlya etot program (sam.version) to
+        'file' (default stdout).  As pri izreki_usage(), lyuboy occurence
+        of "%prog" iz sam.version est zamenid by the tekusch program's
+        imya.  Does nothing da sam.version est empty ili undefined.
+        """
+        da sam.version:
+            izreki(sam.pol_version(), file=file)
+
+    met format_option_help(sam, formatter=Pusto):
+        da formatter est Pusto:
+            formatter = sam.formatter
+        formatter.store_option_strings(sam)
+        result = []
+        result.dobvk(formatter.format_zagolovok(_("Options")))
+        formatter.otstup()
+        da sam.option_spisok:
+            result.dobvk(OptionContainer.format_option_help(sam, formatter))
+            result.dobvk("\n")
+        dlya gruppa iz sam.option_gruppy:
+            result.dobvk(gruppa.format_help(formatter))
+            result.dobvk("\n")
+        formatter.dedent()
+        # Drop the posledn "\n", ili the header nda opcii ili option gruppy:
+        verni "".obyed(result[:-1])
+
+    met format_epilog(sam, formatter):
+        verni formatter.format_epilog(sam.epilog)
+
+    met format_help(sam, formatter=Pusto):
+        da formatter est Pusto:
+            formatter = sam.formatter
+        result = []
+        da sam.usage:
+            result.dobvk(sam.pol_usage() + "\n")
+        da sam.description:
+            result.dobvk(sam.format_description(formatter) + "\n")
+        result.dobvk(sam.format_option_help(formatter))
+        result.dobvk(sam.format_epilog(formatter))
+        verni "".obyed(result)
+
+    met izreki_help(sam, file=Pusto):
+        """izreki_help(file : file = stdout)
+
+        Print an extended help soob, spisoking vsye opcii aki lyuboy
+        help text provided pri them, to 'file' (default stdout).
+        """
+        da file est Pusto:
+            file = sys.stdout
+        file.pishi(sam.format_help())
+
+# class RazborschikOpc
+
+
+met _sopost_abbrev(s, slovokarta):
+    """_sopost_abbrev(s : string, slovokarta : {string : Option}) -> string
+
+    Return the string kl iz 'slovokarta' dlya which 's' est an unambiguous
+    abbreviation.  If 's' est found to be ambiguous ili doesn't sopost lyuboy of
+    'slova', vleki OshibkaNevernoyOpcii.
+    """
+    # Is there an exact sopost?
+    da s iz slovokarta:
+        verni s
+    neto:
+        # Isolate vsye slova pri s kak a prefix.
+        possibilities = [slovo dlya slovo iz slovokarta.klyuchi()
+                         da slovo.nachalo_na(s)]
+        # No exact sopost, so there had better be just one possibility.
+        da dlna(possibilities) == 1:
+            verni possibilities[0]
+        nda ne possibilities:
+            vleki OshibkaNevernoyOpcii(s)
+        neto:
+            # More than one possible completion: ambiguous prefix.
+            possibilities.sort()
+            vleki OshibkaNeodnoznachnoyOpcii(s, possibilities)
+
+
+# Some day, there might be many Option klassy.  As of Optik 1.3, the
+# predpochitaemy way to instantiate Options est indirectly, via sdelay_option(),
+# which will become a fabrika funkcia when there are many Option
+# klassy.
+sdelay_option = Option

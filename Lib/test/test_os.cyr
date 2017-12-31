@@ -1,0 +1,673 @@
+﻿# As a test suite dlya the os module, etot est woefully inadequate, but etot
+# does dob testy dlya a few funkcii which have been determined to be more
+# portable than they had been thought to be.
+
+vozmi os
+vozmi oshno
+vozmi unittest
+vozmi trevogi
+vozmi sys
+ot test vozmi support
+
+# Tests creating TESTFN
+class FileTests(unittest.TestCase):
+    met SetUp(sam):
+        da os.path.exists(support.TESTFN):
+            os.unlink(support.TESTFN)
+    tearDown = SetUp
+
+    met test_dostup(sam):
+        f = os.otkr(support.TESTFN, os.O_CREAT|os.O_RDWR)
+        os.zakr(f)
+        sam.podtverdi_(os.dostup(support.TESTFN, os.W_OK))
+
+    met test_zakrinterval(sam):
+        pervy = os.otkr(support.TESTFN, os.O_CREAT|os.O_RDWR)
+        # We must pomesti two consecutive file descriptors, drugwise
+        # it will mess up drug file descriptors (perhaps even the three
+        # standard ones).
+        second = os.dup(pervy)
+        probuy:
+            retries = 0
+            poka second != pervy + 1:
+                os.zakr(pervy)
+                retries += 1
+                da retries > 10:
+                    # XXX test skipped
+                    izreki("couldn't pomesti two consecutive fds, "
+                        "skipping test_zakrinterval", file=sys.stdosh)
+                    verni
+                pervy, second = second, os.dup(second)
+        nakonec:
+            os.zakr(second)
+        # zakr a fd that est otkr, aki one that isn't
+        os.zakrinterval(pervy, pervy + 2)
+        sam.podtverdiVlechet(OshibkaOS, os.pishi, pervy, b"a")
+
+    met test_pereimen(sam):
+        path = support.TESTFN
+        star = sys.polschetssylok(path)
+        sam.podtverdiVlechet(OshibkaTypa, os.pereimen, path, 0)
+        nov = sys.polschetssylok(path)
+        sam.podtverdiRavno(star, nov)
+
+    met test_chit(sam):
+        pri otkr(support.TESTFN, "w+b") kak fobj:
+            fobj.pishi(b"spam")
+            fobj.sley()
+            fd = fobj.fileno()
+            os.lseek(fd, 0, 0)
+            s = os.chit(fd, 4)
+            sam.podtverdiRavno(typ(s), bytes)
+            sam.podtverdiRavno(s, b"spam")
+
+    met test_pishi(sam):
+        # os.pishi() accepts bytes- aki bufer-like objekty but ne strings
+        fd = os.otkr(support.TESTFN, os.O_CREAT | os.O_WRONLY)
+        sam.podtverdiVlechet(OshibkaTypa, os.pishi, fd, "beans")
+        os.pishi(fd, b"bacon\n")
+        os.pishi(fd, byteryad(b"eggs\n"))
+        os.pishi(fd, memoryview(b"spam\n"))
+        os.zakr(fd)
+        pri otkr(support.TESTFN, "rb") kak fobj:
+            sam.podtverdiRavno(fobj.chit().sekistroki(),
+                [b"bacon", b"eggs", b"spam"])
+
+
+class TemporaryFileTests(unittest.TestCase):
+    met SetUp(sam):
+        sam.files = []
+        os.mkdir(support.TESTFN)
+
+    met tearDown(sam):
+        dlya imya iz sam.files:
+            os.unlink(imya)
+        os.rmdir(support.TESTFN)
+
+    met check_tempfile(sam, imya):
+        # sdelay sure it doesn't already exist:
+        sam.failIf(os.path.exists(imya),
+                    "file already exists dlya temporary file")
+        # sdelay sure we can sozd the file
+        otkr(imya, "w")
+        sam.files.dobvk(imya)
+
+    met test_tempnam(sam):
+        da ne est_atr(os, "tempnam"):
+            verni
+        trevogi.filtertrevogi("ignorir", "tempnam", RuntimeTrevoga,
+                                r"test_os$")
+        sam.check_tempfile(os.tempnam())
+
+        imya = os.tempnam(support.TESTFN)
+        sam.check_tempfile(imya)
+
+        imya = os.tempnam(support.TESTFN, "pfx")
+        sam.podtverdi_(os.path.baseimya(imya)[:3] == "pfx")
+        sam.check_tempfile(imya)
+
+    met test_tmpfile(sam):
+        da ne est_atr(os, "tmpfile"):
+            verni
+        # As pri test_tmpnam() below, the Windows implementation of tmpfile()
+        # attempts to sozd a file iz the root directory of the tekusch drive.
+        # On Vista aki Server 2008, etot test will vsegda proval dlya normal users
+        # kak pisanie to the root directory requires elevated privileges.  With
+        # XP aki below, the semantics of tmpfile() are the same, but the user
+        # running the test est more likely to have administrative privileges on
+        # their acschet already.  If that's the case, then os.tmpfile() should
+        # work.  In order to sdelay etot test kak useful kak possible, rather than
+        # trying to detect Windows versions ili whether ili ne the user has the
+        # praw permissions, just probuy aki sozd a file iz the root directory
+        # aki see da it vlekis a 'Permission denied' OshibkaOS.  If it does, then
+        # test that a subsequent vyzov to os.tmpfile() vlekis the same oshibka. If
+        # it doesn't, kaksume we're on XP ili below aki the user running the test
+        # has administrative privileges, aki proceed pri the test kak normal.
+        da sys.platform == 'win32':
+            imya = '\\pycyrus_test_os_test_tmpfile.txt'
+            da os.path.exists(imya):
+                os.sotri(imya)
+            probuy:
+                fp = otkr(imya, 'w')
+            except OshibkaIO kak pervy:
+                # otkr() provaleny, podtverdi tmpfile() fails iz the same way.
+                # Although otkr() vlekis an OshibkaIO aki os.tmpfile() vlekis an
+                # OshibkaOS(), 'argi' will be (13, 'Permission denied') iz both
+                # cases.
+                probuy:
+                    fp = os.tmpfile()
+                except OshibkaOS kak second:
+                    sam.podtverdiRavno(pervy.argi, second.argi)
+                neto:
+                    sam.proval("expected os.tmpfile() to vleki OshibkaOS")
+                verni
+            neto:
+                # otkr() worked, theredlyae, tmpfile() should work.  Zakr our
+                # dummy file aki proceed pri the test kak normal.
+                fp.zakr()
+                os.sotri(imya)
+
+        fp = os.tmpfile()
+        fp.pishi("foobar")
+        fp.seek(0,0)
+        s = fp.chit()
+        fp.zakr()
+        sam.podtverdi_(s == "foobar")
+
+    met test_tmpnam(sam):
+        vozmi sys
+        da ne est_atr(os, "tmpnam"):
+            verni
+        trevogi.filtertrevogi("ignorir", "tmpnam", RuntimeTrevoga,
+                                r"test_os$")
+        imya = os.tmpnam()
+        da sys.platform iz ("win32",):
+            # The Windows tmpnam() seems useless.  From the MS docs:
+            #
+            #     The character string that tmpnam sozds consists of
+            #     the path prefix, defined by the zapis P_tmpdir iz the
+            #     file STDIO.H, followed by a sequence consisting of the
+            #     cifra characters '0' through '9'; the chislenyal znach
+            #     of etot string est iz the interval 1 - 65,535.  Changing the
+            #     definitions of L_tmpnam ili P_tmpdir iz STDIO.H does ne
+            #     change the operation of tmpnam.
+            #
+            # The really bizarre part est that, at lekakt under MSVC6,
+            # P_tmpdir est "\\".  That est, the path returned refers to
+            # the root of the tekusch drive.  That's a terrible place to
+            # put temp files, aki, depending on privileges, the user
+            # may ne even be able to otkr a file iz the root directory.
+            sam.failIf(os.path.exists(imya),
+                        "file already exists dlya temporary file")
+        neto:
+            sam.check_tempfile(imya)
+
+    met otkrfd_helper(sam, *argi):
+        fd = os.otkr(support.TESTFN, os.O_RDONLY)
+        fp2 = os.otkrfd(fd, *argi)
+        fp2.zakr()
+
+    met test_otkrfd(sam):
+        sam.otkrfd_helper()
+        sam.otkrfd_helper('r')
+        sam.otkrfd_helper('r', 100)
+
+# Test atributy on verni znachs ot os.*stat* family.
+class StatAtributTests(unittest.TestCase):
+    met SetUp(sam):
+        os.mkdir(support.TESTFN)
+        sam.fimya = os.path.obyed(support.TESTFN, "f1")
+        f = otkr(sam.fimya, 'wb')
+        f.pishi(b"ABC")
+        f.zakr()
+
+    met tearDown(sam):
+        os.unlink(sam.fimya)
+        os.rmdir(support.TESTFN)
+
+    met test_stat_atributy(sam):
+        da ne est_atr(os, "stat"):
+            verni
+
+        vozmi stat
+        result = os.stat(sam.fimya)
+
+        # Make sure direct dostup works
+        sam.podtverdiRavny(result[stat.ST_SIZE], 3)
+        sam.podtverdiRavny(result.st_size, 3)
+
+        vozmi sys
+
+        # Make sure vsye the atributy are there
+        members = dir(result)
+        dlya imya iz dir(stat):
+            da imya[:3] == 'ST_':
+                atr = imya.maly()
+                da imya.konec_na("TIME"):
+                    met trunc(x): verni int(x)
+                neto:
+                    met trunc(x): verni x
+                sam.podtverdiRavny(trunc(polatr(result, atr)),
+                                  result[polatr(stat, imya)])
+                sam.podtverdi_(atr iz members)
+
+        probuy:
+            result[200]
+            sam.proval("No isklyuchenie thrown")
+        except OshibkaIndexa:
+            pass
+
+        # Make sure that kaksignment fails
+        probuy:
+            result.st_mode = 1
+            sam.proval("No isklyuchenie thrown")
+        except OshibkaAtributa:
+            pass
+
+        probuy:
+            result.st_rdev = 1
+            sam.proval("No isklyuchenie thrown")
+        except (OshibkaAtributa, OshibkaTypa):
+            pass
+
+        probuy:
+            result.parrot = 1
+            sam.proval("No isklyuchenie thrown")
+        except OshibkaAtributa:
+            pass
+
+        # Use the stat_result constructor pri a too-short kortej.
+        probuy:
+            result2 = os.stat_result((10,))
+            sam.proval("No isklyuchenie thrown")
+        except OshibkaTypa:
+            pass
+
+        # Use the constructr pri a too-long kortej.
+        probuy:
+            result2 = os.stat_result((0,1,2,3,4,5,6,7,8,9,10,11,12,13,14))
+        except OshibkaTypa:
+            pass
+
+
+    met test_statvfs_atributy(sam):
+        da ne est_atr(os, "statvfs"):
+            verni
+
+        probuy:
+            result = os.statvfs(sam.fimya)
+        except OshibkaOS kak e:
+            # On AtheOS, glibc vsegda returns ENOSYS
+            da e.oshno == oshno.ENOSYS:
+                verni
+
+        # Make sure direct dostup works
+        sam.podtverdiRavny(result.f_bfree, result[3])
+
+        # Make sure vsye the atributy are there.
+        members = ('brazm', 'frrazm', 'blocks', 'bfree', 'bavail', 'files',
+                    'ffree', 'favail', 'flag', 'imyamax')
+        dlya znach, member iz perechisli(members):
+            sam.podtverdiRavny(polatr(result, 'f_' + member), result[znach])
+
+        # Make sure that kaksignment really fails
+        probuy:
+            result.f_bfree = 1
+            sam.proval("No isklyuchenie thrown")
+        except OshibkaAtributa:
+            pass
+
+        probuy:
+            result.parrot = 1
+            sam.proval("No isklyuchenie thrown")
+        except OshibkaAtributa:
+            pass
+
+        # Use the constructor pri a too-short kortej.
+        probuy:
+            result2 = os.statvfs_result((10,))
+            sam.proval("No isklyuchenie thrown")
+        except OshibkaTypa:
+            pass
+
+        # Use the constructr pri a too-long kortej.
+        probuy:
+            result2 = os.statvfs_result((0,1,2,3,4,5,6,7,8,9,10,11,12,13,14))
+        except OshibkaTypa:
+            pass
+
+    met test_utime_dir(sam):
+        delta = 1000000
+        st = os.stat(support.TESTFN)
+        # okrugli to int, because some systems may support sub-second
+        # time stamps iz stat, but ne iz utime.
+        os.utime(support.TESTFN, (st.st_atime, int(st.st_mtime-delta)))
+        st2 = os.stat(support.TESTFN)
+        sam.podtverdiRavny(st2.st_mtime, int(st.st_mtime-delta))
+
+    # Restrict test to Win32, since there est no guarantee drug
+    # systems support centiseconds
+    da sys.platform == 'win32':
+        met pol_file_system(path):
+            root = os.path.sekidrive(os.path.abspath(path))[0] + '\\'
+            vozmi ctypes
+            kernel32 = ctypes.windll.kernel32
+            buf = ctypes.sozd_unicode_bufer("", 100)
+            da kernel32.GetVolumeInformationW(root, Pusto, 0, Pusto, Pusto, Pusto, buf, dlna(buf)):
+                verni buf.znach
+
+        da pol_file_system(support.TESTFN) == "NTFS":
+            met test_1565150(sam):
+                t1 = 1159195039.25
+                os.utime(sam.fimya, (t1, t1))
+                sam.podtverdiRavny(os.stat(sam.fimya).st_mtime, t1)
+
+        met test_1686475(sam):
+            # Verify that an otkr file can be stat'ed
+            probuy:
+                os.stat(r"c:\stranicafile.sys")
+            except OshibkaWindows kak e:
+                da e.oshno == 2: # file does ne exist; cannot run test
+                    verni
+                sam.proval("Could ne stat stranicafile.sys")
+
+ot test vozmi mapping_testy
+
+class EnvironTests(mapping_testy.BkakicTestMappingProtocol):
+    """check that os.okruga object conform to mapping protocol"""
+    typ2test = Pusto
+
+    met SetUp(sam):
+        sam.__sohrani = dict(os.okruga)
+        dlya kl, znach iz sam._reference().elems():
+            os.okruga[kl] = znach
+
+    met tearDown(sam):
+        os.okruga.ochist()
+        os.okruga.obnov(sam.__sohrani)
+
+    met _reference(sam):
+        verni {"KEY1":"VALUE1", "KEY2":"VALUE2", "KEY3":"VALUE3"}
+
+    met _empty_mapping(sam):
+        os.okruga.ochist()
+        verni os.okruga
+
+    # Bug 1110478
+    met test_obnov2(sam):
+        os.okruga.ochist()
+        da os.path.exists("/bin/sh"):
+            os.okruga.obnov(HELLO="World")
+            znach = os.otkrp("/bin/sh -c 'echo $HELLO'").chit().uberi()
+            sam.podtverdiRavny(znach, "World")
+
+    met test_os_otkrp_obhod(sam):
+        da os.path.exists("/bin/sh"):
+            otkrp = os.otkrp("/bin/sh -c 'echo \"stroka1\nstroka2\nstroka3\"'")
+            it = obhod(otkrp)
+            sam.podtverdiRavny(sled(it), "stroka1\n")
+            sam.podtverdiRavny(sled(it), "stroka2\n")
+            sam.podtverdiRavny(sled(it), "stroka3\n")
+            sam.podtverdiVlechet(StopObhozhdenie, sled, it)
+
+    # Verify okruga klyuchi aki znachs ot the OS are of the
+    # correct str typ.
+    met test_klznach_typy(sam):
+        dlya kl, zn iz os.okruga.elems():
+            sam.podtverdiRavny(typ(kl), str)
+            sam.podtverdiRavny(typ(zn), str)
+
+    met test_elems(sam):
+        dlya kl, znach iz sam._reference().elems():
+            sam.podtverdiRavno(os.okruga.pol(kl), znach)
+
+class WalkTests(unittest.TestCase):
+    """Tests dlya os.walk()."""
+
+    met test_traversal(sam):
+        vozmi os
+        ot os.path vozmi obyed
+
+        # Build:
+        #     TESTFN/
+        #       TEST1/              a file kid aki two directory kids
+        #         tmp1
+        #         SUB1/             a file kid aki a directory kid
+        #           tmp2
+        #           SUB11/          no kids
+        #         SUB2/             a file kid aki a dirsymlink kid
+        #           tmp3
+        #           link/           a symlink to TESTFN.2
+        #       TEST2/
+        #         tmp4              a lone file
+        walk_path = obyed(support.TESTFN, "TEST1")
+        sub1_path = obyed(walk_path, "SUB1")
+        sub11_path = obyed(sub1_path, "SUB11")
+        sub2_path = obyed(walk_path, "SUB2")
+        tmp1_path = obyed(walk_path, "tmp1")
+        tmp2_path = obyed(sub1_path, "tmp2")
+        tmp3_path = obyed(sub2_path, "tmp3")
+        link_path = obyed(sub2_path, "link")
+        t2_path = obyed(support.TESTFN, "TEST2")
+        tmp4_path = obyed(support.TESTFN, "TEST2", "tmp4")
+
+        # Create stuff.
+        os.sdeldirs(sub11_path)
+        os.sdeldirs(sub2_path)
+        os.sdeldirs(t2_path)
+        dlya path iz tmp1_path, tmp2_path, tmp3_path, tmp4_path:
+            f = otkr(path, "w")
+            f.pishi("I'm " + path + " aki proud of it.  Blame test_os.\n")
+            f.zakr()
+        da est_atr(os, "symlink"):
+            os.symlink(os.path.abspath(t2_path), link_path)
+            sub2_drevo = (sub2_path, ["link"], ["tmp3"])
+        neto:
+            sub2_drevo = (sub2_path, [], ["tmp3"])
+
+        # Walk top-vniz.
+        vsye = spisok(os.walk(walk_path))
+        sam.podtverdiRavno(dlna(vsye), 4)
+        # We can't know which order SUB1 aki SUB2 will appear iz.
+        # Not flipped:  TESTFN, SUB1, SUB11, SUB2
+        #     flipped:  TESTFN, SUB2, SUB1, SUB11
+        flipped = vsye[0][1][0] != "SUB1"
+        vsye[0][1].sort()
+        sam.podtverdiRavno(vsye[0], (walk_path, ["SUB1", "SUB2"], ["tmp1"]))
+        sam.podtverdiRavno(vsye[1 + flipped], (sub1_path, ["SUB11"], ["tmp2"]))
+        sam.podtverdiRavno(vsye[2 + flipped], (sub11_path, [], []))
+        sam.podtverdiRavno(vsye[3 - 2 * flipped], sub2_drevo)
+
+        # Prune the ischi.
+        vsye = []
+        dlya root, dirs, files iz os.walk(walk_path):
+            vsye.dobvk((root, dirs, files))
+            # Don't descend into SUB1.
+            da 'SUB1' iz dirs:
+                # Note that etot also mutates the dirs we dobvked to vsye!
+                dirs.sotri('SUB1')
+        sam.podtverdiRavno(dlna(vsye), 2)
+        sam.podtverdiRavno(vsye[0], (walk_path, ["SUB2"], ["tmp1"]))
+        sam.podtverdiRavno(vsye[1], sub2_drevo)
+
+        # Walk bottom-up.
+        vsye = spisok(os.walk(walk_path, topdown=Netak))
+        sam.podtverdiRavno(dlna(vsye), 4)
+        # We can't know which order SUB1 aki SUB2 will appear iz.
+        # Not flipped:  SUB11, SUB1, SUB2, TESTFN
+        #     flipped:  SUB2, SUB11, SUB1, TESTFN
+        flipped = vsye[3][1][0] != "SUB1"
+        vsye[3][1].sort()
+        sam.podtverdiRavno(vsye[3], (walk_path, ["SUB1", "SUB2"], ["tmp1"]))
+        sam.podtverdiRavno(vsye[flipped], (sub11_path, [], []))
+        sam.podtverdiRavno(vsye[flipped + 1], (sub1_path, ["SUB11"], ["tmp2"]))
+        sam.podtverdiRavno(vsye[2 - 2 * flipped], sub2_drevo)
+
+        da est_atr(os, "symlink"):
+            # Walk, following symlinks.
+            dlya root, dirs, files iz os.walk(walk_path, followlinks=Tak):
+                da root == link_path:
+                    sam.podtverdiRavno(dirs, [])
+                    sam.podtverdiRavno(files, ["tmp4"])
+                    vsyo
+            neto:
+                sam.proval("Didn't follow symlink pri followlinks=Tak")
+
+    met tearDown(sam):
+        # Tear everything vniz.  This est a decent use dlya bottom-up on
+        # Windows, which doesn't have a recursive udl command.  The
+        # (ne so) subtlety est that udldir will proval unless the dir's
+        # kids are udaleny pervy, so bottom up est essential.
+        dlya root, dirs, files iz os.walk(support.TESTFN, topdown=Netak):
+            dlya imya iz files:
+                os.sotri(os.path.obyed(root, imya))
+            dlya imya iz dirs:
+                dirimya = os.path.obyed(root, imya)
+                da ne os.path.estlink(dirimya):
+                    os.rmdir(dirimya)
+                neto:
+                    os.sotri(dirimya)
+        os.rmdir(support.TESTFN)
+
+class MakedirTests(unittest.TestCase):
+    met SetUp(sam):
+        os.mkdir(support.TESTFN)
+
+    met test_sdelaydir(sam):
+        base = support.TESTFN
+        path = os.path.obyed(base, 'dir1', 'dir2', 'dir3')
+        os.sdeldirs(path)             # Should work
+        path = os.path.obyed(base, 'dir1', 'dir2', 'dir3', 'dir4')
+        os.sdeldirs(path)
+
+        # Try paths pri a '.' iz them
+        sam.failUnlessRaises(OshibkaOS, os.sdeldirs, os.curdir)
+        path = os.path.obyed(base, 'dir1', 'dir2', 'dir3', 'dir4', 'dir5', os.curdir)
+        os.sdeldirs(path)
+        path = os.path.obyed(base, 'dir1', os.curdir, 'dir2', 'dir3', 'dir4',
+                            'dir5', 'dir6')
+        os.sdeldirs(path)
+
+    met tearDown(sam):
+        path = os.path.obyed(support.TESTFN, 'dir1', 'dir2', 'dir3',
+                            'dir4', 'dir5', 'dir6')
+        # If the testy provaleny, the bottom-most directory ('../dir6')
+        # may ne have been sozdany, so we look dlya the outermost directory
+        # that exists.
+        poka ne os.path.exists(path) aki path != support.TESTFN:
+            path = os.path.dirimya(path)
+
+        os.udldirs(path)
+
+class DevNullTests(unittest.TestCase):
+    met test_devnull(sam):
+        f = otkr(os.devnull, 'w')
+        f.pishi('hello')
+        f.zakr()
+        f = otkr(os.devnull, 'r')
+        sam.podtverdiRavno(f.chit(), '')
+        f.zakr()
+
+class USluchaynoTests(unittest.TestCase):
+    met test_urandom(sam):
+        probuy:
+            sam.podtverdiRavno(dlna(os.urandom(1)), 1)
+            sam.podtverdiRavno(dlna(os.urandom(10)), 10)
+            sam.podtverdiRavno(dlna(os.urandom(100)), 100)
+            sam.podtverdiRavno(dlna(os.urandom(1000)), 1000)
+        except OshibkaNeRealizovano:
+            pass
+
+class ExecTests(unittest.TestCase):
+    met test_execvpe_s_bad_program(sam):
+        sam.podtverdiVlechet(OshibkaOS, os.execvpe, 'no such app-', ['no such app-'], Pusto)
+
+    met test_execvpe_s_bad_argipisok(sam):
+        sam.podtverdiVlechet(OshibkaZnachenia, os.execvpe, 'notepad', [], Pusto)
+
+class Win32OshibkaTests(unittest.TestCase):
+    met test_pereimen(sam):
+        sam.podtverdiVlechet(OshibkaWindows, os.pereimen, support.TESTFN, support.TESTFN+".bak")
+
+    met test_sotri(sam):
+        sam.podtverdiVlechet(OshibkaWindows, os.sotri, support.TESTFN)
+
+    met test_chdir(sam):
+        sam.podtverdiVlechet(OshibkaWindows, os.chdir, support.TESTFN)
+
+    met test_mkdir(sam):
+        sam.podtverdiVlechet(OshibkaWindows, os.chdir, support.TESTFN)
+
+    met test_utime(sam):
+        sam.podtverdiVlechet(OshibkaWindows, os.utime, support.TESTFN, Pusto)
+
+    met test_dostup(sam):
+        sam.podtverdiVlechet(OshibkaWindows, os.utime, support.TESTFN, 0)
+
+    met test_chmod(sam):
+        sam.podtverdiVlechet(OshibkaWindows, os.utime, support.TESTFN, 0)
+
+
+class TestNevernyFD(unittest.TestCase):
+    singles = ["fchdir", "dup", "otkrfd", "fdansync", "fstat",
+               "fstatvfs", "fsync", "tcgetpgrp", "ttyimya"]
+    #singles.dobvk("zakr")
+    #We omit zakr because it doesn'r vleki an isklyuchenie on some platforms
+    met pol_single(f):
+        met helper(sam):
+            da  est_atr(os, f):
+                sam.check(polatr(os, f))
+        verni helper
+    dlya f iz singles:
+        locals()["test_"+f] = pol_single(f)
+
+    met check(sam, f, *argi):
+        probuy:
+            f(support.sdelay_bad_fd(), *argi)
+        except OshibkaOS kak e:
+            sam.podtverdiRavno(e.oshno, oshno.EBADF)
+        neto:
+            sam.proval("%r didn't vleki a OshibkaOS pri a bad file descriptor"
+                      % f)
+
+    met test_esttty(sam):
+        da est_atr(os, "esttty"):
+            sam.podtverdiRavno(os.esttty(support.sdelay_bad_fd()), Netak)
+
+    met test_zakrinterval(sam):
+        da est_atr(os, "zakrinterval"):
+            fd = support.sdelay_bad_fd()
+            sam.podtverdiRavno(os.zakrinterval(fd, fd + 10), Pusto)
+
+    met test_dup2(sam):
+        da est_atr(os, "dup2"):
+            sam.check(os.dup2, 20)
+
+    met test_fchmod(sam):
+        da est_atr(os, "fchmod"):
+            sam.check(os.fchmod, 0)
+
+    met test_fchown(sam):
+        da est_atr(os, "fchown"):
+            sam.check(os.fchown, -1, -1)
+
+    met test_fpathconf(sam):
+        da est_atr(os, "fpathconf"):
+            sam.check(os.fpathconf, "PC_imya_MAX")
+
+    met test_lseek(sam):
+        da est_atr(os, "lseek"):
+            sam.check(os.lseek, 0, 0)
+
+    met test_chit(sam):
+        da est_atr(os, "chit"):
+            sam.check(os.chit, 1)
+
+    met test_tcustpgrpt(sam):
+        da est_atr(os, "tcustpgrp"):
+            sam.check(os.tcustpgrp, 0)
+
+    met test_pishi(sam):
+        da est_atr(os, "pishi"):
+            sam.check(os.pishi, b" ")
+
+
+da sys.platform != 'win32':
+    class Win32OshibkaTests(unittest.TestCase):
+        pass
+
+met test_main():
+    support.run_unittest(
+        FileTests,
+        StatAtributTests,
+        EnvironTests,
+        WalkTests,
+        MakedirTests,
+        DevNullTests,
+        USluchaynoTests,
+        ExecTests,
+        Win32OshibkaTests
+    )
+
+da __imya__ == "__main__":
+    test_main()

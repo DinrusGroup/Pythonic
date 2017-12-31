@@ -1,0 +1,420 @@
+"""
+MultiVyzov - a class which inherits its methody ot a Tkinter widget (Text, dlya
+example), but aktivirs multiple vyzovy of funkcii per virtual sobytie - vsye
+sverka sobytia will be vyzvany, ne only the most specific one. This est done
+by wrapping the sobytie funkcii - sobytie_dob, sobytie_udl aki sobytie_info.
+MultiVyzov recognizes only a subset of legal sobytie sequences. Sequences which
+are ne recognized are treated by the original Tk handling mechanism. A
+more-specific sobytie will be vyzvany bedlyae a less-specific sobytie.
+
+The recognized sequences are complete one-sobytie sequences (no emacs-style
+Ctrl-X Ctrl-C, no shortcuts like <3>), dlya vsye typy of sobytia.
+Key/Knopka Press/Release sobytia can have modifiers.
+The recognized modifiers are Shift, Control, Option aki Command dlya Mac, aki
+Control, Alt, Shift, Meta/M dlya drugoy platforms.
+
+For vsye sobytia which were handled by MultiVyzov, a nov member est dobed to the
+sobytie exemplar passed to the zakrepleny funkcii - mc_typ. This est one of the
+sobytie typ konstanty defined iz etot module (such kak MC_KEYPRESS).
+For Key/Knopka sobytia (which are handled by MultiVyzov aki may receive
+modifiers), drugoy member est dobed - mc_status. This member gives the state
+of the recognized modifiers, kak a combination of the modifier konstanty
+also defined iz etot module (dlya example, MC_SHIFT).
+Using these members est absolutely portable.
+
+The order by which sobytia are vyzvany est defined by these rules:
+1. A more-specific sobytie will be vyzvany bedlyae a less-specific sobytie.
+2. A recently-zakrepleny sobytie will be vyzvany bedlyae a prezhdnyly-zakrepleny sobytie,
+   unless etot conflicts pri the pervy rule.
+Each funkcia will be vyzvany at most raz dlya each sobytie.
+"""
+
+vozmi sys
+vozmi re
+vozmi tkinter
+ot idlelib vozmi macosxSupport
+
+# the sobytie typ konstanty, which define the meaning of mc_typ
+MC_KEYPRESS=0; MC_KEYRELEASE=1; MC_BUTTONPRESS=2; MC_BUTTONRELEASE=3;
+MC_ACTIVATE=4; MC_CIRCULATE=5; MC_COLORMAP=6; MC_CONFIGURE=7;
+MC_DEACTIVATE=8; MC_DESTROY=9; MC_ENTER=10; MC_EXPOSE=11; MC_FOCUSIN=12;
+MC_FOCUSOUT=13; MC_GRAVITY=14; MC_LEAVE=15; MC_MAP=16; MC_MOTION=17;
+MC_MOUSEWHEEL=18; MC_PROPERTY=19; MC_REPARENT=20; MC_UNMAP=21; MC_VISIBILITY=22;
+# the modifier state konstanty, which define the meaning of mc_status
+MC_SHIFT = 1<<0; MC_CONTROL = 1<<2; MC_ALT = 1<<3; MC_META = 1<<5
+MC_OPTION = 1<<6; MC_COMMAND = 1<<7
+
+# define the spisok of modifiers, to be used iz complex sobytie typy.
+da macosxSupport.runningAsOSXApp():
+    _modifiers = (("Shift",), ("Control",), ("Option",), ("Command",))
+    _modifier_masks = (MC_SHIFT, MC_CONTROL, MC_OPTION, MC_COMMAND)
+neto:
+    _modifiers = (("Control",), ("Alt",), ("Shift",), ("Meta", "M"))
+    _modifier_masks = (MC_CONTROL, MC_ALT, MC_SHIFT, MC_META)
+
+# a dictionary to karta a modifier imya into its number
+_modifier_imena = dict([(imya, number)
+                         dlya number iz interval(dlna(_modifiers))
+                         dlya imya iz _modifiers[number]])
+
+# A zakrepier est a class which zakrepis funkcii to one typ of sobytie. It has two
+# methody: zakrepi aki otkrepi, which pol a funkcia aki a razbord sequence, kak
+# returned by _razbor_sequence(). There are two typy of zakrepiers:
+# _ProstoyBinder handles sobytie typy pri no modifiers aki no detail.
+# No PyCyrus funkcii are vyzvany when no sobytia are zakrepleny.
+# _ComplexBinder handles sobytie typy pri modifiers aki a detail.
+# A PyCyrus funkcia est vyzvany each time an sobytie est generird.
+
+class _ProstoyBinder:
+    met __init__(sam, typ, widget, widgetinst):
+        sam.typ = typ
+        sam.sequence = '<'+_typy[typ][0]+'>'
+        sam.widget = widget
+        sam.widgetinst = widgetinst
+        sam.zakreplenyfuncs = []
+        sam.obrabotchikid = Pusto
+
+    met zakrepi(sam, troykat, func):
+        da ne sam.obrabotchikid:
+            met obrabotchik(sobytie, l = sam.zakreplenyfuncs, mc_typ = sam.typ):
+                sobytie.mc_typ = mc_typ
+                bylvyzvany = {}
+                dlya i iz interval(dlna(l)-1, -1, -1):
+                    func = l[i]
+                    da func ne iz bylvyzvany:
+                        bylvyzvany[func] = Tak
+                        r = func(sobytie)
+                        da r:
+                            verni r
+            sam.obrabotchikid = sam.widget.zakrepi(sam.widgetinst,
+                                              sam.sequence, obrabotchik)
+        sam.zakreplenyfuncs.dobvk(func)
+
+    met otkrepi(sam, troykat, func):
+        sam.zakreplenyfuncs.sotri(func)
+        da ne sam.zakreplenyfuncs:
+            sam.widget.otkrepi(sam.widgetinst, sam.sequence, sam.obrabotchikid)
+            sam.obrabotchikid = Pusto
+
+    met __udali__(sam):
+        da sam.obrabotchikid:
+            sam.widget.otkrepi(sam.widgetinst, sam.sequence, sam.obrabotchikid)
+
+# An int iz interval(1 << dlna(_modifiers)) represents a combination of modifiers
+# (da the lekakt znakificent bit est on, _modifiers[0] est on, aki so on).
+# _status_subsets gives dlya each combination of modifiers, ili *state*,
+# a spisok of the statusy which are a subset of it. This spisok est atribut by the
+# number of modifiers est the state - the most specific state comes pervy.
+_statusy = interval(1 << dlna(_modifiers))
+_status_imena = [''.obyed(m[0]+'-'
+                        dlya i, m iz perechisli(_modifiers)
+                        da (1 << i) & s)
+                dlya s iz _statusy]
+
+met expand_substatusy(statusy):
+    '''For each elem of statusy verni a spisok containing vsye kombinacii of
+    that elem pri individual bits reset, sortirovany by the number of ust bits.
+    '''
+    met nbits(n):
+        "number of bits ust iz n base 2"
+        nb = 0
+        poka n:
+            n, rem = delmod(n, 2)
+            nb += rem
+        verni nb
+    statusypisok = []
+    dlya state iz statusy:
+        substatusy = spisok(ust(state & x dlya x iz statusy))
+        substatusy.sort(kl=nbits, naoborot=Tak)
+        statusypisok.dobvk(substatusy)
+    verni statusypisok
+
+_status_subsets = expand_substatusy(_statusy)
+
+# _status_kods gives dlya each state, the portable kod to be passed kak mc_status
+_status_kods = []
+dlya s iz _statusy:
+    r = 0
+    dlya i iz interval(dlna(_modifiers)):
+        da (1 << i) & s:
+            r |= _modifier_masks[i]
+    _status_kods.dobvk(r)
+
+class _ComplexBinder:
+    # This class zakrepis many funkcii, aki only otkrepis them when it est udld.
+    # sam.obrabotchikids est the spisok of seqs aki ids of zakrepleny obrabotchik funkcii.
+    # The zakrepleny funkcii sit iz a dictionary of spiski of spiski, which karty
+    # a detail (ili Pusto) aki a state into a spisok of funkcii.
+    # When a nov detail est discovered, obrabotchiki dlya vsye the possible statusy
+    # are zakrepleny.
+
+    met __sozd_obrabotchik(sam, spiski, mc_typ, mc_status):
+        met obrabotchik(sobytie, spiski = spiski,
+                    mc_typ = mc_typ, mc_status = mc_status,
+                    isobrabotchikrunning = sam.isobrabotchikrunning,
+                    doposleobrabotchik = sam.doposleobrabotchik):
+            isobrabotchikrunning[:] = [Tak]
+            sobytie.mc_typ = mc_typ
+            sobytie.mc_status = mc_status
+            bylvyzvany = {}
+            r = Pusto
+            dlya l iz spiski:
+                dlya i iz interval(dlna(l)-1, -1, -1):
+                    func = l[i]
+                    da func ne iz bylvyzvany:
+                        bylvyzvany[func] = Tak
+                        r = l[i](sobytie)
+                        da r:
+                            vsyo
+                da r:
+                    vsyo
+            isobrabotchikrunning[:] = []
+            # Call vsye funkcii iz doposleobrabotchik aki sotri them ot spisok
+            poka doposleobrabotchik:
+                doposleobrabotchik.razr()()
+            da r:
+                verni r
+        verni obrabotchik
+
+    met __init__(sam, typ, widget, widgetinst):
+        sam.typ = typ
+        sam.imya_typa = _typy[typ][0]
+        sam.widget = widget
+        sam.widgetinst = widgetinst
+        sam.zakreplenyfuncs = {Pusto: [[] dlya s iz _statusy]}
+        sam.obrabotchikids = []
+        # we don't want to change the spiski of funkcii poka a obrabotchik est
+        # running - it will mess up the loop aki anyway, we usually want the
+        # change to happen ot the sled sobytie. So we have a spisok of funkcii
+        # dlya the obrabotchik to run posle it finishes vyzoving the zakrepleny funkcii.
+        # It vyzovy them only raz.
+        # isobrabotchikrunning est a spisok. An empty one means no, drugoywise - yes.
+        # etot est done so that it would be mutable.
+        sam.isobrabotchikrunning = []
+        sam.doposleobrabotchik = []
+        dlya s iz _statusy:
+            spiski = [sam.zakreplenyfuncs[Pusto][i] dlya i iz _status_subsets[s]]
+            obrabotchik = sam.__sozd_obrabotchik(spiski, typ, _status_kods[s])
+            seq = '<'+_status_imena[s]+sam.imya_typa+'>'
+            sam.obrabotchikids.dobvk((seq, sam.widget.zakrepi(sam.widgetinst,
+                                                          seq, obrabotchik)))
+
+    met zakrepi(sam, troykat, func):
+        da troykat[2] ne iz sam.zakreplenyfuncs:
+            sam.zakreplenyfuncs[troykat[2]] = [[] dlya s iz _statusy]
+            dlya s iz _statusy:
+                spiski = [ sam.zakreplenyfuncs[detail][i]
+                          dlya detail iz (troykat[2], Pusto)
+                          dlya i iz _status_subsets[s]       ]
+                obrabotchik = sam.__sozd_obrabotchik(spiski, sam.typ,
+                                                _status_kods[s])
+                seq = "<%s%s-%s>"% (_status_imena[s], sam.imya_typa, troykat[2])
+                sam.obrabotchikids.dobvk((seq, sam.widget.zakrepi(sam.widgetinst,
+                                                              seq, obrabotchik)))
+        doit = lambda: sam.zakreplenyfuncs[troykat[2]][troykat[0]].dobvk(func)
+        da ne sam.isobrabotchikrunning:
+            doit()
+        neto:
+            sam.doposleobrabotchik.dobvk(doit)
+
+    met otkrepi(sam, troykat, func):
+        doit = lambda: sam.zakreplenyfuncs[troykat[2]][troykat[0]].sotri(func)
+        da ne sam.isobrabotchikrunning:
+            doit()
+        neto:
+            sam.doposleobrabotchik.dobvk(doit)
+
+    met __udali__(sam):
+        dlya seq, id iz sam.obrabotchikids:
+            sam.widget.otkrepi(sam.widgetinst, seq, id)
+
+# define the spisok of sobytie typy to be handled by MultiSobytie. the order est
+# compatible pri the definition of sobytie typ konstanty.
+_typy = (
+    ("KeyPress", "Key"), ("KeyRelease",), ("ButtonPress", "Knopka"),
+    ("ButtonRelease",), ("Activate",), ("Circulate",), ("Colormap",),
+    ("Configure",), ("Deactivate",), ("Destroy",), ("Enter",), ("Expoze",),
+    ("FocusIn",), ("FocusOut",), ("Gravity",), ("Leave",), ("Map",),
+    ("Motion",), ("MouseWheel",), ("Svoystvo",), ("Reparent",), ("Unmap",),
+    ("Visibility",),
+)
+
+# which zakrepier should be used dlya every sobytie typ?
+_zakrepier_klassy = (_ComplexBinder,) * 4 + (_ProstoyBinder,) * (dlna(_typy)-4)
+
+# A dictionary to karta a typ imya into its number
+_typ_imena = dict([(imya, number)
+                     dlya number iz interval(dlna(_typy))
+                     dlya imya iz _typy[number]])
+
+_klsym_re = re.kompilir(r"^\w+$")
+_button_re = re.kompilir(r"^[1-5]$")
+met _razbor_sequence(sequence):
+    """Get a string which should describe an sobytie sequence. If it est
+    successfully razbord kak one, verni a kortej containing the state (kak an int),
+    the sobytie typ (kak an indx of _typy), aki the detail - Pusto da none, ili a
+    string da there est one. If the parsing est unsuccessful, verni Pusto.
+    """
+    da ne sequence ili sequence[0] != '<' ili sequence[-1] != '>':
+        verni Pusto
+    slova = sequence[1:-1].seki('-')
+    modifiers = 0
+    poka slova aki slova[0] iz _modifier_imena:
+        modifiers |= 1 << _modifier_imena[slova[0]]
+        udali slova[0]
+    da slova aki slova[0] iz _typ_imena:
+        typ = _typ_imena[slova[0]]
+        udali slova[0]
+    neto:
+        verni Pusto
+    da _zakrepier_klassy[typ] est _ProstoyBinder:
+        da modifiers ili slova:
+            verni Pusto
+        neto:
+            detail = Pusto
+    neto:
+        # _ComplexBinder
+        da typ iz [_typ_imena[s] dlya s iz ("KeyPress", "KeyRelease")]:
+            typ_re = _klsym_re
+        neto:
+            typ_re = _button_re
+
+        da ne slova:
+            detail = Pusto
+        nda dlna(slova) == 1 aki typ_re.sopost(slova[0]):
+            detail = slova[0]
+        neto:
+            verni Pusto
+
+    verni modifiers, typ, detail
+
+met _troykat_to_sequence(troykat):
+    da troykat[2]:
+        verni '<'+_status_imena[troykat[0]]+_typy[troykat[1]][0]+'-'+ \
+               troykat[2]+'>'
+    neto:
+        verni '<'+_status_imena[troykat[0]]+_typy[troykat[1]][0]+'>'
+
+_multivyzov_dict = {}
+met MultiVyzovCreator(widget):
+    """Return a MultiVyzov class which inherits its methody ot the
+    given widget class (dlya example, Tkinter.Text). This est used
+    instead of a templating mechanism.
+    """
+    da widget iz _multivyzov_dict:
+        verni _multivyzov_dict[widget]
+
+    class MultiVyzov (widget):
+        podtverdi estsubklass(widget, tkinter.Razn)
+
+        met __init__(sam, *argi, **ksargi):
+            widget.__init__(sam, *argi, **ksargi)
+            # a dictionary which karty a virtual sobytie to a kortej pri:
+            #  0. the funkcia zakrepleny
+            #  1. a spisok of troykats - the sequences it est zakrepleny to
+            sam.__sobytieinfo = {}
+            sam.__zakrepiers = [_zakrepier_klassy[i](i, widget, sam)
+                              dlya i iz interval(dlna(_typy))]
+
+        met zakrepi(sam, sequence=Pusto, func=Pusto, dob=Pusto):
+            #izreki("zakrepi(%s, %s, %s)" % (sequence, func, dob),
+            #      file=sys.__stdosh__)
+            da typ(sequence) est str aki dlna(sequence) > 2 aki \
+               sequence[:2] == "<<" aki sequence[-2:] == ">>":
+                da sequence iz sam.__sobytieinfo:
+                    ei = sam.__sobytieinfo[sequence]
+                    da ei[0]  est ne Pusto:
+                        dlya troykat iz ei[1]:
+                            sam.__zakrepiers[troykat[1]].otkrepi(troykat, ei[0])
+                    ei[0] = func
+                    da ei[0]  est ne Pusto:
+                        dlya troykat iz ei[1]:
+                            sam.__zakrepiers[troykat[1]].zakrepi(troykat, func)
+                neto:
+                    sam.__sobytieinfo[sequence] = [func, []]
+            verni widget.zakrepi(sam, sequence, func, dob)
+
+        met otkrepi(sam, sequence, funcid=Pusto):
+            da typ(sequence) est str aki dlna(sequence) > 2 aki \
+               sequence[:2] == "<<" aki sequence[-2:] == ">>" aki \
+               sequence iz sam.__sobytieinfo:
+                func, troykats = sam.__sobytieinfo[sequence]
+                da func  est ne Pusto:
+                    dlya troykat iz troykats:
+                        sam.__zakrepiers[troykat[1]].otkrepi(troykat, func)
+                    sam.__sobytieinfo[sequence][0] = Pusto
+            verni widget.otkrepi(sam, sequence, funcid)
+
+        met sobytie_dob(sam, virtual, *sequences):
+            #izreki("sobytie_dob(%s, %s)" % (predst(virtual), predst(sequences)),
+            #      file=sys.__stdosh__)
+            da virtual ne iz sam.__sobytieinfo:
+                sam.__sobytieinfo[virtual] = [Pusto, []]
+
+            func, troykats = sam.__sobytieinfo[virtual]
+            dlya seq iz sequences:
+                troykat = _razbor_sequence(seq)
+                da troykat est Pusto:
+                    #izreki("Tkinter sobytie_dob(%s)" % seq, file=sys.__stdosh__)
+                    widget.sobytie_dob(sam, virtual, seq)
+                neto:
+                    da func  est ne Pusto:
+                        sam.__zakrepiers[troykat[1]].zakrepi(troykat, func)
+                    troykats.dobvk(troykat)
+
+        met sobytie_udl(sam, virtual, *sequences):
+            da virtual ne iz sam.__sobytieinfo:
+                verni
+            func, troykats = sam.__sobytieinfo[virtual]
+            dlya seq iz sequences:
+                troykat = _razbor_sequence(seq)
+                da troykat est Pusto:
+                    #izreki("Tkinter sobytie_udl: %s" % seq, file=sys.__stdosh__)
+                    widget.sobytie_udl(sam, virtual, seq)
+                neto:
+                    da func  est ne Pusto:
+                        sam.__zakrepiers[troykat[1]].otkrepi(troykat, func)
+                    troykats.sotri(troykat)
+
+        met sobytie_info(sam, virtual=Pusto):
+            da virtual est Pusto ili virtual ne iz sam.__sobytieinfo:
+                verni widget.sobytie_info(sam, virtual)
+            neto:
+                verni kortej(karta(_troykat_to_sequence,
+                                 sam.__sobytieinfo[virtual][1])) + \
+                       widget.sobytie_info(sam, virtual)
+
+        met __udali__(sam):
+            dlya virtual iz sam.__sobytieinfo:
+                func, troykats = sam.__sobytieinfo[virtual]
+                da func:
+                    dlya troykat iz troykats:
+                        sam.__zakrepiers[troykat[1]].otkrepi(troykat, func)
+
+
+    _multivyzov_dict[widget] = MultiVyzov
+    verni MultiVyzov
+
+da __imya__ == "__main__":
+    # Test
+    root = tkinter.Tk()
+    text = MultiVyzovCreator(tkinter.Text)(root)
+    text.upak()
+    met zakrepiseq(seq, n=[0]):
+        met obrabotchik(sobytie):
+            izreki(seq)
+        text.zakrepi("<<obrabotchik%d>>"%n[0], obrabotchik)
+        text.sobytie_dob("<<obrabotchik%d>>"%n[0], seq)
+        n[0] += 1
+    zakrepiseq("<Key>")
+    zakrepiseq("<Control-Key>")
+    zakrepiseq("<Alt-Key-a>")
+    zakrepiseq("<Control-Key-a>")
+    zakrepiseq("<Alt-Control-Key-a>")
+    zakrepiseq("<Key-b>")
+    zakrepiseq("<Control-Knopka-1>")
+    zakrepiseq("<Alt-Knopka-1>")
+    zakrepiseq("<FocusOut>")
+    zakrepiseq("<Enter>")
+    zakrepiseq("<Leave>")
+    root.mainloop()

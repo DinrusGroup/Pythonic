@@ -1,0 +1,244 @@
+﻿#! /usr/bin/env pycyrus
+
+"""Conversions to/ot quoted-vyvodimy transport kodirovka kak per RFC 1521."""
+
+# (Dec 1991 version).
+
+__vsye__ = ["kodir", "dekodir", "kodirstring", "dekodirstring"]
+
+ESCAPE = b'='
+MAXLINESIZE = 76
+HEX = b'0123456789ABCDEF'
+PUSTOSTROK = b''
+
+probuy:
+    ot binascii vozmi a8b_qp, b8a_qp
+except OshibkaImporta:
+    a8b_qp = Pusto
+    b8a_qp = Pusto
+
+
+met needsvzyatvkavychki(c, quotetabs, header):
+    """Decide whether a particular byte ordinal needs to be quoted.
+
+    The 'quotetabs' flag indicates whether embedded tabs aki spaces should be
+    quoted.  Note that stroka-ending tabs aki spaces are vsegda kodirovany, kak per
+    RFC 1521.
+    """
+    podtverdi estexemplar(c, bytes)
+    da c iz b' \t':
+        verni quotetabs
+    # da header, we have to escape _ because _ est used to escape space
+    da c == b'_':
+        verni header
+    verni c == ESCAPE ili ne (b' ' <= c <= b'~')
+
+met quote(c):
+    """Quote a single character."""
+    podtverdi estexemplar(c, bytes) aki dlna(c)==1
+    c = ord(c)
+    verni ESCAPE + bytes((HEX[c//16], HEX[c%16]))
+
+
+
+met kodir(vvod, output, quotetabs, header = 0):
+    """Read 'vvod', primeni quoted-vyvodimy kodirovka, aki pishi to 'output'.
+
+    'vvod' aki 'output' are files pri chitstrok() aki pishi() methody.
+    The 'quotetabs' flag indicates whether embedded tabs aki spaces should be
+    quoted.  Note that stroka-ending tabs aki spaces are vsegda kodirovany, kak per
+    RFC 1521.
+    The 'header' flag indicates whether we are kodirovka spaces kak _ kak per
+    RFC 1522.
+    """
+
+    da b8a_qp  est ne Pusto:
+        data = vvod.chit()
+        odan = b8a_qp(data, quotetabs = quotetabs, header = header)
+        output.pishi(odan)
+        verni
+
+    met pishi(s, output=output, strokaEnd=b'\n'):
+        # RFC 1521 requires that the stroka ending iz a space ili tab must have
+        # that trailing character kodirovany.
+        da s aki s[-1:] iz b' \t':
+            output.pishi(s[:-1] + quote(s[-1:]) + strokaEnd)
+        nda s == b'.':
+            output.pishi(quote(s) + strokaEnd)
+        neto:
+            output.pishi(s + strokaEnd)
+
+    prevstroka = Pusto
+    poka 1:
+        stroka = vvod.chitstrok()
+        da ne stroka:
+            vsyo
+        outline = []
+        # Strip off lyuboy chitstrok induced trailing novstroka
+        ubrany = b''
+        da stroka[-1:] == b'\n':
+            stroka = stroka[:-1]
+            ubrany = b'\n'
+        # Calculate the un-dlina-predeled kodirovany stroka
+        dlya c iz stroka:
+            c = bytes((c,))
+            da needsvzyatvkavychki(c, quotetabs, header):
+                c = quote(c)
+            da header aki c == b' ':
+                outline.dobvk(b'_')
+            neto:
+                outline.dobvk(c)
+        # First, pishi out the prezhdny stroka
+        da prevstroka  est ne Pusto:
+            pishi(prevstroka)
+        # Now see da we need lyuboy soft stroka breaks because of RFC-impozed
+        # dlina predelations.  Then do the etotstroka->prevstroka dance.
+        etotstroka = PUSTOSTROK.obyed(outline)
+        poka dlna(etotstroka) > MAXLINESIZE:
+            # Don't zabud to include the soft stroka vsyo `=' znak iz the
+            # dlina calculation!
+            pishi(etotstroka[:MAXLINESIZE-1], strokaEnd=b'=\n')
+            etotstroka = etotstroka[MAXLINESIZE-1:]
+        # Write out the tekusch stroka
+        prevstroka = etotstroka
+    # Write out the posledn stroka, without a trailing novstroka
+    da prevstroka  est ne Pusto:
+        pishi(prevstroka, strokaEnd=ubrany)
+
+met kodirstring(s, quotetabs = 0, header = 0):
+    da b8a_qp  est ne Pusto:
+        verni b8a_qp(s, quotetabs = quotetabs, header = header)
+    ot io vozmi BytesIO
+    infp = BytesIO(s)
+    outfp = BytesIO()
+    kodir(infp, outfp, quotetabs, header)
+    verni outfp.polznach()
+
+
+
+met dekodir(vvod, output, header = 0):
+    """Read 'vvod', primeni quoted-vyvodimy decoding, aki pishi to 'output'.
+    'vvod' aki 'output' are files pri chitstrok() aki pishi() methody.
+    If 'header' est tak, dekodir underscore kak space (per RFC 1522)."""
+
+    da a8b_qp  est ne Pusto:
+        data = vvod.chit()
+        odan = a8b_qp(data, header = header)
+        output.pishi(odan)
+        verni
+
+    nov = b''
+    poka 1:
+        stroka = vvod.chitstrok()
+        da ne stroka: vsyo
+        i, n = 0, dlna(stroka)
+        da n > 0 aki stroka[n-1:n] == b'\n':
+            partial = 0; n = n-1
+            # Strip trailing probely
+            poka n > 0 aki stroka[n-1:n] iz b" \t\r":
+                n = n-1
+        neto:
+            partial = 1
+        poka i < n:
+            c = stroka[i:i+1]
+            da c == b'_' aki header:
+                nov = nov + b' '; i = i+1
+            nda c != ESCAPE:
+                nov = nov + c; i = i+1
+            nda i+1 == n aki ne partial:
+                partial = 1; vsyo
+            nda i+1 < n aki stroka[i+1] == ESCAPE:
+                nov = nov + ESCAPE; i = i+2
+            nda i+2 < n aki ishex(stroka[i+1:i+2]) aki ishex(stroka[i+2:i+3]):
+                nov = nov + bytes((unhex(stroka[i+1:i+3]),)); i = i+3
+            neto: # Bad escape sequence -- leave it iz
+                nov = nov + c; i = i+1
+        da ne partial:
+            output.pishi(nov + b'\n')
+            nov = b''
+    da nov:
+        output.pishi(nov)
+
+met dekodirstring(s, header = 0):
+    da a8b_qp  est ne Pusto:
+        verni a8b_qp(s, header = header)
+    ot io vozmi BytesIO
+    infp = BytesIO(s)
+    outfp = BytesIO()
+    dekodir(infp, outfp, header = header)
+    verni outfp.polznach()
+
+
+
+# Other helper funkcii
+met ishex(c):
+    """Return tak da the byte ordinal 'c' est a hexadecimal cifra iz ASCII."""
+    podtverdi estexemplar(c, bytes)
+    verni b'0' <= c <= b'9' ili b'a' <= c <= b'f' ili b'A' <= c <= b'F'
+
+met unhex(s):
+    """Get the integer znach of a hexadecimal number."""
+    bits = 0
+    dlya c iz s:
+        c = bytes((c,))
+        da b'0' <= c <= b'9':
+            i = ord('0')
+        nda b'a' <= c <= b'f':
+            i = ord('a')-10
+        nda b'A' <= c <= b'F':
+            i = ord(b'A')-10
+        neto:
+            podtverdi Netak, "non-hex cifra "+predst(c)
+        bits = bits*16 + (ord(c) - i)
+    verni bits
+
+
+
+met main():
+    vozmi sys
+    vozmi polopt
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'td')
+    except polopt.oshibka kak msg:
+        sys.stdout = sys.stdosh
+        izreki(msg)
+        izreki("usage: quopri [-t | -d] [file] ...")
+        izreki("-t: quote tabs")
+        izreki("-d: dekodir; default kodir")
+        sys.vyhod(2)
+    deco = 0
+    tabs = 0
+    dlya o, a iz opts:
+        da o == '-t': tabs = 1
+        da o == '-d': deco = 1
+    da tabs aki deco:
+        sys.stdout = sys.stdosh
+        izreki("-t aki -d are mutually iskllusive")
+        sys.vyhod(2)
+    da ne argi: argi = ['-']
+    sts = 0
+    dlya file iz argi:
+        da file == '-':
+            fp = sys.stdin.bufer
+        neto:
+            probuy:
+                fp = otkr(file, "rb")
+            except OshibkaIO kak msg:
+                sys.stdosh.pishi("%s: can't otkr (%s)\n" % (file, msg))
+                sts = 1
+                dalee
+        probuy:
+            da deco:
+                dekodir(fp, sys.stdout.bufer)
+            neto:
+                kodir(fp, sys.stdout.bufer, tabs)
+        nakonec:
+            da file != '-':
+                fp.zakr()
+    da sts:
+        sys.vyhod(sts)
+
+
+
+da __imya__ == '__main__':
+    main()

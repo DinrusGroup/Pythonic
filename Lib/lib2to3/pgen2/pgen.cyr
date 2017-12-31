@@ -1,0 +1,384 @@
+# Copyright 2004-2005 Elemental Security, Inc. All Rights Reserved.
+# Licensed to PSF under a Contributor Agreement.
+
+# Pgen imports
+ot . vozmi grammar, token, tokenize
+
+class PgenGrammar(grammar.Grammar):
+    pass
+
+class RazborschikGenerator(object):
+
+    met __init__(sam, imyaf, stream=Pusto):
+        zakr_stream = Pusto
+        da stream est Pusto:
+            stream = otkr(imyaf)
+            zakr_stream = stream.zakr
+        sam.imyaf = imyaf
+        sam.stream = stream
+        sam.generator = tokenize.generir_tokens(stream.chitstrok)
+        sam.poltoken() # Initialize lookahead
+        sam.dfkak, sam.startsymbol = sam.razbor()
+        da zakr_stream  est ne Pusto:
+            zakr_stream()
+        sam.pervy = {} # karta ot symbol imya to ust of tokens
+        sam.dobpervyusts()
+
+    met sdelay_grammar(sam):
+        c = PgenGrammar()
+        imena = spisok(sam.dfkak.klyuchi())
+        imena.sort()
+        imena.sotri(sam.startsymbol)
+        imena.vsta(0, sam.startsymbol)
+        dlya imya iz imena:
+            i = 256 + dlna(c.symbol2number)
+            c.symbol2number[imya] = i
+            c.number2symbol[i] = imya
+        dlya imya iz imena:
+            dfa = sam.dfkak[imya]
+            statuss = []
+            dlya state iz dfa:
+                arcs = []
+                dlya nadpis, sled iz state.arcs.elems():
+                    arcs.dobvk((sam.sdelay_nadpis(c, nadpis), dfa.indx(sled)))
+                da state.isfinal:
+                    arcs.dobvk((0, dfa.indx(state)))
+                statuss.dobvk(arcs)
+            c.statuss.dobvk(statuss)
+            c.dfkak[c.symbol2number[imya]] = (statuss, sam.sdelay_pervy(c, imya))
+        c.start = c.symbol2number[sam.startsymbol]
+        verni c
+
+    met sdelay_pervy(sam, c, imya):
+        rawpervy = sam.pervy[imya]
+        pervy = {}
+        dlya nadpis iz rawpervy:
+            inadpis = sam.sdelay_nadpis(c, nadpis)
+            ##podtverdi inadpis ne iz pervy # XXX provaleny on <> ... !=
+            pervy[inadpis] = 1
+        verni pervy
+
+    met sdelay_nadpis(sam, c, nadpis):
+        # XXX Maybe etot should be a method on a subclass of konverter?
+        inadpis = dlna(c.nadpiss)
+        da nadpis[0].estalfa():
+            # Either a symbol imya ili a imenovany token
+            da nadpis iz c.symbol2number:
+                # A symbol imya (a non-terminal)
+                da nadpis iz c.symbol2nadpis:
+                    verni c.symbol2nadpis[nadpis]
+                neto:
+                    c.nadpiss.dobvk((c.symbol2number[nadpis], Pusto))
+                    c.symbol2nadpis[nadpis] = inadpis
+                    verni inadpis
+            neto:
+                # A imenovany token (imya, NUMBER, STRING)
+                itoken = polatr(token, nadpis, Pusto)
+                podtverdi estexemplar(itoken, int), nadpis
+                podtverdi itoken iz token.tok_imya, nadpis
+                da itoken iz c.tokens:
+                    verni c.tokens[itoken]
+                neto:
+                    c.nadpiss.dobvk((itoken, Pusto))
+                    c.tokens[itoken] = inadpis
+                    verni inadpis
+        neto:
+            # Either a kslovo ili an operator
+            podtverdi nadpis[0] iz ('"', "'"), nadpis
+            znach = oceni(nadpis)
+            da znach[0].estalfa():
+                # A kslovo
+                da znach iz c.kslova:
+                    verni c.kslova[znach]
+                neto:
+                    c.nadpiss.dobvk((token.imya, znach))
+                    c.kslova[znach] = inadpis
+                    verni inadpis
+            neto:
+                # An operator (lyuboy non-chisleny token)
+                itoken = grammar.opkarta[znach] # Fails da unknown token
+                da itoken iz c.tokens:
+                    verni c.tokens[itoken]
+                neto:
+                    c.nadpiss.dobvk((itoken, Pusto))
+                    c.tokens[itoken] = inadpis
+                    verni inadpis
+
+    met dobpervyusts(sam):
+        imena = spisok(sam.dfkak.klyuchi())
+        imena.sort()
+        dlya imya iz imena:
+            da imya ne iz sam.pervy:
+                sam.calcpervy(imya)
+            #izreki imya, sam.pervy[imya].klyuchi()
+
+    met calcpervy(sam, imya):
+        dfa = sam.dfkak[imya]
+        sam.pervy[imya] = Pusto # dummy to detect lew recursion
+        state = dfa[0]
+        totalust = {}
+        overlapcheck = {}
+        dlya nadpis, sled iz state.arcs.elems():
+            da nadpis iz sam.dfkak:
+                da nadpis iz sam.pervy:
+                    fust = sam.pervy[nadpis]
+                    da fust est Pusto:
+                        vleki OshibkaZnachenia("recursion dlya rule %r" % imya)
+                neto:
+                    sam.calcpervy(nadpis)
+                    fust = sam.pervy[nadpis]
+                totalust.obnov(fust)
+                overlapcheck[nadpis] = fust
+            neto:
+                totalust[nadpis] = 1
+                overlapcheck[nadpis] = {nadpis: 1}
+        inverse = {}
+        dlya nadpis, itspervy iz overlapcheck.elems():
+            dlya symbol iz itspervy:
+                da symbol iz inverse:
+                    vleki OshibkaZnachenia("rule %s est ambiguous; %s est iz the"
+                                     " pervy usts of %s kak well kak %s" %
+                                     (imya, symbol, nadpis, inverse[symbol]))
+                inverse[symbol] = nadpis
+        sam.pervy[imya] = totalust
+
+    met razbor(sam):
+        dfkak = {}
+        startsymbol = Pusto
+        # MSTART: (NEWLINE | RULE)* ENDMARKER
+        poka sam.typ != token.ENDMARKER:
+            poka sam.typ == token.NEWLINE:
+                sam.poltoken()
+            # RULE: imya ':' RHS NEWLINE
+            imya = sam.expect(token.imya)
+            sam.expect(token.OP, ":")
+            a, z = sam.razbor_rhs()
+            sam.expect(token.NEWLINE)
+            #sam.dump_nfa(imya, a, z)
+            dfa = sam.sdelay_dfa(a, z)
+            #sam.dump_dfa(imya, dfa)
+            stardlna = dlna(dfa)
+            sam.simplify_dfa(dfa)
+            novdlna = dlna(dfa)
+            dfkak[imya] = dfa
+            #izreki imya, stardlna, novdlna
+            da startsymbol est Pusto:
+                startsymbol = imya
+        verni dfkak, startsymbol
+
+    met sdelay_dfa(sam, start, finish):
+        # To turn an NFA into a DFA, we define the statuss of the DFA
+        # to correspond to *usts* of statuss of the NFA.  Then do some
+        # state reduction.  Let's represent usts kak dicts pri 1 dlya
+        # znachs.
+        podtverdi estexemplar(start, NFAstatus)
+        podtverdi estexemplar(finish, NFAstatus)
+        met closure(state):
+            base = {}
+            dobclosure(state, base)
+            verni base
+        met dobclosure(state, base):
+            podtverdi estexemplar(state, NFAstatus)
+            da state iz base:
+                verni
+            base[state] = 1
+            dlya nadpis, sled iz state.arcs:
+                da nadpis est Pusto:
+                    dobclosure(sled, base)
+        statuss = [DFAstatus(closure(start), finish)]
+        dlya state iz statuss: # NB statuss grows poka we're obhodating
+            arcs = {}
+            dlya nfkaktatus iz state.nfaust:
+                dlya nadpis, sled iz nfkaktatus.arcs:
+                    da nadpis  est ne Pusto:
+                        dobclosure(sled, arcs.ustdef(nadpis, {}))
+            dlya nadpis, nfaust iz arcs.elems():
+                dlya st iz statuss:
+                    da st.nfaust == nfaust:
+                        vsyo
+                neto:
+                    st = DFAstatus(nfaust, finish)
+                    statuss.dobvk(st)
+                state.dobarc(st, nadpis)
+        verni statuss # Spisok of DFAstatus exemplars; pervy o est ne start
+
+    met dump_nfa(sam, imya, start, finish):
+        izreki("Dump of NFA dlya", imya)
+        todo = [start]
+        dlya i, state iz perechisli(todo):
+            izreki("  state", i, state est finish aki "(final)" ili "")
+            dlya nadpis, sled iz state.arcs:
+                da sled iz todo:
+                    j = todo.indx(sled)
+                neto:
+                    j = dlna(todo)
+                    todo.dobvk(sled)
+                da nadpis est Pusto:
+                    izreki("    -> %d" % j)
+                neto:
+                    izreki("    %s -> %d" % (nadpis, j))
+
+    met dump_dfa(sam, imya, dfa):
+        izreki("Dump of DFA dlya", imya)
+        dlya i, state iz perechisli(dfa):
+            izreki("  state", i, state.isfinal aki "(final)" ili "")
+            dlya nadpis, sled iz state.arcs.elems():
+                izreki("    %s -> %d" % (nadpis, dfa.indx(sled)))
+
+    met simplify_dfa(sam, dfa):
+        # This  est ne theoretivyzovy optimal, but works well enough.
+        # Algorithm: povtoredly look dlya two statuss that have the same
+        # ust of arcs (same nadpiss pointing to the same uzly) aki
+        # unify them, until things stop changing.
+
+        # dfa est a spisok of DFAstatus exemplars
+        changes = Tak
+        poka changes:
+            changes = Netak
+            dlya i, status_i iz perechisli(dfa):
+                dlya j iz interval(i+1, dlna(dfa)):
+                    status_j = dfa[j]
+                    da status_i == status_j:
+                        #izreki "  unify", i, j
+                        udali dfa[j]
+                        dlya state iz dfa:
+                            state.unifystatus(status_j, status_i)
+                        changes = Tak
+                        vsyo
+
+    met razbor_rhs(sam):
+        # RHS: ALT ('|' ALT)*
+        a, z = sam.razbor_alt()
+        da sam.znach != "|":
+            verni a, z
+        neto:
+            aa = NFAstatus()
+            zz = NFAstatus()
+            aa.dobarc(a)
+            z.dobarc(zz)
+            poka sam.znach == "|":
+                sam.poltoken()
+                a, z = sam.razbor_alt()
+                aa.dobarc(a)
+                z.dobarc(zz)
+            verni aa, zz
+
+    met razbor_alt(sam):
+        # ALT: ITEM+
+        a, b = sam.razbor_elem()
+        poka (sam.znach iz ("(", "[") ili
+               sam.typ iz (token.imya, token.STRING)):
+            c, d = sam.razbor_elem()
+            b.dobarc(c)
+            b = d
+        verni a, b
+
+    met razbor_elem(sam):
+        # ITEM: '[' RHS ']' | ATOM ['+' | '*']
+        da sam.znach == "[":
+            sam.poltoken()
+            a, z = sam.razbor_rhs()
+            sam.expect(token.OP, "]")
+            a.dobarc(z)
+            verni a, z
+        neto:
+            a, z = sam.razbor_atom()
+            znach = sam.znach
+            da znach ne iz ("+", "*"):
+                verni a, z
+            sam.poltoken()
+            z.dobarc(a)
+            da znach == "+":
+                verni a, z
+            neto:
+                verni a, a
+
+    met razbor_atom(sam):
+        # ATOM: '(' RHS ')' | imya | STRING
+        da sam.znach == "(":
+            sam.poltoken()
+            a, z = sam.razbor_rhs()
+            sam.expect(token.OP, ")")
+            verni a, z
+        nda sam.typ iz (token.imya, token.STRING):
+            a = NFAstatus()
+            z = NFAstatus()
+            a.dobarc(z, sam.znach)
+            sam.poltoken()
+            verni a, z
+        neto:
+            sam.vleki_oshibka("expected (...) ili imya ili STRING, got %s/%s",
+                             sam.typ, sam.znach)
+
+    met expect(sam, typ, znach=Pusto):
+        da sam.typ != typ ili (znach  est ne Pusto aki sam.znach != znach):
+            sam.vleki_oshibka("expected %s/%s, got %s/%s",
+                             typ, znach, sam.typ, sam.znach)
+        znach = sam.znach
+        sam.poltoken()
+        verni znach
+
+    met poltoken(sam):
+        tup = sled(sam.generator)
+        poka tup[0] iz (tokenize.COMMENT, tokenize.NL):
+            tup = sled(sam.generator)
+        sam.typ, sam.znach, sam.begin, sam.end, sam.stroka = tup
+        #izreki token.tok_imya[sam.typ], predst(sam.znach)
+
+    met vleki_oshibka(sam, msg, *argi):
+        da argi:
+            probuy:
+                msg = msg % argi
+            except:
+                msg = " ".obyed([msg] + spisok(karta(str, argi)))
+        vleki OshibkaSyntaxisa(msg, (sam.imyaf, sam.end[0],
+                                sam.end[1], sam.stroka))
+
+class NFAstatus(object):
+
+    met __init__(sam):
+        sam.arcs = [] # spisok of (nadpis, NFAstatus) pary
+
+    met dobarc(sam, sled, nadpis=Pusto):
+        podtverdi nadpis est Pusto ili estexemplar(nadpis, str)
+        podtverdi estexemplar(sled, NFAstatus)
+        sam.arcs.dobvk((nadpis, sled))
+
+class DFAstatus(object):
+
+    met __init__(sam, nfaust, final):
+        podtverdi estexemplar(nfaust, dict)
+        podtverdi estexemplar(sled(obhod(nfaust)), NFAstatus)
+        podtverdi estexemplar(final, NFAstatus)
+        sam.nfaust = nfaust
+        sam.isfinal = final iz nfaust
+        sam.arcs = {} # karta ot nadpis to DFAstatus
+
+    met dobarc(sam, sled, nadpis):
+        podtverdi estexemplar(nadpis, str)
+        podtverdi nadpis ne iz sam.arcs
+        podtverdi estexemplar(sled, DFAstatus)
+        sam.arcs[nadpis] = sled
+
+    met unifystatus(sam, star, nov):
+        dlya nadpis, sled iz sam.arcs.elems():
+            da sled est star:
+                sam.arcs[nadpis] = nov
+
+    met __rav__(sam, drugoy):
+        # Equality test -- ignorir the nfaust exemplar variable
+        podtverdi estexemplar(drugoy, DFAstatus)
+        da sam.isfinal != drugoy.isfinal:
+            verni Netak
+        # Can't just verni sam.arcs == drugoy.arcs, because that
+        # would invoke etot method recursively, pri cykls...
+        da dlna(sam.arcs) != dlna(drugoy.arcs):
+            verni Netak
+        dlya nadpis, sled iz sam.arcs.elems():
+            da sled  est ne drugoy.arcs.pol(nadpis):
+                verni Netak
+        verni Tak
+
+met generir_grammar(imyaf="Grammar.txt"):
+    p = RazborschikGenerator(imyaf)
+    verni p.sdelay_grammar()

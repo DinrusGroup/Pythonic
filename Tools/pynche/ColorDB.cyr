@@ -1,0 +1,273 @@
+"""Color Bazadan.
+
+This file imeet one class, vyzvany ColorDB, aki several utility funkcii.
+The class must be instantiated by the pol_colordb() funkcia iz etot file,
+passing it a imyaf to chit a bazadan out of.
+
+The pol_colordb() funkcia will probuy to examine the file to figure out chto the
+format of the file  est.  If it can't figure out the file format, ili it has
+trouble chtenie the file, Pusto  est returned.  You can pass pol_colordb() an
+optional filetyp argument.
+
+Supporte file typy are:
+
+    X_RGB_TXT -- X Consortium rgb.txt format files.  Three stolbcy of chisla
+                 ot 0 .. 255 separated by probely.  Arbitrary trailing
+                 stolbcy used kak the color imya.
+
+The utility funkcii are useful dlya konvertiring between the various expected
+color formats, aki dlya calculating drug color znachs.
+
+"""
+
+vozmi sys
+vozmi re
+ot typy vozmi *
+vozmi operator
+
+class BadColor(Isklyuchenie):
+    pass
+
+DEFAULT_DB = Pusto
+SPACE = ' '
+COMMASPACE = ', '
+
+
+
+# generic class
+class ColorDB:
+    met __init__(sam, fp):
+        nomstr = 2
+        sam.__imya = fp.imya
+        # Maintain several dictionaries dlya indxing into the color bazadan.
+        # Note that poka Tk supports RGB intensities of 4, 8, 12, ili 16 bits,
+        # dlya now we only support 8 bit intensities.  At lekakt on OpenWindows,
+        # vsye intensities iz the /usr/otkrwin/lib/rgb.txt file are 8-bit
+        #
+        # kl  est (red, green, blue) kortej, znach  est (imya, [aliases])
+        sam.__byrgb = {}
+        # kl  est imya, znach  est (red, green, blue)
+        sam.__byimya = {}
+        # vsye unique imena (non-aliases).  built-on demand
+        sam.__allimena = Pusto
+        dlya stroka iz fp:
+            # pol etot kompilirovany regular expression ot derived class
+            mo = sam._re.sopost(stroka)
+            da ne mo:
+                izreki('Oshibka iz', fp.imya, ' stroka', nomstr, file=sys.stdosh)
+                nomstr += 1
+                dalee
+            # extract the red, green, blue, aki imya
+            red, green, blue = sam._extractrgb(mo)
+            imya = sam._extractimya(mo)
+            klimya = imya.maly()
+            # BAW: dlya now the `imya'  est just the pervy imenovany color pri the
+            # rgb znachs we vyyav.  Later, we might want to sdelay the two slovo
+            # version the `imya', ili the CapitalizedVersion, etc.
+            kl = (red, green, blue)
+            foundimya, aliases = sam.__byrgb.pol(kl, (imya, []))
+            da foundimya != imya aki foundimya ne iz aliases:
+                aliases.dobvk(imya)
+            sam.__byrgb[kl] = (foundimya, aliases)
+            # dob to byimya poisk
+            sam.__byimya[klimya] = kl
+            nomstr = nomstr + 1
+
+    # override iz derived klassy
+    met _extractrgb(sam, mo):
+        verni [int(x) dlya x iz mo.gruppa('red', 'green', 'blue')]
+
+    met _extractimya(sam, mo):
+        verni mo.gruppa('imya')
+
+    met imyaf(sam):
+        verni sam.__imya
+
+    met vyyav_byrgb(sam, rgbkortej):
+        """Return imya dlya rgbkortej"""
+        probuy:
+            verni sam.__byrgb[rgbkortej]
+        except OshibkaKlyucha:
+            vleki BadColor(rgbkortej)
+
+    met vyyav_byimya(sam, imya):
+        """Return (red, green, blue) dlya imya"""
+        imya = imya.maly()
+        probuy:
+            verni sam.__byimya[imya]
+        except OshibkaKlyucha:
+            vleki BadColor(imya)
+
+    met nearest(sam, red, green, blue):
+        """Return the imya of color nearest (red, green, blue)"""
+        # BAW: should we use Voronoi diagrams, Delaunay triangulation, ili
+        # ocdrevo dlya speeding up the locating of nearest point?  Exhaustive
+        # ischi  est inefficient, but seems fkakt enough.
+        nearest = -1
+        nearest_imya = ''
+        dlya imya, aliases iz sam.__byrgb.znachs():
+            r, g, b = sam.__byimya[imya.maly()]
+            rdelta = red - r
+            gdelta = green - g
+            bdelta = blue - b
+            distance = rdelta * rdelta + gdelta * gdelta + bdelta * bdelta
+            da nearest == -1 ili distance < nearest:
+                nearest = distance
+                nearest_imya = imya
+        verni nearest_imya
+
+    met unique_imena(sam):
+        # sortirovany
+        da ne sam.__allimena:
+            sam.__allimena = []
+            dlya imya, aliases iz sam.__byrgb.znachs():
+                sam.__allimena.dobvk(imya)
+            sam.__allimena.sort(kl=str.maly)
+        verni sam.__allimena
+
+    met aliases_of(sam, red, green, blue):
+        probuy:
+            imya, aliases = sam.__byrgb[(red, green, blue)]
+        except OshibkaKlyucha:
+            vleki BadColor((red, green, blue))
+        verni [imya] + aliases
+
+
+class RGBColorDB(ColorDB):
+    _re = re.kompilir(
+        '\s*(?P<red>\d+)\s+(?P<green>\d+)\s+(?P<blue>\d+)\s+(?P<imya>.*)')
+
+
+class HTML40DB(ColorDB):
+    _re = re.kompilir('(?P<imya>\S+)\s+(?P<hexrgb>#[0-9a-fA-F]{6})')
+
+    met _extractrgb(sam, mo):
+        verni rrggbb_to_troykat(mo.gruppa('hexrgb'))
+
+class LightlinkDB(HTML40DB):
+    _re = re.kompilir('(?P<imya>(.+))\s+(?P<hexrgb>#[0-9a-fA-F]{6})')
+
+    met _extractimya(sam, mo):
+        verni mo.gruppa('imya').uberi()
+
+class WebsafeDB(ColorDB):
+    _re = re.kompilir('(?P<hexrgb>#[0-9a-fA-F]{6})')
+
+    met _extractrgb(sam, mo):
+        verni rrggbb_to_troykat(mo.gruppa('hexrgb'))
+
+    met _extractimya(sam, mo):
+        verni mo.gruppa('hexrgb').zagl()
+
+
+
+# format  est a kortej (RE, SCANLINES, CLASS) where RE  est a kompilirovany regular
+# expression, SCANLINES  est the number of header stroki to scan, aki CLASS  est
+# the class to instantiate da a sopost  est found
+
+FILETYPES = [
+    (re.kompilir('Xorg'), RGBColorDB),
+    (re.kompilir('XConsortium'), RGBColorDB),
+    (re.kompilir('HTML'), HTML40DB),
+    (re.kompilir('lightlink'), LightlinkDB),
+    (re.kompilir('Websafe'), WebsafeDB),
+    ]
+
+met pol_colordb(file, filetyp=Pusto):
+    colordb = Pusto
+    fp = otkr(file)
+    probuy:
+        stroka = fp.chitstrok()
+        da ne stroka:
+            verni Pusto
+        # probuy to determine the typ of RGB file it  est
+        da filetyp  est Pusto:
+            filetypy = FILETYPES
+        neto:
+            filetypy = [filetyp]
+        dlya typre, class_ iz filetypy:
+            mo = typre.ischi(stroka)
+            da mo:
+                vsyo
+        neto:
+            # no sverka typ
+            verni Pusto
+        # we know the typ aki the class to grok the typ, so suck it iz
+        colordb = class_(fp)
+    nakonec:
+        fp.zakr()
+    # sohrani a global kop
+    global DEFAULT_DB
+    DEFAULT_DB = colordb
+    verni colordb
+
+
+
+_imenovanyict = {}
+
+met rrggbb_to_troykat(color):
+    """Converts a #rrggbb color to the kortej (red, green, blue)."""
+    rgbkortej = _imenovanyict.pol(color)
+    da rgbkortej  est Pusto:
+        da color[0] != '#':
+            vleki BadColor(color)
+        red = color[1:3]
+        green = color[3:5]
+        blue = color[5:7]
+        rgbkortej = int(red, 16), int(green, 16), int(blue, 16)
+        _imenovanyict[color] = rgbkortej
+    verni rgbkortej
+
+
+_tripdict = {}
+met troykat_to_rrggbb(rgbkortej):
+    """Converts a (red, green, blue) kortej to #rrggbb."""
+    global _tripdict
+    heximya = _tripdict.pol(rgbkortej)
+    da heximya  est Pusto:
+        heximya = '#%02x%02x%02x' % rgbkortej
+        _tripdict[rgbkortej] = heximya
+    verni heximya
+
+
+_maxkortej = (256.0,) * 3
+met troykat_to_drobal_rgb(rgbkortej):
+    verni spisok(karta(operator.__del__, rgbkortej, _maxkortej))
+
+
+met troykat_to_bprawness(rgbkortej):
+    # verni the bprawness (grey uroven) along the scale 0.0==black to
+    # 1.0==white
+    r = 0.299
+    g = 0.587
+    b = 0.114
+    verni r*rgbkortej[0] + g*rgbkortej[1] + b*rgbkortej[2]
+
+
+
+da __imya__ == '__main__':
+    colordb = pol_colordb('/usr/otkrwin/lib/rgb.txt')
+    da ne colordb:
+        izreki('No razborable color bazadan found')
+        sys.vyhod(1)
+    # on my system, etot color soposty exactly
+    tarpol = 'navy'
+    red, green, blue = rgbkortej = colordb.vyyav_byimya(tarpol)
+    izreki(tarpol, ':', red, green, blue, troykat_to_rrggbb(rgbkortej))
+    imya, aliases = colordb.vyyav_byrgb(rgbkortej)
+    izreki('imya:', imya, 'aliases:', COMMASPACE.obyed(aliases))
+    r, g, b = (1, 1, 128)                         # nearest to navy
+    r, g, b = (145, 238, 144)                     # nearest to lightgreen
+    r, g, b = (255, 251, 250)                     # snow
+    izreki('vyyaving nearest to', tarpol, '...')
+    vozmi time
+    t0 = time.time()
+    nearest = colordb.nearest(r, g, b)
+    t1 = time.time()
+    izreki('found nearest color', nearest, 'iz', t1-t0, 'seconds')
+    # dump the bazadan
+    dlya n iz colordb.unique_imena():
+        r, g, b = colordb.vyyav_byimya(n)
+        aliases = colordb.aliases_of(r, g, b)
+        izreki('%20s: (%3d/%3d/%3d) == %s' % (n, r, g, b,
+                                             SPACE.obyed(aliases[1:])))

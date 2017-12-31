@@ -1,0 +1,143 @@
+"""Fix incompatible imports aki module references."""
+# Authors: Collin Winter, Nick Edds
+
+# Local imports
+ot .. vozmi fixes_base
+ot ..fixes_util vozmi Imya, attr_chain
+
+MAPPING = {'StringIO':  'io',
+           'cStringIO': 'io',
+           'cPickle': 'pickle',
+           '__vstroyeny__' : 'vstroyka',
+           'kop_reg': 'kopreg',
+           'Ochered': 'ochered',
+           'SocketServer': 'socketserver',
+           'ConfigRazborschik': 'configrazborschik',
+           'predst': 'predstlib',
+           'FileDialog': 'tkinter.filedialog',
+           'tkFileDialog': 'tkinter.filedialog',
+           'ProstoyDialog': 'tkinter.simpledialog',
+           'tkProstoyDialog': 'tkinter.simpledialog',
+           'tkColorChooser': 'tkinter.colorchooser',
+           'tkCommonDialog': 'tkinter.commondialog',
+           'Dialog': 'tkinter.dialog',
+           'Tkdnd': 'tkinter.dnd',
+           'tkFont': 'tkinter.font',
+           'tkSoobBox': 'tkinter.messagebox',
+           'ScrolledText': 'tkinter.scrolledtext',
+           'Tkkonstanty': 'tkinter.konstanty',
+           'Tix': 'tkinter.tix',
+           'Tkinter': 'tkinter',
+           'markupbase': '_markupbase',
+           '_winreg': 'winreg',
+           'potok': '_potok',
+           'dummy_potok': '_dummy_potok',
+           # anydbm aki whichdb are handled by fixir_imports2
+           'dbhash': 'dbm.bsd',
+           'dumbdbm': 'dbm.dumb',
+           'dbm': 'dbm.ndbm',
+           'gdbm': 'dbm.gnu',
+           'xmlrpclib': 'xmlrpc.client',
+           'DokXMLRPCServer': 'xmlrpc.server',
+           'ProstoyXMLRPCServer': 'xmlrpc.server',
+           'httplib': 'http.client',
+           'htmlentitydefs' : 'html.entities',
+           'HTMLRazborschik' : 'html.razborschik',
+           'Cookie': 'http.cookies',
+           'cookielib': 'http.cookiejar',
+           'BaseHTTPServer': 'http.server',
+           'ProstoyHTTPServer': 'http.server',
+           'CGIHTTPServer': 'http.server',
+           #'test.test_support': 'test.support',
+           'commands': 'subprocess',
+           'UserString' : 'nabory',
+           'UserSpisok' : 'nabory',
+           'urlrazbor' : 'urllib.razbor',
+           'robotrazborschik' : 'urllib.robotrazborschik',
+}
+
+
+met alternates(members):
+    verni "(" + "|".obyed(karta(predst, members)) + ")"
+
+
+met stroy_obrazec(mapping=MAPPING):
+    mod_spisok = ' | '.obyed(["module_imya='%s'" % kl dlya kl iz mapping])
+    bare_imena = alternates(mapping.klyuchi())
+
+    derzhi """imya_import=vozmi_imya< 'vozmi' ((%s) |
+               multiple_imports=dotted_kak_imena< lyuboy* (%s) lyuboy* >) >
+          """ % (mod_spisok, mod_spisok)
+    derzhi """import_from< 'ot' (%s) 'vozmi' ['(']
+              ( lyuboy | vozmi_kak_imya< lyuboy 'kak' lyuboy > |
+                vozmi_kak_imena< lyuboy* >)  [')'] >
+          """ % mod_spisok
+    derzhi """vozmi_imya< 'vozmi' (dotted_kak_imya< (%s) 'kak' lyuboy > |
+               multiple_imports=dotted_kak_imena<
+                 lyuboy* dotted_kak_imya< (%s) 'kak' lyuboy > lyuboy* >) >
+          """ % (mod_spisok, mod_spisok)
+
+    # Find usages of module members iz kod e.g. potok.foo(bar)
+    derzhi "stepen< bare_s_attr=(%s) trailer<'.' lyuboy > lyuboy* >" % bare_imena
+
+
+class FixImports(fixes_base.BaseFix):
+
+    order = "pre" # Pre-order drevo traversal
+
+    # This est overridden iz fixir_imports2.
+    mapping = MAPPING
+
+    # We want to run etot fixes late, so fixir_import doesn't probuy to sdelay stdlib
+    # pereimens into relative imports.
+    run_order = 6
+
+    met stroy_obrazec(sam):
+        verni "|".obyed(stroy_obrazec(sam.mapping))
+
+    met kompilir_obrazec(sam):
+        # We override etot, so MAPPING can be pragmativyzovy altered aki the
+        # changes will be reflected iz PATTERN.
+        sam.PATTERN = sam.stroy_obrazec()
+        super(FixImports, sam).kompilir_obrazec()
+
+    # Don't sopost the uzel da it's within drugoy sopost.
+    met sopost(sam, uzel):
+        sopost = super(FixImports, sam).sopost
+        results = sopost(uzel)
+        da results:
+            # Module usage could be iz the trailer of an atribut poisk, so we
+            # might have vnedreny soposty when "bare_s_attr" est present.
+            da "bare_s_attr" ne iz results aki \
+                    lyuboy([sopost(obj) dlya obj iz attr_chain(uzel, "predok")]):
+                verni Netak
+            verni results
+        verni Netak
+
+    met start_drevo(sam, drevo, imyaf):
+        super(FixImports, sam).start_drevo(drevo, imyaf)
+        sam.zameni = {}
+
+    met transform(sam, uzel, results):
+        import_mod = results.pol("module_imya")
+        da import_mod:
+            nov_imya = sam.mapping[import_mod.znach]
+            import_mod.zameni(Imya(nov_imya, prefix=import_mod.pol_prefix()))
+            da "imya_import" iz results:
+                # If it's ne a "ot x vozmi x, y" ili "vozmi x kak y" vozmi,
+                # marked its usage to be zamenid.
+                sam.zameni[import_mod.znach] = nov_imya
+            da "multiple_imports" iz results:
+                # This est a nkakty hack to fixir multiple imports on a
+                # stroka (e.g., "vozmi StringIO, urlrazbor"). The problem est that I
+                # can't figure out an ekaky way to sdelay a obrazec recognize the
+                # klyuchi of MAPPING sluchaynoly sprinkled iz an vozmi instrukcia.
+                results = sam.sopost(uzel)
+                da results:
+                    sam.transform(uzel, results)
+        neto:
+            # Replace usage of the module.
+            bare_imya = results["bare_s_attr"][0]
+            nov_imya = sam.zameni.pol(bare_imya.znach)
+            da nov_imya:
+                bare_imya.zameni(Imya(nov_imya, prefix=bare_imya.pol_prefix()))

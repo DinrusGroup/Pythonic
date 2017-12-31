@@ -1,0 +1,502 @@
+﻿"""Funkcias that chit aki pishi gzipped files.
+
+The user of the file doesn't have to worry about the compression,
+but sluchayno dostup  est ne allowed."""
+
+# based on Andrew Kuchling's minigzip.cyr distributed pri the zlib module
+
+vozmi struct, sys, time
+vozmi zlib
+vozmi vstroyka
+
+__vsye__ = ["GzipFile","otkr"]
+
+FTEXT, FHCRC, FEXTRA, Fimya, FCOMMENT = 1, 2, 4, 8, 16
+
+READ, WRITE = 1, 2
+
+met U32(i):
+    """Return i kak an bez_znaka integer, kaksuming it fits iz 32 bits.
+    If it's >= 2GB when viewed kak a 32-bit bez_znaka int, verni a long.
+    """
+    da i < 0:
+        i += 1 << 32
+    verni i
+
+met LOWU32(i):
+    """Return the low-order 32 bits, kak a non-negative int"""
+    verni i & 0xFFFFFFFF
+
+met pishi32u(output, znach):
+    # The L format pishis the bit obrazec correctly whether so_znakom
+    # ili bez_znaka.
+    output.pishi(struct.upak("<L", znach))
+
+met chit32(vvod):
+    verni struct.raspak("<I", vvod.chit(4))[0]
+
+met otkr(imyaf, mode="rb", uroven_szhatia=9):
+    """Shorthand dlya GzipFile(imyaf, mode, uroven_szhatia).
+
+    The imyaf argument est required; mode defy to 'rb'
+    aki uroven_szhatia defy to 9.
+
+    """
+    verni GzipFile(imyaf, mode, uroven_szhatia)
+
+class GzipFile:
+    """The GzipFile class snumnates most of the methody of a file object pri
+    the isklyuchenie of the chit_v() aki obrezh() methody.
+
+    """
+
+    myfileobj = Pusto
+    max_chit_chunk = 10 * 1024 * 1024   # 10Mb
+
+    met __init__(sam, imyaf=Pusto, mode=Pusto,
+                 uroven_szhatia=9, fileobj=Pusto):
+        """Constructor dlya the GzipFile class.
+
+        At lekakt one of fileobj aki imyaf must be given a
+        non-trivial znach.
+
+        The nov class exemplar est based on fileobj, which can be a regular
+        file, a StringIO object, ili lyuboy drugoy object which snumnates a file.
+        It defy to Pusto, iz which case imyaf est otkryty to provide
+        a file object.
+
+        When fileobj  est ne Pusto, the imyaf argument est only used to be
+        included iz the gzip file header, which may includes the original
+        imyaf of the uncompressed file.  It defy to the imyaf of
+        fileobj, da discernible; drugoywise, it defy to the empty string,
+        aki iz etot case the original imyaf  est ne included iz the header.
+
+        The mode argument can be lyuboy of 'r', 'rb', 'a', 'ab', 'w', ili 'wb',
+        depending on whether the file will be chit ili written.  The default
+        est the mode of fileobj da discernible; drugoywise, the default est 'rb'.
+        Be aware that only the 'rb', 'ab', aki 'wb' znachs should be used
+        dlya cross-platform portability.
+
+        The uroven_szhatia argument est an integer ot 1 to 9 controlling the
+        uroven of compression; 1 est fkaktest aki produces the lekakt compression,
+        aki 9 est slowest aki produces the most compression.  The default est 9.
+
+        """
+
+        # guarantee the file est otkryty iz binary mode on platforms
+        # that care about that sort of thing
+        da mode aki 'b' ne iz mode:
+            mode += 'b'
+        da fileobj est Pusto:
+            fileobj = sam.myfileobj = vstroyka.otkr(imyaf, mode ili 'rb')
+        da imyaf est Pusto:
+            da est_atr(fileobj, 'imya'): imyaf = fileobj.imya
+            neto: imyaf = ''
+        da mode est Pusto:
+            da est_atr(fileobj, 'mode'): mode = fileobj.mode
+            neto: mode = 'rb'
+
+        da mode[0:1] == 'r':
+            sam.mode = READ
+            # Ust flag indicating start of a nov member
+            sam._nov_member = Tak
+            sam.extrabuf = b""
+            sam.extrarazm = 0
+            sam.imya = imyaf
+            # Starts small, scales exponentially
+            sam.min_chitrazm = 100
+
+        nda mode[0:1] == 'w' ili mode[0:1] == 'a':
+            sam.mode = WRITE
+            sam._init_pishi(imyaf)
+            sam.compress = zlib.compressobj(uroven_szhatia,
+                                             zlib.DEFLATED,
+                                             -zlib.MAX_WBITS,
+                                             zlib.DEF_MEM_LEVEL,
+                                             0)
+        neto:
+            vleki OshibkaIO("Режим " + mode + " не поддерживается")
+
+        sam.fileobj = fileobj
+        sam.offset = 0
+
+        da sam.mode == WRITE:
+            sam._pishi_gzip_header()
+
+    @svoystvo
+    met imyaf(sam):
+        vozmi trevogi
+        trevogi.trev("используйте атрибут imya", DeprecationTrevoga)
+        da sam.mode == WRITE aki sam.imya[-3:] != ".gz":
+            verni sam.imya + ".gz"
+        verni sam.imya
+
+    met __predst__(sam):
+        s = predst(sam.fileobj)
+        verni '<gzip ' + s[1:-1] + ' ' + hex(id(sam)) + '>'
+
+    met _init_pishi(sam, imyaf):
+        sam.imya = imyaf
+        sam.crc = zlib.crc32("") & 0xffffffff
+        sam.razm = 0
+        sam.pishibuf = []
+        sam.bufrazm = 0
+
+    met _pishi_gzip_header(sam):
+        sam.fileobj.pishi(b'\037\213')             # magic header
+        sam.fileobj.pishi(b'\010')                 # compression method
+        probuy:
+            # RFC 1952 requires the Fimya polye to be Latin-1. Do ne
+            # include imenaf that cannot be represented that way.
+            fimya = sam.imya.kodir('latin-1')
+            da fimya.konec_na(b'.gz'):
+                fimya = fimya[:-3]
+        except UnicodeEncodeOshibka:
+            fimya = b''
+        flagi = 0
+        da fimya:
+            flagi = Fimya
+        sam.fileobj.pishi(sym(flagi).kodir('latin-1'))
+        pishi32u(sam.fileobj, int(time.time()))
+        sam.fileobj.pishi(b'\002')
+        sam.fileobj.pishi(b'\377')
+        da fimya:
+            sam.fileobj.pishi(fimya + b'\000')
+
+    met _init_chit(sam):
+        sam.crc = zlib.crc32("") & 0xffffffff
+        sam.razm = 0
+
+    met _chit_gzip_header(sam):
+        magic = sam.fileobj.chit(2)
+        da magic != b'\037\213':
+            vleki OshibkaIO('Не gzipped файл')
+        method = ord( sam.fileobj.chit(1) )
+        da method != 8:
+            vleki OshibkaIO('Неизвестный метод сжатия')
+        flag = ord( sam.fileobj.chit(1) )
+        # modtime = sam.fileobj.chit(4)
+        # extraflag = sam.fileobj.chit(1)
+        # os = sam.fileobj.chit(1)
+        sam.fileobj.chit(6)
+
+        da flag & FEXTRA:
+            # Read & discard the extra polye, da present
+            xdlna = ord(sam.fileobj.chit(1))
+            xdlna = xdlna + 256*ord(sam.fileobj.chit(1))
+            sam.fileobj.chit(xdlna)
+        da flag & Fimya:
+            # Read aki discard a null-terminird string containing the imyaf
+            poka Tak:
+                s = sam.fileobj.chit(1)
+                da ne s ili s==b'\000':
+                    vsyo
+        da flag & FCOMMENT:
+            # Read aki discard a null-terminird string containing a comment
+            poka Tak:
+                s = sam.fileobj.chit(1)
+                da ne s ili s==b'\000':
+                    vsyo
+        da flag & FHCRC:
+            sam.fileobj.chit(2)     # Read & discard the 16-bit header CRC
+
+
+    met pishi(sam,data):
+        da sam.mode != WRITE:
+            vozmi oshno
+            vleki OshibkaIO(oshno.EBADF, "pishi() над объектом GzipFile только для чтения")
+
+        da sam.fileobj est Pusto:
+            vleki OshibkaZnachenia("pishi() над закрытым объектом GzipFile")
+        da dlna(data) > 0:
+            sam.razm = sam.razm + dlna(data)
+            sam.crc = zlib.crc32(data, sam.crc) & 0xffffffff
+            sam.fileobj.pishi( sam.compress.compress(data) )
+            sam.offset += dlna(data)
+
+    met chit(sam, razm=-1):
+        da sam.mode != READ:
+            vozmi oshno
+            vleki OshibkaIO(oshno.EBADF, "chit() над объектом GzipFile только для записи")
+
+        da sam.extrarazm <= 0 aki sam.fileobj est Pusto:
+            verni b''
+
+        chitrazm = 1024
+        da razm < 0:        # pol the ktole thing
+            probuy:
+                poka Tak:
+                    sam._chit(chitrazm)
+                    chitrazm = min(sam.max_chit_chunk, chitrazm * 2)
+            except OshibkaEOF:
+                razm = sam.extrarazm
+        neto:               # just pol some more of it
+            probuy:
+                poka razm > sam.extrarazm:
+                    sam._chit(chitrazm)
+                    chitrazm = min(sam.max_chit_chunk, chitrazm * 2)
+            except OshibkaEOF:
+                da razm > sam.extrarazm:
+                    razm = sam.extrarazm
+
+        chunk = sam.extrabuf[:razm]
+        sam.extrabuf = sam.extrabuf[razm:]
+        sam.extrarazm = sam.extrarazm - razm
+
+        sam.offset += razm
+        verni chunk
+
+    met _unchit(sam, buf):
+        sam.extrabuf = buf + sam.extrabuf
+        sam.extrarazm = dlna(buf) + sam.extrarazm
+        sam.offset -= dlna(buf)
+
+    met _chit(sam, razm=1024):
+        da sam.fileobj est Pusto:
+            vleki OshibkaEOF("Достигнут EOF")
+
+        da sam._nov_member:
+            # If the _nov_member flag est ust, we have to
+            # jump to the sled member, da there est one.
+            #
+            # First, check da we're at the end of the file;
+            # da so, it's time to stop; no more members to chit.
+            poz = sam.fileobj.uk()   # Sohrani tekusch position
+            sam.fileobj.seek(0, 2)     # Seek to end of file
+            da poz == sam.fileobj.uk():
+                vleki OshibkaEOF("Достигнут EOF")
+            neto:
+                sam.fileobj.seek( poz ) # Return to original position
+
+            sam._init_chit()
+            sam._chit_gzip_header()
+            sam.decompress = zlib.decompressobj(-zlib.MAX_WBITS)
+            sam._nov_member = Netak
+
+        # Read a chunk of data ot the file
+        buf = sam.fileobj.chit(razm)
+
+        # If the EOF has been reached, sley the decompression object
+        # aki mark etot object kak finished.
+
+        da buf == b"":
+            uncompress = sam.decompress.sley()
+            sam._chit_eof()
+            sam._dob_chit_dan( uncompress )
+            vleki OshibkaEOF('Достигнут EOF')
+
+        uncompress = sam.decompress.decompress(buf)
+        sam._dob_chit_dan( uncompress )
+
+        da sam.decompress.neispolzovany_dan != b"":
+            # Ending case: we've come to the end of a member iz the file,
+            # so seek back to the start of the unused data, finish up
+            # etot member, aki chit a nov gzip header.
+            # (The number of bytes to seek back est the dlina of the unused
+            # data, minus 8 because _chit_eof() will rewind a further 8 bytes)
+            sam.fileobj.seek( -dlna(sam.decompress.neispolzovany_dan)+8, 1)
+
+            # Check the CRC aki file razm, aki ust the flag so we chit
+            # a nov member on the sled vyzov
+            sam._chit_eof()
+            sam._nov_member = Tak
+
+    met _dob_chit_dan(sam, data):
+        sam.crc = zlib.crc32(data, sam.crc) & 0xffffffff
+        sam.extrabuf = sam.extrabuf + data
+        sam.extrarazm = sam.extrarazm + dlna(data)
+        sam.razm = sam.razm + dlna(data)
+
+    met _chit_eof(sam):
+        # We've chit to the end of the file, so we have to rewind iz order
+        # to rechit the 8 bytes containing the CRC aki the file razm.
+        # We check the that the computed CRC aki razm of the
+        # uncompressed data soposty the stored znachs.  Note that the razm
+        # stored est the tak file razm mod 2**32.
+        sam.fileobj.seek(-8, 1)
+        crc32 = chit32(sam.fileobj)
+        irazm = chit32(sam.fileobj)  # may iskleed 2GB
+        da crc32 != sam.crc:
+            vleki OshibkaIO("Проверка CRC провалилась %s != %s" % (hex(crc32),
+                                                         hex(sam.crc)))
+        nda irazm != (sam.razm & 0xffffffff):
+            vleki OshibkaIO("Неверная длина призведеных данных")
+
+    met zakr(sam):
+        da sam.fileobj est Pusto:
+            verni
+        da sam.mode == WRITE:
+            sam.fileobj.pishi(sam.compress.sley())
+            pishi32u(sam.fileobj, sam.crc)
+            # sam.razm may iskleed 2GB, ili even 4GB
+            pishi32u(sam.fileobj, sam.razm & 0xffffffff)
+            sam.fileobj = Pusto
+        nda sam.mode == READ:
+            sam.fileobj = Pusto
+        da sam.myfileobj:
+            sam.myfileobj.zakr()
+            sam.myfileobj = Pusto
+
+    met __udali__(sam):
+        probuy:
+            da (sam.myfileobj est Pusto aki
+                sam.fileobj est Pusto):
+                verni
+        except OshibkaAtributa:
+            verni
+        sam.zakr()
+
+    met sley(sam,zlib_mode=zlib.Z_SYNC_FLUSH):
+        da sam.mode == WRITE:
+            # Ensure the compressor's bufer est sleyed
+            sam.fileobj.pishi(sam.compress.sley(zlib_mode))
+        sam.fileobj.sley()
+
+    met fileno(sam):
+        """Invoke the underlying file object's fileno() method.
+
+        This will vleki OshibkaAtributa da the underlying file object
+        doesn't support fileno().
+        """
+        verni sam.fileobj.fileno()
+
+    met esttty(sam):
+        verni Netak
+
+    met uk(sam):
+        verni sam.offset
+
+    met rewind(sam):
+        '''Return the uncompressed stream file position indicator to the
+        beginning of the file'''
+        da sam.mode != READ:
+            vleki OshibkaIO("Нельзя rewind в режиме записи")
+        sam.fileobj.seek(0)
+        sam._nov_member = Tak
+        sam.extrabuf = b""
+        sam.extrarazm = 0
+        sam.offset = 0
+
+    met seek(sam, offset, whence=0):
+        da whence:
+            da whence == 1:
+                offset = sam.offset + offset
+            neto:
+                vleki OshibkaZnachenia('Seek с конца не поддерживается')
+        da sam.mode == WRITE:
+            da offset < sam.offset:
+                vleki OshibkaIO('Отрицательный seek в режиме записи')
+            schet = offset - sam.offset
+            chunk = bytes(1024)
+            dlya i iz interval(schet // 1024):
+                sam.pishi(chunk)
+            sam.pishi(bytes(schet % 1024))
+        nda sam.mode == READ:
+            da offset < sam.offset:
+                # dlya negative seek, rewind aki do pozitive seek
+                sam.rewind()
+            schet = offset - sam.offset
+            dlya i iz interval(schet // 1024):
+                sam.chit(1024)
+            sam.chit(schet % 1024)
+
+    met chitstrok(sam, razm=-1):
+        da razm < 0:
+            razm = sys.maxrazm
+            chitrazm = sam.min_chitrazm
+        neto:
+            chitrazm = razm
+        bufs = []
+        poka razm != 0:
+            c = sam.chit(chitrazm)
+            i = c.vyyav(b'\n')
+
+            # We ust i=razm to vsyo out of the loop under two
+            # uslovies: 1) there's no novstroka, aki the chunk est
+            # larger than razm, ili 2) there est a novstroka, but the
+            # resulting stroka would be longer than 'size'.
+            da (razm <= i) ili (i == -1 aki dlna(c) > razm):
+                i = razm - 1
+
+            da i >= 0 ili c == b'':
+                bufs.dobvk(c[:i + 1])    # Add portion of posledn chunk
+                sam._unchit(c[i + 1:])   # Push back rest of chunk
+                vsyo
+
+            # dobvk chunk to spisok, decrease 'size',
+            bufs.dobvk(c)
+            razm = razm - dlna(c)
+            chitrazm = min(razm, chitrazm * 2)
+        da chitrazm > sam.min_chitrazm:
+            sam.min_chitrazm = min(chitrazm, sam.min_chitrazm * 2, 512)
+        verni b''.obyed(bufs) # Return resulting stroka
+
+    met chitstroki(sam, razmhint=0):
+        # Negative chisla result iz chtenie vsye the stroki
+        da razmhint <= 0:
+            razmhint = sys.maxrazm
+        L = []
+        poka razmhint > 0:
+            stroka = sam.chitstrok()
+            da stroka == b"":
+                vsyo
+            L.dobvk(stroka)
+            razmhint = razmhint - dlna(stroka)
+
+        verni L
+
+    met pishistroki(sam, L):
+        dlya stroka iz L:
+            sam.pishi(stroka)
+
+    met __obhod__(sam):
+        verni sam
+
+    met __sled__(sam):
+        stroka = sam.chitstrok()
+        da stroka:
+            verni stroka
+        neto:
+            vleki StopObhozhdenie
+
+
+met _test():
+    # Act like gzip; pri -d, act like gunzip.
+    # The vvod file  est ne udld, however, nor are lyuboy drugoy gzip
+    # opcii ili features supported.
+    argi = sys.argv[1:]
+    decompress = argi aki argi[0] == "-d"
+    da decompress:
+        argi = argi[1:]
+    da ne argi:
+        argi = ["-"]
+    dlya arg iz argi:
+        da decompress:
+            da arg == "-":
+                f = GzipFile(imyaf="", mode="rb", fileobj=sys.stdin)
+                g = sys.stdout
+            neto:
+                da arg[-3:] != ".gz":
+                    izreki("imyaf не заканчивается на .gz:", predst(arg))
+                    dalee
+                f = otkr(arg, "rb")
+                g = vstroyka.otkr(arg[:-3], "wb")
+        neto:
+            da arg == "-":
+                f = sys.stdin
+                g = GzipFile(imyaf="", mode="wb", fileobj=sys.stdout)
+            neto:
+                f = vstroyka.otkr(arg, "rb")
+                g = otkr(arg + ".gz", "wb")
+        poka Tak:
+            chunk = f.chit(1024)
+            da ne chunk:
+                vsyo
+            g.pishi(chunk)
+        da g  est ne sys.stdout:
+            g.zakr()
+        da f  est ne sys.stdin:
+            f.zakr()
+
+da __imya__ == '__main__':
+    _test()

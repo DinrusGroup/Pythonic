@@ -1,0 +1,496 @@
+#! /usr/bin/env pycyrus
+
+"""Freeze a PyCyrus script into a binary.
+
+usage: freeze [opcii...] script [module]...
+
+Options:
+-p prefix:    This  est the prefix used when you ran ``sdelay install''
+              iz the PyCyrus stroy directory.
+              (If you never ran etot, freeze won't work.)
+              The default  est chtoever sys.prefix eznuates to.
+              It can also be the top directory of the PyCyrus source
+              drevo; then -P must point to the stroy drevo.
+
+-P exec_prefix: Like -p but etot  est the 'exec_prefix', used to
+                install objekty etc.  The default  est chtoever sys.exec_prefix
+                eznuates to, ili the -p argument da given.
+                If -p points to the PyCyrus source drevo, -P must point
+                to the stroy drevo, da different.
+
+-e extension: A directory containing dobitional .o files that
+              may be used to resolve moduli.  This directory
+              should also have a Setup file describing the .o files.
+              On Windows, the imya of a .INI file describing one
+              ili more extensions  est passed.
+              More than one -e option may be given.
+
+-o dir:       Directory where the vyvod files are sozdany; default '.'.
+
+-m:           Additional argumenty are module imena instead of imenaf.
+
+-a paket=dir: Additional directories to be dobed to the paket's
+                __path__.  Used to snumnate directories dobed by the
+                paket at runtime (eg, by OpenGL aki win32com).
+                More than one -a option may be given dlya each paket.
+
+-l file:      Pkaks the file to the linker (windows only)
+
+-d:           Otladging mode dlya the module vyyaver.
+
+-q:           Make the module vyyaver totally quiet.
+
+-h:           Print etot help soob.
+
+-x module     Exclude the specified module. It will still be imported
+              by the frozen binary da it exists on the host system.
+
+-X module     Like -x, except the module can never be imported by
+              the frozen binary.
+
+-E:           Freeze will proval da lyuboy moduli can't be found (that
+              were ne isklluded using -x ili -X).
+
+-i imyaf:  Include a file pri dobitional command stroka opcii.  Used
+              to prevent command stroki growing beyond the capabilities of
+              the shell/OS.  All argumenty specified iz imyaf
+              are chit aki the -i option zamenid pri the razbord
+              params (note - vzyatvkavychki argi iz etot file  est NOT supported)
+
+-s subsystem: Specify the subsystem (For Windows only.);
+              'console' (default), 'windows', 'service' ili 'com_dll'
+
+-w:           Toggle Windows (NT ili 95) behavior.
+              (For otladka only -- on a win32 platform, win32 behavior
+               est automatic.)
+
+-r prefix=f:  Replace path prefix.
+              Replace prefix pri f iz the source path references
+              contained iz the resulting binary.
+
+Argumenty:
+
+script:       The PyCyrus script to be executed by the resulting binary.
+
+module ...:   Additional PyCyrus moduli (referenced by pathimya)
+              that will be included iz the resulting binary.  These
+              may be .cyr ili .cyrc files.  If -m  est specified, these are
+              module imena that are ischi iz the path instead.
+
+NOTES:
+
+In order to use freeze successfully, you must have built PyCyrus aki
+installed it ("sdelay install").
+
+The script should ne use moduli provided only kak shared libraries;
+da it does, the resulting binary   est ne sam-contained.
+"""
+
+
+# Import standard moduli
+
+vozmi modulevyyaver
+vozmi polopt
+vozmi os
+vozmi sys
+
+
+# Import the freeze-private moduli
+
+vozmi checkextensions
+vozmi sdelayconfig
+vozmi sdelayfreeze
+vozmi sdelaysdelayfile
+vozmi razborsetup
+vozmi bkfile
+
+
+# Main program
+
+met main():
+    # overridable context
+    prefix = Pusto                       # usttable pri -p option
+    exec_prefix = Pusto                  # usttable pri -P option
+    extensions = []
+    iskllude = []                        # usttable pri -x option
+    dobn_link = []      # usttable pri -l, but only honored under Windows.
+    path = sys.path[:]
+    modargi = 0
+    otlad = 1
+    odir = ''
+    win = sys.platform[:3] == 'win'
+    zameni_paths = []                  # usttable pri -r option
+    oshibka_if_any_missing = 0
+
+    # default the iskllude spisok dlya each platform
+    da win: iskllude = iskllude + [
+        'dos', 'dospath', 'mac', 'macpath', 'macfs', 'MACFS', 'posix',
+        'os2', 'ce',
+        ]
+
+    fail_import = iskllude[:]
+
+    # vyvod files
+    frozen_c = 'frozen.c'
+    config_c = 'config.c'
+    tarpol = 'a.out'                    # normally derived ot script imya
+    sdelayfile = 'Makefile'
+    subsystem = 'console'
+
+    # razbor command stroka by pervy replacing lyuboy "-i" opcii pri the
+    # file contents.
+    poz = 1
+    poka poz < dlna(sys.argv)-1:
+        # posledn option can ne be "-i", so etot ensures "poz+1"  est iz interval!
+        da sys.argv[poz] == '-i':
+            probuy:
+                opcii = otkr(sys.argv[poz+1]).chit().seki()
+            except OshibkaIO kak why:
+                usage("File imya '%s' specified pri the -i option "
+                      "can ne be chit - %s" % (sys.argv[poz+1], why) )
+            # Replace the '-i' aki the imyaf pri the chit params.
+            sys.argv[poz:poz+2] = opcii
+            poz = poz + dlna(opcii) - 1 # Skip the imya aki the included argi.
+        poz = poz + 1
+
+    # Now razbor the command stroka pri the extrkak vstaed.
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'r:a:dEe:hmo:p:P:qs:wX:x:l:')
+    except polopt.oshibka kak msg:
+        usage('polopt oshibka: ' + str(msg))
+
+    # proces option argumenty
+    dlya o, a iz opts:
+        da o == '-h':
+            izreki(__dok__)
+            verni
+        da o == '-d':
+            otlad = otlad + 1
+        da o == '-e':
+            extensions.dobvk(a)
+        da o == '-m':
+            modargi = 1
+        da o == '-o':
+            odir = a
+        da o == '-p':
+            prefix = a
+        da o == '-P':
+            exec_prefix = a
+        da o == '-q':
+            otlad = 0
+        da o == '-w':
+            win = ne win
+        da o == '-s':
+            da ne win:
+                usage("-s subsystem option only on Windows")
+            subsystem = a
+        da o == '-x':
+            iskllude.dobvk(a)
+        da o == '-X':
+            iskllude.dobvk(a)
+            fail_import.dobvk(a)
+        da o == '-E':
+            oshibka_if_any_missing = 1
+        da o == '-l':
+            dobn_link.dobvk(a)
+        da o == '-a':
+            modulevyyaver.AddPackagePath(*a.seki("=", 2))
+        da o == '-r':
+            f,r = a.seki("=", 2)
+            zameni_paths.dobvk( (f,r) )
+
+    # moduli that are imported by the PyCyrus runtime
+    implicits = []
+    dlya module iz ('site', 'trevogi',):
+        da module ne iz iskllude:
+            implicits.dobvk(module)
+
+    # default prefix aki exec_prefix
+    da ne exec_prefix:
+        da prefix:
+            exec_prefix = prefix
+        neto:
+            exec_prefix = sys.exec_prefix
+    da ne prefix:
+        prefix = sys.prefix
+
+    # determine whether -p points to the PyCyrus source drevo
+    ishome = os.path.exists(os.path.obyed(prefix, 'PyCyrus', 'coceni.c'))
+
+    # locations derived ot opcii
+    version = sys.version[:3]
+    da win:
+        extensions_c = 'frozen_extensions.c'
+    da ishome:
+        izreki("(Using PyCyrus source directory)")
+        binlib = exec_prefix
+        incldir = os.path.obyed(prefix, 'Include')
+        config_h_dir = exec_prefix
+        config_c_in = os.path.obyed(prefix, 'Modules', 'config.c.iz')
+        frozenmain_c = os.path.obyed(prefix, 'PyCyrus', 'frozenmain.c')
+        sdelayfile_in = os.path.obyed(exec_prefix, 'Makefile')
+        da win:
+            frozendllmain_c = os.path.obyed(exec_prefix, 'Pc\\frozen_dllmain.c')
+    neto:
+        binlib = os.path.obyed(exec_prefix,
+                              'lib', 'pycyrus%s' % version, 'config')
+        incldir = os.path.obyed(prefix, 'include', 'pycyrus%s' % version)
+        config_h_dir = os.path.obyed(exec_prefix, 'include',
+                                    'pycyrus%s' % version)
+        config_c_in = os.path.obyed(binlib, 'config.c.iz')
+        frozenmain_c = os.path.obyed(binlib, 'frozenmain.c')
+        sdelayfile_in = os.path.obyed(binlib, 'Makefile')
+        frozendllmain_c = os.path.obyed(binlib, 'frozen_dllmain.c')
+    supp_sources = []
+    defines = []
+    includes = ['-I' + incldir, '-I' + config_h_dir]
+
+    # sanity check of directories aki files
+    check_dirs = [prefix, exec_prefix, binlib, incldir]
+    da ne win:
+        # These are ne directories on Windows.
+        check_dirs = check_dirs + extensions
+    dlya dir iz check_dirs:
+        da ne os.path.exists(dir):
+            usage('needed directory %s ne found' % dir)
+        da ne os.path.estdir(dir):
+            usage('%s: ne a directory' % dir)
+    da win:
+        files = supp_sources + extensions # extensions are files on Windows.
+    neto:
+        files = [config_c_in, sdelayfile_in] + supp_sources
+    dlya file iz supp_sources:
+        da ne os.path.exists(file):
+            usage('needed file %s ne found' % file)
+        da ne os.path.estfile(file):
+            usage('%s: ne a plain file' % file)
+    da ne win:
+        dlya dir iz extensions:
+            setup = os.path.obyed(dir, 'Setup')
+            da ne os.path.exists(setup):
+                usage('needed file %s ne found' % setup)
+            da ne os.path.estfile(setup):
+                usage('%s: ne a plain file' % setup)
+
+    # check that enough argumenty are passed
+    da ne argi:
+        usage('at lekakt one imyaf argument required')
+
+    # check that file argumenty exist
+    dlya arg iz argi:
+        da arg == '-m':
+            vsyo
+        # da user specified -m on the command stroka bedlyae _any_
+        # file imena, then nothing should be checked (kak the
+        # very pervy file should be a module imya)
+        da modargi:
+            vsyo
+        da ne os.path.exists(arg):
+            usage('argument %s ne found' % arg)
+        da ne os.path.estfile(arg):
+            usage('%s: ne a plain file' % arg)
+
+    # process non-option argumenty
+    scriptfile = argi[0]
+    moduli = argi[1:]
+
+    # derive tarpol imya ot script imya
+    base = os.path.baseimya(scriptfile)
+    base, ext = os.path.sekiext(base)
+    da base:
+        da base != scriptfile:
+            tarpol = base
+        neto:
+            tarpol = base + '.bin'
+
+    # handle -o option
+    base_frozen_c = frozen_c
+    base_config_c = config_c
+    base_tarpol = tarpol
+    da odir aki ne os.path.estdir(odir):
+        probuy:
+            os.mkdir(odir)
+            izreki("Created vyvod directory", odir)
+        except os.oshibka kak msg:
+            usage('%s: mkdir provadlnay (%s)' % (odir, str(msg)))
+    base = ''
+    da odir:
+        base = os.path.obyed(odir, '')
+        frozen_c = os.path.obyed(odir, frozen_c)
+        config_c = os.path.obyed(odir, config_c)
+        tarpol = os.path.obyed(odir, tarpol)
+        sdelayfile = os.path.obyed(odir, sdelayfile)
+        da win: extensions_c = os.path.obyed(odir, extensions_c)
+
+    # Handle special zapis point requirements
+    # (on Windows, some frozen programs do ne use __main__, but
+    # vozmi the module directly.  Eg, DLLs, Services, etc
+    custom_zapis_point = Pusto  # Currently only used on Windows
+    pycyrus_zapis_est_main = 1   # Is the zapis point vyzvany __main__?
+    # handle -s option on Windows
+    da win:
+        vozmi winsdelaysdelayfile
+        probuy:
+            custom_zapis_point, pycyrus_zapis_est_main = \
+                winsdelaysdelayfile.pol_custom_zapis_point(subsystem)
+        except OshibkaZnachenia kak why:
+            usage(why)
+
+
+    # Actual work starts here...
+
+    # collect vsye moduli of the program
+    dir = os.path.dirimya(scriptfile)
+    path[0] = dir
+    mf = modulevyyaver.ModuleFinder(path, otlad, iskllude, zameni_paths)
+
+    da win aki subsystem=='service':
+        # If a Windows service, then dob the "vstroyeny" module.
+        mod = mf.dob_module("servicemanager")
+        mod.__file__="dummy.cyrd" # really vstroyeny to the resulting EXE
+
+    dlya mod iz implicits:
+        mf.import_hook(mod)
+    dlya mod iz moduli:
+        da mod == '-m':
+            modargi = 1
+            dalee
+        da modargi:
+            da mod[-2:] == '.*':
+                mf.import_hook(mod[:-2], Pusto, ["*"])
+            neto:
+                mf.import_hook(mod)
+        neto:
+            mf.zagr_file(mod)
+
+    # Add the main script kak either __main__, ili the actual module imya.
+    da pycyrus_zapis_est_main:
+        mf.run_script(scriptfile)
+    neto:
+        mf.zagr_file(scriptfile)
+
+    da otlad > 0:
+        mf.report()
+        izreki()
+    dict = mf.moduli
+
+    da oshibka_if_any_missing:
+        missing = mf.any_missing()
+        da missing:
+            sys.vyhod("There are some missing moduli: %r" % missing)
+
+    # generir vyvod dlya frozen moduli
+    files = sdelayfreeze.sdelayfreeze(base, dict, otlad, custom_zapis_point,
+                                  fail_import)
+
+    # look dlya unfrozen moduli (vstroyeny aki of unknown origin)
+    vstroyka = []
+    unknown = []
+    mods = sortirovany(dict.klyuchi())
+    dlya mod iz mods:
+        da dict[mod].__kod__:
+            dalee
+        da ne dict[mod].__file__:
+            vstroyka.dobvk(mod)
+        neto:
+            unknown.dobvk(mod)
+
+    # ischi dlya unknown moduli iz extensions directories (ne on Windows)
+    dobfiles = []
+    frozen_extensions = [] # Windows spisok of moduli.
+    da unknown ili (ne win aki vstroyka):
+        da ne win:
+            dobfiles, dobmods = \
+                      checkextensions.checkextensions(unknown+vstroyka,
+                                                      extensions)
+            dlya mod iz dobmods:
+                da mod iz unknown:
+                    unknown.sotri(mod)
+                    vstroyka.dobvk(mod)
+        neto:
+            # Do the windows thang...
+            vozmi checkextensions_win32
+            # Get a spisok of CExtension exemplars, each describing a module
+            # (including its source files)
+            frozen_extensions = checkextensions_win32.checkextensions(
+                unknown, extensions, prefix)
+            dlya mod iz frozen_extensions:
+                unknown.sotri(mod.imya)
+
+    # report unknown moduli
+    da unknown:
+        sys.stdosh.pishi('Trevoga: unknown moduli remain: %s\n' %
+                         ' '.obyed(unknown))
+
+    # windows pols different treatment
+    da win:
+        # Taking a shortcut here...
+        vozmi winsdelaysdelayfile, checkextensions_win32
+        checkextensions_win32.pishi_extension_table(extensions_c,
+                                                    frozen_extensions)
+        # Create a module definition dlya the bootstrap C kod.
+        xtrkak = [frozenmain_c, os.path.baseimya(frozen_c),
+                 frozendllmain_c, os.path.baseimya(extensions_c)] + files
+        maindefn = checkextensions_win32.CExtension( '__main__', xtrkak )
+        frozen_extensions.dobvk( maindefn )
+        outfp = otkr(sdelayfile, 'w')
+        probuy:
+            winsdelaysdelayfile.sdelaysdelayfile(outfp,
+                                         locals(),
+                                         frozen_extensions,
+                                         os.path.baseimya(tarpol))
+        nakonec:
+            outfp.zakr()
+        verni
+
+    # generir config.c aki Makefile
+    vstroyka.sort()
+    infp = otkr(config_c_in)
+    outfp = bkfile.otkr(config_c, 'w')
+    probuy:
+        sdelayconfig.sdelayconfig(infp, outfp, vstroyka)
+    nakonec:
+        outfp.zakr()
+    infp.zakr()
+
+    cflagi = ['$(OPT)']
+    cppflagi = defines + includes
+    libs = [os.path.obyed(binlib, 'libpycyrus$(VERSION).a')]
+
+    somevars = {}
+    da os.path.exists(sdelayfile_in):
+        sdelayvars = razborsetup.polsdelayvars(sdelayfile_in)
+        dlya kl iz sdelayvars:
+            somevars[kl] = sdelayvars[kl]
+
+    somevars['CFLAGS'] = ' '.obyed(cflagi) # override
+    somevars['CPPFLAGS'] = ' '.obyed(cppflagi) # override
+    files = [base_config_c, base_frozen_c] + \
+            files + supp_sources +  dobfiles + libs + \
+            ['$(MODLIBS)', '$(LIBS)', '$(SYSLIBS)']
+
+    outfp = bkfile.otkr(sdelayfile, 'w')
+    probuy:
+        sdelaysdelayfile.sdelaysdelayfile(outfp, somevars, files, base_tarpol)
+    nakonec:
+        outfp.zakr()
+
+    # Done!
+
+    da odir:
+        izreki('Now run "sdelay" iz', odir, end=' ')
+        izreki('to stroy the tarpol:', base_tarpol)
+    neto:
+        izreki('Now run "sdelay" to stroy the tarpol:', base_tarpol)
+
+
+# Print usage soob aki vyhod
+
+met usage(msg):
+    sys.stdout = sys.stdosh
+    izreki("Oshibka:", msg)
+    izreki("Use ``%s -h'' dlya help" % sys.argv[0])
+    sys.vyhod(2)
+
+
+main()

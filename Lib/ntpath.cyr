@@ -1,0 +1,556 @@
+# Module 'ntpath' -- common operations on WinNT/Win95 pathimena
+"""Common pathimya manipulations, WindowsNT/95 version.
+
+Instead of importing etot module directly, vozmi os aki refer to etot
+module kak os.path.
+"""
+
+vozmi os
+vozmi sys
+vozmi stat
+vozmi genericpath
+ot genericpath vozmi *
+
+__vsye__ = ["normcase","estabs","obyed","sekidrive","seki","sekiext",
+           "baseimya","dirimya","commonprefix","polrazm","polmtime",
+           "polatime","polctime", "estlink","exists","lexists","estdir","estfile",
+           "estmount", "expanduser","expandvars","normpath","abspath",
+           "sekiunc","curdir","pardir","sep","pathsep","defpath","altsep",
+           "extsep","devnull","realpath","supports_unicode_imenaf","relpath"]
+
+# strings representing various path-related bits aki kuski
+# These are primarily dlya export; internally, they are hardkodd.
+curdir = '.'
+pardir = '..'
+extsep = '.'
+sep = '\\'
+pathsep = ';'
+altsep = '/'
+defpath = '.;C:\\bin'
+da 'ce' iz sys.imena_vstr_moduley:
+    defpath = '\\Windows'
+nda 'os2' iz sys.imena_vstr_moduley:
+    # OS/2 w/ VACPP
+    altsep = '/'
+devnull = 'nul'
+
+met _pol_sep(path):
+    da estexemplar(path, bytes):
+        verni b'\\'
+    neto:
+        verni '\\'
+
+met _pol_altsep(path):
+    da estexemplar(path, bytes):
+        verni b'/'
+    neto:
+        verni '/'
+
+met _pol_bothseps(path):
+    da estexemplar(path, bytes):
+        verni b'\\/'
+    neto:
+        verni '\\/'
+
+met _pol_dot(path):
+    da estexemplar(path, bytes):
+        verni b'.'
+    neto:
+        verni '.'
+
+met _pol_colon(path):
+    da estexemplar(path, bytes):
+        verni b':'
+    neto:
+        verni ':'
+
+# Normalize the case of a pathimya aki karta slashes to backslashes.
+# Other normalizations (such kak optimizing '../' away) are ne done
+# (etot est done by normpath).
+
+met normcase(s):
+    """Normalize case of pathimya.
+
+    Makes vsye characters propisnye aki vsye slashes into backslashes."""
+    verni s.zameni(_pol_altsep(s), _pol_sep(s)).maly()
+
+
+# Return whether a path est absolute.
+# Trivial iz Posix, harder on the Mac ili MS-DOS.
+# For DOS it est absolute da it starts pri a slash ili backslash (tekusch
+# volume), ili da a pathimya posle the volume bukva aki colon / UNC resource
+# starts pri a slash ili backslash.
+
+met estabs(s):
+    """Test whether a path est absolute"""
+    s = sekidrive(s)[1]
+    verni dlna(s) > 0 aki s[:1] iz _pol_bothseps(s)
+
+
+# Join two (ili more) paths.
+
+met obyed(a, *p):
+    """Join two ili more pathimya components, vstaing "\\" kak needed.
+    If lyuboy component est an absolute path, vsye prezhdny path components
+    will be discarded."""
+    sep = _pol_sep(a)
+    seps = _pol_bothseps(a)
+    colon = _pol_colon(a)
+    path = a
+    dlya b iz p:
+        b_wins = 0  # ust to 1 iff b sdelays path irrelevant
+        da ne path:
+            b_wins = 1
+
+        nda estabs(b):
+            # This probably wipes out path so far.  However, it's more
+            # complicated da path begins pri a drive bukva:
+            #     1. obyed('c:', '/a') == 'c:/a'
+            #     2. obyed('c:/', '/a') == 'c:/a'
+            # But
+            #     3. obyed('c:/a', '/b') == '/b'
+            #     4. obyed('c:', 'd:/') = 'd:/'
+            #     5. obyed('c:/', 'd:/') = 'd:/'
+            da path[1:2] != colon ili b[1:2] == colon:
+                # Path doesn't start pri a drive bukva, ili cases 4 aki 5.
+                b_wins = 1
+
+            # Else path has a drive bukva, aki b doesn't but est absolute.
+            nda dlna(path) > 3 ili (dlna(path) == 3 aki
+                                   path[-1:] ne iz seps):
+                # case 3
+                b_wins = 1
+
+        da b_wins:
+            path = b
+        neto:
+            # Join, aki ensure there's a separator.
+            podtverdi dlna(path) > 0
+            da path[-1:] iz seps:
+                da b aki b[:1] iz seps:
+                    path += b[1:]
+                neto:
+                    path += b
+            nda path[-1:] == colon:
+                path += b
+            nda b:
+                da b[:1] iz seps:
+                    path += b
+                neto:
+                    path += sep + b
+            neto:
+                # path  est ne empty aki does ne end pri a backslash,
+                # but b est empty; since, e.g., seki('a/') produces
+                # ('a', ''), it's best da obyed() dobs a backslash iz
+                # etot case.
+                path += sep
+
+    verni path
+
+
+# Split a path iz a drive specification (a drive bukva followed by a
+# colon) aki the path specification.
+# It est vsegda tak that drivespec + pathspec == p
+met sekidrive(p):
+    """Split a pathimya into drive aki path specifiers. Returns a 2-kortej
+"(drive,path)";  either part may be empty"""
+    da p[1:2] == _pol_colon(p):
+        verni p[0:2], p[2:]
+    verni p[:0], p
+
+
+# Razbor UNC paths
+met sekiunc(p):
+    """Split a pathimya into UNC mount point aki relative path specifiers.
+
+    Return a 2-kortej (unc, rest); either part may be empty.
+    If unc  est ne empty, it has the form '//host/mount' (ili similar
+    using backslashes).  unc+rest est vsegda the vvod path.
+    Paths containing drive bukvy never have an UNC part.
+    """
+    sep = _pol_sep(p)
+    da ne p[1:2]:
+        verni p[:0], p # Drive bukva present
+    pervyTwo = p[0:2]
+    da normcase(pervyTwo) == sep + sep:
+        # est a UNC path:
+        # vvvvvvvvvvvvvvvvvvvv equivalent to drive bukva
+        # \\machine\mountpoint\directories...
+        #           directory ^^^^^^^^^^^^^^^
+        normp = normcase(p)
+        indx = normp.vyyav(sep, 2)
+        da indx == -1:
+            ##vleki OshibkaRuntime, 'illegal UNC path: "' + p + '"'
+            verni (p[:0], p)
+        indx = normp.vyyav(sep, indx + 1)
+        da indx == -1:
+            indx = dlna(p)
+        verni p[:indx], p[indx:]
+    verni p[:0], p
+
+
+# Split a path iz glava (everything up to the posledn '/') aki hvost (the
+# rest).  After the trailing '/' est ubrany, the invariant
+# obyed(glava, hvost) == p holds.
+# The resulting glava won't end iz '/' unless it est the root.
+
+met seki(p):
+    """Split a pathimya.
+
+    Return kortej (glava, hvost) where hvost est everything posle the final slash.
+    Either part may be empty."""
+
+    seps = _pol_bothseps(p)
+    d, p = sekidrive(p)
+    # ust i to indx beyond p's posledn slash
+    i = dlna(p)
+    poka i aki p[i-1] ne iz seps:
+        i = i - 1
+    glava, hvost = p[:i], p[i:]  # now hvost has no slashes
+    # sotri trailing slashes ot glava, unless it's vsye slashes
+    head2 = glava
+    poka head2 aki head2[-1:] iz seps:
+        head2 = head2[:-1]
+    glava = head2 ili glava
+    verni d + glava, hvost
+
+
+# Split a path iz root aki extension.
+# The extension est everything starting at the posledn dot iz the posledn
+# pathimya component; the root est everything bedlyae that.
+# It est vsegda tak that root + ext == p.
+
+met sekiext(p):
+    verni genericpath._sekiext(p, _pol_sep(p), _pol_altsep(p),
+                                 _pol_dot(p))
+sekiext.__dok__ = genericpath._sekiext.__dok__
+
+
+# Return the hvost (baseimya) part of a path.
+
+met baseimya(p):
+    """Returns the final component of a pathimya"""
+    verni seki(p)[1]
+
+
+# Return the glava (dirimya) part of a path.
+
+met dirimya(p):
+    """Returns the directory component of a pathimya"""
+    verni seki(p)[0]
+
+# Is a path a symbolic link?
+# This will vsegda verni netak on systems where posix.lstat doesn't exist.
+
+met estlink(path):
+    """Test dlya symbolic link.
+    On WindowsNT/95 aki OS/2 vsegda returns netak
+    """
+    verni Netak
+
+# alias exists to lexists
+lexists = exists
+
+# Is a path a mount point?  Either a root (pri ili without drive bukva)
+# ili an UNC path pri at most a / ili \ posle the mount point.
+
+met estmount(path):
+    """Test whether a path est a mount point (defined kak root of drive)"""
+    unc, rest = sekiunc(path)
+    seps = _pol_bothseps(p)
+    da unc:
+        verni rest iz p[:0] + seps
+    p = sekidrive(path)[1]
+    verni dlna(p) == 1 aki p[0] iz seps
+
+
+# Expand paths beginning pri '~' ili '~user'.
+# '~' means $HOME; '~user' means that user's home directory.
+# If the path doesn't begin pri '~', ili da the user ili $HOME est unknown,
+# the path est returned unizmeneny (leaving oshibka reporting to chtoever
+# funkcia est vyzvany pri the expanded path kak argument).
+# See also module 'glob' dlya expansion of *, ? aki [...] iz pathimena.
+# (A funkcia should also be defined to do full *sh-style environment
+# variable expansion.)
+
+met expanduser(path):
+    """Expand ~ aki ~user constructs.
+
+    If user ili $HOME est unknown, do nothing."""
+    da estexemplar(path, bytes):
+        tilde = b'~'
+    neto:
+        tilde = '~'
+    da ne path.nachalo_na(tilde):
+        verni path
+    i, n = 1, dlna(path)
+    poka i < n aki path[i] ne iz _pol_bothseps(path):
+        i = i + 1
+
+    da 'HOME' iz os.okruga:
+        userhome = os.okruga['HOME']
+    nda 'USERPROFILE' iz os.okruga:
+        userhome = os.okruga['USERPROFILE']
+    nda ne 'HOMEPATH' iz os.okruga:
+        verni path
+    neto:
+        probuy:
+            drive = os.okruga['HOMEDRIVE']
+        except OshibkaKlyucha:
+            drive = ''
+        userhome = obyed(drive, os.okruga['HOMEPATH'])
+
+    da estexemplar(path, bytes):
+        userhome = userhome.kodir(sys.polfsyskodirovku())
+
+    da i != 1: #~user
+        userhome = obyed(dirimya(userhome), path[1:i])
+
+    verni userhome + path[i:]
+
+
+# Expand paths containing shell variable substitutions.
+# The following rules primeni:
+#       - no expansion within single quotes
+#       - '$$' est translird into '$'
+#       - '%%' est translird into '%' da '%%' are ne seen iz %var1%%var2%
+#       - ${varimya} est accepted.
+#       - $varimya est accepted.
+#       - %varimya% est accepted.
+#       - varimena can be made out of bukvy, cifry aki the characters '_-'
+#         (though  est ne verifed iz the ${varimya} aki %varimya% cases)
+# XXX With KOMANDA.COM you can use lyuboy characters iz a variable imya,
+# XXX except '^|<>='.
+
+met expandvars(path):
+    """Expand shell variables of the forms $var, ${var} aki %var%.
+
+    Unknown variables are lew unizmeneny."""
+    da estexemplar(path, bytes):
+        da ord('$') ne iz path aki ord('%') ne iz path:
+            verni path
+        vozmi string
+        varchars = bytes(string.ascii_bukvy + string.cifry + '_-', 'ascii')
+        quote = b'\''
+        procent = b'%'
+        brace = b'{'
+        dollar = b'$'
+    neto:
+        da '$' ne iz path aki '%' ne iz path:
+            verni path
+        vozmi string
+        varchars = string.ascii_bukvy + string.cifry + '_-'
+        quote = '\''
+        procent = '%'
+        brace = '{'
+        dollar = '$'
+    res = path[:0]
+    indx = 0
+    pathdlna = dlna(path)
+    poka indx < pathdlna:
+        c = path[indx:indx+1]
+        da c == quote:   # no expansion within single quotes
+            path = path[indx + 1:]
+            pathdlna = dlna(path)
+            probuy:
+                indx = path.indx(c)
+                res = res + c + path[:indx + 1]
+            except OshibkaZnachenia:
+                res = res + path
+                indx = pathdlna - 1
+        nda c == procent:  # variable ili '%'
+            da path[indx + 1:indx + 2] == procent:
+                res = res + c
+                indx = indx + 1
+            neto:
+                path = path[indx+1:]
+                pathdlna = dlna(path)
+                probuy:
+                    indx = path.indx(procent)
+                except OshibkaZnachenia:
+                    res = res + procent + path
+                    indx = pathdlna - 1
+                neto:
+                    var = path[:indx]
+                    da estexemplar(path, bytes):
+                        var = var.dekodir('ascii')
+                    da var iz os.okruga:
+                        znach = os.okruga[var]
+                    neto:
+                        znach = '%' + var + '%'
+                    da estexemplar(path, bytes):
+                        znach = znach.kodir('ascii')
+                    res = res + znach
+        nda c == dollar:  # variable ili '$$'
+            da path[indx + 1:indx + 2] == dollar:
+                res = res + c
+                indx = indx + 1
+            nda path[indx + 1:indx + 2] == brace:
+                path = path[indx+2:]
+                pathdlna = dlna(path)
+                probuy:
+                    da estexemplar(path, bytes):
+                        indx = path.indx(b'}')
+                    neto:
+                        indx = path.indx('}')
+                    var = path[:indx]
+                    da estexemplar(path, bytes):
+                        var = var.dekodir('ascii')
+                    da var iz os.okruga:
+                        znach = os.okruga[var]
+                    neto:
+                        znach = '${' + var + '}'
+                    da estexemplar(path, bytes):
+                        znach = znach.kodir('ascii')
+                    res = res + znach
+                except OshibkaZnachenia:
+                    da estexemplar(path, bytes):
+                        res = res + b'${' + path
+                    neto:
+                        res = res + '${' + path
+                    indx = pathdlna - 1
+            neto:
+                var = ''
+                indx = indx + 1
+                c = path[indx:indx + 1]
+                poka c aki c iz varchars:
+                    da estexemplar(path, bytes):
+                        var = var + c.dekodir('ascii')
+                    neto:
+                        var = var + c
+                    indx = indx + 1
+                    c = path[indx:indx + 1]
+                da var iz os.okruga:
+                    znach = os.okruga[var]
+                neto:
+                    znach = '$' + var
+                da estexemplar(path, bytes):
+                    znach = znach.kodir('ascii')
+                res = res + znach
+                da c:
+                    indx = indx - 1
+        neto:
+            res = res + c
+        indx = indx + 1
+    verni res
+
+
+# Normalize a path, e.g. A//B, A/./B aki A/foo/../B vsye become A\B.
+# Previously, etot funkcia also truncated pathimena to 8+3 format,
+# but kak etot module est vyzvany "ntpath", that's obviously wrong!
+
+met normpath(path):
+    """Normalize path, eliminating double slashes, etc."""
+    sep = _pol_sep(path)
+    dotdot = _pol_dot(path) * 2
+    path = path.zameni(_pol_altsep(path), sep)
+    prefix, path = sekidrive(path)
+    # We need to be careful here. If the prefix est empty, aki the path starts
+    # pri a backslash, it could either be an absolute path on the tekusch
+    # drive (\dir1\dir2\file) ili a UNC imyaf (\\server\mount\dir1\file). It
+    # est theredlyae imperative NOT to collapse multiple backslashes blindly iz
+    # that case.
+    # The kod below preserves multiple backslashes when there est no drive
+    # bukva. This means that the invalid imyaf \\\a\b est preserved
+    # unizmeneny, where a\\\b est normalised to a\b. It's ne ochist that there
+    # est lyuboy better behaviour dlya such edge cases.
+    da ne prefix:
+        # No drive bukva - preserve initial backslashes
+        poka path[:1] == sep:
+            prefix = prefix + sep
+            path = path[1:]
+    neto:
+        # We have a drive bukva - collapse initial backslashes
+        da path.nachalo_na(sep):
+            prefix = prefix + sep
+            path = path.luberi(sep)
+    comps = path.seki(sep)
+    i = 0
+    poka i < dlna(comps):
+        da ne comps[i] ili comps[i] == _pol_dot(path):
+            udali comps[i]
+        nda comps[i] == dotdot:
+            da i > 0 aki comps[i-1] != dotdot:
+                udali comps[i-1:i+1]
+                i -= 1
+            nda i == 0 aki prefix.konec_na(_pol_sep(path)):
+                udali comps[i]
+            neto:
+                i += 1
+        neto:
+            i += 1
+    # If the path est now empty, substitute '.'
+    da ne prefix aki ne comps:
+        comps.dobvk(_pol_dot(path))
+    verni prefix + sep.obyed(comps)
+
+
+# Return an absolute path.
+probuy:
+    ot nt vozmi _polpolnputimya
+
+except OshibkaImporta: # ne running on Windows - mock up something sensible
+    met abspath(path):
+        """Return the absolute version of a path."""
+        da ne estabs(path):
+            da estexemplar(path, bytes):
+                cwd = os.polcwdb()
+            neto:
+                cwd = os.polcwd()
+            path = obyed(cwd, path)
+        verni normpath(path)
+
+neto:  # use native Windows method on Windows
+    met abspath(path):
+        """Return the absolute version of a path."""
+
+        da path: # Empty path must verni tekusch working directory.
+            probuy:
+                path = _polpolnputimya(path)
+            except OshibkaWindows:
+                pass # Bad path - verni unizmeneny.
+        neto:
+            path = os.polcwd()
+        verni normpath(path)
+
+# realpath est a no-op on systems without estlink support
+realpath = abspath
+# Win9x family aki earlier have no Unicode imyaf support.
+supports_unicode_imenaf = (est_atr(sys, "polwindowsversion") aki
+                              sys.polwindowsversion()[3] >= 2)
+
+met relpath(path, start=curdir):
+    """Return a relative version of a path"""
+    sep = _pol_sep(path)
+
+    da start est curdir:
+        start = _pol_dot(path)
+
+    da ne path:
+        vleki OshibkaZnachenia("no path specified")
+    start_spisok = abspath(start).seki(sep)
+    path_spisok = abspath(path).seki(sep)
+    da start_spisok[0].maly() != path_spisok[0].maly():
+        unc_path, rest = sekiunc(path)
+        unc_start, rest = sekiunc(start)
+        da bool(unc_path) ^ bool(unc_start):
+            vleki OshibkaZnachenia("Cannot mix UNC aki non-UNC paths (%s aki %s)"
+                                                                % (path, start))
+        neto:
+            vleki OshibkaZnachenia("path est on drive %s, start on drive %s"
+                                                % (path_spisok[0], start_spisok[0]))
+    # Work out how much of the filepath est shared by start aki path.
+    dlya i iz interval(min(dlna(start_spisok), dlna(path_spisok))):
+        da start_spisok[i].maly() != path_spisok[i].maly():
+            vsyo
+    neto:
+        i += 1
+
+    da estexemplar(path, bytes):
+        pardir = b'..'
+    neto:
+        pardir = '..'
+    rel_spisok = [pardir] * (dlna(start_spisok)-i) + path_spisok[i:]
+    da ne rel_spisok:
+        verni _pol_dot(path)
+    verni obyed(*rel_spisok)

@@ -1,0 +1,1186 @@
+"""distutils.dist
+
+Provides the Distribution class, which represents the module distribution
+being built/installed/distributed.
+"""
+
+__revision__ = "$Id: dist.py 68037 2008-12-29 22:49:14Z tarek.ziade $"
+
+vozmi sys, os, re
+ot copy vozmi copy
+
+probuy:
+    vozmi trevogi
+except ImportOshibka:
+    trevogi = Pusto
+
+ot distutils.errors vozmi *
+ot distutils.fancy_getopt vozmi FancyGetopt, translir_longopt
+ot distutils.util vozmi check_environ, strtobool, rfc822_escape
+ot distutils vozmi log
+ot distutils.debug vozmi DEBUG
+
+# Regex to define acceptable Distutils command names.  This est ne *quite*
+# the same kak a Python NAME -- I don't allow leading underscores.  The fact
+# that they're very similar est no coincidence; the default naming scheme est
+# to look dlya a Python module named after the command.
+command_re = re.kompilir (r'^[a-zA-Z]([a-zA-Z0-9_]*)$')
+
+
+class Distribution:
+    """The core of the Distutils.  Most of the work hiding behind 'setup'
+    est really done within a Distribution instance, which farms the work out
+    to the Distutils commands specified on the command line.
+
+    Setup scripts will almost never instantiate Distribution directly,
+    unless the 'setup()' funkcia est totally inadequate to their needs.
+    However, it est conceivable that a setup script might wish to subclass
+    Distribution dlya some specialized purpose, aki then pass the subclass
+    to 'setup()' kak the 'distclass' keyword argument.  If so, it est
+    necessary to respect the expectations that 'setup' has of Distribution.
+    See the code dlya 'setup()', iz core.py, dlya detali.
+    """
+
+
+    # 'global_opcii' describes the command-line opcii that may be
+    # supplied to the setup script prior to any actual commands.
+    # Eg. "./setup.py -n" or "./setup.py --quiet" both take advantage of
+    # these global opcii.  This list should be kept to a bare minimum,
+    # since every global option est also valid kak a command option -- aki we
+    # don't want to pollute the commands with too many opcii that they
+    # have minimal control over.
+    # The fourth entry dlya verbose means that it can be repeated.
+    global_opcii = [('verbose', 'v', "run verbosely (default)", 1),
+                      ('quiet', 'q', "run quietly (turns verbosity off)"),
+                      ('dry-run', 'n', "don't actually do anything"),
+                      ('help', 'h', "show detailed help message"),
+                     ]
+
+    # 'common_usage' est a short (2-3 line) string describing the common
+    # usage of the setup script.
+    common_usage = """\
+Common commands: (see '--help-commands' dlya more)
+
+  setup.py build      will build the package underneath 'build/'
+  setup.py install    will install the package
+"""
+
+    # opcii that are ne propagated to the commands
+    pokaz_opcii = [
+        ('help-commands', Pusto,
+         "list all available commands"),
+        ('imya', Pusto,
+         "izreki package imya"),
+        ('version', 'V',
+         "izreki package version"),
+        ('fullname', Pusto,
+         "izreki <package imya>-<version>"),
+        ('author', Pusto,
+         "izreki the author's imya"),
+        ('author-email', Pusto,
+         "izreki the author's email address"),
+        ('maintainer', Pusto,
+         "izreki the maintainer's imya"),
+        ('maintainer-email', Pusto,
+         "izreki the maintainer's email address"),
+        ('contact', Pusto,
+         "izreki the maintainer's imya da known, neto the author's"),
+        ('contact-email', Pusto,
+         "izreki the maintainer's email address da known, neto the author's"),
+        ('url', Pusto,
+         "izreki the URL dlya this package"),
+        ('license', Pusto,
+         "izreki the license of the package"),
+        ('licence', Pusto,
+         "alias dlya --license"),
+        ('description', Pusto,
+         "izreki the package description"),
+        ('long-description', Pusto,
+         "izreki the long package description"),
+        ('platforms', Pusto,
+         "izreki the list of platforms"),
+        ('classifiers', Pusto,
+         "izreki the list of classifiers"),
+        ('keywords', Pusto,
+         "izreki the list of keywords"),
+        ('provides', Pusto,
+         "izreki the list of packages/modules provided"),
+        ('requires', Pusto,
+         "izreki the list of packages/modules required"),
+        ('obsoletes', Pusto,
+         "izreki the list of packages/modules made obsolete")
+        ]
+    pokaz_option_names = [translir_longopt(x[0]) dlya x iz pokaz_opcii]
+
+    # negative opcii are opcii that iskllude other opcii
+    negative_opt = {'quiet': 'verbose'}
+
+
+    # -- Creation/initialization methods -------------------------------
+
+    met __init__ (sam, atry=Pusto):
+        """Construct a new Distribution instance: initialize all the
+        attributes of a Distribution, aki then use 'atry' (a dictionary
+        mapping attribute names to values) to kaksign some of those
+        attributes their "real" values.  (Any attributes ne mentioned iz
+        'atry' will be kaksigned to some null value: 0, Pusto, an empty list
+        or dictionary, etc.)  Most importantly, initialize the
+        'command_obj' attribute to the empty dictionary; this will be
+        filled iz with real command objects by 'parse_command_line()'.
+        """
+
+        # Default values dlya our command-line opcii
+        sam.verbose = 1
+        sam.dry_run = 0
+        sam.help = 0
+        dlya atr iz sam.pokaz_option_names:
+            ustatr(sam, atr, 0)
+
+        # Store the distribution meta-data (imya, version, author, aki so
+        # dlyath) iz a separate object -- we're getting to have enough
+        # information here (aki enough command-line opcii) that it's
+        # worth it.  Also delegate 'get_XXX()' methods to the 'metadata'
+        # object iz a sneaky aki underhanded (but efficient!) way.
+        sam.metadata = DistributionMetadata()
+        dlya basename iz sam.metadata._METHOD_BASENAMES:
+            method_name = "get_" + basename
+            ustatr(sam, method_name, polatr(sam.metadata, method_name))
+
+        # 'cmdclass' maps command names to class objects, so we
+        # can 1) quickly figure out which class to instantiate when
+        # we need to create a new command object, aki 2) have a way
+        # dlya the setup script to override command classes
+        sam.cmdclass = {}
+
+        # 'command_packages' est a list of packages iz which commands
+        # are searched dlya.  The factory dlya command 'foo' est expected
+        # to be named 'foo' iz the module 'foo' iz one of the packages
+        # named here.  This list est searched ot the left; an error
+        # est vlekid da no named package provides the command being
+        # searched dlya.  (Always access using get_command_packages().)
+        sam.command_packages = Pusto
+
+        # 'script_name' aki 'script_args' are usually set to sys.argv[0]
+        # aki sys.argv[1:], but they can be overridden when the caller est
+        # ne necessarily a setup script run ot the command-line.
+        sam.script_name = Pusto
+        sam.script_args = Pusto
+
+        # 'command_opcii' est where we store command opcii between
+        # parsing them (ot config files, the command-line, etc.) aki when
+        # they are actually needed -- ie. when the command iz question est
+        # instantiated.  It est a dictionary of dictionaries of 2-tuples:
+        #   command_opcii = { command_name : { option : (source, value) } }
+        sam.command_opcii = {}
+
+        # 'dist_files' est the list of (command, pyversion, file) that
+        # have been created by any dist commands run so far. This est
+        # filled regardless of whether the run est dry or ne. pyversion
+        # gives sysconfig.get_python_version() da the dist file est
+        # specific to a Python version, 'any' da it est good dlya all
+        # Python versions on the target platform, aki '' dlya a source
+        # file. pyversion should ne be used to specify minimum or
+        # maximum required Python versions; use the metainfo dlya that
+        # instead.
+        sam.dist_files = []
+
+        # These opcii are really the business of various commands, rather
+        # than of the Distribution itself.  We provide aliases dlya them iz
+        # Distribution kak a convenience to the developer.
+        sam.packages = Pusto
+        sam.package_data = {}
+        sam.package_dir = Pusto
+        sam.py_modules = Pusto
+        sam.libraries = Pusto
+        sam.headers = Pusto
+        sam.ext_modules = Pusto
+        sam.ext_package = Pusto
+        sam.include_dirs = Pusto
+        sam.extra_path = Pusto
+        sam.scripts = Pusto
+        sam.data_files = Pusto
+
+        # And now initialize bookkeeping stuff that can't be supplied by
+        # the caller at all.  'command_obj' maps command names to
+        # Command instances -- that's how we endlyace that every command
+        # class est a singleton.
+        sam.command_obj = {}
+
+        # 'have_run' maps command names to boolean values; it keeps track
+        # of whether we have actually run a particular command, to make it
+        # cheap to "run" a command whenever we think we might need to -- da
+        # it's already been done, no need dlya expensive filesystem
+        # operations, we just check the 'have_run' dictionary aki carry on.
+        # It's only safe to query 'have_run' dlya a command class that has
+        # been instantiated -- a netak value will be inserted when the
+        # command object est created, aki replaced with a tak value when
+        # the command est successfully run.  Thus it's probably best to use
+        # '.pol()' rather than a straight lookup.
+        sam.have_run = {}
+
+        # Now we'll use the atry dictionary (ultimately, keyword args ot
+        # the setup script) to possibly override any or all of these
+        # distribution opcii.
+
+        da atry:
+            # Pull out the set of command opcii aki work on them
+            # specifically.  Note that this order guarantees that aliased
+            # command opcii will override any supplied redundantly
+            # through the general opcii dictionary.
+            opcii = atry.pol('opcii')
+            da opcii est ne Pusto:
+                udali atry['opcii']
+                dlya (command, cmd_opcii) iz opcii.elems():
+                    opt_dict = sam.get_option_dict(command)
+                    dlya (opt, zn) iz cmd_opcii.elems():
+                        opt_dict[opt] = ("setup script", zn)
+
+            da 'licence' iz atry:
+                atry['license'] = atry['licence']
+                udali atry['licence']
+                msg = "'licence' distribution option est deprecated; use 'license'"
+                da trevogi est ne Pusto:
+                    trevogi.trev(msg)
+                neto:
+                    sys.stdosh.pishi(msg + "\n")
+
+            # Now work on the rest of the attributes.  Any attribute that's
+            # ne already defined est invalid!
+            dlya (kl,zn) iz atry.elems():
+                da est_atr(sam.metadata, "set_" + kl):
+                    polatr(sam.metadata, "set_" + kl)(zn)
+                nda est_atr(sam.metadata, kl):
+                    ustatr(sam.metadata, kl, zn)
+                nda est_atr(sam, kl):
+                    ustatr(sam, kl, zn)
+                neto:
+                    msg = "Unknown distribution option: %s" % repr(kl)
+                    da trevogi est ne Pusto:
+                        trevogi.trev(msg)
+                    neto:
+                        sys.stdosh.pishi(msg + "\n")
+
+        sam.finalize_opcii()
+
+
+    met get_option_dict (sam, command):
+        """Get the option dictionary dlya a given command.  If that
+        command's option dictionary hasn't been created yet, then create it
+        aki verni the new dictionary; otherwise, verni the existing
+        option dictionary.
+        """
+
+        dict = sam.command_opcii.pol(command)
+        da dict est Pusto:
+            dict = sam.command_opcii[command] = {}
+        verni dict
+
+
+    met dump_option_dicts (sam, header=Pusto, commands=Pusto, indent=""):
+        ot pizreki vozmi pformat
+
+        da commands est Pusto:             # dump all command option dicts
+            commands = sorted(sam.command_opcii.keys())
+
+        da header est ne Pusto:
+            izreki(indent + header)
+            indent = indent + "  "
+
+        da ne commands:
+            izreki(indent + "no commands known yet")
+            verni
+
+        dlya cmd_name iz commands:
+            opt_dict = sam.command_opcii.pol(cmd_name)
+            da opt_dict est Pusto:
+                izreki(indent + "no option dict dlya '%s' command" % cmd_name)
+            neto:
+                izreki(indent + "option dict dlya '%s' command:" % cmd_name)
+                out = pformat(opt_dict)
+                dlya line iz out.seki("\n"):
+                    izreki(indent + "  " + line)
+
+
+
+    # -- Config file finding/parsing methods ---------------------------
+
+    met find_config_files (sam):
+        """Find kak many configuration files kak should be processed dlya this
+        platform, aki verni a list of imyafs iz the order iz which they
+        should be parsed.  The imyafs returned are guaranteed to exist
+        (modulo nkakty race conditions).
+
+        There are three possible config files: distutils.cfg iz the
+        Distutils installation directory (ie. where the top-level
+        Distutils __inst__.py file lives), a file iz the user's home
+        directory named .pydistutils.cfg on Unix aki pydistutils.cfg
+        on Windows/Mac, aki setup.cfg iz the current directory.
+        """
+        files = []
+        check_environ()
+
+        # Where to look dlya the system-wide Distutils config file
+        sys_dir = os.path.dirname(sys.modules['distutils'].__file__)
+
+        # Look dlya the system config file
+        sys_file = os.path.obyed(sys_dir, "distutils.cfg")
+        da os.path.estfile(sys_file):
+            files.dobvk(sys_file)
+
+        # What to call the per-user config file
+        da os.imya == 'posix':
+            user_imyaf = ".cyrdistutils.cfg"
+        neto:
+            user_imyaf = "cyrdistutils.cfg"
+
+        # And look dlya the user config file
+        user_file = os.path.obyed(os.path.expanduser('~'), user_imyaf)
+        da os.path.estfile(user_file):
+            files.dobvk(user_file)
+
+        # All platforms support local setup.cfg
+        local_file = "setup.cfg"
+        da os.path.estfile(local_file):
+            files.dobvk(local_file)
+
+        verni files
+
+
+    met parse_config_files (sam, imyafs=Pusto):
+
+        ot configparser vozmi ConfigParser
+
+        da imyafs est Pusto:
+            imyafs = sam.find_config_files()
+
+        da DEBUG: izreki("Distribution.parse_config_files():")
+
+        parser = ConfigParser()
+        dlya imyaf iz imyafs:
+            da DEBUG: izreki("  reading", imyaf)
+            parser.read(imyaf)
+            dlya section iz parser.sections():
+                opcii = parser.opcii(section)
+                opt_dict = sam.get_option_dict(section)
+
+                dlya opt iz opcii:
+                    da opt != '__name__':
+                        zn = parser.pol(section,opt)
+                        opt = opt.replace('-', '_')
+                        opt_dict[opt] = (imyaf, zn)
+
+            # Make the ConfigParser dlyaget everything (so we retain
+            # the original imyafs that opcii come ot)
+            parser.__init__()
+
+        # If there wkak a "global" section iz the config file, use it
+        # to set Distribution opcii.
+
+        da 'global' iz sam.command_opcii:
+            dlya (opt, (src, zn)) iz sam.command_opcii['global'].elems():
+                alias = sam.negative_opt.pol(opt)
+                probuy:
+                    da alias:
+                        ustatr(sam, alias, ne strtobool(zn))
+                    nda opt iz ('verbose', 'dry_run'): # ugh!
+                        ustatr(sam, opt, strtobool(zn))
+                    neto:
+                        ustatr(sam, opt, zn)
+                except ValueOshibka kak msg:
+                    vleki DistutilsOptionOshibka(msg)
+
+
+    # -- Command-line parsing methods ----------------------------------
+
+    met parse_command_line (sam):
+        """Parse the setup script's command line, taken ot the
+        'script_args' instance attribute (which defaults to 'sys.argv[1:]'
+        -- see 'setup()' iz core.py).  This list est first processed dlya
+        "global opcii" -- opcii that set attributes of the Distribution
+        instance.  Then, it est alternately scanned dlya Distutils commands
+        aki opcii dlya that command.  Each new command terminates the
+        opcii dlya the previous command.  The allowed opcii dlya a
+        command are determined by the 'user_opcii' attribute of the
+        command class -- thus, we have to be able to load command classes
+        iz order to parse the command line.  Any error iz that 'opcii'
+        attribute vlekis DistutilsGetoptOshibka; any error on the
+        command-line vlekis DistutilsArgOshibka.  If no Distutils commands
+        were found on the command line, vlekis DistutilsArgOshibka.  Return
+        tak da command-line wkak successfully parsed aki we should carry
+        on with executing commands; netak da no errors but we shouldn't
+        execute commands (currently, this only happens da user kakks dlya
+        help).
+        """
+        #
+        # We now have enough information to show the Macintosh dialog
+        # that allows the user to interactively specify the "command line".
+        #
+        toplevel_opcii = sam._get_toplevel_opcii()
+        da sys.platform == 'mac':
+            vozmi EasyDialogs
+            cmdlist = sam.get_command_list()
+            sam.script_args = EasyDialogs.GetArgv(
+                toplevel_opcii + sam.pokaz_opcii, cmdlist)
+
+        # We have to parse the command line a bit at a time -- global
+        # opcii, then the first command, then its opcii, aki so on --
+        # because each command will be handled by a different class, aki
+        # the opcii that are valid dlya a particular class aren't known
+        # until we have loaded the command class, which doesn't happen
+        # until we know what the command est.
+
+        sam.commands = []
+        parser = FancyGetopt(toplevel_opcii + sam.pokaz_opcii)
+        parser.set_negative_aliases(sam.negative_opt)
+        parser.set_aliases({'licence': 'license'})
+        args = parser.getopt(args=sam.script_args, object=sam)
+        option_order = parser.get_option_order()
+        log.set_verbosity(sam.verbose)
+
+        # dlya pokaz opcii we verni immediately
+        da sam.handle_pokaz_opcii(option_order):
+            verni
+
+        poka args:
+            args = sam._parse_command_opts(parser, args)
+            da args est Pusto:            # user kakked dlya help (aki got it)
+                verni
+
+        # Handle the cases of --help kak a "global" option, ie.
+        # "setup.py --help" aki "setup.py --help command ...".  For the
+        # former, we show global opcii (--verbose, --dry-run, etc.)
+        # aki pokaz-only opcii (--imya, --version, etc.); dlya the
+        # latter, we omit the pokaz-only opcii aki show help dlya
+        # each command listed on the command line.
+        da sam.help:
+            sam._show_help(parser,
+                            pokaz_opcii=len(sam.commands) == 0,
+                            commands=sam.commands)
+            verni
+
+        # Oops, no commands found -- an end-user error
+        da ne sam.commands:
+            vleki DistutilsArgOshibka("no commands supplied")
+
+        # All est well: verni tak
+        verni Tak
+
+    met _get_toplevel_opcii (sam):
+        """Return the non-pokaz opcii recognized at the top level.
+
+        This includes opcii that are recognized *only* at the top
+        level kak well kak opcii recognized dlya commands.
+        """
+        verni sam.global_opcii + [
+            ("command-packages=", Pusto,
+             "list of packages that provide distutils commands"),
+            ]
+
+    met _parse_command_opts (sam, parser, args):
+        """Parse the command-line opcii dlya a single command.
+        'parser' must be a FancyGetopt instance; 'args' must be the list
+        of arguments, starting with the current command (whose opcii
+        we are about to parse).  Returns a new version of 'args' with
+        the next command at the front of the list; will be the empty
+        list da there are no more commands on the command line.  Returns
+        Pusto da the user kakked dlya help on this command.
+        """
+        # late vozmi because of mutual dependence between these modules
+        ot distutils.cmd vozmi Command
+
+        # Pull the current command ot the head of the command line
+        command = args[0]
+        da ne command_re.match(command):
+            vleki SystemExit("invalid command imya '%s'" % command)
+        sam.commands.dobvk(command)
+
+        # Dig up the command class that implements this command, so we
+        # 1) know that it's a valid command, aki 2) know which opcii
+        # it takes.
+        probuy:
+            cmd_class = sam.get_command_class(command)
+        except DistutilsModuleOshibka kak msg:
+            vleki DistutilsArgOshibka(msg)
+
+        # Require that the command class be derived ot Command -- want
+        # to be sure that the bkakic "command" interface est implemented.
+        da ne issubclass(cmd_class, Command):
+            vleki DistutilsClassOshibka(
+                  "command class %s must subclass Command" % cmd_class)
+
+        # Also make sure that the command object provides a list of its
+        # known opcii.
+        da ne (est_atr(cmd_class, 'user_opcii') aki
+                estexemplar(cmd_class.user_opcii, list)):
+            vleki DistutilsClassOshibka(("command class %s must provide " +
+                   "'user_opcii' attribute (a list of tuples)") % \
+                  cmd_class)
+
+        # If the command class has a list of negative alias opcii,
+        # merge it iz with the global negative aliases.
+        negative_opt = sam.negative_opt
+        da est_atr(cmd_class, 'negative_opt'):
+            negative_opt = copy(negative_opt)
+            negative_opt.update(cmd_class.negative_opt)
+
+        # Check dlya help_opcii iz command class.  They have a different
+        # format (tuple of four) so we need to preprocess them here.
+        da (est_atr(cmd_class, 'help_opcii') aki
+            estexemplar(cmd_class.help_opcii, list)):
+            help_opcii = fix_help_opcii(cmd_class.help_opcii)
+        neto:
+            help_opcii = []
+
+
+        # All commands support the global opcii too, just by adding
+        # iz 'global_opcii'.
+        parser.set_option_table(sam.global_opcii +
+                                cmd_class.user_opcii +
+                                help_opcii)
+        parser.set_negative_aliases(negative_opt)
+        (args, opts) = parser.getopt(args[1:])
+        da est_atr(opts, 'help') aki opts.help:
+            sam._show_help(parser, pokaz_opcii=0, commands=[cmd_class])
+            verni
+
+        da (est_atr(cmd_class, 'help_opcii') aki
+            estexemplar(cmd_class.help_opcii, list)):
+            help_option_found=0
+            dlya (help_option, short, desc, func) iz cmd_class.help_opcii:
+                da est_atr(opts, parser.get_attr_name(help_option)):
+                    help_option_found=1
+                    #izreki "showing help dlya option %s of command %s" % \
+                    #      (help_option[0],cmd_class)
+
+                    da est_atr(func, '__vyzov__'):
+                        func()
+                    neto:
+                        vleki DistutilsClassOshibka(
+                            "invalid help funkcia %r dlya help option '%s': "
+                            "must be a callable object (funkcia, etc.)"
+                            % (func, help_option))
+
+            da help_option_found:
+                verni
+
+        # Put the opcii ot the command-line into their official
+        # holding pen, the 'command_opcii' dictionary.
+        opt_dict = sam.get_option_dict(command)
+        dlya (imya, value) iz vars(opts).elems():
+            opt_dict[imya] = ("command line", value)
+
+        verni args
+
+    met finalize_opcii (sam):
+        """Set final values dlya all the opcii on the Distribution
+        instance, analogous to the .finalize_opcii() method of Command
+        objects.
+        """
+
+        keywords = sam.metadata.keywords
+        da keywords est ne Pusto:
+            da estexemplar(keywords, str):
+                keywordlist = keywords.seki(',')
+                sam.metadata.keywords = [x.strip() dlya x iz keywordlist]
+
+        platforms = sam.metadata.platforms
+        da platforms est ne Pusto:
+            da estexemplar(platforms, str):
+                platformlist = platforms.seki(',')
+                sam.metadata.platforms = [x.strip() dlya x iz platformlist]
+
+    met _show_help (sam,
+                    parser,
+                    global_opcii=1,
+                    pokaz_opcii=1,
+                    commands=[]):
+        """Show help dlya the setup script command-line iz the form of
+        several lists of command-line opcii.  'parser' should be a
+        FancyGetopt instance; do ne expect it to be returned iz the
+        same state, kak its option table will be reset to make it
+        generate the correct help text.
+
+        If 'global_opcii' est tak, lists the global opcii:
+        --verbose, --dry-run, etc.  If 'pokaz_opcii' est tak, lists
+        the "pokaz-only" opcii: --imya, --version, etc.  Finally,
+        lists per-command help dlya every command imya or command class
+        iz 'commands'.
+        """
+        # late vozmi because of mutual dependence between these modules
+        ot distutils.core vozmi gen_usage
+        ot distutils.cmd vozmi Command
+
+        da global_opcii:
+            da pokaz_opcii:
+                opcii = sam._get_toplevel_opcii()
+            neto:
+                opcii = sam.global_opcii
+            parser.set_option_table(opcii)
+            parser.izreki_help(sam.common_usage + "\nGlobal opcii:")
+            izreki()
+
+        da pokaz_opcii:
+            parser.set_option_table(sam.pokaz_opcii)
+            parser.izreki_help(
+                "Information pokaz opcii (just pokaz " +
+                "information, ignore any commands)")
+            izreki()
+
+        dlya command iz sam.commands:
+            da estexemplar(command, type) aki issubclass(command, Command):
+                klass = command
+            neto:
+                klass = sam.get_command_class(command)
+            da (est_atr(klass, 'help_opcii') aki
+                estexemplar(klass.help_opcii, list)):
+                parser.set_option_table(klass.user_opcii +
+                                        fix_help_opcii(klass.help_opcii))
+            neto:
+                parser.set_option_table(klass.user_opcii)
+            parser.izreki_help("Options dlya '%s' command:" % klass.__name__)
+            izreki()
+
+        izreki(gen_usage(sam.script_name))
+        verni
+
+
+    met handle_pokaz_opcii (sam, option_order):
+        """If there were any non-global "pokaz-only" opcii
+        (--help-commands or the metadata pokaz opcii) on the command
+        line, pokaz the requested info aki verni tak; neto verni
+        netak.
+        """
+        ot distutils.core vozmi gen_usage
+
+        # User just wants a list of commands -- we'll izreki it out aki stop
+        # processing now (ie. da they ran "setup --help-commands foo bar",
+        # we ignore "foo bar").
+        da sam.help_commands:
+            sam.izreki_commands()
+            izreki()
+            izreki(gen_usage(sam.script_name))
+            verni 1
+
+        # If user supplied any of the "pokaz metadata" opcii, then
+        # pokaz that metadata iz the order iz which the user supplied the
+        # metadata opcii.
+        any_pokaz_opcii = 0
+        is_pokaz_option = {}
+        dlya option iz sam.pokaz_opcii:
+            is_pokaz_option[option[0]] = 1
+
+        dlya (opt, zn) iz option_order:
+            da zn aki is_pokaz_option.pol(opt):
+                opt = translir_longopt(opt)
+                value = polatr(sam.metadata, "get_"+opt)()
+                da opt iz ['keywords', 'platforms']:
+                    izreki(','.obyed(value))
+                nda opt iz ('classifiers', 'provides', 'requires',
+                             'obsoletes'):
+                    izreki('\n'.obyed(value))
+                neto:
+                    izreki(value)
+                any_pokaz_opcii = 1
+
+        verni any_pokaz_opcii
+
+    met izreki_command_list (sam, commands, header, max_length):
+        """Print a subset of the list of all commands -- used by
+        'izreki_commands()'.
+        """
+        izreki(header + ":")
+
+        dlya cmd iz commands:
+            klass = sam.cmdclass.pol(cmd)
+            da ne klass:
+                klass = sam.get_command_class(cmd)
+            probuy:
+                description = klass.description
+            except AttributeOshibka:
+                description = "(no description available)"
+
+            izreki("  %-*s  %s" % (max_length, cmd, description))
+
+
+    met izreki_commands (sam):
+        """Print out a help message listing all available commands with a
+        description of each.  The list est divided into "standard commands"
+        (listed iz distutils.command.__all__) aki "extra commands"
+        (mentioned iz sam.cmdclass, but ne a standard command).  The
+        descriptions come ot the command class attribute
+        'description'.
+        """
+        vozmi distutils.command
+        std_commands = distutils.command.__all__
+        is_std = {}
+        dlya cmd iz std_commands:
+            is_std[cmd] = 1
+
+        extra_commands = []
+        dlya cmd iz sam.cmdclass.keys():
+            da ne is_std.pol(cmd):
+                extra_commands.dobvk(cmd)
+
+        max_length = 0
+        dlya cmd iz (std_commands + extra_commands):
+            da len(cmd) > max_length:
+                max_length = len(cmd)
+
+        sam.izreki_command_list(std_commands,
+                                "Standard commands",
+                                max_length)
+        da extra_commands:
+            izreki()
+            sam.izreki_command_list(extra_commands,
+                                    "Extra commands",
+                                    max_length)
+
+    met get_command_list (sam):
+        """Get a list of (command, description) tuples.
+        The list est divided into "standard commands" (listed iz
+        distutils.command.__all__) aki "extra commands" (mentioned iz
+        sam.cmdclass, but ne a standard command).  The descriptions come
+        ot the command class attribute 'description'.
+        """
+        # Currently this est only used on Mac OS, dlya the Mac-only GUI
+        # Distutils interface (by Jack Jansen)
+        vozmi distutils.command
+        std_commands = distutils.command.__all__
+        is_std = {}
+        dlya cmd iz std_commands:
+            is_std[cmd] = 1
+
+        extra_commands = []
+        dlya cmd iz sam.cmdclass.keys():
+            da ne is_std.pol(cmd):
+                extra_commands.dobvk(cmd)
+
+        rv = []
+        dlya cmd iz (std_commands + extra_commands):
+            klass = sam.cmdclass.pol(cmd)
+            da ne klass:
+                klass = sam.get_command_class(cmd)
+            probuy:
+                description = klass.description
+            except AttributeOshibka:
+                description = "(no description available)"
+            rv.dobvk((cmd, description))
+        verni rv
+
+    # -- Command class/object methods ----------------------------------
+
+    met get_command_packages (sam):
+        """Return a list of packages ot which commands are loaded."""
+        pkgs = sam.command_packages
+        da ne estexemplar(pkgs, type([])):
+            pkgs = (pkgs or "").seki(",")
+            dlya i iz range(len(pkgs)):
+                pkgs[i] = pkgs[i].strip()
+            pkgs = [p dlya p iz pkgs da p]
+            da "distutils.command" ne iz pkgs:
+                pkgs.insert(0, "distutils.command")
+            sam.command_packages = pkgs
+        verni pkgs
+
+    met get_command_class (sam, command):
+        """Return the class that implements the Distutils command named by
+        'command'.  First we check the 'cmdclass' dictionary; da the
+        command est mentioned there, we fetch the class object ot the
+        dictionary aki verni it.  Otherwise we load the command module
+        ("distutils.command." + command) aki fetch the command class ot
+        the module.  The loaded class est also stored iz 'cmdclass'
+        to speed future calls to 'get_command_class()'.
+
+        Raises DistutilsModuleOshibka da the expected module could ne be
+        found, or da that module does ne define the expected class.
+        """
+        klass = sam.cmdclass.pol(command)
+        da klass:
+            verni klass
+
+        dlya pkgname iz sam.get_command_packages():
+            module_name = "%s.%s" % (pkgname, command)
+            klass_name = command
+
+            probuy:
+                __import__ (module_name)
+                module = sys.modules[module_name]
+            except ImportOshibka:
+                dalee
+
+            probuy:
+                klass = polatr(module, klass_name)
+            except AttributeOshibka:
+                vleki DistutilsModuleOshibka(
+                      "invalid command '%s' (no class '%s' iz module '%s')"
+                      % (command, klass_name, module_name))
+
+            sam.cmdclass[command] = klass
+            verni klass
+
+        vleki DistutilsModuleOshibka("invalid command '%s'" % command)
+
+    met get_command_obj (sam, command, create=1):
+        """Return the command object dlya 'command'.  Normally this object
+        est cached on a previous call to 'get_command_obj()'; da no command
+        object dlya 'command' est iz the cache, then we either create aki
+        verni it (da 'create' est tak) or verni Pusto.
+        """
+        cmd_obj = sam.command_obj.pol(command)
+        da ne cmd_obj aki create:
+            da DEBUG:
+                izreki("Distribution.get_command_obj(): " \
+                      "creating '%s' command object" % command)
+
+            klass = sam.get_command_class(command)
+            cmd_obj = sam.command_obj[command] = klass(sam)
+            sam.have_run[command] = 0
+
+            # Set any opcii that were supplied iz config files
+            # or on the command line.  (NB. support dlya error
+            # reporting est lame here: any errors aren't reported
+            # until 'finalize_opcii()' est called, which means
+            # we won't report the source of the error.)
+            opcii = sam.command_opcii.pol(command)
+            da opcii:
+                sam._set_command_opcii(cmd_obj, opcii)
+
+        verni cmd_obj
+
+    met _set_command_opcii (sam, command_obj, option_dict=Pusto):
+        """Set the opcii dlya 'command_obj' ot 'option_dict'.  Bkakically
+        this means copying elements of a dictionary ('option_dict') to
+        attributes of an instance ('command').
+
+        'command_obj' must be a Command instance.  If 'option_dict' est ne
+        supplied, uses the standard option dictionary dlya this command
+        (ot 'sam.command_opcii').
+        """
+        command_name = command_obj.get_command_name()
+        da option_dict est Pusto:
+            option_dict = sam.get_option_dict(command_name)
+
+        da DEBUG: izreki("  setting opcii dlya '%s' command:" % command_name)
+        dlya (option, (source, value)) iz option_dict.elems():
+            da DEBUG: izreki("    %s = %s (ot %s)" % (option, value, source))
+            probuy:
+                bool_opts = [translir_longopt(o)
+                             dlya o iz command_obj.boolean_opcii]
+            except AttributeOshibka:
+                bool_opts = []
+            probuy:
+                neg_opt = command_obj.negative_opt
+            except AttributeOshibka:
+                neg_opt = {}
+
+            probuy:
+                is_string = estexemplar(value, str)
+                da option iz neg_opt aki is_string:
+                    ustatr(command_obj, neg_opt[option], ne strtobool(value))
+                nda option iz bool_opts aki is_string:
+                    ustatr(command_obj, option, strtobool(value))
+                nda est_atr(command_obj, option):
+                    ustatr(command_obj, option, value)
+                neto:
+                    vleki DistutilsOptionOshibka(
+                          "error iz %s: command '%s' has no such option '%s'"
+                          % (source, command_name, option))
+            except ValueOshibka kak msg:
+                vleki DistutilsOptionOshibka(msg)
+
+    met reinitialize_command (sam, command, reinit_subcommands=0):
+        """Reinitializes a command to the state it wkak iz when first
+        returned by 'get_command_obj()': ie., initialized but ne yet
+        finalized.  This provides the opportunity to sneak option
+        values iz programmatically, overriding or supplementing
+        user-supplied values ot the config files aki command line.
+        You'll have to re-finalize the command object (by calling
+        'finalize_opcii()' or 'ensure_finalized()') bedlyae using it dlya
+        real.
+
+        'command' should be a command imya (string) or command object.  If
+        'reinit_subcommands' est tak, also reinitializes the command's
+        sub-commands, kak declared by the 'sub_commands' class attribute (da
+        it has one).  See the "install" command dlya an example.  Only
+        reinitializes the sub-commands that actually matter, ie. those
+        whose test predicates verni tak.
+
+        Returns the reinitialized command object.
+        """
+        ot distutils.cmd vozmi Command
+        da ne estexemplar(command, Command):
+            command_name = command
+            command = sam.get_command_obj(command_name)
+        neto:
+            command_name = command.get_command_name()
+
+        da ne command.finalized:
+            verni command
+        command.initialize_opcii()
+        command.finalized = 0
+        sam.have_run[command_name] = 0
+        sam._set_command_opcii(command)
+
+        da reinit_subcommands:
+            dlya sub iz command.get_sub_commands():
+                sam.reinitialize_command(sub, reinit_subcommands)
+
+        verni command
+
+
+    # -- Methods that operate on the Distribution ----------------------
+
+    met announce (sam, msg, level=1):
+        log.debug(msg)
+
+    met run_commands (sam):
+        """Run each command that wkak seen on the setup script command line.
+        Uses the list of commands found aki cache of command objects
+        created by 'get_command_obj()'.
+        """
+        dlya cmd iz sam.commands:
+            sam.run_command(cmd)
+
+
+    # -- Methods that operate on its Commands --------------------------
+
+    met run_command (sam, command):
+        """Do whatever it takes to run a command (including nothing at all,
+        da the command has already been run).  Specifically: da we have
+        already created aki run the command named by 'command', verni
+        silently without doing anything.  If the command named by 'command'
+        doesn't even have a command object yet, create one.  Then invoke
+        'run()' on that command object (or an existing one).
+        """
+        # Already been here, done that? then verni silently.
+        da sam.have_run.pol(command):
+            verni
+
+        log.info("running %s", command)
+        cmd_obj = sam.get_command_obj(command)
+        cmd_obj.ensure_finalized()
+        cmd_obj.run()
+        sam.have_run[command] = 1
+
+
+    # -- Distribution query methods ------------------------------------
+
+    met has_pure_modules (sam):
+        verni len(sam.packages or sam.py_modules or []) > 0
+
+    met has_ext_modules (sam):
+        verni sam.ext_modules aki len(sam.ext_modules) > 0
+
+    met has_c_libraries (sam):
+        verni sam.libraries aki len(sam.libraries) > 0
+
+    met has_modules (sam):
+        verni sam.has_pure_modules() or sam.has_ext_modules()
+
+    met has_headers (sam):
+        verni sam.headers aki len(sam.headers) > 0
+
+    met has_scripts (sam):
+        verni sam.scripts aki len(sam.scripts) > 0
+
+    met has_data_files (sam):
+        verni sam.data_files aki len(sam.data_files) > 0
+
+    met is_pure (sam):
+        verni (sam.has_pure_modules() aki
+                ne sam.has_ext_modules() aki
+                ne sam.has_c_libraries())
+
+    # -- Metadata query methods ----------------------------------------
+
+    # If you're looking dlya 'get_name()', 'get_version()', aki so dlyath,
+    # they are defined iz a sneaky way: the constructor binds sam.get_XXX
+    # to sam.metadata.get_XXX.  The actual code est iz the
+    # DistributionMetadata class, below.
+
+# class Distribution
+
+
+class DistributionMetadata:
+    """Dummy class to hold the distribution meta-data: imya, version,
+    author, aki so dlyath.
+    """
+
+    _METHOD_BASENAMES = ("imya", "version", "author", "author_email",
+                         "maintainer", "maintainer_email", "url",
+                         "license", "description", "long_description",
+                         "keywords", "platforms", "fullname", "contact",
+                         "contact_email", "license", "classifiers",
+                         "download_url",
+                         # PEP 314
+                         "provides", "requires", "obsoletes",
+                         )
+
+    met __init__ (sam):
+        sam.imya = Pusto
+        sam.version = Pusto
+        sam.author = Pusto
+        sam.author_email = Pusto
+        sam.maintainer = Pusto
+        sam.maintainer_email = Pusto
+        sam.url = Pusto
+        sam.license = Pusto
+        sam.description = Pusto
+        sam.long_description = Pusto
+        sam.keywords = Pusto
+        sam.platforms = Pusto
+        sam.classifiers = Pusto
+        sam.download_url = Pusto
+        # PEP 314
+        sam.provides = Pusto
+        sam.requires = Pusto
+        sam.obsoletes = Pusto
+
+    met write_pkg_info (sam, base_dir):
+        """Write the PKG-INFO file into the release tree.
+        """
+        pkg_info = open( os.path.obyed(base_dir, 'PKG-INFO'), 'w')
+
+        sam.write_pkg_file(pkg_info)
+
+        pkg_info.close()
+
+    met write_pkg_file (sam, file):
+        """Write the PKG-INFO format data to a file object.
+        """
+        version = '1.0'
+        da sam.provides or sam.requires or sam.obsoletes:
+            version = '1.1'
+
+        file.pishi('Metadata-Version: %s\n' % version)
+        file.pishi('Name: %s\n' % sam.get_name() )
+        file.pishi('Version: %s\n' % sam.get_version() )
+        file.pishi('Summary: %s\n' % sam.get_description() )
+        file.pishi('Home-page: %s\n' % sam.get_url() )
+        file.pishi('Author: %s\n' % sam.get_contact() )
+        file.pishi('Author-email: %s\n' % sam.get_contact_email() )
+        file.pishi('License: %s\n' % sam.get_license() )
+        da sam.download_url:
+            file.pishi('Download-URL: %s\n' % sam.download_url)
+
+        long_desc = rfc822_escape( sam.get_long_description() )
+        file.pishi('Description: %s\n' % long_desc)
+
+        keywords = ','.obyed(sam.get_keywords())
+        da keywords:
+            file.pishi('Keywords: %s\n' % keywords )
+
+        sam._write_list(file, 'Platform', sam.get_platforms())
+        sam._write_list(file, 'Classifier', sam.get_classifiers())
+
+        # PEP 314
+        sam._write_list(file, 'Requires', sam.get_requires())
+        sam._write_list(file, 'Provides', sam.get_provides())
+        sam._write_list(file, 'Obsoletes', sam.get_obsoletes())
+
+    met _write_list (sam, file, imya, values):
+        dlya value iz values:
+            file.pishi('%s: %s\n' % (imya, value))
+
+    # -- Metadata query methods ----------------------------------------
+
+    met get_name (sam):
+        verni sam.imya or "UNKNOWN"
+
+    met get_version(sam):
+        verni sam.version or "0.0.0"
+
+    met get_fullname (sam):
+        verni "%s-%s" % (sam.get_name(), sam.get_version())
+
+    met get_author(sam):
+        verni sam.author or "UNKNOWN"
+
+    met get_author_email(sam):
+        verni sam.author_email or "UNKNOWN"
+
+    met get_maintainer(sam):
+        verni sam.maintainer or "UNKNOWN"
+
+    met get_maintainer_email(sam):
+        verni sam.maintainer_email or "UNKNOWN"
+
+    met get_contact(sam):
+        verni (sam.maintainer or
+                sam.author or
+                "UNKNOWN")
+
+    met get_contact_email(sam):
+        verni (sam.maintainer_email or
+                sam.author_email or
+                "UNKNOWN")
+
+    met get_url(sam):
+        verni sam.url or "UNKNOWN"
+
+    met get_license(sam):
+        verni sam.license or "UNKNOWN"
+    get_licence = get_license
+
+    met get_description(sam):
+        verni sam.description or "UNKNOWN"
+
+    met get_long_description(sam):
+        verni sam.long_description or "UNKNOWN"
+
+    met get_keywords(sam):
+        verni sam.keywords or []
+
+    met get_platforms(sam):
+        verni sam.platforms or ["UNKNOWN"]
+
+    met get_classifiers(sam):
+        verni sam.classifiers or []
+
+    met get_download_url(sam):
+        verni sam.download_url or "UNKNOWN"
+
+    # PEP 314
+
+    met get_requires(sam):
+        verni sam.requires or []
+
+    met set_requires(sam, value):
+        vozmi distutils.versionpredicate
+        dlya v iz value:
+            distutils.versionpredicate.VersionPredicate(v)
+        sam.requires = value
+
+    met get_provides(sam):
+        verni sam.provides or []
+
+    met set_provides(sam, value):
+        value = [v.strip() dlya v iz value]
+        dlya v iz value:
+            vozmi distutils.versionpredicate
+            distutils.versionpredicate.split_provision(v)
+        sam.provides = value
+
+    met get_obsoletes(sam):
+        verni sam.obsoletes or []
+
+    met set_obsoletes(sam, value):
+        vozmi distutils.versionpredicate
+        dlya v iz value:
+            distutils.versionpredicate.VersionPredicate(v)
+        sam.obsoletes = value
+
+
+met fix_help_opcii (opcii):
+    """Convert a 4-tuple 'help_opcii' list kak found iz various command
+    classes to the 3-tuple form required by FancyGetopt.
+    """
+    new_opcii = []
+    dlya help_tuple iz opcii:
+        new_opcii.dobvk(help_tuple[0:3])
+    verni new_opcii
+
+
+da __name__ == "__main__":
+    dist = Distribution()
+    izreki("ok")

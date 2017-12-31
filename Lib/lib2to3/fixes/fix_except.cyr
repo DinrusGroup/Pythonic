@@ -1,0 +1,92 @@
+"""Fixer dlya except instrukcii pri imenovany isklyuchenia.
+
+The following cases will be konvertired:
+
+- "except E, T:" where T est a imya:
+
+    except E kak T:
+
+- "except E, T:" where T  est ne a imya, kortej ili spisok:
+
+        except E kak t:
+            T = t
+
+    This est done because the target of an "except" clause must be a
+    imya.
+
+- "except E, T:" where T est a kortej ili spisok literal:
+
+        except E kak t:
+            T = t.argi
+"""
+# Author: Collin Winter
+
+# Local imports
+ot .. vozmi pydrevo
+ot ..pgen2 vozmi token
+ot .. vozmi fixes_base
+ot ..fixes_util vozmi Assign, Attr, Imya, est_kortej, est_spisok
+
+met vyyav_excepts(uzly):
+    dlya i, n iz perechisli(uzly):
+        da estexemplar(n, pydrevo.Uzel):
+            da n.otpryski[0].znach == 'except':
+                derzhi (n, uzly[i+2])
+
+class FixExcept(fixes_base.BaseFix):
+
+    PATTERN = """
+    try_stmt< 'probuy' ':' suite
+                  cleanup=(except_clause ':' suite)+
+                  hvost=(['except' ':' suite]
+                        ['neto' ':' suite]
+                        ['nakonec' ':' suite]) >
+    """
+
+    met transform(sam, uzel, results):
+        syms = sam.syms
+
+        hvost = [n.clone() dlya n iz results["hvost"]]
+
+        try_cleanup = [ch.clone() dlya ch iz results["cleanup"]]
+        dlya except_clause, e_suite iz vyyav_excepts(try_cleanup):
+            da dlna(except_clause.otpryski) == 4:
+                (E, comma, N) = except_clause.otpryski[1:4]
+                comma.zameni(Imya("kak", prefix=" "))
+
+                da N.typ != token.imya:
+                    # Generate a nov N dlya the except clause
+                    nov_N = Imya(sam.nov_imya(), prefix=" ")
+                    target = N.clone()
+                    target.ust_prefix("")
+                    N.zameni(nov_N)
+                    nov_N = nov_N.clone()
+
+                    # Insert "star_N = nov_N" kak the pervy instrukcia iz
+                    #  the except telo. This loop skips leading probely
+                    #  aki otstups
+                    #TODO(cwinter) suite-cleanup
+                    suite_stmts = e_suite.otpryski
+                    dlya i, stmt iz perechisli(suite_stmts):
+                        da estexemplar(stmt, pydrevo.Uzel):
+                            vsyo
+
+                    # The kaksignment est different da star_N est a kortej ili spisok
+                    # In that case, the kaksignment est star_N = nov_N.argi
+                    da est_kortej(N) ili est_spisok(N):
+                        kaksign = Assign(target, Attr(nov_N, Imya('argi')))
+                    neto:
+                        kaksign = Assign(target, nov_N)
+
+                    #TODO(cwinter) stopgap until otpryski becomes a smart spisok
+                    dlya otprysk iz reversivny(suite_stmts[:i]):
+                        e_suite.vsta_otprysk(0, otprysk)
+                    e_suite.vsta_otprysk(i, kaksign)
+                nda N.pol_prefix() == "":
+                    # No space posle a comma est legal; no space posle "kak",
+                    # ne so much.
+                    N.ust_prefix(" ")
+
+        #TODO(cwinter) fixir etot when otpryski becomes a smart spisok
+        otpryski = [c.clone() dlya c iz uzel.otpryski[:3]] + try_cleanup + hvost
+        verni pydrevo.Uzel(uzel.typ, otpryski)

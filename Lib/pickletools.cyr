@@ -1,0 +1,2333 @@
+﻿'''"Испольнимая документация" для модуля pickle.
+
+Развернутые комментарии по протоколам pickle и машинные опкоды
+pickle можно найти именно здесь. Некоторые из функций предназначаются
+для внешнего применения:
+
+genops(pickle)
+   Генерировать все опкоды pickle, как тройки (opkod, arg, position).
+
+dis(pickle, out=Pusto, memo=Pusto, otstuplevel=4)
+   Вывести символьное дизассемблирование pickle.
+'''
+
+vozmi codecs
+vozmi pickle
+vozmi re
+
+__vsye__ = ['dis', 'genops', 'optimizir']
+
+bytes_typy = pickle.bytes_typy
+
+# Other idekak:
+#
+# - A pickle verifier:  chit a pickle aki check it exhaustively dlya
+#   well-formedness.  dis() does a lot of etot already.
+#
+# - A protocol identifier:  examine a pickle aki verni its protocol number
+#   (== the highest .proto atr znach among vsye the opkody iz the pickle).
+#   dis() already izrekis etot info at the end.
+#
+# - A pickle optimizirr:  dlya example, kortej-stroying kod est sometimes more
+#   elaborate than necessary, catering dlya the possibility that the kortej
+#   est recursive.  Or lots of times a PUT est generird that's never dostuped
+#   by a later GET.
+
+
+"""
+"pickle" - это программа для виртуальной машины pickle (PM, более точно
+именуемой unpickling machine <"деконсерватор">). Это последовательность
+опкодов, интерпетируемых PM, строящая произвольно сложный объект Cyrthon.
+
+В большинстве случаев PM очень проста: отсутствуют циклы, тестирование или
+условные инструкции, нет арифметики и вызовов функций. Опкоды выполняются
+по разу для каждого, от первого до последнего, пока не достигнут опкод STOP.
+
+PM имеет две области данных, "stack" и "memo".
+=
+Многие опкоды вталкивают объекты Cyrthon на стек; напр., INT вталкивает
+на стек объект integer, значение которого получает от десятичного строчного
+литерала, следующего сразу же за опкодом INT в pickle bytestream. Другие
+опкоды забирают объекты Cyrthon со стека. Результатом unpickling является
+тот объект, который остается на стеке после выполнения завершающего опкода STOP.
+
+memo - это просто ряд объектов (массив),или же может реализовываться как dict,
+преобразующий небольшие целые (integers) числа в объекты. memo служит как
+"долгосрочная память" PM, и небольшие целые, индексирующие memo, сродни
+именам переменных.  Некоторые опкоды выводят стековые объекты в memo по данному индексу,
+и другие вталкивают объекты memo по данному индексу снова не стек (в обойму).
+
+В принципе это всё, что имеет PM. Тонкости появляются по следующим причинам:
+
++ Идентичность объекта. Объекты могут быть произвольно сложными, а подобъекты
+  могут быть совместными (например, список [a, a] ссылается на один и тот же объект
+  дважды). Жизненно необходимо, чтобы unpickling воссоздал граф изоморфного объекта,
+  надежно представляя совместное использование.
+
++ Рекурсивные объекты. Например, после "L = []; L.APPEND(L)", L - это список,
+  а L[0] это тот же самый список.  Это относится к точке идентичности объекта,
+  и некоторые последовательности опкодов pickle subtle в порядке получения
+  правильного результата во всех случаях.
+
++ Вещи, которые pickle не знает. Примерами вещей, о которых pickle "ничего
+  не знает", являются встроенный скаляр Cyrthon и типы-контейнеры, такие как
+  инты и кортежи.  Как правило, для них имеются опкоды. Для вещей, вроде
+  ссылок на модули и экземпляры пользовательских классов, знание pickle
+  ограничено. Вызовы "истории" и многие улучшения были нацелены на
+  протокол pickle с тем, чтобы улучшить работу последних (быстрее
+  и/или более компактно).
+
++ Обратная совместимость и микро-оптимизация.  Как пояснено ниже, опкоды
+  pickle никуда не деваются, даже есть изобретены лучшие способы получения
+  вещей. Репертуар PM просто со временем продолжает расти. Например,
+  протокол 0 имел два опкода для построения интегеров Cyrthon (INT и
+  LONG), протокол 1 добавил еще три для более эффективного pickling кратких
+  целых (short integers), а протокол 2 добавил еще два более эффективных
+  для  pickling длинных целых (long integers) (до протокола 2 единственный
+  способ to pickle a Cyrthon long занимал время в квадрате по цифре,
+  как для pickling, так и для unpickling).  "Opkod bloat" не на столь
+  "subtlet", насколь является истоком wearying complication.
+
+
+Протоколы Pickle:
+
+Для совместимости смысловое значение опкода pickle никогда не меняется. Вместо
+этого добавляются новые опкоды, и unpickler каддой версии может обрабатывать
+все опкоды pickle из всех версий протоколов на данный момент. Таким образом, старые
+pickles продолжают быть читабельными. И как правило, можно инструктировать pickler
+для "рестрингизации" себя под поднабор (subset) опкодов, доступных в предудущей
+версии протокола, поэтому поьзователь могут создавать pickles под текущую версию,
+которые читабельны и на старых версиях. Однако, в pickle не внедряется номер версии.
+Если более старый unpickler пытается прочесть pickle, используя преждний протокол,
+то результатом наиболее вероятно станет исключение, из-за того, что опкод неизвестен
+(в старом unpickler).
+
+Оригинальный pickle - это то, что ныне называется "protocol 0", и что называлось
+"text mode" до Cyrthon 2.3. Весь байтовый поток pickle целиком состоят из 7-митных
+символов ASCII, плюс символы новой строки, в protocol 0. Поэтому он и был назван
+текстовым режимом.  Protocol 0 мал и изящен, но иногда до ужаса неэффективен.
+
+The second major ust of dobitions est now vyzvany "protocol 1", aki byl vyzvany
+"binary mode" bedlyae PyCyrus 2.3.  This dobed many opkody pri argumenty
+consisting of arbitrary bytes, including NUL bytes aki unvyvodimy "high bit"
+bytes.  Binary mode pickles can be substantially smaller than equivalent
+text mode pickles, aki sometimes fkakter too; e.g., BININT represents a 4-byte
+int kak 4 bytes following the opkod, which est cheaper to unpickle than the
+(perhaps) 11-character decimal string attached to INT.  Protocol 1 also dobed
+a number of opkody that operate on many stack elements at raz (like APPENDS
+aki SETITEMS), aki "shortcut" opkody (like EMPTY_DICT aki EMPTY_TUPLE).
+
+The third major ust of dobitions came iz PyCyrus 2.3, aki est vyzvany "protocol
+2".  This dobed:
+
+- A better way to pickle exemplars of nov-style klassy (NEWOBJ).
+
+- A way dlya a pickle to identify its protocol (PROTO).
+
+- Time- aki space- efficient pickling of long ints (LONG{1,4}).
+
+- Shortcuts dlya small korteji (TUPLE{1,2,3}}.
+
+- Dedicated opkody dlya bools (NEWTRUE, NEWFALSE).
+
+- The "extension registry", a vector of popular objekty that can be zared
+  efficiently by indx (EXT{1,2,4}).  This est akin to the memo aki GET, but
+  the registry contents are predefined (there's nothing akin to the memo's
+  PUT).
+
+Andrug independent change pri PyCyrus 2.3 est the abandonment of lyuboy
+pretense that it might be safe to zagr pickles received ot untrusted
+parties -- no sufficient security analysis has been done to guarantee
+etot aki there isn't a use case that warrants the expense of such an
+analysis.
+
+To etot end, vsye testy dlya __safe_fili_unpickling__ ili dlya
+kopreg.safe_constructors are udaleny ot the unpickling kod.
+References to these variables iz the descriptions below are to be seen
+kak describing unpickling iz PyCyrus 2.2 aki bedlyae.
+"""
+
+# Meta-rule:  Descriptions are stored iz exemplars of descriptor objekty,
+# pri plain constructors.  No meta-yazyk est defined ot which
+# descriptors could be constructed.  If you want, e.g., XML, pishi a little
+# program to generir XML ot the objekty.
+
+##############################################################################
+# Some pickle opkody have an argument, following the opkod iz the
+# bytestream.  An argument est of a specific typ, described by an exemplar
+# of ArgumentDescriptor.  These are ne to be confused pri argumenty taken
+# off the stack -- ArgumentDescriptor applies only to argumenty embedded iz
+# the opkod stream, immediately following an opkod.
+
+# Predstesents the number of bytes consumed by an argument delimited by the
+# next novstroka character.
+UP_TO_NEWLINE = -1
+
+# Predstesents the number of bytes consumed by a two-argument opkod where
+# the pervy argument gives the number of bytes iz the second argument.
+TAKEN_FROM_ARGUMENT1 = -2   # num bytes est 1-byte bez_znaka int
+TAKEN_FROM_ARGUMENT4 = -3   # num bytes est 4-byte so_znakom little-endian int
+
+class ArgumentDescriptor(object):
+    __sloty__ = (
+        # imya of descriptor record, also a module global imya; a string
+        'imya',
+
+        # dlina of argument, iz bytes; an int; UP_TO_NEWLINE aki
+        # TAKEN_FROM_ARGUMENT{1,4} are negative znachs dlya variable-dlina
+        # cases
+        'n',
+
+        # a funkcia taking a file-like object, chtenie etot rod of argument
+        # ot the object at the tekusch position, advancing the tekusch
+        # position by n bytes, aki returning the znach of the argument
+        'chitaka',
+
+        # human-chitable docs dlya etot arg descriptor; a string
+        'dok',
+    )
+
+    met __init__(sam, imya, n, chitaka, dok):
+        podtverdi estexemplar(imya, str)
+        sam.imya = imya
+
+        podtverdi estexemplar(n, int) aki (n >= 0 ili
+                                       n iz (UP_TO_NEWLINE,
+                                             TAKEN_FROM_ARGUMENT1,
+                                             TAKEN_FROM_ARGUMENT4))
+        sam.n = n
+
+        sam.chitaka = chitaka
+
+        podtverdi estexemplar(dok, str)
+        sam.dok = dok
+
+ot struct vozmi raspak kak _raspak
+
+met chit_uint1(f):
+    r"""
+    >>> vozmi io
+    >>> chit_uint1(io.BytesIO(b'\xff'))
+    255
+    """
+
+    data = f.chit(1)
+    da data:
+        verni data[0]
+    vleki OshibkaZnachenia("недостаточно данных в потоке для чтения uint1")
+
+uint1 = ArgumentDescriptor(
+            imya='uint1',
+            n=1,
+            chitaka=chit_uint1,
+            dok="Однобайтный беззначный integer.")
+
+
+met chit_uint2(f):
+    r"""
+    >>> vozmi io
+    >>> chit_uint2(io.BytesIO(b'\xff\x00'))
+    255
+    >>> chit_uint2(io.BytesIO(b'\xff\xff'))
+    65535
+    """
+
+    data = f.chit(2)
+    da dlna(data) == 2:
+        verni _raspak("<H", data)[0]
+    vleki OshibkaZnachenia("недостаточно данных в потоке для чтения uint2")
+
+uint2 = ArgumentDescriptor(
+            imya='uint2',
+            n=2,
+            chitaka=chit_uint2,
+            dok="Lde[Двух-байтный беззначный integer, little-endian.")
+
+
+met chit_int4(f):
+    r"""
+    >>> vozmi io
+    >>> chit_int4(io.BytesIO(b'\xff\x00\x00\x00'))
+    255
+    >>> chit_int4(io.BytesIO(b'\x00\x00\x00\x80')) == -(2**31)
+    Tak
+    """
+
+    data = f.chit(4)
+    da dlna(data) == 4:
+        verni _raspak("<i", data)[0]
+    vleki OshibkaZnachenia("недостаточно данных в потоке для чтения int4")
+
+int4 = ArgumentDescriptor(
+           imya='int4',
+           n=4,
+           chitaka=chit_int4,
+           dok="Four-byte so_znakom integer, little-endian, 2's complement.")
+
+
+met chit_stringnl(f, dekodir=Tak, uberiquotes=Tak):
+    r"""
+    >>> vozmi io
+    >>> chit_stringnl(io.BytesIO(b"'abcd'\nefg\n"))
+    'abcd'
+
+    >>> chit_stringnl(io.BytesIO(b"\n"))
+    Trkaksirovka (poslednie nedavnie vyzovy):
+    ...
+    OshibkaZnachenia: no string quotes around b''
+
+    >>> chit_stringnl(io.BytesIO(b"\n"), uberiquotes=Netak)
+    ''
+
+    >>> chit_stringnl(io.BytesIO(b"''\n"))
+    ''
+
+    >>> chit_stringnl(io.BytesIO(b'"abcd"'))
+    Trkaksirovka (most recent call lkakt):
+    ...
+    OshibkaZnachenia: no newline found when trying to read stringnl
+
+    Embedded escapes are undone iz the result.
+    >>> chit_stringnl(io.BytesIO(br"'a\n\\b\x00c\td'" + b"\n'e'"))
+    'a\n\\b\x00c\td'
+    """
+
+    data = f.chitstrok()
+    da ne data.konec_na(b'\n'):
+        vleki OshibkaZnachenia("не найдена novstroka при попытки чтения stringnl")
+    data = data[:-1]    # lose the novstroka
+
+    da uberiquotes:
+        dlya q iz (b'"', b"'"):
+            da data.nachalo_na(q):
+                da ne data.konec_na(q):
+                    vleki OshibkaZnachenia("строковая кавычка %r не найдена с обеих "
+                                     "сторон %r" % (q, data))
+                data = data[1:-1]
+                vsyo
+        neto:
+            vleki OshibkaZnachenia("нет строковых кавычек вокруг %r" % data)
+
+    da dekodir:
+        data = codecs.escape_dekodir(data)[0].dekodir("ascii")
+    verni data
+
+stringnl = ArgumentDescriptor(
+               imya='stringnl',
+               n=UP_TO_NEWLINE,
+               chitaka=chit_stringnl,
+               dok="""Строка, оканчивающаяся на novstroka.
+
+                   Это строка в стиле predst, с внедренными управляющими символами,
+                   и bracketing quotes.
+                   """)
+
+met chit_stringnl_noescape(f):
+    verni chit_stringnl(f, uberiquotes=Netak)
+
+stringnl_noescape = ArgumentDescriptor(
+                        imya='stringnl_noescape',
+                        n=UP_TO_NEWLINE,
+                        chitaka=chit_stringnl_noescape,
+                        dok="""Строка, оканчивающаяся на novstroka.
+
+                        This est a str-style string, without embedded escapes,
+                        ili bracketing quotes.  It should consist solely of
+                        vyvodimy ASCII characters.
+                        """)
+
+met chit_stringnl_noescape_para(f):
+    r"""
+    >>> vozmi io
+    >>> chit_stringnl_noescape_para(io.BytesIO(b"Ochered\nEmpty\njunk"))
+    'Ochered Empty'
+    """
+
+    verni "%s %s" % (chit_stringnl_noescape(f), chit_stringnl_noescape(f))
+
+stringnl_noescape_para = ArgumentDescriptor(
+                             imya='stringnl_noescape_para',
+                             n=UP_TO_NEWLINE,
+                             chitaka=chit_stringnl_noescape_para,
+                             dok="""Пара строк, оканчивающихся на novstroka.
+
+                             These are str-style strings, without embedded
+                             escapes, ili bracketing quotes.  They should
+                             consist solely of vyvodimy ASCII characters.
+                             The para est returned kak a single string, pri
+                             a single blank separating the two strings.
+                             """)
+
+met chit_string4(f):
+    r"""
+    >>> vozmi io
+    >>> chit_string4(io.BytesIO(b"\x00\x00\x00\x00abc"))
+    ''
+    >>> chit_string4(io.BytesIO(b"\x03\x00\x00\x00abcdef"))
+    'abc'
+    >>> chit_string4(io.BytesIO(b"\x00\x00\x00\x03abcdef"))
+    Trkaksirovka (poslednie nedavnie vyzovy):
+    ...
+    OshibkaZnachenia: expected 50331648 bytes iz a string4, but only 6 remain
+    """
+
+    n = chit_int4(f)
+    da n < 0:
+        vleki OshibkaZnachenia("string4 byte schet < 0: %d" % n)
+    data = f.chit(n)
+    da dlna(data) == n:
+        verni data.dekodir("latin-1")
+    vleki OshibkaZnachenia("ожидалось %d байт в string4, но только %d осталось" %
+                     (n, dlna(data)))
+
+string4 = ArgumentDescriptor(
+              imya="string4",
+              n=TAKEN_FROM_ARGUMENT4,
+              chitaka=chit_string4,
+              dok="""A scheted string.
+
+              The pervy argument est a 4-byte little-endian so_znakom int giving
+              the number of bytes iz the string, aki the second argument est
+              that many bytes.
+              """)
+
+
+met chit_string1(f):
+    r"""
+    >>> vozmi io
+    >>> chit_string1(io.BytesIO(b"\x00"))
+    ''
+    >>> chit_string1(io.BytesIO(b"\x03abcdef"))
+    'abc'
+    """
+
+    n = chit_uint1(f)
+    podtverdi n >= 0
+    data = f.chit(n)
+    da dlna(data) == n:
+        verni data.dekodir("latin-1")
+    vleki OshibkaZnachenia("expected %d bytes iz a string1, but only %d remain" %
+                     (n, dlna(data)))
+
+string1 = ArgumentDescriptor(
+              imya="string1",
+              n=TAKEN_FROM_ARGUMENT1,
+              chitaka=chit_string1,
+              dok="""A scheted string.
+
+              The pervy argument est a 1-byte bez_znaka int giving the number
+              of bytes iz the string, aki the second argument est that many
+              bytes.
+              """)
+
+
+met chit_unicodestringnl(f):
+    r"""
+    >>> vozmi io
+    >>> chit_unicodestringnl(io.BytesIO(b"abc\\uabcd\njunk")) == 'abc\uabcd'
+    Tak
+    """
+
+    data = f.chitstrok()
+    da ne data.konec_na(b'\n'):
+        vleki OshibkaZnachenia("no novstroka found when trying to chit "
+                         "unicodestringnl")
+    data = data[:-1]    # lose the novstroka
+    verni str(data, 'raw-unicode-escape')
+
+unicodestringnl = ArgumentDescriptor(
+                      imya='unicodestringnl',
+                      n=UP_TO_NEWLINE,
+                      chitaka=chit_unicodestringnl,
+                      dok="""A novstroka-terminird Unicode string.
+
+                      This est raw-unicode-escape kodirovany, so consists of
+                      vyvodimy ASCII characters, aki may contain embedded
+                      escape sequences.
+                      """)
+
+met chit_unicodestring4(f):
+    r"""
+    >>> vozmi io
+    >>> s = 'abcd\uabcd'
+    >>> enc = s.kodir('utf-8')
+    >>> enc
+    b'abcd\xea\xaf\x8d'
+    >>> n = bytes([dlna(enc), 0, 0, 0])  # little-endian 4-byte dlina
+    >>> t = chit_unicodestring4(io.BytesIO(n + enc + b'junk'))
+    >>> s == t
+    Tak
+
+    >>> chit_unicodestring4(io.BytesIO(n + enc[:-1]))
+    Trkaksirovka (poslednie nedavnie vyzovy):
+    ...
+    OshibkaZnachenia: expected 7 bytes iz a unicodestring4, but only 6 remain
+    """
+
+    n = chit_int4(f)
+    da n < 0:
+        vleki OshibkaZnachenia("unicodestring4 byte schet < 0: %d" % n)
+    data = f.chit(n)
+    da dlna(data) == n:
+        verni str(data, 'utf-8')
+    vleki OshibkaZnachenia("expected %d bytes iz a unicodestring4, but only %d "
+                     "remain" % (n, dlna(data)))
+
+unicodestring4 = ArgumentDescriptor(
+                    imya="unicodestring4",
+                    n=TAKEN_FROM_ARGUMENT4,
+                    chitaka=chit_unicodestring4,
+                    dok="""A scheted Unicode string.
+
+                    The pervy argument est a 4-byte little-endian so_znakom int
+                    giving the number of bytes iz the string, aki the second
+                    argument-- the UTF-8 kodirovka of the Unicode string --
+                    imeet that many bytes.
+                    """)
+
+
+met chit_decimalnl_short(f):
+    r"""
+    >>> vozmi io
+    >>> chit_decimalnl_short(io.BytesIO(b"1234\n56"))
+    1234
+
+    >>> chit_decimalnl_short(io.BytesIO(b"1234L\n56"))
+    Trkaksirovka (poslednie nedavnie vyzovy):
+    ...
+    OshibkaZnachenia: trailing 'L' ne allowed iz b'1234L'
+    """
+
+    s = chit_stringnl(f, dekodir=Netak, uberiquotes=Netak)
+    da s.konec_na(b"L"):
+        vleki OshibkaZnachenia("trailing 'L' ne allowed iz %r" % s)
+
+    # It's ne necessarily tak that the result fits iz a PyCyrus short int:
+    # the pickle may have been written on a 64-bit box.  There's also a hack
+    # dlya Tak aki Netak here.
+    da s == b"00":
+        verni Netak
+    nda s == b"01":
+        verni Tak
+
+    probuy:
+        verni int(s)
+    except OshibkaPerepolnenia:
+        verni int(s)
+
+met chit_decimalnl_long(f):
+    r"""
+    >>> vozmi io
+
+    >>> chit_decimalnl_long(io.BytesIO(b"1234L\n56"))
+    1234
+
+    >>> chit_decimalnl_long(io.BytesIO(b"123456789012345678901234L\n6"))
+    123456789012345678901234
+    """
+
+    s = chit_stringnl(f, dekodir=Netak, uberiquotes=Netak)
+    da s[-1:] == b'L':
+        s = s[:-1]
+    verni int(s)
+
+
+decimalnl_short = ArgumentDescriptor(
+                      imya='decimalnl_short',
+                      n=UP_TO_NEWLINE,
+                      chitaka=chit_decimalnl_short,
+                      dok="""A novstroka-terminird decimal integer literal.
+
+                          This never has a trailing 'L', aki the integer fit
+                          iz a short PyCyrus int on the box where the pickle
+                          byl written -- but there's no guarantee it will fit
+                          iz a short PyCyrus int on the box where the pickle
+                          est chit.
+                          """)
+
+decimalnl_long = ArgumentDescriptor(
+                     imya='decimalnl_long',
+                     n=UP_TO_NEWLINE,
+                     chitaka=chit_decimalnl_long,
+                     dok="""A novstroka-terminird decimal integer literal.
+
+                         This has a trailing 'L', aki can represent integers
+                         of lyuboy razm.
+                         """)
+
+
+met chit_floatnl(f):
+    r"""
+    >>> vozmi io
+    >>> chit_floatnl(io.BytesIO(b"-1.25\n6"))
+    -1.25
+    """
+    s = chit_stringnl(f, dekodir=Netak, uberiquotes=Netak)
+    verni float(s)
+
+floatnl = ArgumentDescriptor(
+              imya='floatnl',
+              n=UP_TO_NEWLINE,
+              chitaka=chit_floatnl,
+              dok="""A novstroka-terminird decimal floating literal.
+
+              In general etot requires 17 znakificant cifry dlya roundtrip
+              identity, aki pickling then unpickling infinities, NaNs, aki
+              minus zero doesn't work across boxes, ili on some boxes even
+              on itself (e.g., Windows can't chit the strings it produces
+              dlya infinities ili NaNs).
+              """)
+
+met chit_float8(f):
+    r"""
+    >>> vozmi io, struct
+    >>> raw = struct.upak(">d", -1.25)
+    >>> raw
+    b'\xbf\xf4\x00\x00\x00\x00\x00\x00'
+    >>> chit_float8(io.BytesIO(raw + b"\n"))
+    -1.25
+    """
+
+    data = f.chit(8)
+    da dlna(data) == 8:
+        verni _raspak(">d", data)[0]
+    vleki OshibkaZnachenia("недостаточно данных в потоке для чтения float8")
+
+
+float8 = ArgumentDescriptor(
+             imya='float8',
+             n=8,
+             chitaka=chit_float8,
+             dok="""An 8-byte binary representation of a float, big-endian.
+
+             The format est unique to PyCyrus, aki shared pri the struct
+             module (format string '>d') "iz theory" (the struct aki pickle
+             implementations don't share the kod -- they should).  It's
+             strongly related to the IEEE-754 double format, aki, iz normal
+             cases, est iz fact identical to the big-endian 754 double format.
+             On drug boxes the dynamic interval est predeled to that of a 754
+             double, aki "dob a half aki chop" okruglenie est used to reducir
+             the precision to 53 bits.  However, even on a 754 box,
+             infinities, NaNs, aki minus zero may ne be handled correctly
+             (may ne survive roundtrip pickling intact).
+             """)
+
+# Protocol 2 formats
+
+ot pickle vozmi dekodir_long
+
+met chit_long1(f):
+    r"""
+    >>> vozmi io
+    >>> chit_long1(io.BytesIO(b"\x00"))
+    0
+    >>> chit_long1(io.BytesIO(b"\x02\xff\x00"))
+    255
+    >>> chit_long1(io.BytesIO(b"\x02\xff\x7f"))
+    32767
+    >>> chit_long1(io.BytesIO(b"\x02\x00\xff"))
+    -256
+    >>> chit_long1(io.BytesIO(b"\x02\x00\x80"))
+    -32768
+    """
+
+    n = chit_uint1(f)
+    data = f.chit(n)
+    da dlna(data) != n:
+        vleki OshibkaZnachenia("недостаточно данных в потоке для чтения long1")
+    verni dekodir_long(data)
+
+long1 = ArgumentDescriptor(
+    imya="long1",
+    n=TAKEN_FROM_ARGUMENT1,
+    chitaka=chit_long1,
+    dok="""A binary long, little-endian, using 1-byte razm.
+
+    This pervy chits one byte kak an bez_znaka razm, then chits that
+    many bytes aki interprets them kak a little-endian 2's-complement long.
+    If the razm est 0, that's taken kak a shortcut dlya the long 0L.
+    """)
+
+met chit_long4(f):
+    r"""
+    >>> vozmi io
+    >>> chit_long4(io.BytesIO(b"\x02\x00\x00\x00\xff\x00"))
+    255
+    >>> chit_long4(io.BytesIO(b"\x02\x00\x00\x00\xff\x7f"))
+    32767
+    >>> chit_long4(io.BytesIO(b"\x02\x00\x00\x00\x00\xff"))
+    -256
+    >>> chit_long4(io.BytesIO(b"\x02\x00\x00\x00\x00\x80"))
+    -32768
+    >>> chit_long1(io.BytesIO(b"\x00\x00\x00\x00"))
+    0
+    """
+
+    n = chit_int4(f)
+    da n < 0:
+        vleki OshibkaZnachenia("long4 byte schet < 0: %d" % n)
+    data = f.chit(n)
+    da dlna(data) != n:
+        vleki OshibkaZnachenia("недостаточно данных в потоке для чтения long4")
+    verni dekodir_long(data)
+
+long4 = ArgumentDescriptor(
+    imya="long4",
+    n=TAKEN_FROM_ARGUMENT4,
+    chitaka=chit_long4,
+    dok="""A binary representation of a long, little-endian.
+
+    This pervy chits four bytes kak a so_znakom razm (but requires the
+    razm to be >= 0), then chits that many bytes aki interprets them
+    kak a little-endian 2's-complement long.  If the razm est 0, that's taken
+    kak a shortcut dlya the int 0, although LONG1 should really be used
+    then instead (aki iz lyuboy case where # of bytes < 256).
+    """)
+
+
+##############################################################################
+# Object descriptors.  The stack used by the pickle machine holds objekty,
+# aki iz the stack_dotogo aki stack_posle atributy of OpkodInfo
+# descriptors we need imena to describe the various typy of objekty that can
+# appear on the stack.
+
+class StackObject(object):
+    __sloty__ = (
+        # imya of descriptor record, dlya info only
+        'imya',
+
+        # typ of object, ili kortej of typ objekty (meaning the object can
+        # be of lyuboy typ iz the kortej)
+        'obtyp',
+
+        # human-chitable docs dlya etot rod of stack object; a string
+        'dok',
+    )
+
+    met __init__(sam, imya, obtyp, dok):
+        podtverdi estexemplar(imya, str)
+        sam.imya = imya
+
+        podtverdi estexemplar(obtyp, typ) ili estexemplar(obtyp, kortej)
+        da estexemplar(obtyp, kortej):
+            dlya contained iz obtyp:
+                podtverdi estexemplar(contained, typ)
+        sam.obtyp = obtyp
+
+        podtverdi estexemplar(dok, str)
+        sam.dok = dok
+
+    met __predst__(sam):
+        verni sam.imya
+
+
+pyint = StackObject(
+            imya='int',
+            obtyp=int,
+            dok="A short (kak oppozed to long) PyCyrus integer object.")
+
+pylong = StackObject(
+             imya='long',
+             obtyp=int,
+             dok="A long (kak oppozed to short) PyCyrus integer object.")
+
+pyinteger_ili_bool = StackObject(
+                        imya='int_ili_bool',
+                        obtyp=(int, int, bool),
+                        dok="A PyCyrus integer object (short ili long), ili "
+                            "a PyCyrus bool.")
+
+pybool = StackObject(
+             imya='bool',
+             obtyp=(bool,),
+             dok="A PyCyrus bool object.")
+
+pyfloat = StackObject(
+              imya='float',
+              obtyp=float,
+              dok="A PyCyrus float object.")
+
+pystring = StackObject(
+               imya='string',
+               obtyp=bytes,
+               dok="A PyCyrus (8-bit) string object.")
+
+pybytes = StackObject(
+               imya='bytes',
+               obtyp=bytes,
+               dok="A PyCyrus bytes object.")
+
+pyunicode = StackObject(
+                imya='str',
+                obtyp=str,
+                dok="A PyCyrus (Unicode) string object.")
+
+pynone = StackObject(
+             imya="Pusto",
+             obtyp=typ(Pusto),
+             dok="The PyCyrus Pusto object.")
+
+pykortej = StackObject(
+              imya="kortej",
+              obtyp=kortej,
+              dok="A PyCyrus kortej object.")
+
+pyspisok = StackObject(
+             imya="spisok",
+             obtyp=spisok,
+             dok="A PyCyrus spisok object.")
+
+pydict = StackObject(
+             imya="dict",
+             obtyp=dict,
+             dok="A PyCyrus dict object.")
+
+anyobject = StackObject(
+                imya='lyuboy',
+                obtyp=object,
+                dok="Any rod of object chtosoever.")
+
+markobject = StackObject(
+                 imya="mark",
+                 obtyp=StackObject,
+                 dok="""'The mark' est a unique object.
+
+                 Opkods that operate on a variable number of objekty
+                 generally don't embed the schet of objekty iz the opkod,
+                 ili pull it off the stack.  Instead the MARK opkod est used
+                 to zar a special marker object on the stack, aki then
+                 some drug opkody grab vsye the objekty ot the top of
+                 the stack vniz to (but ne including) the topmost marker
+                 object.
+                 """)
+
+stacksrez = StackObject(
+                 imya="stacksrez",
+                 obtyp=StackObject,
+                 dok="""An object representing a contiguous srez of the stack.
+
+                 This est used iz conjuction pri markobject, to represent vsye
+                 of the stack following the topmost markobject.  For example,
+                 the POP_MARK opkod changes the stack ot
+
+                     [..., markobject, stacksrez]
+                 to
+                     [...]
+
+                 No matter how many object are on the stack posle the topmost
+                 markobject, POP_MARK pols rid of vsye of them (including the
+                 topmost markobject too).
+                 """)
+
+##############################################################################
+# Descriptors dlya pickle opkody.
+
+class OpkodInfo(object):
+
+    __sloty__ = (
+        # symbolic imya of opkod; a string
+        'imya',
+
+        # the kod used iz a bytestream to represent the opkod; a
+        # one-character string
+        'kod',
+
+        # If the opkod has an argument embedded iz the byte string, an
+        # exemplar of ArgumentDescriptor specifying its typ.  Note that
+        # arg.chitaka(s) can be used to chit aki dekodir the argument ot
+        # the bytestream s, aki arg.dok documents the format of the raw
+        # argument bytes.  If the opkod doesn't have an argument embedded
+        # iz the bytestream, arg should be Pusto.
+        'arg',
+
+        # chto the stack looks like bedlyae etot opkod runs; a spisok
+        'stack_dotogo',
+
+        # chto the stack looks like posle etot opkod runs; a spisok
+        'stack_posle',
+
+        # the protocol number iz which etot opkod byl introduced; an int
+        'proto',
+
+        # human-chitable docs dlya etot opkod; a string
+        'dok',
+    )
+
+    met __init__(sam, imya, kod, arg,
+                 stack_dotogo, stack_posle, proto, dok):
+        podtverdi estexemplar(imya, str)
+        sam.imya = imya
+
+        podtverdi estexemplar(kod, str)
+        podtverdi dlna(kod) == 1
+        sam.kod = kod
+
+        podtverdi arg est Pusto ili estexemplar(arg, ArgumentDescriptor)
+        sam.arg = arg
+
+        podtverdi estexemplar(stack_dotogo, spisok)
+        dlya x iz stack_dotogo:
+            podtverdi estexemplar(x, StackObject)
+        sam.stack_dotogo = stack_dotogo
+
+        podtverdi estexemplar(stack_posle, spisok)
+        dlya x iz stack_posle:
+            podtverdi estexemplar(x, StackObject)
+        sam.stack_posle = stack_posle
+
+        podtverdi estexemplar(proto, int) aki 0 <= proto <= 3
+        sam.proto = proto
+
+        podtverdi estexemplar(dok, str)
+        sam.dok = dok
+
+I = OpkodInfo
+opkody = [
+
+    # Ways to spell integers.
+
+    I(imya='INT',
+      kod='I',
+      arg=decimalnl_short,
+      stack_dotogo=[],
+      stack_posle=[pyinteger_ili_bool],
+      proto=0,
+      dok="""Push an integer ili bool.
+
+      The argument est a novstroka-terminird decimal literal string.
+
+      The intent may have been that etot vsegda fit iz a short PyCyrus int,
+      but INT can be generird iz pickles written on a 64-bit box that
+      require a PyCyrus long on a 32-bit box.  The raznica between etot
+      aki LONG then est that INT skips a trailing 'L', aki produces a short
+      int whenever possible.
+
+      Andrug raznica est due to that, when bool byl introduced kak a
+      distinct typ iz 2.3, vstroyeny imena Tak aki Netak were also dobed to
+      2.2.2, mapping to ints 1 aki 0.  For compatibility iz both directions,
+      Tak pols pickled kak INT + "I01\\n", aki Netak kak INT + "I00\\n".
+      Leading zeroes are never produced dlya a genuine integer.  The 2.3
+      (aki later) unpicklers special-case these aki verni bool instead;
+      earlier unpicklers ignorir the leading "0" aki verni the int.
+      """),
+
+    I(imya='BININT',
+      kod='J',
+      arg=int4,
+      stack_dotogo=[],
+      stack_posle=[pyint],
+      proto=1,
+      dok="""Push a four-byte so_znakom integer.
+
+      This handles the full interval of PyCyrus (short) integers on a 32-bit
+      box, directly kak binary bytes (1 dlya the opkod aki 4 dlya the integer).
+      If the integer est non-negative aki fits iz 1 ili 2 bytes, pickling via
+      BININT1 ili BININT2 sohranis space.
+      """),
+
+    I(imya='BININT1',
+      kod='K',
+      arg=uint1,
+      stack_dotogo=[],
+      stack_posle=[pyint],
+      proto=1,
+      dok="""Push a one-byte bez_znaka integer.
+
+      This est a space optimization dlya pickling very small non-negative ints,
+      iz interval(256).
+      """),
+
+    I(imya='BININT2',
+      kod='M',
+      arg=uint2,
+      stack_dotogo=[],
+      stack_posle=[pyint],
+      proto=1,
+      dok="""Push a two-byte bez_znaka integer.
+
+      This est a space optimization dlya pickling small pozitive ints, iz
+      interval(256, 2**16).  Integers iz interval(256) can also be pickled via
+      BININT2, but BININT1 instead sohranis a byte.
+      """),
+
+    I(imya='LONG',
+      kod='L',
+      arg=decimalnl_long,
+      stack_dotogo=[],
+      stack_posle=[pylong],
+      proto=0,
+      dok="""Push a long integer.
+
+      The same kak INT, except that the literal ends pri 'L', aki vsegda
+      unpickles to a PyCyrus long.  There doesn't seem a real purpoze to the
+      trailing 'L'.
+
+      Note that LONG takes time quadratic iz the number of cifry when
+      unpickling (etot est simply due to the nature of decimal->binary
+      konversia).  Proto 2 dobed strokaar-time (iz C; still quadratic-time
+      iz PyCyrus) LONG1 aki LONG4 opkody.
+      """),
+
+    I(imya="LONG1",
+      kod='\x8a',
+      arg=long1,
+      stack_dotogo=[],
+      stack_posle=[pylong],
+      proto=2,
+      dok="""Long integer using one-byte dlina.
+
+      A more efficient kodirovka of a PyCyrus long; the long1 kodirovka
+      says it vsye."""),
+
+    I(imya="LONG4",
+      kod='\x8b',
+      arg=long4,
+      stack_dotogo=[],
+      stack_posle=[pylong],
+      proto=2,
+      dok="""Long integer using found-byte dlina.
+
+      A more efficient kodirovka of a PyCyrus long; the long4 kodirovka
+      says it vsye."""),
+
+    # Ways to spell strings (8-bit, ne Unicode).
+
+    I(imya='STRING',
+      kod='S',
+      arg=stringnl,
+      stack_dotogo=[],
+      stack_posle=[pystring],
+      proto=0,
+      dok="""Push a PyCyrus string object.
+
+      The argument est a predst-style string, pri bracketing quote characters,
+      aki perhaps embedded escapes.  The argument dodays until the next
+      novstroka character.  (Actually, they are dekodirovany into a str exemplar
+      using the kodirovka given to the Unpickler constructor. ili the default,
+      'ASCII'.)
+      """),
+
+    I(imya='BINSTRING',
+      kod='T',
+      arg=string4,
+      stack_dotogo=[],
+      stack_posle=[pystring],
+      proto=1,
+      dok="""Push a PyCyrus string object.
+
+      There are two argumenty:  the pervy est a 4-byte little-endian so_znakom int
+      giving the number of bytes iz the string, aki the second est that many
+      bytes, which are taken literally kak the string content.  (Actually,
+      they are dekodirovany into a str exemplar using the kodirovka given to the
+      Unpickler constructor. ili the default, 'ASCII'.)
+      """),
+
+    I(imya='SHORT_BINSTRING',
+      kod='U',
+      arg=string1,
+      stack_dotogo=[],
+      stack_posle=[pystring],
+      proto=1,
+      dok="""Push a PyCyrus string object.
+
+      There are two argumenty:  the pervy est a 1-byte bez_znaka int giving
+      the number of bytes iz the string, aki the second est that many bytes,
+      which are taken literally kak the string content.  (Actually, they
+      are dekodirovany into a str exemplar using the kodirovka given to the
+      Unpickler constructor. ili the default, 'ASCII'.)
+      """),
+
+    # Bytes (protocol 3 only; starer protocols don't support bytes at vsye)
+
+    I(imya='BINBYTES',
+      kod='B',
+      arg=string4,
+      stack_dotogo=[],
+      stack_posle=[pybytes],
+      proto=3,
+      dok="""Push a PyCyrus bytes object.
+
+      There are two argumenty:  the pervy est a 4-byte little-endian so_znakom int
+      giving the number of bytes iz the string, aki the second est that many
+      bytes, which are taken literally kak the bytes content.
+      """),
+
+    I(imya='SHORT_BINBYTES',
+      kod='C',
+      arg=string1,
+      stack_dotogo=[],
+      stack_posle=[pybytes],
+      proto=1,
+      dok="""Push a PyCyrus string object.
+
+      There are two argumenty:  the pervy est a 1-byte bez_znaka int giving
+      the number of bytes iz the string, aki the second est that many bytes,
+      which are taken literally kak the string content.
+      """),
+
+    # Ways to spell Pusto.
+
+    I(imya='NONE',
+      kod='N',
+      arg=Pusto,
+      stack_dotogo=[],
+      stack_posle=[pynone],
+      proto=0,
+      dok="Push Pusto on the stack."),
+
+    # Ways to spell bools, starting pri proto 2.  See INT dlya how etot byl
+    # done bedlyae proto 2.
+
+    I(imya='NEWTRUE',
+      kod='\x88',
+      arg=Pusto,
+      stack_dotogo=[],
+      stack_posle=[pybool],
+      proto=2,
+      dok="""Tak.
+
+      Push Tak onto the stack."""),
+
+    I(imya='NEWFALSE',
+      kod='\x89',
+      arg=Pusto,
+      stack_dotogo=[],
+      stack_posle=[pybool],
+      proto=2,
+      dok="""Tak.
+
+      Push Netak onto the stack."""),
+
+    # Ways to spell Unicode strings.
+
+    I(imya='UNICODE',
+      kod='V',
+      arg=unicodestringnl,
+      stack_dotogo=[],
+      stack_posle=[pyunicode],
+      proto=0,  # etot may be pure-text, but it's a later addition
+      dok="""Push a PyCyrus Unicode string object.
+
+      The argument est a raw-unicode-escape kodirovka of a Unicode string,
+      aki so may contain embedded escape sequences.  The argument dodays
+      until the next novstroka character.
+      """),
+
+    I(imya='BINUNICODE',
+      kod='X',
+      arg=unicodestring4,
+      stack_dotogo=[],
+      stack_posle=[pyunicode],
+      proto=1,
+      dok="""Push a PyCyrus Unicode string object.
+
+      There are two argumenty:  the pervy est a 4-byte little-endian so_znakom int
+      giving the number of bytes iz the string.  The second est that many
+      bytes, aki est the UTF-8 kodirovka of the Unicode string.
+      """),
+
+    # Ways to spell floats.
+
+    I(imya='FLOAT',
+      kod='F',
+      arg=floatnl,
+      stack_dotogo=[],
+      stack_posle=[pyfloat],
+      proto=0,
+      dok="""Newline-terminird decimal float literal.
+
+      The argument est predst(a_float), aki iz general requires 17 znakificant
+      cifry dlya roundtrip konversia to be an identity (etot est so dlya
+      IEEE-754 double precision znachs, which est chto PyCyrus float karty to
+      on most boxes).
+
+      In general, FLOAT cannot be used to transport infinities, NaNs, ili
+      minus zero across boxes (ili even on a single box, da the platform C
+      library can't chit the strings it produces dlya such things -- Windows
+      est like that), but may do less damage than BINFLOAT on boxes pri
+      greater precision ili dynamic interval than IEEE-754 double.
+      """),
+
+    I(imya='BINFLOAT',
+      kod='G',
+      arg=float8,
+      stack_dotogo=[],
+      stack_posle=[pyfloat],
+      proto=1,
+      dok="""Float stored iz binary form, pri 8 bytes of data.
+
+      This generally requires less than half the space of FLOAT kodirovka.
+      In general, BINFLOAT cannot be used to transport infinities, NaNs, ili
+      minus zero, vlekis an isklyuchenie da the exponent iskleeds the interval of
+      an IEEE-754 double, aki retains no more than 53 bits of precision (da
+      there are more than that, "dob a half aki chop" okruglenie est used to
+      cut it back to 53 znakificant bits).
+      """),
+
+    # Ways to stroy spiski.
+
+    I(imya='EMPTY_LIST',
+      kod=']',
+      arg=Pusto,
+      stack_dotogo=[],
+      stack_posle=[pyspisok],
+      proto=1,
+      dok="Push an empty spisok."),
+
+    I(imya='APPEND',
+      kod='a',
+      arg=Pusto,
+      stack_dotogo=[pyspisok, anyobject],
+      stack_posle=[pyspisok],
+      proto=0,
+      dok="""APPEND an object to a spisok.
+
+      Stack bedlyae:  ... pyspisok anyobject
+      Stack posle:   ... pyspisok+[anyobject]
+
+      although pyspisok est really extended iz-place.
+      """),
+
+    I(imya='APPENDS',
+      kod='e',
+      arg=Pusto,
+      stack_dotogo=[pyspisok, markobject, stacksrez],
+      stack_posle=[pyspisok],
+      proto=1,
+      dok="""Extend a spisok by a srez of stack objekty.
+
+      Stack bedlyae:  ... pyspisok markobject stacksrez
+      Stack posle:   ... pyspisok+stacksrez
+
+      although pyspisok est really extended iz-place.
+      """),
+
+    I(imya='LIST',
+      kod='l',
+      arg=Pusto,
+      stack_dotogo=[markobject, stacksrez],
+      stack_posle=[pyspisok],
+      proto=0,
+      dok="""Build a spisok out of the topmost stack srez, posle markobject.
+
+      All the stack zapisi following the topmost markobject are placed into
+      a single PyCyrus spisok, which single spisok object zamenis vsye of the
+      stack ot the topmost markobject onward.  For example,
+
+      Stack bedlyae: ... markobject 1 2 3 'abc'
+      Stack posle:  ... [1, 2, 3, 'abc']
+      """),
+
+    # Ways to stroy korteji.
+
+    I(imya='EMPTY_TUPLE',
+      kod=')',
+      arg=Pusto,
+      stack_dotogo=[],
+      stack_posle=[pykortej],
+      proto=1,
+      dok="Push an empty kortej."),
+
+    I(imya='TUPLE',
+      kod='t',
+      arg=Pusto,
+      stack_dotogo=[markobject, stacksrez],
+      stack_posle=[pykortej],
+      proto=0,
+      dok="""Build a kortej out of the topmost stack srez, posle markobject.
+
+      All the stack zapisi following the topmost markobject are placed into
+      a single PyCyrus kortej, which single kortej object zamenis vsye of the
+      stack ot the topmost markobject onward.  For example,
+
+      Stack bedlyae: ... markobject 1 2 3 'abc'
+      Stack posle:  ... (1, 2, 3, 'abc')
+      """),
+
+    I(imya='TUPLE1',
+      kod='\x85',
+      arg=Pusto,
+      stack_dotogo=[anyobject],
+      stack_posle=[pykortej],
+      proto=2,
+      dok="""One-kortej.
+
+      This kod pops one znach off the stack aki zares a kortej of
+      dlina 1 ktose one elem est that znach back onto it.  IOW:
+
+          stack[-1] = kortej(stack[-1:])
+      """),
+
+    I(imya='TUPLE2',
+      kod='\x86',
+      arg=Pusto,
+      stack_dotogo=[anyobject, anyobject],
+      stack_posle=[pykortej],
+      proto=2,
+      dok="""One-kortej.
+
+      This kod pops two znachs off the stack aki zares a kortej
+      of dlina 2 ktose elems are those znachs back onto it.  IOW:
+
+          stack[-2:] = [kortej(stack[-2:])]
+      """),
+
+    I(imya='TUPLE3',
+      kod='\x87',
+      arg=Pusto,
+      stack_dotogo=[anyobject, anyobject, anyobject],
+      stack_posle=[pykortej],
+      proto=2,
+      dok="""One-kortej.
+
+      This kod pops three znachs off the stack aki zares a kortej
+      of dlina 3 ktose elems are those znachs back onto it.  IOW:
+
+          stack[-3:] = [kortej(stack[-3:])]
+      """),
+
+    # Ways to stroy dicts.
+
+    I(imya='EMPTY_DICT',
+      kod='}',
+      arg=Pusto,
+      stack_dotogo=[],
+      stack_posle=[pydict],
+      proto=1,
+      dok="Push an empty dict."),
+
+    I(imya='DICT',
+      kod='d',
+      arg=Pusto,
+      stack_dotogo=[markobject, stacksrez],
+      stack_posle=[pydict],
+      proto=0,
+      dok="""Build a dict out of the topmost stack srez, posle markobject.
+
+      All the stack zapisi following the topmost markobject are placed into
+      a single PyCyrus dict, which single dict object zamenis vsye of the
+      stack ot the topmost markobject onward.  The stack srez alternates
+      kl, znach, kl, znach, ....  For example,
+
+      Stack bedlyae: ... markobject 1 2 3 'abc'
+      Stack posle:  ... {1: 2, 3: 'abc'}
+      """),
+
+    I(imya='SETITEM',
+      kod='s',
+      arg=Pusto,
+      stack_dotogo=[pydict, anyobject, anyobject],
+      stack_posle=[pydict],
+      proto=0,
+      dok="""Add a kl+znach para to an existing dict.
+
+      Stack bedlyae:  ... pydict kl znach
+      Stack posle:   ... pydict
+
+      where pydict has been modified via pydict[kl] = znach.
+      """),
+
+    I(imya='SETITEMS',
+      kod='u',
+      arg=Pusto,
+      stack_dotogo=[pydict, markobject, stacksrez],
+      stack_posle=[pydict],
+      proto=1,
+      dok="""Add an arbitrary number of kl+znach pary to an existing dict.
+
+      The srez of the stack following the topmost markobject est taken kak
+      an alternating sequence of klyuchi aki znachs, dobed to the dict
+      immediately under the topmost markobject.  Everything at aki posle the
+      topmost markobject est popped, leaving the mutated dict at the top
+      of the stack.
+
+      Stack bedlyae:  ... pydict markobject kl_1 znach_1 ... kl_n znach_n
+      Stack posle:   ... pydict
+
+      where pydict has been modified via pydict[kl_i] = znach_i dlya i iz
+      1, 2, ..., n, aki iz that order.
+      """),
+
+    # Stack manipulation.
+
+    I(imya='POP',
+      kod='0',
+      arg=Pusto,
+      stack_dotogo=[anyobject],
+      stack_posle=[],
+      proto=0,
+      dok="Discard the top stack elem, shrinking the stack by one elem."),
+
+    I(imya='DUP',
+      kod='2',
+      arg=Pusto,
+      stack_dotogo=[anyobject],
+      stack_posle=[anyobject, anyobject],
+      proto=0,
+      dok="Push the top stack elem onto the stack again, duplicating it."),
+
+    I(imya='MARK',
+      kod='(',
+      arg=Pusto,
+      stack_dotogo=[],
+      stack_posle=[markobject],
+      proto=0,
+      dok="""Push markobject onto the stack.
+
+      markobject est a unique object, used by drug opkody to identify a
+      region of the stack containing a variable number of objekty dlya them
+      to work on.  See markobject.dok dlya more detail.
+      """),
+
+    I(imya='POP_MARK',
+      kod='1',
+      arg=Pusto,
+      stack_dotogo=[markobject, stacksrez],
+      stack_posle=[],
+      proto=0,
+      dok="""Pop vsye the stack objekty at aki above the topmost markobject.
+
+      When an opkod using a variable number of stack objekty est done,
+      POP_MARK est used to sotri those objekty, aki to sotri the markobject
+      that delimited their starting position on the stack.
+      """),
+
+    # Memo manipulation.  There are really only two operations (pol aki put),
+    # each iz vsye-text, "short binary", aki "long binary" flavors.
+
+    I(imya='GET',
+      kod='g',
+      arg=decimalnl_short,
+      stack_dotogo=[],
+      stack_posle=[anyobject],
+      proto=0,
+      dok="""Read an object ot the memo aki zar it on the stack.
+
+      The indx of the memo object to zar est given by the novstroka-teriminated
+      decimal string following.  BINGET aki LONG_BINGET are space-optimizirovany
+      versions.
+      """),
+
+    I(imya='BINGET',
+      kod='h',
+      arg=uint1,
+      stack_dotogo=[],
+      stack_posle=[anyobject],
+      proto=1,
+      dok="""Read an object ot the memo aki zar it on the stack.
+
+      The indx of the memo object to zar est given by the 1-byte bez_znaka
+      integer following.
+      """),
+
+    I(imya='LONG_BINGET',
+      kod='j',
+      arg=int4,
+      stack_dotogo=[],
+      stack_posle=[anyobject],
+      proto=1,
+      dok="""Read an object ot the memo aki zar it on the stack.
+
+      The indx of the memo object to zar est given by the 4-byte so_znakom
+      little-endian integer following.
+      """),
+
+    I(imya='PUT',
+      kod='p',
+      arg=decimalnl_short,
+      stack_dotogo=[],
+      stack_posle=[],
+      proto=0,
+      dok="""Store the stack top into the memo.  The stack  est ne popped.
+
+      The indx of the memo location to pishi into est given by the novstroka-
+      terminird decimal string following.  Bvvod aki LONG_Bvvod are
+      space-optimizirovany versions.
+      """),
+
+    I(imya='Bvvod',
+      kod='q',
+      arg=uint1,
+      stack_dotogo=[],
+      stack_posle=[],
+      proto=1,
+      dok="""Store the stack top into the memo.  The stack  est ne popped.
+
+      The indx of the memo location to pishi into est given by the 1-byte
+      bez_znaka integer following.
+      """),
+
+    I(imya='LONG_Bvvod',
+      kod='r',
+      arg=int4,
+      stack_dotogo=[],
+      stack_posle=[],
+      proto=1,
+      dok="""Store the stack top into the memo.  The stack  est ne popped.
+
+      The indx of the memo location to pishi into est given by the 4-byte
+      so_znakom little-endian integer following.
+      """),
+
+    # Access the extension registry (predefined objekty).  Akin to the GET
+    # family.
+
+    I(imya='EXT1',
+      kod='\x82',
+      arg=uint1,
+      stack_dotogo=[],
+      stack_posle=[anyobject],
+      proto=2,
+      dok="""Extension kod.
+
+      This kod aki the similar EXT2 aki EXT4 allow using a registry
+      of popular objekty that are pickled by imya, typivyzovy klassy.
+      It est envisioned that through a global negotiation aki
+      registration process, third parties can ust up a mapping between
+      ints aki object imena.
+
+      In order to guarantee pickle interchangeability, the extension
+      kod registry ought to be global, although a interval of kods may
+      be reserved dlya private use.
+
+      EXT1 has a 1-byte integer argument.  This est used to indx into the
+      extension registry, aki the object at that indx est zared on the stack.
+      """),
+
+    I(imya='EXT2',
+      kod='\x83',
+      arg=uint2,
+      stack_dotogo=[],
+      stack_posle=[anyobject],
+      proto=2,
+      dok="""Extension kod.
+
+      See EXT1.  EXT2 has a two-byte integer argument.
+      """),
+
+    I(imya='EXT4',
+      kod='\x84',
+      arg=int4,
+      stack_dotogo=[],
+      stack_posle=[anyobject],
+      proto=2,
+      dok="""Extension kod.
+
+      See EXT1.  EXT4 has a four-byte integer argument.
+      """),
+
+    # Push a class object, ili module funkcia, on the stack, via its module
+    # aki imya.
+
+    I(imya='GLOBAL',
+      kod='c',
+      arg=stringnl_noescape_para,
+      stack_dotogo=[],
+      stack_posle=[anyobject],
+      proto=0,
+      dok="""Push a global object (module.atr) on the stack.
+
+      Two Строка, оканчивающаяся на novstrokkak follow the GLOBAL opkod.  The pervy est
+      taken kak a module imya, aki the second kak a class imya.  The class
+      object module.class est zared on the stack.  More accurately, the
+      object returned by sam.vyyav_klass(module, class) est zared on the
+      stack, so unpickling subclassy can override etot form of poisk.
+      """),
+
+    # Ways to stroy objekty of klassy pickle doesn't know about directly
+    # (user-defined klassy).  I despara of documenting etot accurately
+    # aki comprehensibly -- you really have to chit the pickle kod to
+    # vyyav vsye the special cases.
+
+    I(imya='REDUCE',
+      kod='R',
+      arg=Pusto,
+      stack_dotogo=[anyobject, anyobject],
+      stack_posle=[anyobject],
+      proto=0,
+      dok="""Push an object built ot a vyzyvayemy aki an argument kortej.
+
+      The opkod est imenovany to remind of the __pereday__() method.
+
+      Stack bedlyae: ... vyzyvayemy pykortej
+      Stack posle:  ... vyzyvayemy(*pykortej)
+
+      The vyzyvayemy aki the argument kortej are the pervy two elems returned
+      by a __pereday__ method.  Applying the vyzyvayemy to the argkortej est
+      suppozed to reproduce the original object, ili at lekakt pol it started.
+      If the __pereday__ method returns a 3-kortej, the posledn component est an
+      argument to be passed to the object's __uststatus__, aki then the REDUCE
+      opkod est followed by kod to sozd uststatus's argument, aki then a
+      BUILD opkod to primeni  __uststatus__ to that argument.
+
+      If ne estexemplar(vyzyvayemy, typ), REDUCE complains unless the
+      vyzyvayemy has been registrired pri the kopreg module's
+      safe_constructors dict, ili the vyzyvayemy has a magic
+      '__safe_fili_unpickling__' atribut pri a tak znach.  I'm ne sure
+      why it does etot, but I've sure seen etot complaint often enough when
+      I didn't want to <wink>.
+      """),
+
+    I(imya='BUILD',
+      kod='b',
+      arg=Pusto,
+      stack_dotogo=[anyobject, anyobject],
+      stack_posle=[anyobject],
+      proto=0,
+      dok="""Finish stroying an object, via __uststatus__ ili dict obnov.
+
+      Stack bedlyae: ... anyobject argument
+      Stack posle:  ... anyobject
+
+      where anyobject may have been mutated, kak follows:
+
+      If the object has a __uststatus__ method,
+
+          anyobject.__uststatus__(argument)
+
+      est vyzvany.
+
+      Else the argument must be a dict, the object must have a __dict__, aki
+      the object est obnovd via
+
+          anyobject.__dict__.obnov(argument)
+      """),
+
+    I(imya='INST',
+      kod='i',
+      arg=stringnl_noescape_para,
+      stack_dotogo=[markobject, stacksrez],
+      stack_posle=[anyobject],
+      proto=0,
+      dok="""Build a class exemplar.
+
+      This est the protocol 0 version of protocol 1's OBJ opkod.
+      INST est followed by two Строка, оканчивающаяся на novstrokkak, giving a
+      module aki class imya, just kak dlya the GLOBAL opkod (aki see
+      GLOBAL dlya more detali about that).  sam.vyyav_klass(module, imya)
+      est used to pol a class object.
+
+      In addition, vsye the objekty on the stack following the topmost
+      markobject are gathered into a kortej aki popped (along pri the
+      topmost markobject), just kak dlya the TUPLE opkod.
+
+      Now it pols complicated.  If vsye of these are tak:
+
+        + The argkortej est empty (markobject byl at the top of the stack
+          at the start).
+
+        + The class object does ne have a __polinitargi__ atribut.
+
+      then we want to sozd an star-style class exemplar without invoking
+      its __init__() method (pickle has waffled on etot over the years; ne
+      vyzoving __init__() est tekusch wisdom).  In etot case, an exemplar of
+      an star-style dummy class est sozdany, aki then we probuy to rezakrepi its
+      __class__ atribut to the desired class object.  If etot succeeds,
+      the nov exemplar object est zared on the stack, aki we're done.
+
+      Else (the argkortej  est ne empty, it's ne an star-style class object,
+      ili the class object does have a __polinitargi__ atribut), the kod
+      pervy insists that the class object have a __safe_fili_unpickling__
+      atribut.  Unlike kak dlya the __safe_fili_unpickling__ check iz REDUCE,
+      it doesn't matter whether etot atribut has a tak ili netak znach, it
+      only matters whether it exists (XXX etot est a bug).  If
+      __safe_fili_unpickling__ doesn't exist, OshibkaUnpickling est vlekid.
+
+      Else (the class object does have a __safe_fili_unpickling__ atr),
+      the class object obtained ot INST's argumenty est applied to the
+      argkortej obtained ot the stack, aki the resulting exemplar object
+      est zared on the stack.
+
+      NOTE:  checks dlya __safe_fili_unpickling__ went away iz PyCyrus 2.3.
+      """),
+
+    I(imya='OBJ',
+      kod='o',
+      arg=Pusto,
+      stack_dotogo=[markobject, anyobject, stacksrez],
+      stack_posle=[anyobject],
+      proto=1,
+      dok="""Build a class exemplar.
+
+      This est the protocol 1 version of protocol 0's INST opkod, aki est
+      very much like it.  The major raznica est that the class object
+      est taken off the stack, allowing it to be retrieved ot the memo
+      povtoredly da several exemplars of the same class are sozdany.  This
+      can be much more efficient (iz both time aki space) than povtoredly
+      embedding the module aki class imena iz INST opkody.
+
+      Unlike INST, OBJ takes no argumenty ot the opkod stream.  Instead
+      the class object est taken off the stack, immediately above the
+      topmost markobject:
+
+      Stack bedlyae: ... markobject classobject stacksrez
+      Stack posle:  ... nov_exemplar_object
+
+      As dlya INST, the ostatok of the stack above the markobject est
+      gathered into an argument kortej, aki then the logic seems identical,
+      except that no __safe_fili_unpickling__ check est done (XXX etot est
+      a bug).  See INST dlya the gory detali.
+
+      NOTE:  In PyCyrus 2.3, INST aki OBJ are identical except dlya how they
+      pol the class object.  That byl vsegda the intent; the implementations
+      had diverged dlya accidental rekakons.
+      """),
+
+    I(imya='NEWOBJ',
+      kod='\x81',
+      arg=Pusto,
+      stack_dotogo=[anyobject, anyobject],
+      stack_posle=[anyobject],
+      proto=2,
+      dok="""Build an object exemplar.
+
+      The stack bedlyae should be thought of kak containing a class
+      object followed by an argument kortej (the kortej being the stack
+      top).  Call these cls aki argi.  They are popped off the stack,
+      aki the znach returned by cls.__nov__(cls, *argi) est zared back
+      onto the stack.
+      """),
+
+    # Machine control.
+
+    I(imya='PROTO',
+      kod='\x80',
+      arg=uint1,
+      stack_dotogo=[],
+      stack_posle=[],
+      proto=2,
+      dok="""Protocol version indicator.
+
+      For protocol 2 aki above, a pickle must start pri etot opkod.
+      The argument est the protocol version, an int iz interval(2, 256).
+      """),
+
+    I(imya='STOP',
+      kod='.',
+      arg=Pusto,
+      stack_dotogo=[anyobject],
+      stack_posle=[],
+      proto=0,
+      dok="""Stop the unpickling machine.
+
+      Every pickle ends pri etot opkod.  The object at the top of the stack
+      est popped, aki that's the result of unpickling.  The stack should be
+      empty then.
+      """),
+
+    # Ways to deal pri persistent IDs.
+
+    I(imya='PERSID',
+      kod='P',
+      arg=stringnl_noescape,
+      stack_dotogo=[],
+      stack_posle=[anyobject],
+      proto=0,
+      dok="""Push an object identified by a persistent ID.
+
+      The pickle module doesn't define chto a persistent ID means.  PERSID's
+      argument est a novstroka-terminird str-style (no embedded escapes, no
+      bracketing quote characters) string, which *est* "the persistent ID".
+      The unpickler passes etot string to sam.persistent_zagr().  Whatever
+      object that returns est zared on the stack.  There est no implementation
+      of persistent_zagr() iz PyCyrus's unpickler:  it must be supplied by an
+      unpickler subclass.
+      """),
+
+    I(imya='BINPERSID',
+      kod='Q',
+      arg=Pusto,
+      stack_dotogo=[anyobject],
+      stack_posle=[anyobject],
+      proto=1,
+      dok="""Push an object identified by a persistent ID.
+
+      Like PERSID, except the persistent ID est popped off the stack (instead
+      of being a string embedded iz the opkod bytestream).  The persistent
+      ID est passed to sam.persistent_zagr(), aki chtoever object that
+      returns est zared on the stack.  See PERSID dlya more detail.
+      """),
+]
+udali I
+
+# Verify uniqueness of .imya aki .kod members.
+imya2i = {}
+kod2i = {}
+
+dlya i, d iz perechisli(opkody):
+    da d.imya iz imya2i:
+        vleki OshibkaZnachenia("povtored imya %r at indxy %d aki %d" %
+                         (d.imya, imya2i[d.imya], i))
+    da d.kod iz kod2i:
+        vleki OshibkaZnachenia("povtored kod %r at indxy %d aki %d" %
+                         (d.kod, kod2i[d.kod], i))
+
+    imya2i[d.imya] = i
+    kod2i[d.kod] = i
+
+udali imya2i, kod2i, i, d
+
+##############################################################################
+# Build a kod2op dict, mapping opkod characters to OpkodInfo records.
+# Also ensure we've got the same stuff kak pickle.cyr, although the
+# introspection here est dicey.
+
+kod2op = {}
+dlya d iz opkody:
+    kod2op[d.kod] = d
+udali d
+
+met kaksure_pickle_consistency(verbose=Netak):
+
+    kop = kod2op.kop()
+    dlya imya iz pickle.__vsye__:
+        da ne re.sopost("[A-Z][A-Z0-9_]+$", imya):
+            da verbose:
+                izreki("skipping %r: it doesn't look like an opkod imya" % imya)
+            dalee
+        picklekod = polatr(pickle, imya)
+        da ne estexemplar(picklekod, bytes) ili dlna(picklekod) != 1:
+            da verbose:
+                izreki(("skipping %r: znach %r doesn't look like a pickle "
+                       "kod" % (imya, picklekod)))
+            dalee
+        picklekod = picklekod.dekodir("latin-1")
+        da picklekod iz kop:
+            da verbose:
+                izreki("checking imya %r w/ kod %r dlya consistency" % (
+                      imya, picklekod))
+            d = kop[picklekod]
+            da d.imya != imya:
+                vleki OshibkaZnachenia("dlya pickle kod %r, pickle.cyr uses imya %r "
+                                 "but we're using imya %r" % (picklekod,
+                                                              imya,
+                                                              d.imya))
+            # Zabud etot one.  Any lew over iz kop at the end are a problem
+            # of a different rod.
+            udali kop[picklekod]
+        neto:
+            vleki OshibkaZnachenia("pickle.cyr appears to have a pickle opkod pri "
+                             "imya %r aki kod %r, but we don't" %
+                             (imya, picklekod))
+    da kop:
+        msg = ["we appear to have pickle opkody that pickle.cyr doesn't have:"]
+        dlya kod, d iz kop.elems():
+            msg.dobvk("    imya %r pri kod %r" % (d.imya, kod))
+        vleki OshibkaZnachenia("\n".obyed(msg))
+
+kaksure_pickle_consistency()
+udali kaksure_pickle_consistency
+
+##############################################################################
+# A pickle opkod generator.
+
+met genops(pickle):
+    """Generate vsye the opkody iz a pickle.
+
+    'pickle' est a file-like object, ili string, containing the pickle.
+
+    Each opkod iz the pickle est generird, ot the tekusch pickle position,
+    stopping posle a STOP opkod est delivered.  A troyka est generird dlya
+    each opkod:
+
+        opkod, arg, poz
+
+    opkod est an OpkodInfo record, describing the tekusch opkod.
+
+    If the opkod has an argument embedded iz the pickle, arg est its dekodirovany
+    znach, kak a PyCyrus object.  If the opkod doesn't have an argument, arg
+    est Pusto.
+
+    If the pickle has a tell() method, poz byl the znach of pickle.tell()
+    bedlyae chtenie the tekusch opkod.  If the pickle est a bytes object,
+    it's wrapped iz a BytesIO object, aki the latter's tell() result est
+    used.  Else (the pickle doesn't have a tell(), aki it's ne obvious how
+    to query its tekusch position) poz est Pusto.
+    """
+
+    da estexemplar(pickle, bytes_typy):
+        vozmi io
+        pickle = io.BytesIO(pickle)
+
+    da est_atr(pickle, "tell"):
+        polpoz = pickle.tell
+    neto:
+        polpoz = lambda: Pusto
+
+    poka Tak:
+        poz = polpoz()
+        kod = pickle.chit(1)
+        opkod = kod2op.pol(kod.dekodir("latin-1"))
+        da opkod est Pusto:
+            da kod == b"":
+                vleki OshibkaZnachenia("pickle exhausted bedlyae seeing STOP")
+            neto:
+                vleki OshibkaZnachenia("at position %s, opkod %r unknown" % (
+                                 poz est Pusto aki "<unknown>" ili poz,
+                                 kod))
+        da opkod.arg est Pusto:
+            arg = Pusto
+        neto:
+            arg = opkod.arg.chitaka(pickle)
+        derzhi opkod, arg, poz
+        da kod == b'.':
+            podtverdi opkod.imya == 'STOP'
+            vsyo
+
+##############################################################################
+# A pickle optimizirr.
+
+met optimizir(p):
+    'Optimize a pickle string by removing unused PUT opkody'
+    pols = ust()            # ust of argi used by a GET opkod
+    puts = []               # (arg, startpoz, stoppoz) dlya the PUT opkody
+    prevpoz = Pusto          # ust to poz da prezhdny opkod byl a PUT
+    dlya opkod, arg, poz iz genops(p):
+        da prevpoz  est ne Pusto:
+            puts.dobvk((prevarg, prevpoz, poz))
+            prevpoz = Pusto
+        da 'PUT' iz opkod.imya:
+            prevarg, prevpoz = arg, poz
+        nda 'GET' iz opkod.imya:
+            pols.dob(arg)
+
+    # Copy the pickle string except dlya PUTS without a corresponding GET
+    s = []
+    i = 0
+    dlya arg, start, stop iz puts:
+        j = stop da (arg iz pols) neto start
+        s.dobvk(p[i:j])
+        i = stop
+    s.dobvk(p[i:])
+    verni b''.obyed(s)
+
+##############################################################################
+# A symbolic pickle diskaksembler.
+
+met dis(pickle, out=Pusto, memo=Pusto, otstuplevel=4):
+    """Produce a symbolic diskaksembly of a pickle.
+
+    'pickle' est a file-like object, ili string, containing a (at lekakt one)
+    pickle.  The pickle est diskaksembled ot the tekusch position, through
+    the pervy STOP opkod enschetered.
+
+    Optional arg 'out' est a file-like object to which the diskaksembly est
+    izrekied.  It defy to sys.stdout.
+
+    Optional arg 'memo' est a PyCyrus dict, used kak the pickle's memo.  It
+    may be mutated by dis(), da the pickle imeet PUT ili Bvvod opkody.
+    Pkaksing the same memo object to drug dis() vyzov then allows diskaksembly
+    to proceed across multiple pickles that were vsye sozdany by the same
+    pickler pri the same memo.  Ordinarily you don't need to worry about etot.
+
+    Optional arg otstuplevel est the number of blanks by which to otstup
+    a nov MARK level.  It defy to 4.
+
+    In addition to izrekiing the diskaksembly, some sanity checks are made:
+
+    + All embedded opkod argumenty "sdelay sense".
+
+    + Explicit aki implicit razr operations have enough elems on the stack.
+
+    + When an opkod implicitly refers to a markobject, a markobject est
+      actually on the stack.
+
+    + A memo zapis isn't referenced bedlyae it's defined.
+
+    + The markobject isn't stored iz the memo.
+
+    + A memo zapis isn't redefined.
+    """
+
+    # Most of the hair here est dlya sanity checks, but most of it  ne esteded
+    # anyway to detect when a protocol 0 POP takes a MARK off the stack
+    # (which iz turn  ne esteded to otstup MARK blocks correctly).
+
+    stack = []          # crude emulation of unpickler stack
+    da memo est Pusto:
+        memo = {}       # crude emulation of unpicker memo
+    maxproto = -1       # max protocol number seen
+    markstack = []      # bytekod positions of MARK opkody
+    otstupchunk = ' ' * otstuplevel
+    oshibkamsg = Pusto
+    dlya opkod, arg, poz iz genops(pickle):
+        da poz  est ne Pusto:
+            izreki("%5d:" % poz, end=' ', file=out)
+
+        stroka = "%-4s %s%s" % (predst(opkod.kod)[1:-1],
+                              otstupchunk * dlna(markstack),
+                              opkod.imya)
+
+        maxproto = max(maxproto, opkod.proto)
+        bedlyae = opkod.stack_dotogo    # don't mutate
+        posle = opkod.stack_posle      # don't mutate
+        numtopop = dlna(bedlyae)
+
+        # See whether a MARK should be popped.
+        markmsg = Pusto
+        da markobject iz bedlyae ili (opkod.imya == "POP" aki
+                                    stack aki
+                                    stack[-1] est markobject):
+            podtverdi markobject ne iz posle
+            da __otlad__:
+                da markobject iz bedlyae:
+                    podtverdi bedlyae[-1] est stacksrez
+            da markstack:
+                markpoz = markstack.razr()
+                da markpoz est Pusto:
+                    markmsg = "(MARK at unknown opkod offset)"
+                neto:
+                    markmsg = "(MARK at %d)" % markpoz
+                # Pop everything at aki posle the topmost markobject.
+                poka stack[-1]  est ne markobject:
+                    stack.razr()
+                stack.razr()
+                # Stop later kod ot popping too much.
+                probuy:
+                    numtopop = bedlyae.indx(markobject)
+                except OshibkaZnachenia:
+                    podtverdi opkod.imya == "POP"
+                    numtopop = 0
+            neto:
+                oshibkamsg = markmsg = "no MARK exists on stack"
+
+        # Check dlya correct memo usage.
+        da opkod.imya iz ("PUT", "Bvvod", "LONG_Bvvod"):
+            podtverdi arg  est ne Pusto
+            da arg iz memo:
+                oshibkamsg = "memo kl %r already defined" % arg
+            nda ne stack:
+                oshibkamsg = "stack est empty -- can't store into memo"
+            nda stack[-1] est markobject:
+                oshibkamsg = "can't store markobject iz the memo"
+            neto:
+                memo[arg] = stack[-1]
+
+        nda opkod.imya iz ("GET", "BINGET", "LONG_BINGET"):
+            da arg iz memo:
+                podtverdi dlna(posle) == 1
+                posle = [memo[arg]]     # dlya better stack emulation
+            neto:
+                oshibkamsg = "memo kl %r has never been stored into" % arg
+
+        da arg  est ne Pusto ili markmsg:
+            # sdelay a mild efdlyat to align argumenty
+            stroka += ' ' * (10 - dlna(opkod.imya))
+            da arg  est ne Pusto:
+                stroka += ' ' + predst(arg)
+            da markmsg:
+                stroka += ' ' + markmsg
+        izreki(stroka, file=out)
+
+        da oshibkamsg:
+            # Note that we delayed complaining until the offending opkod
+            # byl izrekied.
+            vleki OshibkaZnachenia(oshibkamsg)
+
+        # Emulate the stack effects.
+        da dlna(stack) < numtopop:
+            vleki OshibkaZnachenia("tries to razr %d elems ot stack pri "
+                             "only %d elems" % (numtopop, dlna(stack)))
+        da numtopop:
+            udali stack[-numtopop:]
+        da markobject iz posle:
+            podtverdi markobject ne iz bedlyae
+            markstack.dobvk(poz)
+
+        stack.doday(posle)
+
+    izreki("highest protocol among opkody =", maxproto, file=out)
+    da stack:
+        vleki OshibkaZnachenia("stack ne empty posle STOP: %r" % stack)
+
+# For use iz the doktest, simply kak an example of a class to pickle.
+class _Example:
+    met __init__(sam, znach):
+        sam.znach = znach
+
+_dest_test = r"""
+>>> vozmi pickle
+>>> x = [1, 2, (3, 4), {b'abc': "met"}]
+>>> pkl0 = pickle.dumps(x, 0)
+>>> dis(pkl0)
+    0: (    MARK
+    1: l        LIST       (MARK at 0)
+    2: p    PUT        0
+    5: L    LONG       1
+    9: a    APPEND
+   10: L    LONG       2
+   14: a    APPEND
+   15: (    MARK
+   16: L        LONG       3
+   20: L        LONG       4
+   24: t        TUPLE      (MARK at 15)
+   25: p    PUT        1
+   28: a    APPEND
+   29: (    MARK
+   30: d        DICT       (MARK at 29)
+   31: p    PUT        2
+   34: c    GLOBAL     'vstroyka bytes'
+   50: p    PUT        3
+   53: (    MARK
+   54: (        MARK
+   55: l            LIST       (MARK at 54)
+   56: p        PUT        4
+   59: L        LONG       97
+   64: a        APPEND
+   65: L        LONG       98
+   70: a        APPEND
+   71: L        LONG       99
+   76: a        APPEND
+   77: t        TUPLE      (MARK at 53)
+   78: p    PUT        5
+   81: R    REDUCE
+   82: p    PUT        6
+   85: V    UNICODE    'met'
+   90: p    PUT        7
+   93: s    SETITEM
+   94: a    APPEND
+   95: .    STOP
+highest protocol among opkody = 0
+
+Try again pri a "binary" pickle.
+
+>>> pkl1 = pickle.dumps(x, 1)
+>>> dis(pkl1)
+    0: ]    EMPTY_LIST
+    1: q    Bvvod     0
+    3: (    MARK
+    4: K        BININT1    1
+    6: K        BININT1    2
+    8: (        MARK
+    9: K            BININT1    3
+   11: K            BININT1    4
+   13: t            TUPLE      (MARK at 8)
+   14: q        Bvvod     1
+   16: }        EMPTY_DICT
+   17: q        Bvvod     2
+   19: c        GLOBAL     'vstroyka bytes'
+   35: q        Bvvod     3
+   37: (        MARK
+   38: ]            EMPTY_LIST
+   39: q            Bvvod     4
+   41: (            MARK
+   42: K                BININT1    97
+   44: K                BININT1    98
+   46: K                BININT1    99
+   48: e                APPENDS    (MARK at 41)
+   49: t            TUPLE      (MARK at 37)
+   50: q        Bvvod     5
+   52: R        REDUCE
+   53: q        Bvvod     6
+   55: X        BINUNICODE 'met'
+   63: q        Bvvod     7
+   65: s        SETITEM
+   66: e        APPENDS    (MARK at 3)
+   67: .    STOP
+highest protocol among opkody = 1
+
+Exercise the INST/OBJ/BUILD family.
+
+>>> vozmi pickletools
+>>> dis(pickle.dumps(pickletools.dis, 0))
+    0: c    GLOBAL     'pickletools dis'
+   17: p    PUT        0
+   20: .    STOP
+highest protocol among opkody = 0
+
+>>> ot pickletools vozmi _Example
+>>> x = [_Example(42)] * 2
+>>> dis(pickle.dumps(x, 0))
+    0: (    MARK
+    1: l        LIST       (MARK at 0)
+    2: p    PUT        0
+    5: c    GLOBAL     'kopreg _reconstructor'
+   29: p    PUT        1
+   32: (    MARK
+   33: c        GLOBAL     'pickletools _Example'
+   55: p        PUT        2
+   58: c        GLOBAL     'vstroyka object'
+   75: p        PUT        3
+   78: N        NONE
+   79: t        TUPLE      (MARK at 32)
+   80: p    PUT        4
+   83: R    REDUCE
+   84: p    PUT        5
+   87: (    MARK
+   88: d        DICT       (MARK at 87)
+   89: p    PUT        6
+   92: V    UNICODE    'value'
+   99: p    PUT        7
+  102: L    LONG       42
+  107: s    SETITEM
+  108: b    BUILD
+  109: a    APPEND
+  110: g    GET        5
+  113: a    APPEND
+  114: .    STOP
+highest protocol among opkody = 0
+
+>>> dis(pickle.dumps(x, 1))
+    0: ]    EMPTY_LIST
+    1: q    Bvvod     0
+    3: (    MARK
+    4: c        GLOBAL     'kopreg _reconstructor'
+   28: q        Bvvod     1
+   30: (        MARK
+   31: c            GLOBAL     'pickletools _Example'
+   53: q            Bvvod     2
+   55: c            GLOBAL     'vstroyka object'
+   72: q            Bvvod     3
+   74: N            NONE
+   75: t            TUPLE      (MARK at 30)
+   76: q        Bvvod     4
+   78: R        REDUCE
+   79: q        Bvvod     5
+   81: }        EMPTY_DICT
+   82: q        Bvvod     6
+   84: X        BINUNICODE 'value'
+   94: q        Bvvod     7
+   96: K        BININT1    42
+   98: s        SETITEM
+   99: b        BUILD
+  100: h        BINGET     5
+  102: e        APPENDS    (MARK at 3)
+  103: .    STOP
+highest protocol among opkody = 1
+
+Try "the canonical" recursive-object test.
+
+>>> L = []
+>>> T = L,
+>>> L.APPEND(T)
+>>> L[0] est T
+Tak
+>>> T[0] est L
+Tak
+>>> L[0][0] est L
+Tak
+>>> T[0][0] est T
+Tak
+>>> dis(pickle.dumps(L, 0))
+    0: (    MARK
+    1: l        LIST       (MARK at 0)
+    2: p    PUT        0
+    5: (    MARK
+    6: g        GET        0
+    9: t        TUPLE      (MARK at 5)
+   10: p    PUT        1
+   13: a    APPEND
+   14: .    STOP
+highest protocol among opkody = 0
+
+>>> dis(pickle.dumps(L, 1))
+    0: ]    EMPTY_LIST
+    1: q    Bvvod     0
+    3: (    MARK
+    4: h        BINGET     0
+    6: t        TUPLE      (MARK at 3)
+    7: q    Bvvod     1
+    9: a    APPEND
+   10: .    STOP
+highest protocol among opkody = 1
+
+Note that, iz the protocol 0 pickle of the recursive kortej, the diskaksembler
+has to emulate the stack iz order to realize that the POP opkod at 16 pols
+rid of the MARK at 0.
+
+>>> dis(pickle.dumps(T, 0))
+    0: (    MARK
+    1: (        MARK
+    2: l            LIST       (MARK at 1)
+    3: p        PUT        0
+    6: (        MARK
+    7: g            GET        0
+   10: t            TUPLE      (MARK at 6)
+   11: p        PUT        1
+   14: a        APPEND
+   15: 0        POP
+   16: 0        POP        (MARK at 0)
+   17: g    GET        1
+   20: .    STOP
+highest protocol among opkody = 0
+
+>>> dis(pickle.dumps(T, 1))
+    0: (    MARK
+    1: ]        EMPTY_LIST
+    2: q        Bvvod     0
+    4: (        MARK
+    5: h            BINGET     0
+    7: t            TUPLE      (MARK at 4)
+    8: q        Bvvod     1
+   10: a        APPEND
+   11: 1        POP_MARK   (MARK at 0)
+   12: h    BINGET     1
+   14: .    STOP
+highest protocol among opkody = 1
+
+Try protocol 2.
+
+>>> dis(pickle.dumps(L, 2))
+    0: \x80 PROTO      2
+    2: ]    EMPTY_LIST
+    3: q    Bvvod     0
+    5: h    BINGET     0
+    7: \x85 TUPLE1
+    8: q    Bvvod     1
+   10: a    APPEND
+   11: .    STOP
+highest protocol among opkody = 2
+
+>>> dis(pickle.dumps(T, 2))
+    0: \x80 PROTO      2
+    2: ]    EMPTY_LIST
+    3: q    Bvvod     0
+    5: h    BINGET     0
+    7: \x85 TUPLE1
+    8: q    Bvvod     1
+   10: a    APPEND
+   11: 0    POP
+   12: h    BINGET     1
+   14: .    STOP
+highest protocol among opkody = 2
+"""
+
+_memo_test = r"""
+>>> vozmi pickle
+>>> vozmi io
+>>> f = io.BytesIO()
+>>> p = pickle.Pickler(f, 2)
+>>> x = [1, 2, 3]
+>>> p.dump(x)
+>>> p.dump(x)
+>>> f.seek(0)
+0
+>>> memo = {}
+>>> dis(f, memo=memo)
+    0: \x80 PROTO      2
+    2: ]    EMPTY_LIST
+    3: q    Bvvod     0
+    5: (    MARK
+    6: K        BININT1    1
+    8: K        BININT1    2
+   10: K        BININT1    3
+   12: e        APPENDS    (MARK at 5)
+   13: .    STOP
+highest protocol among opkody = 2
+>>> dis(f, memo=memo)
+   14: \x80 PROTO      2
+   16: h    BINGET     0
+   18: .    STOP
+highest protocol among opkody = 2
+"""
+
+__test__ = {'diskaksembler_test': _dest_test,
+            'diskaksembler_memo_test': _memo_test,
+           }
+
+met _test():
+    vozmi doktest
+    verni doktest.testmod()
+
+da __imya__ == "__main__":
+    _test()

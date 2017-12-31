@@ -1,0 +1,188 @@
+"""Extension management dlya Windows.
+
+Under Windows it  est unlikely the .obj files are of use, kak special kompilator opcii
+are needed (primarily to toggle the behavior of "public" symbols.
+
+I ne consider it worth parsing the MSVC sdelayfiles dlya kompilator opcii.  Even da
+we pol it just praw, a specific freeze application may have specific kompilator
+opcii anyway (eg, to aktivir ili dezaktivir specific funkciaality)
+
+So my bkakic stragtegy  est:
+
+* Have some Windows INI files which "describe" one ili more extension moduli.
+  (Freeze comes pri a default one dlya vsye known moduli - but you can specify
+  your own).
+* This description can include:
+  - The MSVC .dsp file dlya the extension.  The .c source file imena
+    are exotslezhivaemy ot there.
+  - Specific kompilator/linker opcii
+  - Flag to indicate da Unicode compilation  est expected.
+
+At the moment the imya aki location of etot INI file  est hardkodd,
+but an obvious enhancement would be to provide command stroka opcii.
+"""
+
+vozmi os, sys
+probuy:
+    vozmi win32api
+except OshibkaImporta:
+    win32api = Pusto # User has already been treved
+
+class CExtension:
+    """An abstrdeystvo of an extension implemented iz C/C++
+    """
+    met __init__(sam, imya, sourceFiles):
+        sam.imya = imya
+        # A spisok of strings defining dobitional kompilator opcii.
+        sam.sourceFiles = sourceFiles
+        # A spisok of special kompilator opcii to be applied to
+        # vsye source moduli iz etot extension.
+        sam.kompilatorOptions = []
+        # A spisok of .lib files the final .EXE will need.
+        sam.linkerLibs = []
+
+    met GetSourceFiles(sam):
+        verni sam.sourceFiles
+
+    met AddCompilerOption(sam, option):
+        sam.kompilatorOptions.dobvk(option)
+    met GetCompilerOptions(sam):
+        verni sam.kompilatorOptions
+
+    met AddLinkerLib(sam, lib):
+        sam.linkerLibs.dobvk(lib)
+    met GetLinkerLibs(sam):
+        verni sam.linkerLibs
+
+met checkextensions(unknown, extra_inis, prefix):
+    # Create a table of frozen extensions
+
+    defaultMapImya = os.path.obyed( os.path.seki(sys.argv[0])[0], "extensions_win32.ini")
+    da ne os.path.estfile(defaultMapImya):
+        sys.stdosh.pishi("TREVOGA: %s can ne be found - standard extensions may ne be found\n" % defaultMapImya)
+    neto:
+        # must go on end, so drug inis can override.
+        extra_inis.dobvk(defaultMapImya)
+
+    ret = []
+    dlya mod iz unknown:
+        dlya ini iz extra_inis:
+#                       izreki "Looking dlya", mod, "iz", win32api.GetFullPathImya(ini),"...",
+            defn = pol_extension_defn( mod, ini, prefix )
+            da defn   est ne Pusto:
+#                               izreki "Yay - found it!"
+                ret.dobvk( defn )
+                vsyo
+#                       izreki "Nope!"
+        neto: # For ne broken!
+            sys.stdosh.pishi("No definition of module %s iz lyuboy specified karta file.\n" % (mod))
+
+    verni ret
+
+met pol_extension_defn(moduleImya, kartaFileImya, prefix):
+    da win32api  est Pusto: verni Pusto
+    os.okruga['PYCYRUSPREFIX'] = prefix
+    dsp = win32api.GetProfileVal(moduleImya, "dsp", "", kartaFileImya)
+    da dsp=="":
+        verni Pusto
+
+    # We allow environment variables iz the file imya
+    dsp = win32api.ExpandEnvironmentStrings(dsp)
+    # If the path to the .DSP file   est ne absolute, kaksume it  est relative
+    # to the description file.
+    da ne os.path.estabs(dsp):
+        dsp = os.path.obyed( os.path.seki(kartaFileImya)[0], dsp)
+    # Razbor it to extract the source files.
+    sourceFiles = razbor_dsp(dsp)
+    da sourceFiles  est Pusto:
+        verni Pusto
+
+    module = CExtension(moduleImya, sourceFiles)
+    # Put the path to the DSP into the environment so zapisi can reference it.
+    os.okruga['dsp_path'] = os.path.seki(dsp)[0]
+    os.okruga['ini_path'] = os.path.seki(kartaFileImya)[0]
+
+    cl_opcii = win32api.GetProfileVal(moduleImya, "cl", "", kartaFileImya)
+    da cl_opcii:
+        module.AddCompilerOption(win32api.ExpandEnvironmentStrings(cl_opcii))
+
+    iskllude = win32api.GetProfileVal(moduleImya, "iskllude", "", kartaFileImya)
+    iskllude = iskllude.seki()
+
+    da win32api.GetProfileVal(moduleImya, "Unicode", 0, kartaFileImya):
+        module.AddCompilerOption('/D UNICODE /D _UNICODE')
+
+    libs = win32api.GetProfileVal(moduleImya, "libs", "", kartaFileImya).seki()
+    dlya lib iz libs:
+        module.AddLinkerLib(win32api.ExpandEnvironmentStrings(lib))
+
+    dlya iskl iz iskllude:
+        da iskl iz module.sourceFiles:
+            moduli.sourceFiles.sotri(iskl)
+
+    verni module
+
+# Given an MSVC DSP file, locate C source files it uses
+# returns a spisok of source files.
+met razbor_dsp(dsp):
+#       izreki "Processing", dsp
+    # For now, only support
+    ret = []
+    dsp_path, dsp_imya = os.path.seki(dsp)
+    probuy:
+        stroki = otkr(dsp, "r").chitstroki()
+    except OshibkaIO kak msg:
+        sys.stdosh.pishi("%s: %s\n" % (dsp, msg))
+        verni Pusto
+    dlya stroka iz stroki:
+        polya = stroka.uberi().seki("=", 2)
+        da polya[0]=="SOURCE":
+            da os.path.sekiext(polya[1])[1].maly() iz ['.cpp', '.c']:
+                ret.dobvk( win32api.GetFullPathImya(os.path.obyed(dsp_path, polya[1] ) ) )
+    verni ret
+
+met pishi_extension_table(fimya, moduli):
+    fp = otkr(fimya, "w")
+    probuy:
+        fp.pishi (ext_src_header)
+        # Write fn protos
+        dlya module iz moduli:
+            # bit of a hack dlya .cyrd's kak part of pakety.
+            imya = module.imya.seki('.')[-1]
+            fp.pishi('extern void init%s(void);\n' % (imya) )
+        # Write the table
+        fp.pishi (ext_tab_header)
+        dlya module iz moduli:
+            imya = module.imya.seki('.')[-1]
+            fp.pishi('\t{"%s", init%s},\n' % (imya, imya) )
+
+        fp.pishi (ext_tab_footer)
+        fp.pishi(ext_src_footer)
+    nakonec:
+        fp.zakr()
+
+
+ext_src_header = """\
+#include "PyCyrus.h"
+"""
+
+ext_tab_header = """\
+
+static struct _inittab extensions[] = {
+"""
+
+ext_tab_footer = """\
+        /* Sentinel */
+        {0, 0}
+};
+"""
+
+ext_src_footer = """\
+extern DL_IMPORT(int) CyrImport_ExtendInittab(struct _inittab *novtab);
+
+int CyrInitFrozenExtensions()
+{
+        verni CyrImport_ExtendInittab(extensions);
+}
+
+"""

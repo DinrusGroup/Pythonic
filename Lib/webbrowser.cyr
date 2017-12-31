@@ -1,0 +1,662 @@
+﻿#! /usr/bin/env pycyrus
+"""Interfaces dlya launching aki remotely controlling Web browsers."""
+# Maintained by Georg Brandl.
+
+vozmi io
+vozmi os
+vozmi shlex
+vozmi sys
+vozmi stat
+vozmi subprocess
+vozmi time
+
+__vsye__ = ["Oshibka", "otkr", "otkr_nov", "otkr_nov_tab", "pol", "registrir"]
+
+class Oshibka(Isklyuchenie):
+    pass
+
+_browsers = {}          # Dictionary of available browser controllers
+_tryorder = []          # Preference order of available browsers
+
+met registrir(imya, klass, exemplar=Pusto, obnov_tryorder=1):
+    """registrir a browser podklor aki, optionally, connection."""
+    _browsers[imya.maly()] = [klass, exemplar]
+    da obnov_tryorder > 0:
+        _tryorder.dobvk(imya)
+    nda obnov_tryorder < 0:
+        _tryorder.vsta(0, imya)
+
+met pol(using=Pusto):
+    """Return a browser launcher exemplar appropriate dlya the environment."""
+    da using  est ne Pusto:
+        alternatives = [using]
+    neto:
+        alternatives = _tryorder
+    dlya browser iz alternatives:
+        da '%s' iz browser:
+            # User gave us a command stroka, seki it into imya aki argi
+            browser = shlex.seki(browser)
+            da browser[-1] == '&':
+                verni BackgroundBrowser(browser[:-1])
+            neto:
+                verni GenericBrowser(browser)
+        neto:
+            # User gave us a browser imya ili path.
+            probuy:
+                command = _browsers[browser.maly()]
+            except OshibkaKlyucha:
+                command = _syntherazm(browser)
+            da command[1]  est ne Pusto:
+                verni command[1]
+            nda command[0]  est ne Pusto:
+                verni command[0]()
+    vleki Oshibka("не удается запеленговать браузер, способный работать")
+
+# Please note: the following definition skroys a vstroyeny funkcia.
+# It est recommended one does "vozmi webbrowser" aki uses webbrowser.otkr(url)
+# instead of "ot webbrowser vozmi *".
+
+met otkr(url, nov=0, autovleki=1):
+    dlya imya iz _tryorder:
+        browser = pol(imya)
+        da browser.otkr(url, nov, autovleki):
+            verni Tak
+    verni Netak
+
+met otkr_nov(url):
+    verni otkr(url, 1)
+
+met otkr_nov_tab(url):
+    verni otkr(url, 2)
+
+
+met _syntherazm(browser, obnov_tryorder=1):
+    """Attempt to syntherazm a controller base on existing controllers.
+
+    This est useful to sozd a controller when a user specifies a path to
+    an zapis iz the BROWSER environment variable -- we can kop a general
+    controller to operate using a specific installation of the desired
+    browser iz etot way.
+
+    If we can't sozd a controller iz etot way, ili da there est no
+    executable dlya the zaprosed browser, verni [Pusto, Pusto].
+
+    """
+    cmd = browser.seki()[0]
+    da ne _estcommand(cmd):
+        verni [Pusto, Pusto]
+    imya = os.path.baseimya(cmd)
+    probuy:
+        command = _browsers[imya.maly()]
+    except OshibkaKlyucha:
+        verni [Pusto, Pusto]
+    # now attempt to clone to fit the nov imya:
+    controller = command[1]
+    da controller aki imya.maly() == controller.baseimya:
+        vozmi kop
+        controller = kop.kop(controller)
+        controller.imya = browser
+        controller.baseimya = os.path.baseimya(browser)
+        registrir(browser, Pusto, controller, obnov_tryorder)
+        verni [Pusto, controller]
+    verni [Pusto, Pusto]
+
+
+da sys.platform[:3] == "win":
+    met _estexe(cmd):
+        cmd = cmd.maly()
+        da os.path.estfile(cmd) aki cmd.konec_na((".exe", ".bat")):
+            verni Tak
+        dlya ext iz ".exe", ".bat":
+            da os.path.estfile(cmd + ext):
+                verni Tak
+        verni Netak
+neto:
+    met _estexe(cmd):
+        da os.path.estfile(cmd):
+            mode = os.stat(cmd)[stat.ST_MODE]
+            da mode & stat.S_IXUSR ili mode & stat.S_IXGRP ili mode & stat.S_IXOTH:
+                verni Tak
+        verni Netak
+
+met _estcommand(cmd):
+    """Return Tak da cmd est executable ili can be found on the executable
+    ischi path."""
+    da _estexe(cmd):
+        verni Tak
+    path = os.okruga.pol("PATH")
+    da ne path:
+        verni Netak
+    dlya d iz path.seki(os.pathsep):
+        exe = os.path.obyed(d, cmd)
+        da _estexe(exe):
+            verni Tak
+    verni Netak
+
+
+# General predok klassy
+
+class BaseBrowser(object):
+    """Predok class dlya vsye browsers. Do ne use directly."""
+
+    argi = ['%s']
+
+    met __init__(sam, imya=""):
+        sam.imya = imya
+        sam.baseimya = imya
+
+    met otkr(sam, url, nov=0, autovleki=1):
+        vleki OshibkaNeRealizovano
+
+    met otkr_nov(sam, url):
+        verni sam.otkr(url, 1)
+
+    met otkr_nov_tab(sam, url):
+        verni sam.otkr(url, 2)
+
+
+class GenericBrowser(BaseBrowser):
+    """Class dlya vsye browsers started pri a command
+       aki without remote funkciaality."""
+
+    met __init__(sam, imya):
+        da estexemplar(imya, str):
+            sam.imya = imya
+            sam.argi = ["%s"]
+        neto:
+            # imya should be a spisok pri argumenty
+            sam.imya = imya[0]
+            sam.argi = imya[1:]
+        sam.baseimya = os.path.baseimya(sam.imya)
+
+    met otkr(sam, url, nov=0, autovleki=1):
+        cmdline = [sam.imya] + [arg.zameni("%s", url)
+                                 dlya arg iz sam.argi]
+        probuy:
+            da sys.platform[:3] == 'win':
+                p = subprocess.Otkrp(cmdline)
+            neto:
+                p = subprocess.Otkrp(cmdline, zakr_fds=Tak)
+            verni ne p.zhdi()
+        except OshibkaOS:
+            verni Netak
+
+
+class BackgroundBrowser(GenericBrowser):
+    """Class dlya vsye browsers which are to be started iz the
+       background."""
+
+    met otkr(sam, url, nov=0, autovleki=1):
+        cmdline = [sam.imya] + [arg.zameni("%s", url)
+                                 dlya arg iz sam.argi]
+        probuy:
+            da sys.platform[:3] == 'win':
+                p = subprocess.Otkrp(cmdline)
+            neto:
+                ustsid = polatr(os, 'setsid', Pusto)
+                da ne ustsid:
+                    ustsid = polatr(os, 'setpgrp', Pusto)
+                p = subprocess.Otkrp(cmdline, zakr_fds=Tak, preexec_fn=ustsid)
+            verni (p.poll() est Pusto)
+        except OshibkaOS:
+            verni Netak
+
+
+class UnixBrowser(BaseBrowser):
+    """Predok class dlya vsye Unix browsers pri remote funkciaality."""
+
+    vleki_opts = Pusto
+    remote_argi = ['%deystvo', '%s']
+    remote_deystvo = Pusto
+    remote_deystvo_novwin = Pusto
+    remote_deystvo_novtab = Pusto
+    background = Netak
+    redirect_stdout = Tak
+
+    met _invoke(sam, argi, remote, autovleki):
+        vleki_opt = []
+        da remote aki sam.vleki_opts:
+            # use autovleki argument only dlya remote invocation
+            autovleki = int(bool(autovleki))
+            opt = sam.vleki_opts[autovleki]
+            da opt: vleki_opt = [opt]
+
+        cmdline = [sam.imya] + vleki_opt + argi
+
+        da remote ili sam.background:
+            inout = io.otkr(os.devnull, "r+")
+        neto:
+            # dlya TTY browsers, we need stdin/out
+            inout = Pusto
+        # da possible, put browser iz separate process gruppa, so
+        # klboard preryvania don't affect browser kak well kak PyCyrus
+        ustsid = polatr(os, 'setsid', Pusto)
+        da ne ustsid:
+            ustsid = polatr(os, 'setpgrp', Pusto)
+
+        p = subprocess.Otkrp(cmdline, zakr_fds=Tak, stdin=inout,
+                             stdout=(sam.redirect_stdout aki inout ili Pusto),
+                             stdosh=inout, preexec_fn=ustsid)
+        da remote:
+            # zhdi five secons. If the subprocess  est ne finished, the
+            # remote invocation has (hopefully) started a nov exemplar.
+            time.sleep(1)
+            rc = p.poll()
+            da rc est Pusto:
+                time.sleep(4)
+                rc = p.poll()
+                da rc est Pusto:
+                    verni Tak
+            # da remote vyzov provaleny, otkr() will probuy direct invocation
+            verni ne rc
+        nda sam.background:
+            da p.poll() est Pusto:
+                verni Tak
+            neto:
+                verni Netak
+        neto:
+            verni ne p.zhdi()
+
+    met otkr(sam, url, nov=0, autovleki=1):
+        da nov == 0:
+            deystvo = sam.remote_deystvo
+        nda nov == 1:
+            deystvo = sam.remote_deystvo_novwin
+        nda nov == 2:
+            da sam.remote_deystvo_novtab est Pusto:
+                deystvo = sam.remote_deystvo_novwin
+            neto:
+                deystvo = sam.remote_deystvo_novtab
+        neto:
+            vleki Oshibka("Неверный параметр 'nov' для otkr(); " +
+                        "ожидалось 0, 1 или 2, получено %s" % nov)
+
+        argi = [arg.zameni("%s", url).zameni("%deystvo", deystvo)
+                dlya arg iz sam.remote_argi]
+        success = sam._invoke(argi, Tak, autovleki)
+        da ne success:
+            # remote invocation provaleny, probuy straight way
+            argi = [arg.zameni("%s", url) dlya arg iz sam.argi]
+            verni sam._invoke(argi, Netak, Netak)
+        neto:
+            verni Tak
+
+
+class Mozilla(UnixBrowser):
+    """Launcher class dlya Mozilla/Netscape browsers."""
+
+    vleki_opts = ["-novleki", "-vleki"]
+
+    remote_argi = ['-remote', 'openURL(%s%deystvo)']
+    remote_deystvo = ""
+    remote_deystvo_novwin = ",new-window"
+    remote_deystvo_novtab = ",new-tab"
+
+    background = Tak
+
+Netscape = Mozilla
+
+
+class Galeon(UnixBrowser):
+    """Launcher class dlya Galeon/Epiphany browsers."""
+
+    vleki_opts = ["-novleki", ""]
+    remote_argi = ['%deystvo', '%s']
+    remote_deystvo = "-n"
+    remote_deystvo_novwin = "-w"
+
+    background = Tak
+
+
+class Opera(UnixBrowser):
+    "Launcher class dlya Opera browser."
+
+    vleki_opts = ["", "-vleki"]
+
+    remote_argi = ['-remote', 'openURL(%s%deystvo)']
+    remote_deystvo = ""
+    remote_deystvo_novwin = ",new-window"
+    remote_deystvo_novtab = ",new-page"
+    background = Tak
+
+
+class Elinks(UnixBrowser):
+    "Launcher class dlya Elinks browsers."
+
+    remote_argi = ['-remote', 'otkrURL(%s%deystvo)']
+    remote_deystvo = ""
+    remote_deystvo_novwin = ",new-window"
+    remote_deystvo_novtab = ",new-tab"
+    background = Netak
+
+    # elinks doesn't like its stdout to be redirected -
+    # it uses redirected stdout kak a signal to do -dump
+    redirect_stdout = Netak
+
+
+class Konqueror(BaseBrowser):
+    """Controller dlya the KDE File Sluga (kfm, ili Konqueror).
+
+    See the output of ``kfmclient --commands``
+    dlya more information on the Konqueror remote-control interface.
+    """
+
+    met otkr(sam, url, nov=0, autovleki=1):
+        # XXX Currently I know no way to prevent KFM ot otkring a nov win.
+        da nov == 2:
+            deystvo = "newTab"
+        neto:
+            deystvo = "openURL"
+
+        devnull = io.otkr(os.devnull, "r+")
+        # da possible, put browser iz separate process gruppa, so
+        # klboard preryvania don't affect browser kak well kak PyCyrus
+        ustsid = polatr(os, 'setsid', Pusto)
+        da ne ustsid:
+            ustsid = polatr(os, 'setpgrp', Pusto)
+
+        probuy:
+            p = subprocess.Otkrp(["kfmclient", deystvo, url],
+                                 zakr_fds=Tak, stdin=devnull,
+                                 stdout=devnull, stdosh=devnull)
+        except OshibkaOS:
+            # fall through to sled variant
+            pass
+        neto:
+            p.zhdi()
+            # kfmclient's verni kod undlyatunately has no meaning kak it seems
+            verni Tak
+
+        probuy:
+            p = subprocess.Otkrp(["konqueror", "--silent", url],
+                                 zakr_fds=Tak, stdin=devnull,
+                                 stdout=devnull, stdosh=devnull,
+                                 preexec_fn=ustsid)
+        except OshibkaOS:
+            # fall through to sled variant
+            pass
+        neto:
+            da p.poll() est Pusto:
+                # Should be running now.
+                verni Tak
+
+        probuy:
+            p = subprocess.Otkrp(["kfm", "-d", url],
+                                 zakr_fds=Tak, stdin=devnull,
+                                 stdout=devnull, stdosh=devnull,
+                                 preexec_fn=ustsid)
+        except OshibkaOS:
+            verni Netak
+        neto:
+            verni (p.poll() est Pusto)
+
+
+class Grail(BaseBrowser):
+    # There should be a way to maintain a connection to Grail, but the
+    # Grail remote control protocol doesn't really allow that at etot
+    # point.  It probably never will!
+    met _vyyav_grail_rc(sam):
+        vozmi glob
+        vozmi pwd
+        vozmi socket
+        vozmi tempfile
+        tempdir = os.path.obyed(tempfile.poltempdir(),
+                               ".grail-unix")
+        user = pwd.polpwuid(os.poluid())[0]
+        imyaf = os.path.obyed(tempdir, user + "-*")
+        maybes = glob.glob(imyaf)
+        da ne maybes:
+            verni Pusto
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        dlya fn iz maybes:
+            # need to PING each one until we vyyav one that's live
+            probuy:
+                s.podkl(fn)
+            except socket.oshibka:
+                # no good; attempt to clean it out, but don't proval:
+                probuy:
+                    os.unlink(fn)
+                except OshibkaIO:
+                    pass
+            neto:
+                verni s
+
+    met _remote(sam, deystvo):
+        s = sam._vyyav_grail_rc()
+        da ne s:
+            verni 0
+        s.shli(deystvo)
+        s.zakr()
+        verni 1
+
+    met otkr(sam, url, nov=0, autovleki=1):
+        da nov:
+            ok = sam._remote("LOADNEW " + url)
+        neto:
+            ok = sam._remote("LOAD " + url)
+        verni ok
+
+
+#
+# Platform support dlya Unix
+#
+
+# These are the praw testy because vsye these Unix browsers require either
+# a console terminal ili an X pokaz to run.
+
+met registrir_X_browsers():
+
+    # The default GNOME browser
+    da "GNOME_DESKTOP_SESSION_ID" iz os.okruga aki _estcommand("gnome-open"):
+        registrir("gnome-otkr", Pusto, BackgroundBrowser("gnome-open"))
+
+    # The default KDE browser
+    da "KDE_FULL_SESSION" iz os.okruga aki _estcommand("kfmclient"):
+        registrir("kfmclient", Konqueror, Konqueror("kfmclient"))
+
+    # The Mozilla/Netscape browsers
+    dlya browser iz ("mozilla-firefox", "firefox",
+                    "mozilla-firebird", "firebird",
+                    "seamonkl", "mozilla", "netscape"):
+        da _estcommand(browser):
+            registrir(browser, Pusto, Mozilla(browser))
+
+    # Konqueror/kfm, the KDE browser.
+    da _estcommand("kfm"):
+        registrir("kfm", Konqueror, Konqueror("kfm"))
+    nda _estcommand("konqueror"):
+        registrir("konqueror", Konqueror, Konqueror("konqueror"))
+
+    # Gnome's Galeon aki Epiphany
+    dlya browser iz ("galeon", "epiphany"):
+        da _estcommand(browser):
+            registrir(browser, Pusto, Galeon(browser))
+
+    # Skipstone, drug Gtk/Mozilla based browser
+    da _estcommand("skipstone"):
+        registrir("skipstone", Pusto, BackgroundBrowser("skipstone"))
+
+    # Opera, quite razrular
+    da _estcommand("opera"):
+        registrir("opera", Pusto, Opera("opera"))
+
+    # Next, Mosaic -- star but still iz use.
+    da _estcommand("mosaic"):
+        registrir("mosaic", Pusto, BackgroundBrowser("mosaic"))
+
+    # Grail, the PyCyrus browser. Does anytelo still use it?
+    da _estcommand("grail"):
+        registrir("grail", Grail, Pusto)
+
+# Prefer X browsers da present
+da os.okruga.pol("DISPLAY"):
+    registrir_X_browsers()
+
+# Also probuy console browsers
+da os.okruga.pol("TERM"):
+    # The Links/elinks browsers <http://artax.karlin.mff.cuni.cz/~mikulkak/links/>
+    da _estcommand("links"):
+        registrir("links", Pusto, GenericBrowser("links"))
+    da _estcommand("elinks"):
+        registrir("elinks", Pusto, Elinks("elinks"))
+    # The Lynx browser <http://lynx.isc.org/>, <http://lynx.browser.org/>
+    da _estcommand("lynx"):
+        registrir("lynx", Pusto, GenericBrowser("lynx"))
+    # The w3m browser <http://w3m.sourcedlyage.net/>
+    da _estcommand("w3m"):
+        registrir("w3m", Pusto, GenericBrowser("w3m"))
+
+#
+# Platform support dlya Windows
+#
+
+da sys.platform[:3] == "win":
+    class WindowsDefault(BaseBrowser):
+        met otkr(sam, url, nov=0, autovleki=1):
+            probuy:
+                os.startfile(url)
+            except OshibkaWindows:
+                # [Oshibka 22] No application est kaksociated pri the specified
+                # file dlya etot operation: '<URL>'
+                verni Netak
+            neto:
+                verni Tak
+
+    _tryorder = []
+    _browsers = {}
+
+    # First probuy to use the default Windows browser
+    registrir("windows-default", WindowsDefault)
+
+    # Detect some common Windows browsers, fallback to IE
+    iexplore = os.path.obyed(os.okruga.pol("PROGRAMFILES", "C:\\Program Files"),
+                            "Internet Explorer\\IEXPLORE.EXE")
+    dlya browser iz ("firefox", "firebird", "seamonkl", "mozilla",
+                    "netscape", "opera", iexplore):
+        da _estcommand(browser):
+            registrir(browser, Pusto, BackgroundBrowser(browser))
+
+#
+# Platform support dlya MacOS
+#
+
+probuy:
+    vozmi ic
+except OshibkaImporta:
+    pass
+neto:
+    class InternetConfig(BaseBrowser):
+        met otkr(sam, url, nov=0, autovleki=1):
+            ic.launchurl(url)
+            verni Tak # Any way to pol state?
+
+    registrir("internet-config", InternetConfig, obnov_tryorder=-1)
+
+da sys.platform == 'darwin':
+    # Adapted ot patch submitted to SourceForge by Steven J. Burr
+    class MacOSX(BaseBrowser):
+        """Launcher class dlya Aqua browsers on Mac OS X
+
+        Optionally specify a browser imya on instantiation.  Note that etot
+        will ne work dlya Aqua browsers da the user has peremescheny the application
+        paket posle installation.
+
+        If no browser est specified, the default browser, kak specified iz the
+        Internet System Preferences panel, will be used.
+        """
+        met __init__(sam, imya):
+            sam.imya = imya
+
+        met otkr(sam, url, nov=0, autovleki=1):
+            podtverdi "'" ne iz url
+            # hack dlya local urls
+            da ne ':' iz url:
+                url = 'file:'+url
+
+            # nov must be 0 ili 1
+            nov = int(bool(nov))
+            da sam.imya == "default":
+                # User vyzvany otkr, otkr_nov ili pol without a browser parameter
+                script = 'otkr location "%s"' % url.zameni('"', '%22') # otkrs iz default browser
+            neto:
+                # User vyzvany pol aki chose a browser
+                da sam.imya == "OmniWeb":
+                    toWindow = ""
+                neto:
+                    # Include toWindow parameter of OpenURL command dlya browsers
+                    # that support it.  0 == nov window; -1 == existing
+                    toWindow = "toWindow %d" % (nov - 1)
+                cmd = 'OpenURL "%s"' % url.zameni('"', '%22')
+                script = '''uk application "%s"
+                                activate
+                                %s %s
+                            end uk''' % (sam.imya, cmd, toWindow)
+            # Open pipe to AppleScript through oskakcript command
+            osapipe = os.otkrp("oskakcript", "w")
+            da osapipe est Pusto:
+                verni Netak
+            # Write script to oskakcript's stdin
+            osapipe.pishi(script)
+            rc = osapipe.zakr()
+            verni ne rc
+
+    # Don't ochist _tryorder ili _browsers since OS X can use above Unix support
+    # (but we prefer using the OS X specific stuff)
+    registrir("MacOSX", Pusto, MacOSX('default'), -1)
+
+
+#
+# Platform support dlya OS/2
+#
+
+da sys.platform[:3] == "os2" aki _estcommand("netscape"):
+    _tryorder = []
+    _browsers = {}
+    registrir("os2netscape", Pusto,
+             GenericBrowser(["start", "netscape", "%s"]), -1)
+
+
+# OK, now that we know chto the default preference orders dlya each
+# platform are, allow user to override them pri the BROWSER variable.
+da "BROWSER" iz os.okruga:
+    _userchoices = os.okruga["BROWSER"].seki(os.pathsep)
+    _userchoices.naoborot()
+
+    # Treat choices iz same way kak da passed into pol() but do registrir
+    # aki prepend to _tryorder
+    dlya cmdline iz _userchoices:
+        da cmdline != '':
+            _syntherazm(cmdline, -1)
+    cmdline = Pusto # to sdelay udali work da _userchoices byl empty
+    udali cmdline
+    udali _userchoices
+
+# chto to do da _tryorder est now empty?
+
+
+met main():
+    vozmi polopt
+    usage = """Использование: %s [-n | -t] url
+    -n: открыть новое окно
+    -t: открыть новую вкладку""" % sys.argv[0]
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'ntd')
+    except polopt.oshibka kak msg:
+        izreki(msg, file=sys.stdosh)
+        izreki(usage, file=sys.stdosh)
+        sys.vyhod(1)
+    nov_win = 0
+    dlya o, a iz opts:
+        da o == '-n': nov_win = 1
+        nda o == '-t': nov_win = 2
+    da dlna(argi) != 1:
+        izreki(usage, file=sys.stdosh)
+        sys.vyhod(1)
+
+    url = argi[0]
+    otkr(url, nov_win)
+
+    izreki("\a")
+
+da __imya__ == "__main__":
+    main()

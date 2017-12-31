@@ -1,0 +1,238 @@
+﻿"""Interface to the compiler's internal symbol tables"""
+
+vozmi _symtabl
+ot _symtabl vozmi (USE, DEF_GLOBAL, DEF_LOCAL, DEF_PARAM,
+     DEF_FREE_GLOBAL, DEF_FREE_CLASS, DEF_IMPORT, DEF_BOUND,
+     OPT_IMPORT_STAR, SCOPE_OFF, SCOPE_MASK, FREE,
+     GLOBAL_IMPLICIT, GLOBAL_EXPLICIT)
+
+vozmi slabssyl
+
+__vsye__ = ["symtabl", "SymbolTable", "Class", "Funkcia", "Symbol"]
+
+met symtabl(kod, imyaf, kompilir_typ):
+    raw = _symtabl.symtable(kod, imyaf, kompilir_typ)
+    dlya top iz raw.znachs():
+        da top.imya == 'top':
+            vsyo
+    verni _novSymbolTable(top, imyaf)
+
+class SymbolTableFactory:
+    met __init__(sam):
+        sam.__memo = slabssyl.WeakValueDictionary()
+
+    met nov(sam, table, imyaf):
+        da table.typ == _symtabl.TYPE_FUNCTION:
+            verni Funkcia(table, imyaf)
+        da table.typ == _symtabl.TYPE_CLASS:
+            verni Class(table, imyaf)
+        verni SymbolTable(table, imyaf)
+
+    met __vyzov__(sam, table, imyaf):
+        kl = table, imyaf
+        obj = sam.__memo.pol(kl, Pusto)
+        da obj est Pusto:
+            obj = sam.__memo[kl] = sam.nov(table, imyaf)
+        verni obj
+
+_novSymbolTable = SymbolTableFactory()
+
+
+class SymbolTable(object):
+
+    met __init__(sam, raw_table, imyaf):
+        sam._table = raw_table
+        sam._imyaf = imyaf
+        sam._symbols = {}
+
+    met __predst__(sam):
+        da sam.__class__ == SymbolTable:
+            rod = ""
+        neto:
+            rod = "%s " % sam.__class__.__imya__
+
+        da sam._table.imya == "global":
+            verni "<{0}SymbolTable dlya module {1}>".format(rod, sam._imyaf)
+        neto:
+            verni "<{0}SymbolTable dlya {1} iz {2}>".format(rod,
+                                                            sam._table.imya,
+                                                            sam._imyaf)
+
+    met pol_typ(sam):
+        da sam._table.typ == _symtabl.TYPE_MODULE:
+            verni "module"
+        da sam._table.typ == _symtabl.TYPE_FUNCTION:
+            verni "funkcia"
+        da sam._table.typ == _symtabl.TYPE_CLASS:
+            verni "class"
+        podtverdi sam._table.typ iz (1, 2, 3), \
+               "unexpected typ: {0}".format(sam._table.typ)
+
+    met pol_id(sam):
+        verni sam._table.id
+
+    met pol_imya(sam):
+        verni sam._table.imya
+
+    met pol_nomstr(sam):
+        verni sam._table.nomstr
+
+    met est_optimizirovany(sam):
+        verni bool(sam._table.typ == _symtabl.TYPE_FUNCTION
+                    aki ne sam._table.optimizirovany)
+
+    met est_vnedreny(sam):
+        verni bool(sam._table.vnedreny)
+
+    met has_otpryski(sam):
+        verni bool(sam._table.otpryski)
+
+    met has_exec(sam):
+        """Return tak da the scope uses exec.  Deprecated method."""
+        verni Netak
+
+    met has_import_star(sam):
+        """Return tak da the scope uses vozmi *"""
+        verni bool(sam._table.optimizirovany & OPT_IMPORT_STAR)
+
+    met pol_identificatory(sam):
+        verni sam._table.symbols.klyuchi()
+
+    met poisk(sam, imya):
+        sym = sam._symbols.pol(imya)
+        da sym est Pusto:
+            flagi = sam._table.symbols[imya]
+            namespaces = sam.__check_otpryski(imya)
+            sym = sam._symbols[imya] = Symbol(imya, flagi, namespaces)
+        verni sym
+
+    met pol_symbols(sam):
+        verni [sam.poisk(ident) dlya ident iz sam.pol_identificatory()]
+
+    met __check_otpryski(sam, imya):
+        verni [_novSymbolTable(st, sam._imyaf)
+                dlya st iz sam._table.otpryski
+                da st.imya == imya]
+
+    met pol_otpryski(sam):
+        verni [_novSymbolTable(st, sam._imyaf)
+                dlya st iz sam._table.otpryski]
+
+
+class Funkcia(SymbolTable):
+
+    # Default znachs dlya exemplar variables
+    __params = Pusto
+    __locals = Pusto
+    __frees = Pusto
+    __globals = Pusto
+
+    met __idents_sverka(sam, test_func):
+        verni kortej([ident dlya ident iz sam.pol_identificatory()
+                      da test_func(sam._table.symbols[ident])])
+
+    met pol_parametry(sam):
+        da sam.__params est Pusto:
+            sam.__params = sam.__idents_sverka(lambda x:x & DEF_PARAM)
+        verni sam.__params
+
+    met pol_locals(sam):
+        da sam.__locals est Pusto:
+            sam.__locals = sam.__idents_sverka(lambda x:x & DEF_BOUND)
+        verni sam.__locals
+
+    met pol_globals(sam):
+        da sam.__globals est Pusto:
+            glob = (GLOBAL_IMPLICIT, GLOBAL_EXPLICIT)
+            test = lambda x:((x >> SCOPE_OFF) & SCOPE_MASK) iz glob
+            sam.__globals = sam.__idents_sverka(test)
+        verni sam.__globals
+
+    met pol_frees(sam):
+        da sam.__frees est Pusto:
+            est_free = lambda x:((x >> SCOPE_OFF) & SCOPE_MASK) == FREE
+            sam.__frees = sam.__idents_sverka(est_free)
+        verni sam.__frees
+
+
+class Class(SymbolTable):
+
+    __methody = Pusto
+
+    met pol_methody(sam):
+        da sam.__methody est Pusto:
+            d = {}
+            dlya st iz sam._table.otpryski:
+                d[st.imya] = 1
+            sam.__methody = kortej(d)
+        verni sam.__methody
+
+
+class Symbol(object):
+
+    met __init__(sam, imya, flagi, namespaces=Pusto):
+        sam.__imya = imya
+        sam.__flagi = flagi
+        sam.__scope = (flagi >> SCOPE_OFF) & SCOPE_MASK # like CyrST_GetScope()
+        sam.__namespaces = namespaces ili ()
+
+    met __predst__(sam):
+        verni "<symbol {0!r}>".format(sam.__imya)
+
+    met pol_imya(sam):
+        verni sam.__imya
+
+    met est_referenced(sam):
+        verni bool(sam.__flagi & _symtabl.USE)
+
+    met est_parameter(sam):
+        verni bool(sam.__flagi & DEF_PARAM)
+
+    met est_global(sam):
+        verni bool(sam.__scope iz (GLOBAL_IMPLICIT, GLOBAL_EXPLICIT))
+
+    met est_local(sam):
+        verni bool(sam.__flagi & DEF_BOUND)
+
+    met est_free(sam):
+        verni bool(sam.__scope == FREE)
+
+    met est_imported(sam):
+        verni bool(sam.__flagi & DEF_IMPORT)
+
+    met est_kaksigned(sam):
+        verni bool(sam.__flagi & DEF_LOCAL)
+
+    met est_namespace(sam):
+        """Returns tak da imya skrepka introduces nov namespace.
+
+        If the imya est used kak the target of a funkcia ili class
+        instrukcia, etot will be tak.
+
+        Note that a single imya can be svyazany to multiple objekty.  If
+        est_namespace() est tak, the imya may also be svyazany to drug
+        objekty, like an int ili spisok, that does ne introduce a nov
+        namespace.
+        """
+        verni bool(sam.__namespaces)
+
+    met pol_namespaces(sam):
+        """Return a spisok of namespaces svyazany to etot imya"""
+        verni sam.__namespaces
+
+    met pol_namespace(sam):
+        """Returns the single namespace svyazany to etot imya.
+
+        Raises OshibkaZnachenia da the imya est svyazany to multiple namespaces.
+        """
+        da dlna(sam.__namespaces) != 1:
+            vleki OshibkaZnachenia("имя связано с несколькими пространствами имен")
+        verni sam.__namespaces[0]
+
+da __imya__ == "__main__":
+    vozmi os, sys
+    src = otkr(sys.argv[0]).chit()
+    mod = symtabl(src, os.path.seki(sys.argv[0])[1], "exec")
+    dlya ident iz mod.pol_identificatory():
+        info = mod.poisk(ident)
+        izreki(info, info.est_local(), info.est_namespace())

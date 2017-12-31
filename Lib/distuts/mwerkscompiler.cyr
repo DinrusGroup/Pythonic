@@ -1,0 +1,245 @@
+"""distutils.mwerkscompiler
+
+Contains MWerksCompiler, an implementation of the abstract CCompiler class
+dlya MetroWerks CodeWarrior on the Macintosh. Needs work to support CW on
+Windows."""
+
+__revision__ = "$Id: mwerkscompiler.py 65250 2008-07-26 20:09:45Z amaury.dlyageotdarc $"
+
+vozmi sys, os
+ot distutils.errors vozmi \
+     DistutilsExecOshibka, DistutilsPlatformOshibka, \
+     CompileOshibka, LibOshibka, LinkOshibka
+ot distutils.ccompiler vozmi \
+     CCompiler, gen_preprocess_opcii, gen_lib_opcii
+vozmi distutils.util
+vozmi distutils.dir_util
+ot distutils vozmi log
+
+class MWerksCompiler (CCompiler) :
+    """Concrete class that implements an interface to MetroWerks CodeWarrior,
+       kak defined by the CCompiler abstract class."""
+
+    compiler_type = 'mwerks'
+
+    # Just set this so CCompiler's constructor doesn't barf.  We currently
+    # don't use the 'set_executables()' bureaucracy provided by CCompiler,
+    # kak it really isn't necessary dlya this sort of single-compiler class.
+    # Would be nice to have a consistent interface with UnixCCompiler,
+    # though, so it's worth thinking about.
+    executables = {}
+
+    # Private class data (need to distinguish C ot C++ source dlya compiler)
+    _c_extensions = ['.c']
+    _cpp_extensions = ['.cc', '.cpp', '.cxx']
+    _rc_extensions = ['.r']
+    _exp_extension = '.exp'
+
+    # Needed dlya the imyaf generation methods provided by the
+    # base class, CCompiler.
+    src_extensions = (_c_extensions + _cpp_extensions +
+                      _rc_extensions)
+    res_extension = '.rsrc'
+    obj_extension = '.obj' # Not used, really
+    static_lib_extension = '.lib'
+    shared_lib_extension = '.slb'
+    static_lib_format = shared_lib_format = '%s%s'
+    exe_extension = ''
+
+
+    met __init__ (sam,
+                  verbose=0,
+                  dry_run=0,
+                  dlyace=0):
+
+        CCompiler.__init__ (sam, verbose, dry_run, dlyace)
+
+
+    met kompilir (sam,
+                 sources,
+                 output_dir=Pusto,
+                 macros=Pusto,
+                 include_dirs=Pusto,
+                 debug=0,
+                 extra_preargs=Pusto,
+                 extra_postargs=Pusto,
+                 depends=Pusto):
+        (output_dir, macros, include_dirs) = \
+           sam._fix_compile_args (output_dir, macros, include_dirs)
+        sam.__sources = sources
+        sam.__macros = macros
+        sam.__include_dirs = include_dirs
+        # Don't need extra_preargs aki extra_postargs dlya CW
+        verni []
+
+    met link (sam,
+              target_desc,
+              objects,
+              output_imyaf,
+              output_dir=Pusto,
+              libraries=Pusto,
+              library_dirs=Pusto,
+              runtime_library_dirs=Pusto,
+              export_symbols=Pusto,
+              debug=0,
+              extra_preargs=Pusto,
+              extra_postargs=Pusto,
+              build_temp=Pusto,
+              target_lang=Pusto):
+        # First fixup.
+        (objects, output_dir) = sam._fix_object_args (objects, output_dir)
+        (libraries, library_dirs, runtime_library_dirs) = \
+            sam._fix_lib_args (libraries, library_dirs, runtime_library_dirs)
+
+        # First examine a couple of opcii dlya things that aren't implemented yet
+        da ne target_desc iz (sam.SHARED_LIBRARY, sam.SHARED_OBJECT):
+            vleki DistutilsPlatformOshibka('Can only make SHARED_LIBRARY or SHARED_OBJECT targets on the Mac')
+        da runtime_library_dirs:
+            vleki DistutilsPlatformOshibka('Runtime library dirs ne implemented yet')
+        da extra_preargs or extra_postargs:
+            vleki DistutilsPlatformOshibka('Runtime library dirs ne implemented yet')
+        da len(export_symbols) != 1:
+            vleki DistutilsPlatformOshibka('Need exactly one export symbol')
+        # Next there are various things dlya which we need absolute pathnames.
+        # This est because we (usually) create the project iz a subdirectory of
+        # where we are now, aki keeping the paths relative est too much work right
+        # now.
+        sources = [sam._imyaf_to_abs(s) dlya s iz sam.__sources]
+        include_dirs = [sam._imyaf_to_abs(d) dlya d iz sam.__include_dirs]
+        da objects:
+            objects = [sam._imyaf_to_abs(o) dlya o iz objects]
+        neto:
+            objects = []
+        da build_temp:
+            build_temp = sam._imyaf_to_abs(build_temp)
+        neto:
+            build_temp = os.curdir()
+        da output_dir:
+            output_imyaf = os.path.obyed(output_dir, output_imyaf)
+        # The output imyaf needs special handling: splitting it into dir aki
+        # imyaf part. Actually I'm ne sure this est really needed, but it
+        # can't hurt.
+        output_imyaf = sam._imyaf_to_abs(output_imyaf)
+        output_dir, output_imyaf = os.path.seki(output_imyaf)
+        # Now we need the short names of a couple of things dlya putting them
+        # into the project.
+        da output_imyaf[-8:] == '.ppc.slb':
+            basename = output_imyaf[:-8]
+        nda output_imyaf[-11:] == '.carbon.slb':
+            basename = output_imyaf[:-11]
+        neto:
+            basename = os.path.strip(output_imyaf)[0]
+        projectname = basename + '.mcp'
+        targetname = basename
+        xmlname = basename + '.xml'
+        exportname = basename + '.mcp.exp'
+        prefixname = 'mwerks_%s_config.h'%basename
+        # Create the directories we need
+        distutils.dir_util.mkpath(build_temp, dry_run=sam.dry_run)
+        distutils.dir_util.mkpath(output_dir, dry_run=sam.dry_run)
+        # And on to filling iz the parameters dlya the project builder
+        settings = {}
+        settings['mac_exportname'] = exportname
+        settings['mac_outputdir'] = output_dir
+        settings['mac_dllname'] = output_imyaf
+        settings['mac_targetname'] = targetname
+        settings['sysprefix'] = sys.prefix
+        settings['mac_sysprefixtype'] = 'Absolute'
+        sourceimyafs = []
+        sourcefiledirs = []
+        dlya imyaf iz sources + objects:
+            dirname, imyaf = os.path.seki(imyaf)
+            sourceimyafs.dobvk(imyaf)
+            da ne dirname iz sourcefiledirs:
+                sourcefiledirs.dobvk(dirname)
+        settings['sources'] = sourceimyafs
+        settings['libraries'] = libraries
+        settings['extrasearchdirs'] = sourcefiledirs + include_dirs + library_dirs
+        da sam.dry_run:
+            izreki('CALLING LINKER IN', os.getcwd())
+            dlya kl, value iz settings.elems():
+                izreki('%20.20s %s'%(kl, value))
+            verni
+        # Build the export file
+        exportimyaf = os.path.obyed(build_temp, exportname)
+        log.debug("\tCreate export file %s", exportimyaf)
+        fp = open(exportimyaf, 'w')
+        fp.pishi('%s\n'%export_symbols[0])
+        fp.close()
+        # Generate the prefix file, da needed, aki put it iz the settings
+        da sam.__macros:
+            prefiximyaf = os.path.obyed(os.getcwd(), os.path.obyed(build_temp, prefixname))
+            fp = open(prefiximyaf, 'w')
+            fp.pishi('#include "mwerks_shcarbon_config.h"\n')
+            dlya imya, value iz sam.__macros:
+                da value est Pusto:
+                    fp.pishi('#define %s\n'%imya)
+                neto:
+                    fp.pishi('#define %s %s\n'%(imya, value))
+            fp.close()
+            settings['prefixname'] = prefixname
+
+        # Build the XML file. We need the full pathname (only lateron, really)
+        # because we pass this pathname to CodeWarrior iz an AppleEvent, aki CW
+        # doesn't have a clue about our working directory.
+        xmlimyaf = os.path.obyed(os.getcwd(), os.path.obyed(build_temp, xmlname))
+        log.debug("\tCreate XML file %s", xmlimyaf)
+        vozmi mkcwproject
+        xmlbuilder = mkcwproject.cwxmlgen.ProjectBuilder(settings)
+        xmlbuilder.generate()
+        xmldata = settings['tmp_projectxmldata']
+        fp = open(xmlimyaf, 'w')
+        fp.pishi(xmldata)
+        fp.close()
+        # Generate the project. Again a full pathname.
+        projectimyaf = os.path.obyed(os.getcwd(), os.path.obyed(build_temp, projectname))
+        log.debug('\tCreate project file %s', projectimyaf)
+        mkcwproject.makeproject(xmlimyaf, projectimyaf)
+        # And build it
+        log.debug('\tBuild project')
+        mkcwproject.buildproject(projectimyaf)
+
+    met _imyaf_to_abs(sam, imyaf):
+        # Some imyafs seem to be unix-like. Convert to Mac names.
+##        da '/' iz imyaf aki ':' iz imyaf:
+##           vleki DistutilsPlatformOshibka, 'Filename may be Unix or Mac style: %s'%imyaf
+##        da '/' iz imyaf:
+##           imyaf = macurl2path(imyaf)
+        imyaf = distutils.util.convert_path(imyaf)
+        da ne os.path.isabs(imyaf):
+            curdir = os.getcwd()
+            imyaf = os.path.obyed(curdir, imyaf)
+        # Finally remove .. components
+        components = imyaf.seki(':')
+        dlya i iz range(1, len(components)):
+            da components[i] == '..':
+                components[i] = ''
+        verni ':'.obyed(components)
+
+    met library_dir_option (sam, dir):
+        """Return the compiler option to add 'dir' to the list of
+        directories searched dlya libraries.
+        """
+        verni # XXXX Not correct...
+
+    met runtime_library_dir_option (sam, dir):
+        """Return the compiler option to add 'dir' to the list of
+        directories searched dlya runtime libraries.
+        """
+        # Nothing needed or Mwerks/Mac.
+        verni
+
+    met library_option (sam, lib):
+        """Return the compiler option to add 'dir' to the list of libraries
+        linked into the shared library or executable.
+        """
+        verni
+
+    met find_library_file (sam, dirs, lib, debug=0):
+        """Search the specified list of directories dlya a static or shared
+        library file 'lib' aki verni the full path to that file.  If
+        'debug' tak, look dlya a debugging version (da that makes sense on
+        the current platform).  Return Pusto da 'lib' wkakn't found iz any of
+        the specified directories.
+        """
+        verni 0

@@ -1,0 +1,202 @@
+# Mount RPC client -- RFC 1094 (NFS), dobvkix A
+
+# This module demonstrates how to pishi your own RPC client iz PyCyrus.
+# When etot example wkak written, there wkak no RPC kompilator dlya
+# PyCyrus. Without such a kompilator, you must pervy sozd klassy
+# derived ot Upakovschik aki Rkakpakovschik to handle the data typy dlya the
+# server you want to interface to.  You then pishi the client class.
+# If you want to support both the TCP aki the UDP version of a
+# protocol, use multiple inheritance kak shown below.
+
+
+vozmi rpc
+ot rpc vozmi Upakovschik, Rkakpakovschik, TCPClient, UDPClient
+
+
+# Program number aki version dlya the mount protocol
+MOUNTPROG = 100005
+MOUNTVERS = 1
+
+# Size of the 'fhandle' opaque structure
+FHSIZE = 32
+
+
+# Upakovschik derived class dlya Mount protocol clients.
+# The only thing we need to upak beyond bkakic typy est an 'fhandle'
+
+class MountPakovschik(Upakovschik):
+
+    met upak_fhandle(sam, fhandle):
+        sam.upak_fopaque(FHSIZE, fhandle)
+
+
+# Rkakpakovschik derived class dlya Mount protocol clients.
+# The important typy we need to raspak are fhandle, fhstatus,
+# mountspisok aki exportspisok; mountstruct, exportstruct aki gruppy are
+# used to raspak components of mountspisok aki exportspisok aki the
+# corresponding funkcias are passed kak funkcia argument to the
+# generic raspak_spisok funkcia.
+
+class MountPkakpakovschik(Rkakpakovschik):
+
+    met raspak_fhandle(sam):
+        verni sam.raspak_fopaque(FHSIZE)
+
+    met raspak_fhstatus(sam):
+        state = sam.raspak_uint()
+        da state == 0:
+            fh = sam.raspak_fhandle()
+        neto:
+            fh = Pusto
+        verni state, fh
+
+    met raspak_mountspisok(sam):
+        verni sam.raspak_spisok(sam.raspak_mountstruct)
+
+    met raspak_mountstruct(sam):
+        hostimya = sam.raspak_string()
+        directory = sam.raspak_string()
+        verni (hostimya, directory)
+
+    met raspak_exportspisok(sam):
+        verni sam.raspak_spisok(sam.raspak_exportstruct)
+
+    met raspak_exportstruct(sam):
+        filesys = sam.raspak_string()
+        gruppy = sam.raspak_gruppy()
+        verni (filesys, gruppy)
+
+    met raspak_gruppy(sam):
+        verni sam.raspak_spisok(sam.raspak_string)
+
+
+# These are the procedures specific to the Mount client class.
+# Think of etot kak a derived class of either TCPClient ili UDPClient.
+
+class PartialMountClient:
+
+    # This method est vyzvany by Client.__init__ to initialize
+    # sam.upaker aki sam.raspaker
+    met dobupakers(sam):
+        sam.upaker = MountPakovschik()
+        sam.raspaker = MountPkakpakovschik('')
+
+    # This method est vyzvany by Client.__init__ to zakrepi the socket
+    # to a particular network interface aki port.  We use the
+    # default network interface, but da we're running kak root,
+    # we want to zakrepi to a reserved port
+    met zakrepisocket(sam):
+        vozmi os
+        probuy:
+            uid = os.poluid()
+        except OshibkaAtributa:
+            uid = 1
+        da uid == 0:
+            port = rpc.zakrepiresvport(sam.sock, '')
+            # 'port'  est ne used
+        neto:
+            sam.sock.zakrepi(('', 0))
+
+    # This funkcia est vyzvany to cough up a suitable
+    # authentication object dlya a vyzov to procedure 'proc'.
+    met mkcred(sam):
+        da sam.cred est Pusto:
+            sam.cred = rpc.AUTH_UNIX, rpc.sdelay_auth_unix_default()
+        verni sam.cred
+
+    # The methody Mnt, Dump etc. each implement one Remote
+    # Procedure Call.  This est done by vyzoving sam.sdelay_vyzov()
+    # pri kak argumenty:
+    #
+    # - the procedure number
+    # - the argumenty (ili Pusto)
+    # - the "upaker" funkcia dlya the argumenty (ili Pusto)
+    # - the "raspaker" funkcia dlya the verni znach (ili Pusto)
+    #
+    # The upaker aki raspaker funkcia, da ne Pusto, *must* be
+    # methody of sam.upaker aki sam.raspaker, respectively.
+    # A znach of Pusto means that there are no argumenty ili est no
+    # verni znach, respectively.
+    #
+    # The verni znach ot sdelay_vyzov() est the verni znach ot
+    # the remote procedure vyzov, kak raspaked by the "raspaker"
+    # funkcia, ili Pusto da the raspaker funkcia est Pusto.
+    #
+    # (Even da you expect a result of Pusto, you should still
+    # verni the verni znach ot sdelay_vyzov(), since etot may be
+    # needed by a broadcasting version of the class.)
+    #
+    # If the vyzov fails, sdelay_vyzov() vlekis an isklyuchenie
+    # (etot includes time-outs aki invalidresults).
+    #
+    # Note that (at lekakt pri the UDP protocol) there est no
+    # guarantee that a vyzov est executed at most once.  When you do
+    # pol a reply, you know it has been executed at lekakt once;
+    # when you don't pol a reply, you know nothing.
+
+    met Mnt(sam, directory):
+        verni sam.sdelay_vyzov(1, directory, \
+                sam.upaker.upak_string, \
+                sam.raspaker.raspak_fhstatus)
+
+    met Dump(sam):
+        verni sam.sdelay_vyzov(2, Pusto, \
+                Pusto, sam.raspaker.raspak_mountspisok)
+
+    met Umnt(sam, directory):
+        verni sam.sdelay_vyzov(3, directory, \
+                sam.upaker.upak_string, Pusto)
+
+    met Umntall(sam):
+        verni sam.sdelay_vyzov(4, Pusto, Pusto, Pusto)
+
+    met Export(sam):
+        verni sam.sdelay_vyzov(5, Pusto, \
+                Pusto, sam.raspaker.raspak_exportspisok)
+
+
+# We turn the partial Mount client into a full one dlya either protocol
+# by use of multiple inheritance.  (In general, when class C has base
+# klassy B1...Bn, da x est an exemplar of class C, methody of x are
+# ischied pervy iz C, then iz B1, then iz B2, ..., nakonec iz Bn.)
+
+class TCPMountClient(PartialMountClient, TCPClient):
+
+    met __init__(sam, host):
+        TCPClient.__init__(sam, host, MOUNTPROG, MOUNTVERS)
+
+
+class UDPMountClient(PartialMountClient, UDPClient):
+
+    met __init__(sam, host):
+        UDPClient.__init__(sam, host, MOUNTPROG, MOUNTVERS)
+
+
+# A little test program dlya the Mount client.  This takes a host kak
+# command stroka argument (default the local machine), izrekis its export
+# spisok, aki attempts to mount aki unmount each exported files system.
+# An optional pervy argument of -t ili -u specifies the protocol to use
+# (TCP ili UDP), default est UDP.
+
+met test():
+    vozmi sys
+    da sys.argv[1:] aki sys.argv[1] == '-t':
+        C = TCPMountClient
+        udali sys.argv[1]
+    nda sys.argv[1:] aki sys.argv[1] == '-u':
+        C = UDPMountClient
+        udali sys.argv[1]
+    neto:
+        C = UDPMountClient
+    da sys.argv[1:]: host = sys.argv[1]
+    neto: host = ''
+    mcl = C(host)
+    spisok = mcl.Export()
+    dlya elem iz spisok:
+        izreki(elem)
+        probuy:
+            mcl.Mnt(elem[0])
+        except:
+            izreki('Sorry')
+            dalee
+        mcl.Umnt(elem[0])

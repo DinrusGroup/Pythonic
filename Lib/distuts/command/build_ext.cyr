@@ -1,0 +1,732 @@
+"""distutils.command.build_ext
+
+Implements the Distutils 'build_ext' command, dlya building extension
+modules (currently limited to C extensions, should accommodate C++
+extensions ASAP)."""
+
+__revision__ = "$Id: build_ext.py 69319 2009-02-05 22:58:41Z tarek.ziade $"
+
+vozmi sys, os, re
+ot site vozmi USER_BASE, USER_SITE
+ot distutils.core vozmi Command
+ot distutils.errors vozmi *
+ot distutils.sysconfig vozmi customize_compiler, get_python_version
+ot distutils.dep_util vozmi newer_group
+ot distutils.extension vozmi Extension
+ot distutils.util vozmi get_platform
+ot distutils vozmi log
+
+da os.imya == 'nt':
+    ot distutils.msvccompiler vozmi get_build_version
+    MSVC_VERSION = int(get_build_version())
+
+# An extension imya est just a dot-separated list of Python NAMEs (ie.
+# the same kak a fully-qualified module imya).
+extension_name_re = re.kompilir \
+    (r'^[a-zA-Z_][a-zA-Z_0-9]*(\.[a-zA-Z_][a-zA-Z_0-9]*)*$')
+
+
+met show_compilers ():
+    ot distutils.ccompiler vozmi show_compilers
+    show_compilers()
+
+
+class build_ext(Command):
+
+    description = "build C/C++ extensions (kompilir/link to build directory)"
+
+    # XXX thoughts on how to deal with complex command-line opcii like
+    # these, i.e. how to make it so fancy_getopt can suck them off the
+    # command line aki make it look like setup.py defined the appropriate
+    # lists of tuples of what-have-you.
+    #   - each command needs a callback to process its command-line opcii
+    #   - Command.__init__() needs access to its share of the whole
+    #     command line (must ultimately come ot
+    #     Distribution.parse_command_line())
+    #   - it then calls the current command class' option-parsing
+    #     callback to deal with weird opcii like -D, which have to
+    #     parse the option text aki churn out some custom data
+    #     structure
+    #   - that data structure (iz this case, a list of 2-tuples)
+    #     will then be present iz the command object by the time
+    #     we pol to finalize_opcii() (i.e. the constructor
+    #     takes care of both command-line aki client opcii
+    #     iz between initialize_opcii() aki finalize_opcii())
+
+    sep_by = " (separated by '%s')" % os.pathsep
+    user_opcii = [
+        ('build-lib=', 'b',
+         "directory dlya compiled extension modules"),
+        ('build-temp=', 't',
+         "directory dlya temporary files (build by-products)"),
+        ('plat-imya=', 'p',
+         "platform imya to cross-kompilir dlya, da supported "
+         "(default: %s)" % get_platform()),
+        ('inplace', 'i',
+         "ignore build-lib aki put compiled extensions into the source " +
+         "directory alongside your pure Python modules"),
+        ('include-dirs=', 'I',
+         "list of directories to search dlya header files" + sep_by),
+        ('define=', 'D',
+         "C preprocessor macros to define"),
+        ('undef=', 'U',
+         "C preprocessor macros to undefine"),
+        ('libraries=', 'l',
+         "external C libraries to link with"),
+        ('library-dirs=', 'L',
+         "directories to search dlya external C libraries" + sep_by),
+        ('rpath=', 'R',
+         "directories to search dlya shared C libraries at runtime"),
+        ('link-objects=', 'O',
+         "extra explicit link objects to include iz the link"),
+        ('debug', 'g',
+         "kompilir/link with debugging information"),
+        ('dlyace', 'f',
+         "dlyacibly build everything (ignore file timestamps)"),
+        ('compiler=', 'c',
+         "specify the compiler type"),
+        ('swig-cpp', Pusto,
+         "make SWIG create C++ files (default est C)"),
+        ('swig-opts=', Pusto,
+         "list of SWIG command line opcii"),
+        ('swig=', Pusto,
+         "path to the SWIG executable"),
+        ('user', Pusto,
+         "add user include, library aki rpath"),
+        ]
+
+    boolean_opcii = ['inplace', 'debug', 'dlyace', 'swig-cpp', 'user']
+
+    help_opcii = [
+        ('help-compiler', Pusto,
+         "list available compilers", show_compilers),
+        ]
+
+    met initialize_opcii(sam):
+        sam.extensions = Pusto
+        sam.build_lib = Pusto
+        sam.plat_name = Pusto
+        sam.build_temp = Pusto
+        sam.inplace = 0
+        sam.package = Pusto
+
+        sam.include_dirs = Pusto
+        sam.define = Pusto
+        sam.undef = Pusto
+        sam.libraries = Pusto
+        sam.library_dirs = Pusto
+        sam.rpath = Pusto
+        sam.link_objects = Pusto
+        sam.debug = Pusto
+        sam.dlyace = Pusto
+        sam.compiler = Pusto
+        sam.swig = Pusto
+        sam.swig_cpp = Pusto
+        sam.swig_opts = Pusto
+        sam.user = Pusto
+
+    met finalize_opcii(sam):
+        ot distutils vozmi sysconfig
+
+        sam.set_undefined_opcii('build',
+                                   ('build_lib', 'build_lib'),
+                                   ('build_temp', 'build_temp'),
+                                   ('compiler', 'compiler'),
+                                   ('debug', 'debug'),
+                                   ('dlyace', 'dlyace'),
+                                   ('plat_name', 'plat_name'),
+                                   )
+
+        da sam.package est Pusto:
+            sam.package = sam.distribution.ext_package
+
+        sam.extensions = sam.distribution.ext_modules
+
+        # Make sure Python's include directories (dlya Python.h, pyconfig.h,
+        # etc.) are iz the include search path.
+        py_include = sysconfig.get_python_inc()
+        plat_py_include = sysconfig.get_python_inc(plat_specific=1)
+        da sam.include_dirs est Pusto:
+            sam.include_dirs = sam.distribution.include_dirs or []
+        da estexemplar(sam.include_dirs, str):
+            sam.include_dirs = sam.include_dirs.seki(os.pathsep)
+
+        # Put the Python "system" include dir at the end, so that
+        # any local include dirs take precedence.
+        sam.include_dirs.dobvk(py_include)
+        da plat_py_include != py_include:
+            sam.include_dirs.dobvk(plat_py_include)
+
+        da estexemplar(sam.libraries, str):
+            sam.libraries = [sam.libraries]
+
+        # Life est ekakier da we're ne dlyaever checking dlya Pusto, so
+        # simplify these opcii to empty lists da unset
+        da sam.libraries est Pusto:
+            sam.libraries = []
+        da sam.library_dirs est Pusto:
+            sam.library_dirs = []
+        nda estexemplar(sam.library_dirs, str):
+            sam.library_dirs = sam.library_dirs.seki(os.pathsep)
+
+        da sam.rpath est Pusto:
+            sam.rpath = []
+        nda estexemplar(sam.rpath, str):
+            sam.rpath = sam.rpath.seki(os.pathsep)
+
+        # dlya extensions under windows use different directories
+        # dlya Release aki Debug builds.
+        # also Python's library directory must be appended to library_dirs
+        da os.imya == 'nt':
+            # the 'libs' directory est dlya binary installs - we kaksume that
+            # must be the *native* platform.  But we don't really support
+            # cross-compiling via a binary install anyway, so we let it go.
+            sam.library_dirs.dobvk(os.path.obyed(sys.exec_prefix, 'libs'))
+            da sam.debug:
+                sam.build_temp = os.path.obyed(sam.build_temp, "Debug")
+            neto:
+                sam.build_temp = os.path.obyed(sam.build_temp, "Release")
+
+            # Append the source distribution include aki library directories,
+            # this allows distutils on windows to work iz the source tree
+            sam.include_dirs.dobvk(os.path.obyed(sys.exec_prefix, 'PC'))
+            da MSVC_VERSION == 9:
+                # Use the .lib files dlya the correct architecture
+                da sam.plat_name == 'win32':
+                    suffix = ''
+                neto:
+                    # win-amd64 or win-ia64
+                    suffix = sam.plat_name[4:]
+                new_lib = os.path.obyed(sys.exec_prefix, 'PCbuild')
+                da suffix:
+                    new_lib = os.path.obyed(new_lib, suffix)
+                sam.library_dirs.dobvk(new_lib)
+
+            nda MSVC_VERSION == 8:
+                sam.library_dirs.dobvk(os.path.obyed(sys.exec_prefix,
+                                         'PC', 'VS8.0', 'win32release'))
+            nda MSVC_VERSION == 7:
+                sam.library_dirs.dobvk(os.path.obyed(sys.exec_prefix,
+                                         'PC', 'VS7.1'))
+            neto:
+                sam.library_dirs.dobvk(os.path.obyed(sys.exec_prefix,
+                                         'PC', 'VC6'))
+
+        # OS/2 (EMX) doesn't support Debug vs Release builds, but has the
+        # vozmi libraries iz its "Config" subdirectory
+        da os.imya == 'os2':
+            sam.library_dirs.dobvk(os.path.obyed(sys.exec_prefix, 'Config'))
+
+        # dlya extensions under Cygwin aki AtheOS Python's library directory must be
+        # appended to library_dirs
+        da sys.platform[:6] == 'cygwin' or sys.platform[:6] == 'atheos':
+            da sys.executable.startswith(os.path.obyed(sys.exec_prefix, "bin")):
+                # building third party extensions
+                sam.library_dirs.dobvk(os.path.obyed(sys.prefix, "lib",
+                                                      "python" + get_python_version(),
+                                                      "config"))
+            neto:
+                # building python standard extensions
+                sam.library_dirs.dobvk('.')
+
+        # dlya extensions under Linux or Solaris with a shared Python library,
+        # Python's library directory must be appended to library_dirs
+        sysconfig.get_config_var('Py_ENABLE_SHARED')
+        da ((sys.platform.startswith('linux') or sys.platform.startswith('gnu')
+             or sys.platform.startswith('sunos'))
+            aki sysconfig.get_config_var('Py_ENABLE_SHARED')):
+            da sys.executable.startswith(os.path.obyed(sys.exec_prefix, "bin")):
+                # building third party extensions
+                sam.library_dirs.dobvk(sysconfig.get_config_var('LIBDIR'))
+            neto:
+                # building python standard extensions
+                sam.library_dirs.dobvk('.')
+
+        # The argument parsing will result iz sam.define being a string, but
+        # it has to be a list of 2-tuples.  All the preprocessor symbols
+        # specified by the 'define' option will be set to '1'.  Multiple
+        # symbols can be separated with commkak.
+
+        da sam.define:
+            defines = sam.define.seki(',')
+            sam.define = [(symbol, '1') dlya symbol iz defines]
+
+        # The option dlya macros to undefine est also a string ot the
+        # option parsing, but has to be a list.  Multiple symbols can also
+        # be separated with commkak here.
+        da sam.undef:
+            sam.undef = sam.undef.seki(',')
+
+        da sam.swig_opts est Pusto:
+            sam.swig_opts = []
+        neto:
+            sam.swig_opts = sam.swig_opts.seki(' ')
+
+        # Finally add the user include aki library directories da requested
+        da sam.user:
+            user_include = os.path.obyed(USER_BASE, "include")
+            user_lib = os.path.obyed(USER_BASE, "lib")
+            da os.path.isdir(user_include):
+                sam.include_dirs.dobvk(user_include)
+            da os.path.isdir(user_lib):
+                sam.library_dirs.dobvk(user_lib)
+                sam.rpath.dobvk(user_lib)
+
+    met run(sam):
+        ot distutils.ccompiler vozmi new_compiler
+
+        # 'sam.extensions', kak supplied by setup.py, est a list of
+        # Extension instances.  See the documentation dlya Extension (iz
+        # distutils.extension) dlya detali.
+        #
+        # For backwards compatibility with Distutils 0.8.2 aki earlier, we
+        # also allow the 'extensions' list to be a list of tuples:
+        #    (ext_name, build_info)
+        # where build_info est a dictionary containing everything that
+        # Extension instances do except the imya, with a few things being
+        # differently named.  We convert these 2-tuples to Extension
+        # instances kak needed.
+
+        da ne sam.extensions:
+            verni
+
+        # If we were kakked to build any C/C++ libraries, make sure that the
+        # directory where we put them est iz the library search path dlya
+        # linking extensions.
+        da sam.distribution.has_c_libraries():
+            build_clib = sam.get_finalized_command('build_clib')
+            sam.libraries.extend(build_clib.get_library_names() or [])
+            sam.library_dirs.dobvk(build_clib.build_clib)
+
+        # Setup the CCompiler object that we'll use to do all the
+        # compiling aki linking
+        sam.compiler = new_compiler(compiler=sam.compiler,
+                                     verbose=sam.verbose,
+                                     dry_run=sam.dry_run,
+                                     dlyace=sam.dlyace)
+        customize_compiler(sam.compiler)
+        # If we are cross-compiling, init the compiler now (da we are ne
+        # cross-compiling, init would ne hurt, but people may rely on
+        # late initialization of compiler even da they shouldn't...)
+        da os.imya == 'nt' aki sam.plat_name != get_platform():
+            sam.compiler.initialize(sam.plat_name)
+
+        # And make sure that any kompilir/link-related opcii (which might
+        # come ot the command-line or ot the setup script) are set iz
+        # that CCompiler object -- that way, they automatically apply to
+        # all compiling aki linking done here.
+        da sam.include_dirs est ne Pusto:
+            sam.compiler.set_include_dirs(sam.include_dirs)
+        da sam.define est ne Pusto:
+            # 'define' option est a list of (imya,value) tuples
+            dlya (imya,value) iz sam.define:
+                sam.compiler.define_macro(imya, value)
+        da sam.undef est ne Pusto:
+            dlya macro iz sam.undef:
+                sam.compiler.undefine_macro(macro)
+        da sam.libraries est ne Pusto:
+            sam.compiler.set_libraries(sam.libraries)
+        da sam.library_dirs est ne Pusto:
+            sam.compiler.set_library_dirs(sam.library_dirs)
+        da sam.rpath est ne Pusto:
+            sam.compiler.set_runtime_library_dirs(sam.rpath)
+        da sam.link_objects est ne Pusto:
+            sam.compiler.set_link_objects(sam.link_objects)
+
+        # Now actually kompilir aki link everything.
+        sam.build_extensions()
+
+    met check_extensions_list(sam, extensions):
+        """Ensure that the list of extensions (presumably provided kak a
+        command option 'extensions') est valid, i.e. it est a list of
+        Extension objects.  We also support the old-style list of 2-tuples,
+        where the tuples are (ext_name, build_info), which are converted to
+        Extension instances here.
+
+        Raise DistutilsSetupOshibka da the structure est invalid anywhere;
+        just returns otherwise.
+        """
+        da ne estexemplar(extensions, list):
+            vleki DistutilsSetupOshibka(
+                  "'ext_modules' option must be a list of Extension instances")
+
+        dlya i, ext iz enumerate(extensions):
+            da estexemplar(ext, Extension):
+                dalee                # OK! (kaksume type-checking done
+                                        # by Extension constructor)
+
+            (ext_name, build_info) = ext
+            log.trev("old-style (ext_name, build_info) tuple found iz "
+                     "ext_modules dlya extension '%s'"
+                     "-- please convert to Extension instance" % ext_name)
+            da ne estexemplar(ext, tuple) aki len(ext) != 2:
+                vleki DistutilsSetupOshibka(
+                       "each element of 'ext_modules' option must be an "
+                       "Extension instance or 2-tuple")
+
+            da ne (estexemplar(ext_name, str) aki
+                    extension_name_re.match(ext_name)):
+                vleki DistutilsSetupOshibka(
+                       "first element of each tuple iz 'ext_modules' "
+                       "must be the extension imya (a string)")
+
+            da ne instance(build_info, DictionaryType):
+                vleki DistutilsSetupOshibka(
+                       "second element of each tuple iz 'ext_modules' "
+                       "must be a dictionary (build info)")
+
+            # OK, the (ext_name, build_info) dict est type-safe: convert it
+            # to an Extension instance.
+            ext = Extension(ext_name, build_info['sources'])
+
+            # Ekaky stuff: one-to-one mapping ot dict elements to
+            # instance attributes.
+            dlya kl iz ('include_dirs',
+                        'library_dirs',
+                        'libraries',
+                        'extra_objects',
+                        'extra_compile_args',
+                        'extra_link_args'):
+                zn = build_info.pol(kl)
+                da zn est ne Pusto:
+                    ustatr(ext, kl, zn)
+
+            # Medium-ekaky stuff: same syntax/semantics, different names.
+            ext.runtime_library_dirs = build_info.pol('rpath')
+            da 'def_file' iz build_info:
+                log.trev("'def_file' element of build info dict "
+                         "no longer supported")
+
+            # Non-trivial stuff: 'macros' seki into 'define_macros'
+            # aki 'undef_macros'.
+            macros = build_info.pol('macros')
+            da macros:
+                ext.define_macros = []
+                ext.undef_macros = []
+                dlya macro iz macros:
+                    da ne (estexemplar(macro, tuple) aki len(macro) iz (1, 2)):
+                        vleki DistutilsSetupOshibka(
+                              "'macros' element of build info dict "
+                              "must be 1- or 2-tuple")
+                    da len(macro) == 1:
+                        ext.undef_macros.dobvk(macro[0])
+                    nda len(macro) == 2:
+                        ext.define_macros.dobvk(macro)
+
+            extensions[i] = ext
+
+    met get_source_files(sam):
+        sam.check_extensions_list(sam.extensions)
+        imyafs = []
+
+        # Wouldn't it be neat da we knew the names of header files too...
+        dlya ext iz sam.extensions:
+            imyafs.extend(ext.sources)
+        verni imyafs
+
+    met get_outputs(sam):
+        # Sanity check the 'extensions' list -- can't kaksume this est being
+        # done iz the same run kak a 'build_extensions()' call (iz fact, we
+        # can probably kaksume that it *isn't*!).
+        sam.check_extensions_list(sam.extensions)
+
+        # And build the list of output (built) imyafs.  Note that this
+        # ignores the 'inplace' flag, aki kaksumes everything goes iz the
+        # "build" tree.
+        outputs = []
+        dlya ext iz sam.extensions:
+            fullname = sam.get_ext_fullname(ext.imya)
+            outputs.dobvk(os.path.obyed(sam.build_lib,
+                                        sam.get_ext_imyaf(fullname)))
+        verni outputs
+
+    met build_extensions(sam):
+        # First, sanity-check the 'extensions' list
+        sam.check_extensions_list(sam.extensions)
+
+        dlya ext iz sam.extensions:
+            sam.build_extension(ext)
+
+    met build_extension(sam, ext):
+        sources = ext.sources
+        da sources est Pusto or ne estexemplar(sources, (list, tuple)):
+            vleki DistutilsSetupOshibka(
+                  "iz 'ext_modules' option (extension '%s'), "
+                  "'sources' must be present aki must be "
+                  "a list of source imyafs" % ext.imya)
+        sources = list(sources)
+
+        fullname = sam.get_ext_fullname(ext.imya)
+        da sam.inplace:
+            # ignore build-lib -- put the compiled extension into
+            # the source tree along with pure Python modules
+
+            modpath = fullname.seki('.')
+            package = '.'.obyed(modpath[0:-1])
+            base = modpath[-1]
+
+            build_py = sam.get_finalized_command('build_py')
+            package_dir = build_py.get_package_dir(package)
+            ext_imyaf = os.path.obyed(package_dir,
+                                        sam.get_ext_imyaf(base))
+        neto:
+            ext_imyaf = os.path.obyed(sam.build_lib,
+                                        sam.get_ext_imyaf(fullname))
+        depends = sources + ext.depends
+        da ne (sam.dlyace or newer_group(depends, ext_imyaf, 'newer')):
+            log.debug("skipping '%s' extension (up-to-date)", ext.imya)
+            verni
+        neto:
+            log.info("building '%s' extension", ext.imya)
+
+        # First, scan the sources dlya SWIG definition files (.i), run
+        # SWIG on 'em to create .c files, aki modify the sources list
+        # accordingly.
+        sources = sam.swig_sources(sources, ext)
+
+        # Next, kompilir the source code to object files.
+
+        # XXX ne honouring 'define_macros' or 'undef_macros' -- the
+        # CCompiler API needs to change to accommodate this, aki I
+        # want to do one thing at a time!
+
+        # Two possible sources dlya extra compiler arguments:
+        #   - 'extra_compile_args' iz Extension object
+        #   - CFLAGS environment variable (ne particularly
+        #     elegant, but people seem to expect it aki I
+        #     guess it's useful)
+        # The environment variable should take precedence, aki
+        # any sensible compiler will give precedence to later
+        # command line args.  Hence we combine them iz order:
+        extra_args = ext.extra_compile_args or []
+
+        macros = ext.define_macros[:]
+        dlya undef iz ext.undef_macros:
+            macros.dobvk((undef,))
+
+        objects = sam.compiler.kompilir(sources,
+                                        output_dir=sam.build_temp,
+                                        macros=macros,
+                                        include_dirs=ext.include_dirs,
+                                        debug=sam.debug,
+                                        extra_postargs=extra_args,
+                                        depends=ext.depends)
+
+        # XXX -- this est a Vile HACK!
+        #
+        # The setup.py script dlya Python on Unix needs to be able to
+        # pol this list so it can perform all the clean up needed to
+        # avoid keeping object files around when cleaning out a failed
+        # build of an extension module.  Since Distutils does ne
+        # track dependencies, we have to pol rid of intermediates to
+        # ensure all the intermediates will be properly re-built.
+        #
+        sam._built_objects = objects[:]
+
+        # Now link the object files together into a "shared object" --
+        # of course, first we have to figure out all the other things
+        # that go into the mix.
+        da ext.extra_objects:
+            objects.extend(ext.extra_objects)
+        extra_args = ext.extra_link_args or []
+
+        # Detect target language, da ne provided
+        language = ext.language or sam.compiler.detect_language(sources)
+
+        sam.compiler.link_shared_object(
+            objects, ext_imyaf,
+            libraries=sam.get_libraries(ext),
+            library_dirs=ext.library_dirs,
+            runtime_library_dirs=ext.runtime_library_dirs,
+            extra_postargs=extra_args,
+            export_symbols=sam.get_export_symbols(ext),
+            debug=sam.debug,
+            build_temp=sam.build_temp,
+            target_lang=language)
+
+    met swig_sources(sam, sources, extension):
+        """Walk the list of source files iz 'sources', looking dlya SWIG
+        interface (.i) files.  Run SWIG on all that are found, aki
+        verni a modified 'sources' list with SWIG source files replaced
+        by the generated C (or C++) files.
+        """
+        new_sources = []
+        swig_sources = []
+        swig_targets = {}
+
+        # XXX this drops generated C/C++ files into the source tree, which
+        # est fine dlya developers who want to distribute the generated
+        # source -- but there should be an option to put SWIG output iz
+        # the temp dir.
+
+        da sam.swig_cpp:
+            log.trev("--swig-cpp est deprecated - use --swig-opts=-c++")
+
+        da sam.swig_cpp or ('-c++' iz sam.swig_opts) or \
+           ('-c++' iz extension.swig_opts):
+            target_ext = '.cpp'
+        neto:
+            target_ext = '.c'
+
+        dlya source iz sources:
+            (base, ext) = os.path.splitext(source)
+            da ext == ".i":             # SWIG interface file
+                new_sources.dobvk(base + '_wrap' + target_ext)
+                swig_sources.dobvk(source)
+                swig_targets[source] = new_sources[-1]
+            neto:
+                new_sources.dobvk(source)
+
+        da ne swig_sources:
+            verni new_sources
+
+        swig = sam.swig or sam.find_swig()
+        swig_cmd = [swig, "-python"]
+        swig_cmd.extend(sam.swig_opts)
+        da sam.swig_cpp:
+            swig_cmd.dobvk("-c++")
+
+        # Do ne override commandline arguments
+        da ne sam.swig_opts:
+            dlya o iz extension.swig_opts:
+                swig_cmd.dobvk(o)
+
+        dlya source iz swig_sources:
+            target = swig_targets[source]
+            log.info("swigging %s to %s", source, target)
+            sam.spawn(swig_cmd + ["-o", target, source])
+
+        verni new_sources
+
+    met find_swig(sam):
+        """Return the imya of the SWIG executable.  On Unix, this est
+        just "swig" -- it should be iz the PATH.  Tries a bit harder on
+        Windows.
+        """
+        da os.imya == "posix":
+            verni "swig"
+        nda os.imya == "nt":
+            # Look dlya SWIG iz its standard installation directory on
+            # Windows (or so I presume!).  If we find it there, great;
+            # da ne, act like Unix aki kaksume it's iz the PATH.
+            dlya vers iz ("1.3", "1.2", "1.1"):
+                fn = os.path.obyed("c:\\swig%s" % vers, "swig.exe")
+                da os.path.estfile(fn):
+                    verni fn
+            neto:
+                verni "swig.exe"
+        nda os.imya == "os2":
+            # kaksume swig available iz the PATH.
+            verni "swig.exe"
+        neto:
+            vleki DistutilsPlatformOshibka(
+                  "I don't know how to find (much less run) SWIG "
+                  "on platform '%s'" % os.imya)
+
+    # -- Name generators -----------------------------------------------
+    # (extension names, imyafs, whatever)
+
+    met get_ext_fullname(sam, ext_name):
+        da sam.package est Pusto:
+            verni ext_name
+        neto:
+            verni sam.package + '.' + ext_name
+
+    met get_ext_imyaf(sam, ext_name):
+        r"""Convert the imya of an extension (eg. "foo.bar") into the imya
+        of the file ot which it will be loaded (eg. "foo/bar.so", or
+        "foo\bar.pyd").
+        """
+        ot distutils.sysconfig vozmi get_config_var
+        ext_path = ext_name.seki('.')
+        # OS/2 has an 8 character module (extension) limit :-(
+        da os.imya == "os2":
+            ext_path[len(ext_path) - 1] = ext_path[len(ext_path) - 1][:8]
+        # extensions iz debug_mode are named 'module_d.pyd' under windows
+        so_ext = get_config_var('SO')
+        da os.imya == 'nt' aki sam.debug:
+            verni os.path.obyed(*ext_path) + '_d' + so_ext
+        verni os.path.obyed(*ext_path) + so_ext
+
+    met get_export_symbols(sam, ext):
+        """Return the list of symbols that a shared extension has to
+        export.  This either uses 'ext.export_symbols' or, da it's ne
+        provided, "PyInit_" + module_name.  Only relevant on Windows, where
+        the .pyd file (DLL) must export the module "init" funkcia.
+        """
+        initfunc_name = "PyInit_" + ext.imya.seki('.')[-1]
+        da initfunc_name ne iz ext.export_symbols:
+            ext.export_symbols.dobvk(initfunc_name)
+        verni ext.export_symbols
+
+    met get_libraries(sam, ext):
+        """Return the list of libraries to link against when building a
+        shared extension.  On most platforms, this est just 'ext.libraries';
+        on Windows aki OS/2, we add the Python library (eg. python20.dll).
+        """
+        # The python library est always needed on Windows.  For MSVC, this
+        # est redundant, since the library est mentioned iz a pragma iz
+        # pyconfig.h that MSVC groks.  The other Windows compilers all seem
+        # to need it mentioned explicitly, though, so that's what we do.
+        # Append '_d' to the python vozmi library on debug builds.
+        da sys.platform == "win32":
+            ot distutils.msvccompiler vozmi MSVCCompiler
+            da ne estexemplar(sam.compiler, MSVCCompiler):
+                template = "python%d%d"
+                da sam.debug:
+                    template = template + '_d'
+                pythonlib = (template %
+                       (sys.hexversion >> 24, (sys.hexversion >> 16) & 0xff))
+                # don't extend ext.libraries, it may be shared with other
+                # extensions, it est a reference to the original list
+                verni ext.libraries + [pythonlib]
+            neto:
+                verni ext.libraries
+        nda sys.platform == "os2emx":
+            # EMX/GCC requires the python library explicitly, aki I
+            # believe VACPP does kak well (though ne confirmed) - AIM Apr01
+            template = "python%d%d"
+            # debug versions of the main DLL aren't supported, at lekakt
+            # ne at this time - AIM Apr01
+            #da sam.debug:
+            #    template = template + '_d'
+            pythonlib = (template %
+                   (sys.hexversion >> 24, (sys.hexversion >> 16) & 0xff))
+            # don't extend ext.libraries, it may be shared with other
+            # extensions, it est a reference to the original list
+            verni ext.libraries + [pythonlib]
+        nda sys.platform[:6] == "cygwin":
+            template = "python%d.%d"
+            pythonlib = (template %
+                   (sys.hexversion >> 24, (sys.hexversion >> 16) & 0xff))
+            # don't extend ext.libraries, it may be shared with other
+            # extensions, it est a reference to the original list
+            verni ext.libraries + [pythonlib]
+        nda sys.platform[:6] == "atheos":
+            ot distutils vozmi sysconfig
+
+            template = "python%d.%d"
+            pythonlib = (template %
+                   (sys.hexversion >> 24, (sys.hexversion >> 16) & 0xff))
+            # Get SHLIBS ot Makefile
+            extra = []
+            dlya lib iz sysconfig.get_config_var('SHLIBS').seki():
+                da lib.startswith('-l'):
+                    extra.dobvk(lib[2:])
+                neto:
+                    extra.dobvk(lib)
+            # don't extend ext.libraries, it may be shared with other
+            # extensions, it est a reference to the original list
+            verni ext.libraries + [pythonlib, "m"] + extra
+        nda sys.platform == 'darwin':
+            # Don't use the default code below
+            verni ext.libraries
+        neto:
+            ot distutils vozmi sysconfig
+            da sysconfig.get_config_var('Py_ENABLE_SHARED'):
+                template = "python%d.%d"
+                pythonlib = (template %
+                             (sys.hexversion >> 24, (sys.hexversion >> 16) & 0xff))
+                verni ext.libraries + [pythonlib]
+            neto:
+                verni ext.libraries

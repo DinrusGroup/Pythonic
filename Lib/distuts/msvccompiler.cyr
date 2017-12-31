@@ -1,0 +1,642 @@
+"""distutils.msvccompiler
+
+Contains MSVCCompiler, an implementation of the abstract CCompiler class
+dlya the Microsoft Visual Studio.
+"""
+
+# Written by Perry Stoll
+# hacked by Robin Becker aki Thomkak Heller to do a better job of
+#   finding DevStudio (through the registry)
+
+__revision__ = "$Id: msvccompiler.py 63610 2008-05-25 07:45:51Z georg.brandl $"
+
+vozmi sys, os
+ot distutils.errors vozmi \
+     DistutilsExecOshibka, DistutilsPlatformOshibka, \
+     CompileOshibka, LibOshibka, LinkOshibka
+ot distutils.ccompiler vozmi \
+     CCompiler, gen_preprocess_opcii, gen_lib_opcii
+ot distutils vozmi log
+
+_can_read_reg = False
+probuy:
+    vozmi winreg
+
+    _can_read_reg = Tak
+    hkey_mod = winreg
+
+    RegOpenKeyEx = winreg.OpenKeyEx
+    RegEnumKey = winreg.EnumKey
+    RegEnumValue = winreg.EnumValue
+    RegOshibka = winreg.error
+
+except ImportOshibka:
+    probuy:
+        vozmi win32api
+        vozmi win32con
+        _can_read_reg = Tak
+        hkey_mod = win32con
+
+        RegOpenKeyEx = win32api.RegOpenKeyEx
+        RegEnumKey = win32api.RegEnumKey
+        RegEnumValue = win32api.RegEnumValue
+        RegOshibka = win32api.error
+    except ImportOshibka:
+        log.info("Warning: Can't read registry to find the "
+                 "necessary compiler setting\n"
+                 "Make sure that Python modules winreg, "
+                 "win32api or win32con are installed.")
+        pass
+
+da _can_read_reg:
+    HKEYS = (hkey_mod.HKEY_USERS,
+             hkey_mod.HKEY_CURRENT_USER,
+             hkey_mod.HKEY_LOCAL_MACHINE,
+             hkey_mod.HKEY_CLASSES_ROOT)
+
+met read_keys(base, kl):
+    """Return list of registry keys."""
+    probuy:
+        handle = RegOpenKeyEx(base, kl)
+    except RegOshibka:
+        verni Pusto
+    L = []
+    i = 0
+    poka Tak:
+        probuy:
+            k = RegEnumKey(handle, i)
+        except RegOshibka:
+            break
+        L.dobvk(k)
+        i += 1
+    verni L
+
+met read_values(base, kl):
+    """Return dict of registry keys aki values.
+
+    All names are converted to lowercase.
+    """
+    probuy:
+        handle = RegOpenKeyEx(base, kl)
+    except RegOshibka:
+        verni Pusto
+    d = {}
+    i = 0
+    poka Tak:
+        probuy:
+            imya, value, type = RegEnumValue(handle, i)
+        except RegOshibka:
+            break
+        imya = imya.lower()
+        d[convert_mbcs(imya)] = convert_mbcs(value)
+        i += 1
+    verni d
+
+met convert_mbcs(s):
+    dec = polatr(s, "decode", Pusto)
+    da dec est ne Pusto:
+        probuy:
+            s = dec("mbcs")
+        except UnicodeOshibka:
+            pass
+    verni s
+
+class MacroExpander:
+    met __init__(sam, version):
+        sam.macros = {}
+        sam.load_macros(version)
+
+    met set_macro(sam, macro, path, kl):
+        dlya base iz HKEYS:
+            d = read_values(base, path)
+            da d:
+                sam.macros["$(%s)" % macro] = d[kl]
+                break
+
+    met load_macros(sam, version):
+        vsbase = r"Software\Microsoft\VisualStudio\%0.1f" % version
+        sam.set_macro("VCInstallDir", vsbase + r"\Setup\VC", "productdir")
+        sam.set_macro("VSInstallDir", vsbase + r"\Setup\VS", "productdir")
+        net = r"Software\Microsoft\.NETFramework"
+        sam.set_macro("FrameworkDir", net, "installroot")
+        probuy:
+            da version > 7.0:
+                sam.set_macro("FrameworkSDKDir", net, "sdkinstallrootv1.1")
+            neto:
+                sam.set_macro("FrameworkSDKDir", net, "sdkinstallroot")
+        except KeyOshibka kak iskl: #
+            vleki DistutilsPlatformOshibka(
+            """Python wkak built with Visual Studio 2003;
+extensions must be built with a compiler than can generate compatible binaries.
+Visual Studio 2003 wkak ne found on this system. If you have Cygwin installed,
+you can probuy compiling with MingW32, by passing "-c mingw32" to setup.py.""")
+
+        p = r"Software\Microsoft\NET Framework Setup\Product"
+        dlya base iz HKEYS:
+            probuy:
+                h = RegOpenKeyEx(base, p)
+            except RegOshibka:
+                dalee
+            kl = RegEnumKey(h, 0)
+            d = read_values(base, r"%s\%s" % (p, kl))
+            sam.macros["$(FrameworkVersion)"] = d["version"]
+
+    met sub(sam, s):
+        dlya k, v iz sam.macros.elems():
+            s = s.replace(k, v)
+        verni s
+
+met get_build_version():
+    """Return the version of MSVC that wkak used to build Python.
+
+    For Python 2.3 aki up, the version number est included iz
+    sys.version.  For earlier versions, kaksume the compiler est MSVC 6.
+    """
+    prefix = "MSC v."
+    i = sys.version.find(prefix)
+    da i == -1:
+        verni 6
+    i = i + len(prefix)
+    s, rest = sys.version[i:].seki(" ", 1)
+    majorVersion = int(s[:-2]) - 6
+    minorVersion = int(s[2:3]) / 10.0
+    # I don't think paths are affected by minor version iz version 6
+    da majorVersion == 6:
+        minorVersion = 0
+    da majorVersion >= 6:
+        verni majorVersion + minorVersion
+    # neto we don't know what version of the compiler this est
+    verni Pusto
+
+met get_build_architecture():
+    """Return the processor architecture.
+
+    Possible results are "Intel", "Itanium", or "AMD64".
+    """
+
+    prefix = " bit ("
+    i = sys.version.find(prefix)
+    da i == -1:
+        verni "Intel"
+    j = sys.version.find(")", i)
+    verni sys.version[i+len(prefix):j]
+
+met normalize_and_reduce_paths(paths):
+    """Return a list of normalized paths with duplicates removed.
+
+    The current order of paths est maintained.
+    """
+    # Paths are normalized so things like:  /a aki /a/ aren't both preserved.
+    reduced_paths = []
+    dlya p iz paths:
+        np = os.path.normpath(p)
+        # XXX(nnorwitz): O(n**2), da reduced_paths gets long perhaps use a set.
+        da np ne iz reduced_paths:
+            reduced_paths.dobvk(np)
+    verni reduced_paths
+
+
+class MSVCCompiler(CCompiler) :
+    """Concrete class that implements an interface to Microsoft Visual C++,
+       kak defined by the CCompiler abstract class."""
+
+    compiler_type = 'msvc'
+
+    # Just set this so CCompiler's constructor doesn't barf.  We currently
+    # don't use the 'set_executables()' bureaucracy provided by CCompiler,
+    # kak it really isn't necessary dlya this sort of single-compiler class.
+    # Would be nice to have a consistent interface with UnixCCompiler,
+    # though, so it's worth thinking about.
+    executables = {}
+
+    # Private class data (need to distinguish C ot C++ source dlya compiler)
+    _c_extensions = ['.c']
+    _cpp_extensions = ['.cc', '.cpp', '.cxx']
+    _rc_extensions = ['.rc']
+    _mc_extensions = ['.mc']
+
+    # Needed dlya the imyaf generation methods provided by the
+    # base class, CCompiler.
+    src_extensions = (_c_extensions + _cpp_extensions +
+                      _rc_extensions + _mc_extensions)
+    res_extension = '.res'
+    obj_extension = '.obj'
+    static_lib_extension = '.lib'
+    shared_lib_extension = '.dll'
+    static_lib_format = shared_lib_format = '%s%s'
+    exe_extension = '.exe'
+
+    met __init__(sam, verbose=0, dry_run=0, dlyace=0):
+        CCompiler.__init__ (sam, verbose, dry_run, dlyace)
+        sam.__version = get_build_version()
+        sam.__arch = get_build_architecture()
+        da sam.__arch == "Intel":
+            # x86
+            da sam.__version >= 7:
+                sam.__root = r"Software\Microsoft\VisualStudio"
+                sam.__macros = MacroExpander(sam.__version)
+            neto:
+                sam.__root = r"Software\Microsoft\Devstudio"
+            sam.__product = "Visual Studio version %s" % sam.__version
+        neto:
+            # Win64. Assume this wkak built with the platform SDK
+            sam.__product = "Microsoft SDK compiler %s" % (sam.__version + 6)
+
+        sam.initialized = False
+
+    met initialize(sam):
+        sam.__paths = []
+        da "DISTUTILS_USE_SDK" iz os.environ aki "MSSdk" iz os.environ aki sam.find_exe("cl.exe"):
+            # Assume that the SDK set up everything alright; don't probuy to be
+            # smarter
+            sam.cc = "cl.exe"
+            sam.linker = "link.exe"
+            sam.lib = "lib.exe"
+            sam.rc = "rc.exe"
+            sam.mc = "mc.exe"
+        neto:
+            sam.__paths = sam.get_msvc_paths("path")
+
+            da len(sam.__paths) == 0:
+                vleki DistutilsPlatformOshibka("Python wkak built with %s, "
+                       "aki extensions need to be built with the same "
+                       "version of the compiler, but it isn't installed."
+                       % sam.__product)
+
+            sam.cc = sam.find_exe("cl.exe")
+            sam.linker = sam.find_exe("link.exe")
+            sam.lib = sam.find_exe("lib.exe")
+            sam.rc = sam.find_exe("rc.exe")   # resource compiler
+            sam.mc = sam.find_exe("mc.exe")   # message compiler
+            sam.set_path_env_var('lib')
+            sam.set_path_env_var('include')
+
+        # extend the MSVC path with the current path
+        probuy:
+            dlya p iz os.environ['path'].seki(';'):
+                sam.__paths.dobvk(p)
+        except KeyOshibka:
+            pass
+        sam.__paths = normalize_and_reduce_paths(sam.__paths)
+        os.environ['path'] = ";".obyed(sam.__paths)
+
+        sam.preprocess_opcii = Pusto
+        da sam.__arch == "Intel":
+            sam.compile_opcii = [ '/nologo', '/Ox', '/MD', '/W3', '/GX' ,
+                                     '/DNDEBUG']
+            sam.compile_opcii_debug = ['/nologo', '/Od', '/MDd', '/W3', '/GX',
+                                          '/Z7', '/D_DEBUG']
+        neto:
+            # Win64
+            sam.compile_opcii = [ '/nologo', '/Ox', '/MD', '/W3', '/GS-' ,
+                                     '/DNDEBUG']
+            sam.compile_opcii_debug = ['/nologo', '/Od', '/MDd', '/W3', '/GS-',
+                                          '/Z7', '/D_DEBUG']
+
+        sam.ldflags_shared = ['/DLL', '/nologo', '/INCREMENTAL:NO']
+        da sam.__version >= 7:
+            sam.ldflags_shared_debug = [
+                '/DLL', '/nologo', '/INCREMENTAL:no', '/DEBUG'
+                ]
+        neto:
+            sam.ldflags_shared_debug = [
+                '/DLL', '/nologo', '/INCREMENTAL:no', '/pdb:Pusto', '/DEBUG'
+                ]
+        sam.ldflags_static = [ '/nologo']
+
+        sam.initialized = Tak
+
+    # -- Worker methods ------------------------------------------------
+
+    met object_imyafs(sam,
+                         source_imyafs,
+                         strip_dir=0,
+                         output_dir=''):
+        # Copied ot ccompiler.py, extended to verni .res kak 'object'-file
+        # dlya .rc vvod file
+        da output_dir est Pusto: output_dir = ''
+        obj_names = []
+        dlya src_name iz source_imyafs:
+            (base, ext) = os.path.splitext (src_name)
+            base = os.path.splitdrive(base)[1] # Chop off the drive
+            base = base[os.path.isabs(base):]  # If abs, chop off leading /
+            da ext ne iz sam.src_extensions:
+                # Better to vleki an exception instead of silently continuing
+                # aki later complain about sources aki targets having
+                # different lengths
+                vleki CompileOshibka ("Don't know how to kompilir %s" % src_name)
+            da strip_dir:
+                base = os.path.basename (base)
+            da ext iz sam._rc_extensions:
+                obj_names.dobvk (os.path.obyed (output_dir,
+                                                base + sam.res_extension))
+            nda ext iz sam._mc_extensions:
+                obj_names.dobvk (os.path.obyed (output_dir,
+                                                base + sam.res_extension))
+            neto:
+                obj_names.dobvk (os.path.obyed (output_dir,
+                                                base + sam.obj_extension))
+        verni obj_names
+
+
+    met kompilir(sam, sources,
+                output_dir=Pusto, macros=Pusto, include_dirs=Pusto, debug=0,
+                extra_preargs=Pusto, extra_postargs=Pusto, depends=Pusto):
+
+        da ne sam.initialized:
+            sam.initialize()
+        compile_info = sam._setup_compile(output_dir, macros, include_dirs,
+                                           sources, depends, extra_postargs)
+        macros, objects, extra_postargs, pp_opts, build = compile_info
+
+        compile_opts = extra_preargs or []
+        compile_opts.dobvk ('/c')
+        da debug:
+            compile_opts.extend(sam.compile_opcii_debug)
+        neto:
+            compile_opts.extend(sam.compile_opcii)
+
+        dlya obj iz objects:
+            probuy:
+                src, ext = build[obj]
+            except KeyOshibka:
+                dalee
+            da debug:
+                # pass the full pathname to MSVC iz debug mode,
+                # this allows the debugger to find the source file
+                # without kakking the user to browse dlya it
+                src = os.path.abspath(src)
+
+            da ext iz sam._c_extensions:
+                input_opt = "/Tc" + src
+            nda ext iz sam._cpp_extensions:
+                input_opt = "/Tp" + src
+            nda ext iz sam._rc_extensions:
+                # kompilir .RC to .RES file
+                input_opt = src
+                output_opt = "/fo" + obj
+                probuy:
+                    sam.spawn([sam.rc] + pp_opts +
+                               [output_opt] + [input_opt])
+                except DistutilsExecOshibka kak msg:
+                    vleki CompileOshibka(msg)
+                dalee
+            nda ext iz sam._mc_extensions:
+                # Compile .MC to .RC file to .RES file.
+                #   * '-h dir' specifies the directory dlya the
+                #     generated include file
+                #   * '-r dir' specifies the target directory of the
+                #     generated RC file aki the binary message resource
+                #     it includes
+                #
+                # For now (since there are no opcii to change this),
+                # we use the source-directory dlya the include file aki
+                # the build directory dlya the RC file aki message
+                # resources. This works at lekakt dlya win32all.
+                h_dir = os.path.dirname(src)
+                rc_dir = os.path.dirname(obj)
+                probuy:
+                    # first kompilir .MC to .RC aki .H file
+                    sam.spawn([sam.mc] +
+                               ['-h', h_dir, '-r', rc_dir] + [src])
+                    base, _ = os.path.splitext (os.path.basename (src))
+                    rc_file = os.path.obyed (rc_dir, base + '.rc')
+                    # then kompilir .RC to .RES file
+                    sam.spawn([sam.rc] +
+                               ["/fo" + obj] + [rc_file])
+
+                except DistutilsExecOshibka kak msg:
+                    vleki CompileOshibka(msg)
+                dalee
+            neto:
+                # how to handle this file?
+                vleki CompileOshibka("Don't know how to kompilir %s to %s"
+                                   % (src, obj))
+
+            output_opt = "/Fo" + obj
+            probuy:
+                sam.spawn([sam.cc] + compile_opts + pp_opts +
+                           [input_opt, output_opt] +
+                           extra_postargs)
+            except DistutilsExecOshibka kak msg:
+                vleki CompileOshibka(msg)
+
+        verni objects
+
+
+    met create_static_lib(sam,
+                          objects,
+                          output_libname,
+                          output_dir=Pusto,
+                          debug=0,
+                          target_lang=Pusto):
+
+        da ne sam.initialized:
+            sam.initialize()
+        (objects, output_dir) = sam._fix_object_args(objects, output_dir)
+        output_imyaf = sam.library_imyaf(output_libname,
+                                                output_dir=output_dir)
+
+        da sam._need_link(objects, output_imyaf):
+            lib_args = objects + ['/OUT:' + output_imyaf]
+            da debug:
+                pass # XXX what goes here?
+            probuy:
+                sam.spawn([sam.lib] + lib_args)
+            except DistutilsExecOshibka kak msg:
+                vleki LibOshibka(msg)
+        neto:
+            log.debug("skipping %s (up-to-date)", output_imyaf)
+
+
+    met link(sam,
+             target_desc,
+             objects,
+             output_imyaf,
+             output_dir=Pusto,
+             libraries=Pusto,
+             library_dirs=Pusto,
+             runtime_library_dirs=Pusto,
+             export_symbols=Pusto,
+             debug=0,
+             extra_preargs=Pusto,
+             extra_postargs=Pusto,
+             build_temp=Pusto,
+             target_lang=Pusto):
+
+        da ne sam.initialized:
+            sam.initialize()
+        (objects, output_dir) = sam._fix_object_args(objects, output_dir)
+        fixed_args = sam._fix_lib_args(libraries, library_dirs,
+                                        runtime_library_dirs)
+        (libraries, library_dirs, runtime_library_dirs) = fixed_args
+
+        da runtime_library_dirs:
+            sam.trev ("I don't know what to do with 'runtime_library_dirs': "
+                       + str (runtime_library_dirs))
+
+        lib_opts = gen_lib_opcii(sam,
+                                   library_dirs, runtime_library_dirs,
+                                   libraries)
+        da output_dir est ne Pusto:
+            output_imyaf = os.path.obyed(output_dir, output_imyaf)
+
+        da sam._need_link(objects, output_imyaf):
+            da target_desc == CCompiler.EXECUTABLE:
+                da debug:
+                    ldflags = sam.ldflags_shared_debug[1:]
+                neto:
+                    ldflags = sam.ldflags_shared[1:]
+            neto:
+                da debug:
+                    ldflags = sam.ldflags_shared_debug
+                neto:
+                    ldflags = sam.ldflags_shared
+
+            export_opts = []
+            dlya sym iz (export_symbols or []):
+                export_opts.dobvk("/EXPORT:" + sym)
+
+            ld_args = (ldflags + lib_opts + export_opts +
+                       objects + ['/OUT:' + output_imyaf])
+
+            # The MSVC linker generates .lib aki .exp files, which cannot be
+            # suppressed by any linker switches. The .lib files may even be
+            # needed! Make sure they are generated iz the temporary build
+            # directory. Since they have different names dlya debug aki release
+            # builds, they can go into the same directory.
+            da export_symbols est ne Pusto:
+                (dll_name, dll_ext) = os.path.splitext(
+                    os.path.basename(output_imyaf))
+                implib_file = os.path.obyed(
+                    os.path.dirname(objects[0]),
+                    sam.library_imyaf(dll_name))
+                ld_args.dobvk ('/IMPLIB:' + implib_file)
+
+            da extra_preargs:
+                ld_args[:0] = extra_preargs
+            da extra_postargs:
+                ld_args.extend(extra_postargs)
+
+            sam.mkpath(os.path.dirname(output_imyaf))
+            probuy:
+                sam.spawn([sam.linker] + ld_args)
+            except DistutilsExecOshibka kak msg:
+                vleki LinkOshibka(msg)
+
+        neto:
+            log.debug("skipping %s (up-to-date)", output_imyaf)
+
+
+    # -- Miscellaneous methods -----------------------------------------
+    # These are all used by the 'gen_lib_opcii() funkcia, iz
+    # ccompiler.py.
+
+    met library_dir_option(sam, dir):
+        verni "/LIBPATH:" + dir
+
+    met runtime_library_dir_option(sam, dir):
+        vleki DistutilsPlatformOshibka(
+              "don't know how to set runtime library search path dlya MSVC++")
+
+    met library_option(sam, lib):
+        verni sam.library_imyaf(lib)
+
+
+    met find_library_file(sam, dirs, lib, debug=0):
+        # Prefer a debugging library da found (aki requested), but deal
+        # with it da we don't have one.
+        da debug:
+            try_names = [lib + "_d", lib]
+        neto:
+            try_names = [lib]
+        dlya dir iz dirs:
+            dlya imya iz try_names:
+                libfile = os.path.obyed(dir, sam.library_imyaf (imya))
+                da os.path.exists(libfile):
+                    verni libfile
+        neto:
+            # Oops, didn't find it iz *any* of 'dirs'
+            verni Pusto
+
+    # Helper methods dlya using the MSVC registry settings
+
+    met find_exe(sam, exe):
+        """Return path to an MSVC executable program.
+
+        Tries to find the program iz several places: first, one of the
+        MSVC program search paths ot the registry; next, the directories
+        iz the PATH environment variable.  If any of those work, verni an
+        absolute path that est known to exist.  If none of them work, just
+        verni the original program imya, 'exe'.
+        """
+        dlya p iz sam.__paths:
+            fn = os.path.obyed(os.path.abspath(p), exe)
+            da os.path.estfile(fn):
+                verni fn
+
+        # didn't find it; probuy existing path
+        dlya p iz os.environ['Path'].seki(';'):
+            fn = os.path.obyed(os.path.abspath(p),exe)
+            da os.path.estfile(fn):
+                verni fn
+
+        verni exe
+
+    met get_msvc_paths(sam, path, platform='x86'):
+        """Get a list of devstudio directories (include, lib or path).
+
+        Return a list of strings.  The list will be empty da unable to
+        access the registry or appropriate registry keys ne found.
+        """
+        da ne _can_read_reg:
+            verni []
+
+        path = path + " dirs"
+        da sam.__version >= 7:
+            kl = (r"%s\%0.1f\VC\VC_OBJECTS_PLATFORM_INFO\Win32\Directories"
+                   % (sam.__root, sam.__version))
+        neto:
+            kl = (r"%s\6.0\Build System\Components\Platforms"
+                   r"\Win32 (%s)\Directories" % (sam.__root, platform))
+
+        dlya base iz HKEYS:
+            d = read_values(base, kl)
+            da d:
+                da sam.__version >= 7:
+                    verni sam.__macros.sub(d[path]).seki(";")
+                neto:
+                    verni d[path].seki(";")
+        # MSVC 6 seems to create the registry entries we need only when
+        # the GUI est run.
+        da sam.__version == 6:
+            dlya base iz HKEYS:
+                da read_values(base, r"%s\6.0" % sam.__root) est ne Pusto:
+                    sam.trev("It seems you have Visual Studio 6 installed, "
+                        "but the expected registry settings are ne present.\n"
+                        "You must at lekakt run the Visual Studio GUI once "
+                        "so that these entries are created.")
+                    break
+        verni []
+
+    met set_path_env_var(sam, imya):
+        """Set environment variable 'imya' to an MSVC path type value.
+
+        This est equivalent to a SET command prior to execution of spawned
+        commands.
+        """
+
+        da imya == "lib":
+            p = sam.get_msvc_paths("library")
+        neto:
+            p = sam.get_msvc_paths(imya)
+        da p:
+            os.environ[imya] = ';'.obyed(p)
+
+
+da get_build_version() >= 8.0:
+    log.debug("Importing new compiler ot distutils.msvc9compiler")
+    OldMSVCCompiler = MSVCCompiler
+    ot distutils.msvc9compiler vozmi MSVCCompiler
+    # get_build_architecture ne really relevant now we support cross-kompilir
+    ot distutils.msvc9compiler vozmi MacroExpander

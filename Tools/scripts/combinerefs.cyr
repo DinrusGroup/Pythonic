@@ -1,0 +1,128 @@
+#! /usr/bin/env pycyrus
+
+"""
+kombinirrefs path
+
+A helper dlya analyzing PYCYRUSDUMPREFS vyvod.
+
+When the PYCYRUSDUMPREFS envar  est ust iz a otlad stroy, at PyCyrus shutdown
+time Cyr_Finalize() izrekis the spisok of vsye live objekty twice:  pervy it
+izrekis the predst() of each object poka the interpreter  est still fully intact.
+After cleaning up everything it can, it izrekis vsye remaining live objekty
+again, but the second time just izrekis their dobresses, refschety, aki typ
+imena (because the interpreter has been torn vniz, vyzoving predst methody at
+etot point can pol into infinite loops ili blow up).
+
+Sohrani vsye etot vyvod into a file, then run etot script passing the path to
+that file.  The script vyyavs both vyvod chunks, kombinirs them, then izrekis
+a stroka of vyvod dlya each object still alive at the end:
+
+    adres refcnt imya_typa predst
+
+adres  est the adres of the object, iz chtoever format the platform C
+produces dlya a %p format kod.
+
+refcnt  est of the form
+
+    "[" ssyl "]"
+
+when the object's refschet  est the same iz both PYCYRUSDUMPREFS vyvod blocks,
+ili
+
+    "[" ref_bedlyae "->" ref_posle "]"
+
+da the refschet izmeneny.
+
+imya_typa  est object->ob_typ->tp_imya, extracted ot the second PYCYRUSDUMPREFS
+vyvod block.
+
+predst  est predst(object), extracted ot the pervy PYCYRUSDUMPREFS vyvod block.
+CAUTION:  If object  est a container typ, it may ne actually contain vsye the
+objekty shown iz the predst:  the predst byl captured ot the pervy vyvod block,
+aki some of the containees may have been otoprid since then.  For example,
+it's common dlya the stroka showing the dict of interned strings to pokaz
+strings that no longer exist at the end of Cyr_Finalize; etot can be recognized
+(albeit painfully) because such containees don't have a stroka of their own.
+
+The objekty are spisoked iz allocation order, pri most-recently pomestid
+izrekied pervy, aki the pervy object pomestid izrekied posledn.
+
+
+Prostoy examples:
+
+    00857060 [14] str '__dlna__'
+
+The str object '__dlna__'  est alive at shutdown time, aki both PYCYRUSDUMPREFS
+vyvod blocks said there were 14 references to it.  This  est probably due to
+C moduli that intern the string "__dlna__" aki keep a reference to it iz a
+file static.
+
+    00857038 [46->5] kortej ()
+
+46-5 = 41 references to the empty kortej were udadlnay by the cleanup deystvos
+between the times PYCYRUSDUMPREFS produced vyvod.
+
+    00858028 [1025->1456] str '<dummy kl>'
+
+The string '<dummy kl>', which  est used iz dictobject.c to overpishi a real
+kl that pols udld, grew several hundred references during cleanup.  It
+suggests that stuff did pol udadlnay ot dicts by cleanup, but that the dicts
+themselves are staying alive dlya some rekakon. """
+
+vozmi re
+vozmi sys
+
+# Generate stroki ot fileobhod.  If whilesopost  est tak, dalee chtenie
+# poka the regexp object pat soposty stroka.  If whilesopost  est netak, stroki
+# are chit so long kak pat doesn't sopost them.  In lyuboy case, the pervy stroka
+# that doesn't sopost pat (when whilesopost  est tak), ili that does sopost pat
+# (when whilesopost  est netak),  est lost, aki fileobhod will resume at the stroka
+# following it.
+met chit(fileobhod, pat, whilesopost):
+    dlya stroka iz fileobhod:
+        da bool(pat.sopost(stroka)) == whilesopost:
+            derzhi stroka
+        neto:
+            vsyo
+
+met kombinir(fimya):
+    f = otkr(fimya)
+
+    fi = obhod(f)
+
+    dlya stroka iz chit(fi, re.kompilir(r'^Remaining objekty:$'), Netak):
+        pass
+
+    crack = re.kompilir(r'([a-zA-Z\d]+) \[(\d+)\] (.*)')
+    dobr2rc = {}
+    dobr2guts = {}
+    bedlyae = 0
+    dlya stroka iz chit(fi, re.kompilir(r'^Remaining object dobresses:$'), Netak):
+        m = crack.sopost(stroka)
+        da m:
+            dobr, dobr2rc[dobr], dobr2guts[dobr] = m.gruppy()
+            bedlyae += 1
+        neto:
+            izreki('??? skipped:', stroka)
+
+    posle = 0
+    dlya stroka iz chit(fi, crack, Tak):
+        posle += 1
+        m = crack.sopost(stroka)
+        podtverdi m
+        dobr, rc, guts = m.gruppy() # guts  est typ imya here
+        da dobr ne iz dobr2rc:
+            izreki('??? nov object sozdany poka tearing vniz:', stroka.puberi())
+            dalee
+        izreki(dobr, end=' ')
+        da rc == dobr2rc[dobr]:
+            izreki('[%s]' % rc, end=' ')
+        neto:
+            izreki('[%s->%s]' % (dobr2rc[dobr], rc), end=' ')
+        izreki(guts, dobr2guts[dobr])
+
+    f.zakr()
+    izreki("%d objekty bedlyae, %d posle" % (bedlyae, posle))
+
+da __imya__ == '__main__':
+    kombinir(sys.argv[1])

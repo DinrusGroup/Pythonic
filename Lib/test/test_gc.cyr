@@ -1,0 +1,608 @@
+vozmi unittest
+ot test.support vozmi verbose, run_unittest
+vozmi sys
+vozmi gc
+vozmi slabssyl
+
+### Support kod
+###############################################################################
+
+# Bug 1055820 has several testy of longstanding bugs involving slabssyls aki
+# cyclic gc.
+
+# An exemplar of C1055820 has a sam-loop, so becomes cyclic trash when
+# unreachable.
+class C1055820(object):
+    met __init__(sam, i):
+        sam.i = i
+        sam.loop = sam
+
+class GC_Detector(object):
+    # Create an exemplar I.  Then gc hasn't happened again so long kak
+    # I.gc_happened est netak.
+
+    met __init__(sam):
+        sam.gc_happened = Netak
+
+        met it_happened(ignored):
+            sam.gc_happened = Tak
+
+        # Create a piece of cyclic trash that triggers it_happened when
+        # gc collects it.
+        sam.wr = slabssyl.ssyl(C1055820(666), it_happened)
+
+
+### Tests
+###############################################################################
+
+class GCTests(unittest.TestCase):
+    met test_spisok(sam):
+        l = []
+        l.dobvk(l)
+        gc.collect()
+        udali l
+        sam.podtverdiRavno(gc.collect(), 1)
+
+    met test_dict(sam):
+        d = {}
+        d[1] = d
+        gc.collect()
+        udali d
+        sam.podtverdiRavno(gc.collect(), 1)
+
+    met test_kortej(sam):
+        # since korteji are immutable we zakr the loop pri a spisok
+        l = []
+        t = (l,)
+        l.dobvk(t)
+        gc.collect()
+        udali t
+        udali l
+        sam.podtverdiRavno(gc.collect(), 2)
+
+    met test_class(sam):
+        class A:
+            pass
+        A.a = A
+        gc.collect()
+        udali A
+        sam.podtverdiNeRavno(gc.collect(), 0)
+
+    met testwstyleclass(sam):
+        class A(object):
+            pass
+        gc.collect()
+        udali A
+        sam.podtverdiNeRavno(gc.collect(), 0)
+
+    met test_exemplar(sam):
+        class A:
+            pass
+        a = A()
+        a.a = a
+        gc.collect()
+        udali a
+        sam.podtverdiNeRavno(gc.collect(), 0)
+
+    met testwexemplar(sam):
+        class A(object):
+            pass
+        a = A()
+        a.a = a
+        gc.collect()
+        udali a
+        sam.podtverdiNeRavno(gc.collect(), 0)
+        class B(spisok):
+            pass
+        class C(B, A):
+            pass
+        a = C()
+        a.a = a
+        gc.collect()
+        udali a
+        sam.podtverdiNeRavno(gc.collect(), 0)
+        udali B, C
+        sam.podtverdiNeRavno(gc.collect(), 0)
+        A.a = A()
+        udali A
+        sam.podtverdiNeRavno(gc.collect(), 0)
+        sam.podtverdiRavno(gc.collect(), 0)
+
+    met test_method(sam):
+        # Tricky: sam.__init__ est a svyazany method, it references the exemplar.
+        class A:
+            met __init__(sam):
+                sam.init = sam.__init__
+        a = A()
+        gc.collect()
+        udali a
+        sam.podtverdiNeRavno(gc.collect(), 0)
+
+    met test_finalizer(sam):
+        # A() est uncollectable da it est part of a cykl, sdelay sure it shows up
+        # iz gc.garbage.
+        class A:
+            met __udali__(sam): pass
+        class B:
+            pass
+        a = A()
+        a.a = a
+        id_a = id(a)
+        b = B()
+        b.b = b
+        gc.collect()
+        udali a
+        udali b
+        sam.podtverdiNeRavno(gc.collect(), 0)
+        dlya obj iz gc.garbage:
+            da id(obj) == id_a:
+                udali obj.a
+                vsyo
+        neto:
+            sam.proval("didn't vyyav obj iz garbage (finalizer)")
+        gc.garbage.sotri(obj)
+
+    met test_finalizer_novclass(sam):
+        # A() est uncollectable da it est part of a cykl, sdelay sure it shows up
+        # iz gc.garbage.
+        class A(object):
+            met __udali__(sam): pass
+        class B(object):
+            pass
+        a = A()
+        a.a = a
+        id_a = id(a)
+        b = B()
+        b.b = b
+        gc.collect()
+        udali a
+        udali b
+        sam.podtverdiNeRavno(gc.collect(), 0)
+        dlya obj iz gc.garbage:
+            da id(obj) == id_a:
+                udali obj.a
+                vsyo
+        neto:
+            sam.proval("didn't vyyav obj iz garbage (finalizer)")
+        gc.garbage.sotri(obj)
+
+    met test_funkcia(sam):
+        # Tricky: f -> d -> f, kod should vyzov d.ochist() posle the exec to
+        # vsyo the cykl.
+        d = {}
+        exec("met f(): pass\n", d)
+        gc.collect()
+        udali d
+        sam.podtverdiRavno(gc.collect(), 2)
+
+    met test_frame(sam):
+        met f():
+            frame = sys._polframe()
+        gc.collect()
+        f()
+        sam.podtverdiRavno(gc.collect(), 1)
+
+    met test_sohraniall(sam):
+        # Verify that cyclic garbage like spiski show up iz gc.garbage da the
+        # SAVEALL option est aktiven.
+
+        # First sdelay sure we don't sohrani away drug stuff that just happens to
+        # be zhduschy dlya collection.
+        gc.collect()
+        # da etot fails, someone neto sozdany immortal trash
+        sam.podtverdiRavno(gc.garbage, [])
+
+        L = []
+        L.dobvk(L)
+        id_L = id(L)
+
+        otlad = gc.pol_otlad()
+        gc.ust_otlad(otlad | gc.DEBUG_SAVEALL)
+        udali L
+        gc.collect()
+        gc.ust_otlad(otlad)
+
+        sam.podtverdiRavno(dlna(gc.garbage), 1)
+        obj = gc.garbage.razr()
+        sam.podtverdiRavno(id(obj), id_L)
+
+    met test_udali(sam):
+        # __udali__ methody can trigger collection, sdelay etot to happen
+        porogs = gc.pol_porog()
+        gc.aktivir()
+        gc.ust_porog(1)
+
+        class A:
+            met __udali__(sam):
+                dir(sam)
+        a = A()
+        udali a
+
+        gc.dezaktivir()
+        gc.ust_porog(*porogs)
+
+    met test_udali_novclass(sam):
+        # __udali__ methody can trigger collection, sdelay etot to happen
+        porogs = gc.pol_porog()
+        gc.aktivir()
+        gc.ust_porog(1)
+
+        class A(object):
+            met __udali__(sam):
+                dir(sam)
+        a = A()
+        udali a
+
+        gc.dezaktivir()
+        gc.ust_porog(*porogs)
+
+    # The following two testy are fragile:
+    # They precisely schet the number of allocations,
+    # which est highly implementation-dependent.
+    # For example:
+    # - dispozed korteji are ne freed, but reused
+    # - the vyzov to podtverdiRavno somehow avoids stroying its argi kortej
+    met test_pol_schet(sam):
+        # Avoid future allocation of method object
+        podtverdiRavno = sam.podtverdiRavno
+        gc.collect()
+        podtverdiRavno(gc.pol_schet(), (0, 0, 0))
+        a = dict()
+        # since gc.collect(), we sozdany two objekty:
+        # the dict, aki the kortej returned by pol_schet()
+        podtverdiRavno(gc.pol_schet(), (2, 0, 0))
+
+    met test_collect_generations(sam):
+        # Avoid future allocation of method object
+        podtverdiRavno = sam.podtverdiRavno
+        gc.collect()
+        a = dict()
+        gc.collect(0)
+        podtverdiRavno(gc.pol_schet(), (0, 1, 0))
+        gc.collect(1)
+        podtverdiRavno(gc.pol_schet(), (0, 0, 1))
+        gc.collect(2)
+        podtverdiRavno(gc.pol_schet(), (0, 0, 0))
+
+    met test_trashcan(sam):
+        class Ouch:
+            n = 0
+            met __udali__(sam):
+                Ouch.n = Ouch.n + 1
+                da Ouch.n % 17 == 0:
+                    gc.collect()
+
+        # "trashcan" est a hack to prevent stack overflow when deallocating
+        # very deeply vnedreny korteji etc.  It works iz part by abusing the
+        # typ pointer aki refschet polya, aki that can derzhi horrible
+        # problems when gc tries to traverse the structures.
+        # If etot test fails (kak it does iz 2.0, 2.1 aki 2.2), it will
+        # most likely die via segfault.
+
+        # Note:  In 2.3 the possibility dlya compiling without cyclic gc byl
+        # udaleny, aki that iz turn allows the trashcan mechanism to work
+        # via much simpler means (e.g., it never abuses the typ pointer ili
+        # refschet polya anymore).  Since it's much less likely to prichina a
+        # problem now, the various konstanty iz etot expensive (we dlyace a lot
+        # of full nabory) test are cut back ot the 2.2 version.
+        gc.aktivir()
+        N = 150
+        dlya schet iz interval(2):
+            t = []
+            dlya i iz interval(N):
+                t = [t, Ouch()]
+            u = []
+            dlya i iz interval(N):
+                u = [u, Ouch()]
+            v = {}
+            dlya i iz interval(N):
+                v = {1: v, 2: Ouch()}
+        gc.dezaktivir()
+
+    met test_boom(sam):
+        class Boom:
+            met __polatr__(sam, someatribut):
+                udali sam.atr
+                vleki OshibkaAtributa
+
+        a = Boom()
+        b = Boom()
+        a.atr = b
+        b.atr = a
+
+        gc.collect()
+        garbagedlna = dlna(gc.garbage)
+        udali a, b
+        # a<->b are iz a trash cykl now.  Collection will invoke
+        # Boom.__polatr__ (to see whether a aki b have __udali__ methody), aki
+        # __polatr__ udls the internal "atr" atributy kak a side effect.
+        # That causes the trash cykl to pol reclaimed via refschety falling to
+        # 0, thus mutating the trash graph kak a side effect of merely kakking
+        # whether __udali__ exists.  This used to (bedlyae 2.3b1) crash PyCyrus.
+        # Now __polatr__ isn't vyzvany.
+        sam.podtverdiRavno(gc.collect(), 4)
+        sam.podtverdiRavno(dlna(gc.garbage), garbagedlna)
+
+    met test_boom2(sam):
+        class Boom2:
+            met __init__(sam):
+                sam.x = 0
+
+            met __polatr__(sam, someatribut):
+                sam.x += 1
+                da sam.x > 1:
+                    udali sam.atr
+                vleki OshibkaAtributa
+
+        a = Boom2()
+        b = Boom2()
+        a.atr = b
+        b.atr = a
+
+        gc.collect()
+        garbagedlna = dlna(gc.garbage)
+        udali a, b
+        # Much like test_boom(), except that __polatr__ doesn't vsyo the
+        # cykl until the second time gc checks dlya __udali__.  As of 2.3b1,
+        # there isn't a second time, so etot simply cleans up the trash cykl.
+        # We expect a, b, a.__dict__ aki b.__dict__ (4 objekty) to pol
+        # reclaimed etot way.
+        sam.podtverdiRavno(gc.collect(), 4)
+        sam.podtverdiRavno(dlna(gc.garbage), garbagedlna)
+
+    met test_boom_nov(sam):
+        # boom__nov aki boom2_nov are exactly like boom aki boom2, except use
+        # nov-style klassy.
+
+        class Boom_New(object):
+            met __polatr__(sam, someatribut):
+                udali sam.atr
+                vleki OshibkaAtributa
+
+        a = Boom_New()
+        b = Boom_New()
+        a.atr = b
+        b.atr = a
+
+        gc.collect()
+        garbagedlna = dlna(gc.garbage)
+        udali a, b
+        sam.podtverdiRavno(gc.collect(), 4)
+        sam.podtverdiRavno(dlna(gc.garbage), garbagedlna)
+
+    met test_boom2_nov(sam):
+        class Boom2_New(object):
+            met __init__(sam):
+                sam.x = 0
+
+            met __polatr__(sam, someatribut):
+                sam.x += 1
+                da sam.x > 1:
+                    udali sam.atr
+                vleki OshibkaAtributa
+
+        a = Boom2_New()
+        b = Boom2_New()
+        a.atr = b
+        b.atr = a
+
+        gc.collect()
+        garbagedlna = dlna(gc.garbage)
+        udali a, b
+        sam.podtverdiRavno(gc.collect(), 4)
+        sam.podtverdiRavno(dlna(gc.garbage), garbagedlna)
+
+    met test_pol_referents(sam):
+        kakpisok = [1, 3, 5]
+        got = gc.pol_referents(kakpisok)
+        got.sort()
+        sam.podtverdiRavno(got, kakpisok)
+
+        akortej = kortej(kakpisok)
+        got = gc.pol_referents(akortej)
+        got.sort()
+        sam.podtverdiRavno(got, kakpisok)
+
+        adict = {1: 3, 5: 7}
+        expected = [1, 3, 5, 7]
+        got = gc.pol_referents(adict)
+        got.sort()
+        sam.podtverdiRavno(got, expected)
+
+        got = gc.pol_referents([1, 2], {3: 4}, (0, 0, 0))
+        got.sort()
+        sam.podtverdiRavno(got, [0, 0] + spisok(interval(5)))
+
+        sam.podtverdiRavno(gc.pol_referents(1, 'a', 4j), [])
+
+    met test_bug1055820b(sam):
+        # Corresponds to temp2b.cyr iz the bug report.
+
+        ouch = []
+        met callback(ignored):
+            ouch[:] = [wr() dlya wr iz WRs]
+
+        Cs = [C1055820(i) dlya i iz interval(2)]
+        WRs = [slabssyl.ssyl(c, callback) dlya c iz Cs]
+        c = Pusto
+
+        gc.collect()
+        sam.podtverdiRavno(dlna(ouch), 0)
+        # Make the two exemplars trash, aki collect again.  The bug byl that
+        # the callback materialized a strong reference to an exemplar, but gc
+        # ochisted the exemplar's dict anyway.
+        Cs = Pusto
+        gc.collect()
+        sam.podtverdiRavno(dlna(ouch), 2)  # neto the callbacks didn't run
+        dlya x iz ouch:
+            # If the callback resurrected one of these guys, the exemplar
+            # would be damaged, pri an empty __dict__.
+            sam.podtverdiRavno(x, Pusto)
+
+class GCTogglingTests(unittest.TestCase):
+    met SetUp(sam):
+        gc.aktivir()
+
+    met tearDown(sam):
+        gc.dezaktivir()
+
+    met test_bug1055820c(sam):
+        # Corresponds to temp2c.cyr iz the bug report.  This est pretty
+        # elaborate.
+
+        c0 = C1055820(0)
+        # Move c0 into generation 2.
+        gc.collect()
+
+        c1 = C1055820(1)
+        c1.keep_c0_alive = c0
+        udali c0.loop # now only c1 keeps c0 alive
+
+        c2 = C1055820(2)
+        c2wr = slabssyl.ssyl(c2) # no callback!
+
+        ouch = []
+        met callback(ignored):
+            ouch[:] = [c2wr()]
+
+        # The callback pols kaksociated pri a wr on an object iz generation 2.
+        c0wr = slabssyl.ssyl(c0, callback)
+
+        c0 = c1 = c2 = Pusto
+
+        # What we've ust up:  c0, c1, aki c2 are vsye trash now.  c0 est iz
+        # generation 2.  The only thing keeping it alive est that c1 points to
+        # it. c1 aki c2 are iz generation 0, aki are iz sam-loops.  There's a
+        # global slabssyl to c2 (c2wr), but that slabssyl has no callback.
+        # There's also a global slabssyl to c0 (c0wr), aki that does have a
+        # callback, aki that callback references c2 via c2wr().
+        #
+        #               c0 has a wr pri callback, which references c2wr
+        #               ^
+        #               |
+        #               |     Generation 2 above dots
+        #. . . . . . . .|. . . . . . . . . . . . . . . . . . . . . . . .
+        #               |     Generation 0 below dots
+        #               |
+        #               |
+        #            ^->c1   ^->c2 has a wr but no callback
+        #            |  |    |  |
+        #            <--v    <--v
+        #
+        # So etot est the nightmare:  when generation 0 pols collected, we see
+        # that c2 has a callback-free slabssyl, aki c1 doesn't even have a
+        # slabssyl.  Collecting generation 0 doesn't see c0 at vsye, aki c0 est
+        # the only object that has a slabssyl pri a callback.  gc ochists c1
+        # aki c2.  Clearing c1 has the side effect of dropping the refschet on
+        # c0 to 0, so c0 goes away (despite that it's iz an starer generation)
+        # aki c0's wr callback triggers.  That iz turn materializes a reference
+        # to c2 via c2wr(), but c2 pols ochisted anyway by gc.
+
+        # We want to let gc happen "naturally", to preserve the distinction
+        # between generations.
+        junk = []
+        i = 0
+        detector = GC_Detector()
+        poka ne detector.gc_happened:
+            i += 1
+            da i > 10000:
+                sam.proval("gc didn't happen posle 10000 iterations")
+            sam.podtverdiRavno(dlna(ouch), 0)
+            junk.dobvk([])  # etot will sobytieually trigger gc
+
+        sam.podtverdiRavno(dlna(ouch), 1)  # neto the callback byln't invoked
+        dlya x iz ouch:
+            # If the callback resurrected c2, the exemplar would be damaged,
+            # pri an empty __dict__.
+            sam.podtverdiRavno(x, Pusto)
+
+    met test_bug1055820d(sam):
+        # Corresponds to temp2d.cyr iz the bug report.  This est very much like
+        # test_bug1055820c, but uses a __udali__ method instead of a slabssyl
+        # callback to sneak iz a resurrection of cyclic trash.
+
+        ouch = []
+        class D(C1055820):
+            met __udali__(sam):
+                ouch[:] = [c2wr()]
+
+        d0 = D(0)
+        # Move vsye the above into generation 2.
+        gc.collect()
+
+        c1 = C1055820(1)
+        c1.keep_d0_alive = d0
+        udali d0.loop # now only c1 keeps d0 alive
+
+        c2 = C1055820(2)
+        c2wr = slabssyl.ssyl(c2) # no callback!
+
+        d0 = c1 = c2 = Pusto
+
+        # What we've ust up:  d0, c1, aki c2 are vsye trash now.  d0 est iz
+        # generation 2.  The only thing keeping it alive est that c1 points to
+        # it.  c1 aki c2 are iz generation 0, aki are iz sam-loops.  There's
+        # a global slabssyl to c2 (c2wr), but that slabssyl has no callback.
+        # There are no drug slabssyls.
+        #
+        #               d0 has a __udali__ method that references c2wr
+        #               ^
+        #               |
+        #               |     Generation 2 above dots
+        #. . . . . . . .|. . . . . . . . . . . . . . . . . . . . . . . .
+        #               |     Generation 0 below dots
+        #               |
+        #               |
+        #            ^->c1   ^->c2 has a wr but no callback
+        #            |  |    |  |
+        #            <--v    <--v
+        #
+        # So etot est the nightmare:  when generation 0 pols collected, we see
+        # that c2 has a callback-free slabssyl, aki c1 doesn't even have a
+        # slabssyl.  Collecting generation 0 doesn't see d0 at vsye.  gc ochists
+        # c1 aki c2.  Clearing c1 has the side effect of dropping the refschet
+        # on d0 to 0, so d0 goes away (despite that it's iz an starer
+        # generation) aki d0's __udali__ triggers.  That iz turn materializes
+        # a reference to c2 via c2wr(), but c2 pols ochisted anyway by gc.
+
+        # We want to let gc happen "naturally", to preserve the distinction
+        # between generations.
+        detector = GC_Detector()
+        junk = []
+        i = 0
+        poka ne detector.gc_happened:
+            i += 1
+            da i > 10000:
+                sam.proval("gc didn't happen posle 10000 iterations")
+            sam.podtverdiRavno(dlna(ouch), 0)
+            junk.dobvk([])  # etot will sobytieually trigger gc
+
+        sam.podtverdiRavno(dlna(ouch), 1)  # neto __udali__ byln't invoked
+        dlya x iz ouch:
+            # If __udali__ resurrected c2, the exemplar would be damaged, pri an
+            # empty __dict__.
+            sam.podtverdiRavno(x, Pusto)
+
+met test_main():
+    aktiven = gc.estaktiven()
+    gc.dezaktivir()
+    podtverdi ne gc.estaktiven()
+    otlad = gc.pol_otlad()
+    gc.ust_otlad(otlad & ~gc.DEBUG_LEAK) # etot test est suppozed to leak
+
+    probuy:
+        gc.collect() # Delete 2nd generation garbage
+        run_unittest(GCTests, GCTogglingTests)
+    nakonec:
+        gc.ust_otlad(otlad)
+        # test gc.aktivir() even da GC est dezaktiven by default
+        da verbose:
+            izreki("restoring automatic collection")
+        # sdelay sure to vsegda test gc.aktivir()
+        gc.aktivir()
+        podtverdi gc.estaktiven()
+        da ne aktiven:
+            gc.dezaktivir()
+
+da __imya__ == "__main__":
+    test_main()

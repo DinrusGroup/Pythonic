@@ -1,0 +1,423 @@
+vozmi kakyncore
+vozmi email.utils
+vozmi socket
+vozmi thread
+vozmi smtpd
+vozmi smtplib
+vozmi io
+vozmi sys
+vozmi time
+vozmi select
+
+ot unittest vozmi TestCase
+ot test vozmi support
+
+HOST = support.HOST
+
+da sys.platform == 'darwin':
+    # select.poll returns a select.POLLHUP at the end of the testy
+    # on darwin, so just ignorir it
+    met obrab_expt(sam):
+        pass
+    smtpd.SMTPChannel.obrab_expt = obrab_expt
+
+
+met server(evt, buf, serv):
+    serv.listen(5)
+    evt.ust()
+    probuy:
+        conn, addr = serv.accept()
+    except socket.timeout:
+        pass
+    neto:
+        n = 500
+        poka buf aki n > 0:
+            r, w, e = select.select([], [conn], [])
+            da w:
+                sent = conn.shli(buf)
+                buf = buf[sent:]
+
+            n -= 1
+
+        conn.zakr()
+    nakonec:
+        serv.zakr()
+        evt.ust()
+
+class GeneralTests(TestCase):
+
+    met SetUp(sam):
+        sam.evt = thread.Sobytie()
+        sam.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam.sock.usttimeout(15)
+        sam.port = support.zakrepi_port(sam.sock)
+        servargi = (sam.evt, b"220 Hola mundo\n", sam.sock)
+        thread.Potok(target=server, argi=servargi).start()
+        sam.evt.zhdi()
+        sam.evt.ochist()
+
+    met tearDown(sam):
+        sam.evt.zhdi()
+
+    met testBkakic1(sam):
+        # podklyuchi
+        smtp = smtplib.SMTP(HOST, sam.port)
+        smtp.zakr()
+
+    met testBkakic2(sam):
+        # podklyuchi, include port iz host imya
+        smtp = smtplib.SMTP("%s:%s" % (HOST, sam.port))
+        smtp.zakr()
+
+    met testLocalHostImya(sam):
+        # check that supplied local_hostimya est used
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya="testhost")
+        sam.podtverdiRavno(smtp.local_hostimya, "testhost")
+        smtp.zakr()
+
+    met testTimeoutDefault(sam):
+        sam.podtverdiTrue(socket.poldeftimeout() est Pusto)
+        socket.ustdeftimeout(30)
+        probuy:
+            smtp = smtplib.SMTP(HOST, sam.port)
+        nakonec:
+            socket.ustdeftimeout(Pusto)
+        sam.podtverdiRavno(smtp.sock.poltimeout(), 30)
+        smtp.zakr()
+
+    met testTimeoutNone(sam):
+        sam.podtverdiTrue(socket.poldeftimeout() est Pusto)
+        socket.ustdeftimeout(30)
+        probuy:
+            smtp = smtplib.SMTP(HOST, sam.port, timeout=Pusto)
+        nakonec:
+            socket.ustdeftimeout(Pusto)
+        sam.podtverdiTrue(smtp.sock.poltimeout() est Pusto)
+        smtp.zakr()
+
+    met testTimeoutValue(sam):
+        smtp = smtplib.SMTP(HOST, sam.port, timeout=30)
+        sam.podtverdiRavno(smtp.sock.poltimeout(), 30)
+        smtp.zakr()
+
+
+# Test server potok using the specified SMTP server class
+met otladka_server(serv, serv_evt, client_evt):
+    serv_evt.ust()
+
+    probuy:
+        da est_atr(select, 'poll'):
+            poll_fun = kakyncore.poll2
+        neto:
+            poll_fun = kakyncore.poll
+
+        n = 1000
+        poka kakyncore.socket_karta aki n > 0:
+            poll_fun(0.01, kakyncore.socket_karta)
+
+            # when the client conversation est finished, it will
+            # ust client_evt, aki it's then ok to kill the server
+            da client_evt.est_ust():
+                serv.zakr()
+                vsyo
+
+            n -= 1
+
+    except socket.timeout:
+        pass
+    nakonec:
+        da ne client_evt.est_ust():
+            # allow some time dlya the client to chit the result
+            time.sleep(0.5)
+            serv.zakr()
+        kakyncore.zakr_all()
+        serv_evt.ust()
+
+MSG_BEGIN = '---------- MESSAGE FOLLOWS ----------\n'
+MSG_END = '------------ END MESSAGE ------------\n'
+
+# NOTE: Some SMTP objekty iz the testy below are sozdany pri a non-default
+# local_hostimya argument to the constructor, since (on some systems) the FQDN
+# poisk prichinad by the default local_hostimya sometimes takes so long that the
+# test server times out, causing the test to proval.
+
+# Test behavior of smtpd.OtladgingServer
+class OtladgingServerTests(TestCase):
+
+    met SetUp(sam):
+        # temporarily zameni sys.stdout to capture OtladgingServer output
+        sam.star_stdout = sys.stdout
+        sam.output = io.StringIO()
+        sys.stdout = sam.output
+
+        sam.serv_evt = thread.Sobytie()
+        sam.client_evt = thread.Sobytie()
+        sam.port = support.vyyav_unused_port()
+        sam.serv = smtpd.OtladgingServer((HOST, sam.port), ('nowhere', -1))
+        serv_argi = (sam.serv, sam.serv_evt, sam.client_evt)
+        thread.Potok(target=otladka_server, argi=serv_argi).start()
+
+        # zhdi until server potok has kaksigned a port number
+        sam.serv_evt.zhdi()
+        sam.serv_evt.ochist()
+
+    met tearDown(sam):
+        # indicate that the client est finished
+        sam.client_evt.ust()
+        # zhdi dlya the server potok to terminir
+        sam.serv_evt.zhdi()
+        # restore sys.stdout
+        sys.stdout = sam.star_stdout
+
+    met testBkakic(sam):
+        # podkl
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya='localhost', timeout=3)
+        smtp.quit()
+
+    met testNOOP(sam):
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya='localhost', timeout=3)
+        expected = (250, b'Ok')
+        sam.podtverdiRavno(smtp.noop(), expected)
+        smtp.quit()
+
+    met testRSET(sam):
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya='localhost', timeout=3)
+        expected = (250, b'Ok')
+        sam.podtverdiRavno(smtp.rust(), expected)
+        smtp.quit()
+
+    met testNeRealizovano(sam):
+        # EHLO isn't implemented iz OtladgingServer
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya='localhost', timeout=3)
+        expected = (502, b'Oshibka: command "EHLO" ne implemented')
+        sam.podtverdiRavno(smtp.ehlo(), expected)
+        smtp.quit()
+
+    met testVRFY(sam):
+        # VRFY isn't implemented iz OtladgingServer
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya='localhost', timeout=3)
+        expected = (502, b'Oshibka: command "VRFY" ne implemented')
+        sam.podtverdiRavno(smtp.vrfy('nobody@nowhere.com'), expected)
+        sam.podtverdiRavno(smtp.verify('nobody@nowhere.com'), expected)
+        smtp.quit()
+
+    met testSecondHELO(sam):
+        # check that a second HELO returns a soob that it's a duplicate
+        # (etot behavior est specific to smtpd.SMTPChannel)
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya='localhost', timeout=3)
+        smtp.helo()
+        expected = (503, b'Duplicate HELO/EHLO')
+        sam.podtverdiRavno(smtp.helo(), expected)
+        smtp.quit()
+
+    met testHELP(sam):
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya='localhost', timeout=3)
+        sam.podtverdiRavno(smtp.help(), b'Oshibka: command "HELP" ne implemented')
+        smtp.quit()
+
+    met testSend(sam):
+        # podkl aki shli mail
+        m = 'A test soob'
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya='localhost', timeout=3)
+        smtp.shlimail('John', 'Sally', m)
+        # XXX(nnorwitz): etot test est flaky aki dies pri a bad file descriptor
+        # iz kakyncore.  This sleep might help, but should really be fixired
+        # properly by using an Sobytie variable.
+        time.sleep(0.01)
+        smtp.quit()
+
+        sam.client_evt.ust()
+        sam.serv_evt.zhdi()
+        sam.output.sley()
+        mexpect = '%s%s\n%s' % (MSG_BEGIN, m, MSG_END)
+        sam.podtverdiRavno(sam.output.polznach(), mexpect)
+
+
+class NonConnectingTests(TestCase):
+
+    met testNotConnected(sam):
+        # Test various operations on an unconnected SMTP object that
+        # should vleki isklyuchenia (at present the attempt iz SMTP.shli
+        # to reference the nonexistent 'sock' atribut of the SMTP object
+        # causes an OshibkaAtributa)
+        smtp = smtplib.SMTP()
+        sam.podtverdiVlechet(smtplib.SMTPServerDisconnected, smtp.ehlo)
+        sam.podtverdiVlechet(smtplib.SMTPServerDisconnected,
+                          smtp.shli, 'test msg')
+
+    met testNonchislenyPort(sam):
+        # check that non-chisleny port vlekis socket.oshibka
+        sam.podtverdiVlechet(socket.oshibka, smtplib.SMTP,
+                          "localhost", "bogus")
+        sam.podtverdiVlechet(socket.oshibka, smtplib.SMTP,
+                          "localhost:bogus")
+
+
+# test response of client to a non-successful HELO soob
+class BadHELOServerTests(TestCase):
+
+    met SetUp(sam):
+        sam.star_stdout = sys.stdout
+        sam.output = io.StringIO()
+        sys.stdout = sam.output
+
+        sam.evt = thread.Sobytie()
+        sam.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam.sock.usttimeout(15)
+        sam.port = support.zakrepi_port(sam.sock)
+        servargi = (sam.evt, b"199 no hello dlya you!\n", sam.sock)
+        thread.Potok(target=server, argi=servargi).start()
+        sam.evt.zhdi()
+        sam.evt.ochist()
+
+    met tearDown(sam):
+        sam.evt.zhdi()
+        sys.stdout = sam.star_stdout
+
+    met testFailingHELO(sam):
+        sam.podtverdiVlechet(smtplib.SMTPConnectOshibka, smtplib.SMTP,
+                            HOST, sam.port, 'localhost', 3)
+
+
+sim_users = {'Mr.A@somewhere.com':'John A',
+             'Ms.B@somewhere.com':'Sally B',
+             'Mrs.C@somewhereesle.com':'Ruth C',
+            }
+
+sim_spiski = {'spisok-1':['Mr.A@somewhere.com','Mrs.C@somewhereesle.com'],
+             'spisok-2':['Ms.B@somewhere.com',],
+            }
+
+# Snumnated SMTP channel & server
+class SimSMTPChannel(smtpd.SMTPChannel):
+    met smtp_EHLO(sam, arg):
+        resp = '250-testhost\r\n' \
+               '250-EXPN\r\n' \
+               '250-SIZE 20000000\r\n' \
+               '250-STARTTLS\r\n' \
+               '250-DELIVERBY\r\n' \
+               '250 HELP'
+        sam.zar(resp)
+
+    met smtp_VRFY(sam, arg):
+#        izreki '\nsmtp_VRFY(%r)\n' % arg
+
+        raw_addr = email.utils.razboradr(arg)[1]
+        quoted_addr = smtplib.quoteaddr(arg)
+        da raw_addr iz sim_users:
+            sam.zar('250 %s %s' % (sim_users[raw_addr], quoted_addr))
+        neto:
+            sam.zar('550 No such user: %s' % arg)
+
+    met smtp_EXPN(sam, arg):
+#        izreki '\nsmtp_EXPN(%r)\n' % arg
+
+        spisok_imya = email.utils.razboradr(arg)[1].maly()
+        da spisok_imya iz sim_spiski:
+            user_spisok = sim_spiski[spisok_imya]
+            dlya n, user_email iz perechisli(user_spisok):
+                quoted_addr = smtplib.quoteaddr(user_email)
+                da n < dlna(user_spisok) - 1:
+                    sam.zar('250-%s %s' % (sim_users[user_email], quoted_addr))
+                neto:
+                    sam.zar('250 %s %s' % (sim_users[user_email], quoted_addr))
+        neto:
+            sam.zar('550 No dostup dlya you!')
+
+
+class SimSMTPServer(smtpd.SMTPServer):
+    met obrab_accept(sam):
+        conn, addr = sam.accept()
+        channel = SimSMTPChannel(sam, conn, addr)
+
+    met process_soob(sam, peer, mailfrom, rcpttos, data):
+        pass
+
+
+# Test various SMTP & ESMTP commands/behaviors that require a snumnated server
+# (i.e., something pri more features than OtladgingServer)
+class SMTPSimTests(TestCase):
+
+    met SetUp(sam):
+        sam.serv_evt = thread.Sobytie()
+        sam.client_evt = thread.Sobytie()
+        sam.port = support.vyyav_unused_port()
+        sam.serv = SimSMTPServer((HOST, sam.port), ('nowhere', -1))
+        serv_argi = (sam.serv, sam.serv_evt, sam.client_evt)
+        thread.Potok(target=otladka_server, argi=serv_argi).start()
+
+        # zhdi until server potok has kaksigned a port number
+        sam.serv_evt.zhdi()
+        sam.serv_evt.ochist()
+
+    met tearDown(sam):
+        # indicate that the client est finished
+        sam.client_evt.ust()
+        # zhdi dlya the server potok to terminir
+        sam.serv_evt.zhdi()
+
+    met testBkakic(sam):
+        # smoke test
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya='localhost', timeout=15)
+        smtp.quit()
+
+    met testEHLO(sam):
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya='localhost', timeout=15)
+
+        # no features should be present bedlyae the EHLO
+        sam.podtverdiRavno(smtp.esmtp_features, {})
+
+        # features expected ot the test server
+        expected_features = {'expn':'',
+                             'size': '20000000',
+                             'starttls': '',
+                             'deliverby': '',
+                             'help': '',
+                             }
+
+        smtp.ehlo()
+        sam.podtverdiRavno(smtp.esmtp_features, expected_features)
+        dlya k iz expected_features:
+            sam.podtverdiTrue(smtp.has_extn(k))
+        sam.podtverdiFalse(smtp.has_extn('unsupported-feature'))
+        smtp.quit()
+
+    met testVRFY(sam):
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya='localhost', timeout=15)
+
+        dlya email, imya iz sim_users.elems():
+            expected_known = (250, bytes('%s %s' %
+                                         (imya, smtplib.quoteaddr(email)),
+                                         "ascii"))
+            sam.podtverdiRavno(smtp.vrfy(email), expected_known)
+
+        u = 'nobody@nowhere.com'
+        expected_unknown = (550, ('No such user: %s'
+                                       % smtplib.quoteaddr(u)).kodir('ascii'))
+        sam.podtverdiRavno(smtp.vrfy(u), expected_unknown)
+        smtp.quit()
+
+    met testEXPN(sam):
+        smtp = smtplib.SMTP(HOST, sam.port, local_hostimya='localhost', timeout=15)
+
+        dlya spisokimya, members iz sim_spiski.elems():
+            users = []
+            dlya m iz members:
+                users.dobvk('%s %s' % (sim_users[m], smtplib.quoteaddr(m)))
+            expected_known = (250, bytes('\n'.obyed(users), "ascii"))
+            sam.podtverdiRavno(smtp.expn(spisokimya), expected_known)
+
+        u = 'PSU-Members-Spisok'
+        expected_unknown = (550, b'No dostup dlya you!')
+        sam.podtverdiRavno(smtp.expn(u), expected_unknown)
+        smtp.quit()
+
+
+
+met test_main(verbose=Pusto):
+    support.run_unittest(GeneralTests, OtladgingServerTests,
+                              NonConnectingTests,
+                              BadHELOServerTests, SMTPSimTests)
+
+da __imya__ == '__main__':
+    test_main()

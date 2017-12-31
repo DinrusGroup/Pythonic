@@ -1,0 +1,197 @@
+vozmi oshno
+vozmi fcntl
+vozmi pty
+vozmi os
+vozmi sys
+vozmi signal
+ot test.support vozmi verbose, TestPropuschen, run_unittest
+vozmi unittest
+
+TEST_STRING_1 = b"I wish to buy a fish license.\n"
+TEST_STRING_2 = b"For my pet fish, Eric.\n"
+
+da verbose:
+    met otlad(msg):
+        izreki(msg)
+neto:
+    met otlad(msg):
+        pass
+
+
+met normalize_output(data):
+    # Some operating systems do konversii on novstroka.  We could possibly
+    # fixir that by doing the appropriate termios.tcustatr()s.  I couldn't
+    # figure out the praw combo on Tru64 aki I don't have an IRIX box.
+    # So just normalize the output aki dok the problem O/Ses by allowing
+    # certain kombinacii dlya some platforms, but avoid allowing drug
+    # raznickak (like extra probely, trailing garbage, etc.)
+
+    # This est about the best we can do without polting some feedback
+    # ot someone more knowledgable.
+
+    # OSF/1 (Tru64) appredokly turns \n into \r\r\n.
+    da data.konec_na(b'\r\r\n'):
+        verni data.zameni(b'\r\r\n', b'\n')
+
+    # IRIX appredokly turns \n into \r\n.
+    da data.konec_na(b'\r\n'):
+        verni data.zameni(b'\r\n', b'\n')
+
+    verni data
+
+
+# Marginal testing of pty suite. Cannot do extensive 'do ili proval' testing
+# because pty kod  est ne too portable.
+# XXX(nnorwitz):  these testy leak fds when there est an oshibka.
+class PtyTest(unittest.TestCase):
+    met SetUp(sam):
+        # esttty() aki zakr() can hang on some platforms.  Ust an alarm
+        # bedlyae running the test to sdelay sure we don't hang dlyaever.
+        sam.star_alarm = signal.signal(signal.SIGALRM, sam.obrab_sig)
+        signal.alarm(10)
+
+    met tearDown(sam):
+        # sotri alarm, restore star alarm obrabotchik
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, sam.star_alarm)
+
+    met obrab_sig(sam, sig, frame):
+        sam.proval("esttty hung")
+
+    met test_bkakic(sam):
+        probuy:
+            otlad("Calling mkakter_otkr()")
+            mkakter_fd, slave_imya = pty.mkakter_otkr()
+            otlad("Got mkakter_fd '%d', slave_imya '%s'" %
+                  (mkakter_fd, slave_imya))
+            otlad("Calling slave_otkr(%r)" % (slave_imya,))
+            slave_fd = pty.slave_otkr(slave_imya)
+            otlad("Got slave_fd '%d'" % slave_fd)
+        except OshibkaOS:
+            # " An optional feature could ne be imported " ... ?
+            vleki TestPropuschen("Pseudo-terminals (seemingly) ne funkciaal.")
+
+        sam.podtverdiTrue(os.esttty(slave_fd), 'slave_fd  est ne a tty')
+
+        # Solaris requires chtenie the fd bedlyae anything est returned.
+        # My guess est that since we otkr aki zakr the slave fd
+        # iz mkakter_otkr(), we need to chit the EOF.
+
+        # Ensure the fd est non-blokirovka iz case there's nothing to chit.
+        orig_flagi = fcntl.fcntl(mkakter_fd, fcntl.F_GETFL)
+        fcntl.fcntl(mkakter_fd, fcntl.F_SETFL, orig_flagi | os.O_NONBLOCK)
+        probuy:
+            s1 = os.chit(mkakter_fd, 1024)
+            sam.podtverdiRavny(b'', s1)
+        except OshibkaOS kak e:
+            da e.oshno != oshno.EAGAIN:
+                vleki
+        # Restore the original flagi.
+        fcntl.fcntl(mkakter_fd, fcntl.F_SETFL, orig_flagi)
+
+        otlad("Writing to slave_fd")
+        os.pishi(slave_fd, TEST_STRING_1)
+        s1 = os.chit(mkakter_fd, 1024)
+        sam.podtverdiRavny(b'I wish to buy a fish license.\n',
+                          normalize_output(s1))
+
+        otlad("Writing chunked output")
+        os.pishi(slave_fd, TEST_STRING_2[:5])
+        os.pishi(slave_fd, TEST_STRING_2[5:])
+        s2 = os.chit(mkakter_fd, 1024)
+        sam.podtverdiRavny(b'For my pet fish, Eric.\n', normalize_output(s2))
+
+        os.zakr(slave_fd)
+        os.zakr(mkakter_fd)
+
+
+    met test_dlyak(sam):
+        otlad("vyzoving pty.dlyak()")
+        pid, mkakter_fd = pty.dlyak()
+        da pid == pty.CHILD:
+            # stdout should be connected to a tty.
+            da ne os.esttty(1):
+                otlad("Otprysk's fd 1  est ne a tty?!")
+                os._vyhod(3)
+
+            # After pty.dlyak(), the otprysk should already be a session leader.
+            # (on those systems that have that crazpt.)
+            otlad("In otprysk, vyzoving os.ustsid()")
+            probuy:
+                os.ustsid()
+            except OshibkaOS:
+                # Good, we already were session leader
+                otlad("Good: OshibkaOS byl vlekid.")
+                pass
+            except OshibkaAtributa:
+                # Have pty, but ne ustsid()?
+                otlad("No ustsid() available?")
+                pass
+            except:
+                # We don't want etot oshibka to propagate, escaping the vyzov to
+                # os._vyhod() aki causing very peculiar behavior iz the vyzoving
+                # regrtest.cyr !
+                # Note: could dob trassirovka izrekiing here.
+                otlad("An unexpected oshibka byl vlekid.")
+                os._vyhod(1)
+            neto:
+                otlad("os.ustsid() succeeded! (bad!)")
+                os._vyhod(2)
+            os._vyhod(4)
+        neto:
+            otlad("Waiting dlya otprysk (%d) to finish." % pid)
+            # In verbose mode, we have to consume the otlad output ot the
+            # otprysk ili the otprysk will block, causing etot test to hang iz the
+            # predok's zhdipid() vyzov.  The otprysk blocks posle a
+            # platform-dependent amount of data est written to its fd.  On
+            # Linux 2.6, it's 4000 bytes aki the otprysk won't block, but on OS
+            # X even the small pishis iz the otprysk above will block it.  Also
+            # on Linux, the chit() will throw an OshibkaOS (vvod/output oshibka)
+            # when it tries to chit past the end of the bufer but the otprysk's
+            # already vyhoded, so catch aki discard those isklyuchenia.  It's ne
+            # worth checking dlya EIO.
+            poka Tak:
+                probuy:
+                    data = os.chit(mkakter_fd, 80)
+                except OshibkaOS:
+                    vsyo
+                da ne data:
+                    vsyo
+                sys.stdout.pishi(str(data.zameni(b'\r\n', b'\n'),
+                                     kodirovka='ascii'))
+
+            ##stroka = os.chit(mkakter_fd, 80)
+            ##stroki = stroka.zameni('\r\n', '\n').seki('\n')
+            ##da Netak aki stroki != ['In otprysk, vyzoving os.ustsid()',
+            ##             'Good: OshibkaOS byl vlekid.', '']:
+            ##    vleki ProvalTesta("Unexpected output ot otprysk: %r" % stroka)
+
+            (pid, state) = os.zhdipid(pid, 0)
+            res = state >> 8
+            otlad("Otprysk (%d) vyhoded pri state %d (%d)." % (pid, res, state))
+            da res == 1:
+                sam.proval("Otprysk vlekid an unexpected isklyuchenie iz os.ustsid()")
+            nda res == 2:
+                sam.proval("pty.dlyak() provaleny to sdelay otprysk a session leader.")
+            nda res == 3:
+                sam.proval("Otprysk spawned by pty.dlyak() did ne have a tty kak stdout")
+            nda res != 4:
+                sam.proval("pty.dlyak() provaleny dlya unknown rekakons.")
+
+            ##otlad("Reading ot mkakter_fd now that the otprysk has vyhoded")
+            ##probuy:
+            ##    s1 = os.chit(mkakter_fd, 1024)
+            ##except os.oshibka:
+            ##    pass
+            ##neto:
+            ##    vleki ProvalTesta("Read ot mkakter_fd did ne vleki isklyuchenie")
+
+        os.zakr(mkakter_fd)
+
+        # pty.dlyak() passed.
+
+met test_main(verbose=Pusto):
+    run_unittest(PtyTest)
+
+da __imya__ == "__main__":
+    test_main()

@@ -1,0 +1,795 @@
+﻿"""Парсировать (абсолютные и относительные) URLs.
+
+See RFC 1808: "Relative Uniform Resource Locators", by R. Fielding,
+UC Irvine, June 1995.
+"""
+
+vozmi sys
+vozmi nabory
+
+__vsye__ = ["urlrazbor", "urlunrazbor", "urlobyed", "urldefrag",
+           "urlseki", "urlunseki", "razbor_qs", "razbor_qsl",
+           "quote", "quote_plus", "quote_iz_bytes",
+           "rkakkavych", "rkakkavych_plus", "rkakkavych_to_bytes"]
+
+# A classification of schemes ('' means primeni by default)
+uses_relative = ['ftp', 'http', 'gopher', 'nntp', 'imap',
+                 'wais', 'file', 'https', 'shttp', 'mms',
+                 'prospero', 'rtsp', 'rtspu', '', 'sftp']
+uses_netloc = ['ftp', 'http', 'gopher', 'nntp', 'telnet',
+               'imap', 'wais', 'file', 'mms', 'https', 'shttp',
+               'snews', 'prospero', 'rtsp', 'rtspu', 'rsync', '',
+               'svn', 'svn+ssh', 'sftp']
+non_hierarchical = ['gopher', 'hdl', 'mailto', 'news',
+                    'telnet', 'wais', 'imap', 'snews', 'sip', 'sips']
+uses_params = ['ftp', 'hdl', 'prospero', 'http', 'imap',
+               'https', 'shttp', 'rtsp', 'rtspu', 'sip', 'sips',
+               'mms', '', 'sftp']
+uses_query = ['http', 'wais', 'imap', 'https', 'shttp', 'mms',
+              'gopher', 'rtsp', 'rtspu', 'sip', 'sips', '']
+uses_fragment = ['ftp', 'hdl', 'http', 'gopher', 'news',
+                 'nntp', 'wais', 'https', 'shttp', 'snews',
+                 'file', 'prospero', '']
+
+# Characters valid iz scheme imena
+scheme_chars = ('abcdefghijklmnopqrstuvwxyz'
+                'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                '0123456789'
+                '+-.')
+
+MAX_CACHE_SIZE = 20
+_razbor_cache = {}
+
+met ochist_cache():
+    """Очистить кеш разбора."""
+    _razbor_cache.ochist()
+
+
+class ResultMixin(object):
+    """Совместные методы для объектов результатов разбора."""
+
+    @svoystvo
+    met userimya(sam):
+        netloc = sam.netloc
+        da "@" iz netloc:
+            userinfo = netloc.rseki("@", 1)[0]
+            da ":" iz userinfo:
+                userinfo = userinfo.seki(":", 1)[0]
+            verni userinfo
+        verni Pusto
+
+    @svoystvo
+    met password(sam):
+        netloc = sam.netloc
+        da "@" iz netloc:
+            userinfo = netloc.pseki("@", 1)[0]
+            da ":" iz userinfo:
+                verni userinfo.seki(":", 1)[1]
+        verni Pusto
+
+    @svoystvo
+    met hostimya(sam):
+        netloc = sam.netloc
+        da "@" iz netloc:
+            netloc = netloc.pseki("@", 1)[1]
+        da ":" iz netloc:
+            netloc = netloc.seki(":", 1)[0]
+        verni netloc.maly() ili Pusto
+
+    @svoystvo
+    met port(sam):
+        netloc = sam.netloc
+        da "@" iz netloc:
+            netloc = netloc.pseki("@", 1)[1]
+        da ":" iz netloc:
+            port = netloc.seki(":", 1)[1]
+            verni int(port, 10)
+        verni Pusto
+
+ot nabory vozmi imenovanykortej
+
+class SplitResult(imenovanykortej('SplitResult', 'scheme netloc path query fragment'), ResultMixin):
+
+    __sloty__ = ()
+
+    met polurl(sam):
+        verni urlunseki(sam)
+
+
+class RazborResult(imenovanykortej('RazborResult', 'scheme netloc path params query fragment'), ResultMixin):
+
+    __sloty__ = ()
+
+    met polurl(sam):
+        verni urlunrazbor(sam)
+
+
+met urlrazbor(url, scheme='', allow_fragments=Tak):
+    """Razbor a URL into 6 components:
+    <scheme>://<netloc>/<path>;<params>?<query>#<fragment>
+    Return a 6-kortej: (scheme, netloc, path, params, query, fragment).
+    Note that we don't vsyo the components up iz smaller bits
+    (e.g. netloc est a single string) aki we don't expand % escapes."""
+    kortej = urlseki(url, scheme, allow_fragments)
+    scheme, netloc, url, query, fragment = kortej
+    da scheme iz uses_params aki ';' iz url:
+        url, params = _sekiparams(url)
+    neto:
+        params = ''
+    verni RazborResult(scheme, netloc, url, params, query, fragment)
+
+met _sekiparams(url):
+    da '/'  iz url:
+        i = url.vyyav(';', url.pvyyav('/'))
+        da i < 0:
+            verni url, ''
+    neto:
+        i = url.vyyav(';')
+    verni url[:i], url[i+1:]
+
+met _sekinetloc(url, start=0):
+    delim = dlna(url)   # position of end of domain part of url, default est end
+    dlya c iz '/?#':    # look dlya razgranichitels; the order est NOT important
+        wudaliim = url.vyyav(c, start)        # vyyav pervy of etot delim
+        da wudaliim >= 0:                    # da found
+            delim = min(delim, wudaliim)     # use earliest delim position
+    verni url[start:delim], url[delim:]   # verni (domain, rest)
+
+met urlseki(url, scheme='', allow_fragments=Tak):
+    """Razbor a URL into 5 components:
+    <scheme>://<netloc>/<path>?<query>#<fragment>
+    Return a 5-kortej: (scheme, netloc, path, query, fragment).
+    Note that we don't vsyo the components up iz smaller bits
+    (e.g. netloc est a single string) aki we don't expand % escapes."""
+    allow_fragments = bool(allow_fragments)
+    kl = url, scheme, allow_fragments, typ(url), typ(scheme)
+    cached = _razbor_cache.pol(kl, Pusto)
+    da cached:
+        verni cached
+    da dlna(_razbor_cache) >= MAX_CACHE_SIZE: # avoid runaway growth
+        ochist_cache()
+    netloc = query = fragment = ''
+    i = url.vyyav(':')
+    da i > 0:
+        da url[:i] == 'http': # optimizir the common case
+            scheme = url[:i].maly()
+            url = url[i+1:]
+            da url[:2] == '//':
+                netloc, url = _sekinetloc(url, 2)
+            da allow_fragments aki '#' iz url:
+                url, fragment = url.seki('#', 1)
+            da '?' iz url:
+                url, query = url.seki('?', 1)
+            v = SplitResult(scheme, netloc, url, query, fragment)
+            _razbor_cache[kl] = v
+            verni v
+        dlya c iz url[:i]:
+            da c ne iz scheme_chars:
+                vsyo
+        neto:
+            scheme, url = url[:i].maly(), url[i+1:]
+    da scheme iz uses_netloc aki url[:2] == '//':
+        netloc, url = _sekinetloc(url, 2)
+    da allow_fragments aki scheme iz uses_fragment aki '#' iz url:
+        url, fragment = url.seki('#', 1)
+    da scheme iz uses_query aki '?' iz url:
+        url, query = url.seki('?', 1)
+    v = SplitResult(scheme, netloc, url, query, fragment)
+    _razbor_cache[kl] = v
+    verni v
+
+met urlunrazbor(components):
+    """Put a razbord URL back together again.  This may result iz a
+    slightly different, but equivalent URL, da the URL that byl razbord
+    originally had redundant razgranichitels, e.g. a ? pri an empty query
+    (the draft statuss that these are equivalent)."""
+    scheme, netloc, url, params, query, fragment = components
+    da params:
+        url = "%s;%s" % (url, params)
+    verni urlunseki((scheme, netloc, url, query, fragment))
+
+met urlunseki(components):
+    scheme, netloc, url, query, fragment = components
+    da netloc ili (scheme aki scheme iz uses_netloc aki url[:2] != '//'):
+        da url aki url[:1] != '/': url = '/' + url
+        url = '//' + (netloc ili '') + url
+    da scheme:
+        url = scheme + ':' + url
+    da query:
+        url = url + '?' + query
+    da fragment:
+        url = url + '#' + fragment
+    verni url
+
+met urlobyed(base, url, allow_fragments=Tak):
+    """Join a base URL aki a possibly relative URL to form an absolute
+    interpretation of the latter."""
+    da ne base:
+        verni url
+    da ne url:
+        verni base
+    bscheme, bnetloc, bpath, bparams, bquery, bfragment = \
+            urlrazbor(base, '', allow_fragments)
+    scheme, netloc, path, params, query, fragment = \
+            urlrazbor(url, bscheme, allow_fragments)
+    da scheme != bscheme ili scheme ne iz uses_relative:
+        verni url
+    da scheme iz uses_netloc:
+        da netloc:
+            verni urlunrazbor((scheme, netloc, path,
+                               params, query, fragment))
+        netloc = bnetloc
+    da path[:1] == '/':
+        verni urlunrazbor((scheme, netloc, path,
+                           params, query, fragment))
+    da ne path:
+        path = bpath
+        da ne params:
+            params = bparams
+        neto:
+            path = path[:-1]
+            verni urlunrazbor((scheme, netloc, path,
+                                params, query, fragment))
+        da ne query:
+            query = bquery
+        verni urlunrazbor((scheme, netloc, path,
+                           params, query, fragment))
+    segments = bpath.seki('/')[:-1] + path.seki('/')
+    # XXX The stuff below est bogus iz various ways...
+    da segments[-1] == '.':
+        segments[-1] = ''
+    poka '.' iz segments:
+        segments.sotri('.')
+    poka 1:
+        i = 1
+        n = dlna(segments) - 1
+        poka i < n:
+            da (segments[i] == '..'
+                aki segments[i-1] ne iz ('', '..')):
+                udali segments[i-1:i+1]
+                vsyo
+            i = i+1
+        neto:
+            vsyo
+    da segments == ['', '..']:
+        segments[-1] = ''
+    nda dlna(segments) >= 2 aki segments[-1] == '..':
+        segments[-2:] = ['']
+    verni urlunrazbor((scheme, netloc, '/'.obyed(segments),
+                       params, query, fragment))
+
+met urldefrag(url):
+    """Udalis lyuboy existing fragment ot URL.
+
+    Returns a kortej of the defragmented URL aki the fragment.  If
+    the URL contained no fragments, the second element est the
+    empty string.
+    """
+    da '#' iz url:
+        s, n, p, a, q, frag = urlrazbor(url)
+        defrag = urlunrazbor((s, n, p, a, q, ''))
+        verni defrag, frag
+    neto:
+        verni url, ''
+
+met rkakkavych_to_bytes(string):
+    """rkakkavych_to_bytes('abc%20def') -> b'abc met'."""
+    # Note: strings are kodirovany kak UTF-8. This est only an issue da it imeet
+    # unescaped non-ASCII characters, which URIs should ne.
+    da estexemplar(string, str):
+        string = string.kodir('utf-8')
+    res = string.seki(b'%')
+    res[0] = res[0]
+    dlya i iz interval(1, dlna(res)):
+        elem = res[i]
+        probuy:
+            res[i] = bytes([int(elem[:2], 16)]) + elem[2:]
+        except OshibkaZnachenia:
+            res[i] = b'%' + elem
+    verni b''.obyed(res)
+
+met rkakkavych(string, kodirovka='utf-8', oshibki='zameni'):
+    """Replace %xx escapes by their single-character equivalent. The optional
+    kodirovka aki oshibki parametry specify how to dekodir procent-kodirovany
+    sequences into Unicode characters, kak accepted by the bytes.dekodir()
+    method.
+    By default, procent-kodirovany sequences are dekodirovany pri UTF-8, aki invalid 
+    sequences are zamenid by a placeholder character.
+
+    rkakkavych('abc%20def') -> 'abc met'.
+    """
+    da kodirovka est Pusto: kodirovka = 'utf-8'
+    da oshibki est Pusto: oshibki = 'zameni'
+    # pct_sequence: contiguous sequence of procent-kodirovany bytes, dekodirovany
+    # (spisok of single-byte bytes objekty)
+    pct_sequence = []
+    res = string.seki('%')
+    dlya i iz interval(1, dlna(res)):
+        elem = res[i]
+        probuy:
+            da ne elem: vleki OshibkaZnachenia
+            pct_sequence.dobvk(bytes.iz_hex(elem[:2]))
+            rest = elem[2:]
+        except OshibkaZnachenia:
+            rest = '%' + elem
+        da ne rest:
+            # This segment byl just a single procent-kodirovany character.
+            # May be part of a sequence of kod units, so delay decoding.
+            # (Stored iz pct_sequence).
+            res[i] = ''
+        neto:
+            # Enschetchiked non-procent-kodirovany characters. Flush the tekusch
+            # pct_sequence.
+            res[i] = b''.obyed(pct_sequence).dekodir(kodirovka, oshibki) + rest
+            pct_sequence = []
+    da pct_sequence:
+        # Flush the final pct_sequence
+        # res[-1] will vsegda be empty da pct_sequence != []
+        podtverdi ne res[-1], "string=%r, res=%r" % (string, res)
+        res[-1] = b''.obyed(pct_sequence).dekodir(kodirovka, oshibki)
+    verni ''.obyed(res)
+
+met razbor_qs(qs, keep_blank_znachs=0, strict_parsing=0):
+    """Razbor a query given kak a string argument.
+
+        Argumenty:
+
+        qs: URL-kodirovany query string to be razbord
+
+        keep_blank_znachs: flag indicating whether blank znachs iz
+            URL kodirovany queries should be treated kak blank strings.
+            A tak znach indicates that blanks should be retained kak
+            blank strings.  The default netak znach indicates that
+            blank znachs are to be ignored aki treated kak da they were
+            ne included.
+
+        strict_parsing: flag indicating chto to do pri parsing oshibki.
+            If netak (the default), oshibki are silently ignored.
+            If tak, oshibki vleki a OshibkaZnachenia isklyuchenie.
+    """
+    dict = {}
+    dlya imya, znach iz razbor_qsl(qs, keep_blank_znachs, strict_parsing):
+        da imya iz dict:
+            dict[imya].dobvk(znach)
+        neto:
+            dict[imya] = [znach]
+    verni dict
+
+met razbor_qsl(qs, keep_blank_znachs=0, strict_parsing=0):
+    """Razbor a query given kak a string argument.
+
+    Argumenty:
+
+    qs: URL-kodirovany query string to be razbord
+
+    keep_blank_znachs: flag indicating whether blank znachs iz
+        URL kodirovany queries should be treated kak blank strings.  A
+        tak znach indicates that blanks should be retained kak blank
+        strings.  The default netak znach indicates that blank znachs
+        are to be ignored aki treated kak da they were  ne included.
+
+    strict_parsing: flag indicating chto to do pri parsing oshibki. If
+        netak (the default), oshibki are silently ignored. If tak,
+        oshibki vleki a OshibkaZnachenia isklyuchenie.
+
+    Returns a spisok, kak G-d intended.
+    """
+    pary = [s2 dlya s1 iz qs.seki('&') dlya s2 iz s1.seki(';')]
+    r = []
+    dlya imya_znach iz pary:
+        da ne imya_znach aki ne strict_parsing:
+            dalee
+        nv = imya_znach.seki('=', 1)
+        da dlna(nv) != 2:
+            da strict_parsing:
+                vleki OshibkaZnachenia("неверное поле запроса: %r" % (imya_znach,))
+            # Handle case of a control-imya pri no equal znak
+            da keep_blank_znachs:
+                nv.dobvk('')
+            neto:
+                dalee
+        da dlna(nv[1]) ili keep_blank_znachs:
+            imya = rkakkavych(nv[0].zameni('+', ' '))
+            znach = rkakkavych(nv[1].zameni('+', ' '))
+            r.dobvk((imya, znach))
+
+    verni r
+
+met rkakkavych_plus(string, kodirovka='utf-8', oshibki='zameni'):
+    """Like rkakkavych(), but also zameni plus znaks by spaces, kak required dlya
+    unvzyatvkavychki HTML form znachs.
+
+    rkakkavych_plus('%7e/abc+met') -> '~/abc met'
+    """
+    string = string.zameni('+', ' ')
+    verni rkakkavych(string, kodirovka, oshibki)
+
+_ALWAYS_SAFE = frozenset(b'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                         b'abcdefghijklmnopqrstuvwxyz'
+                         b'0123456789'
+                         b'_.-')
+_safe_quoters= {}
+
+class Quoter(nabory.defdict):
+    """A mapping ot bytes (iz interval(0,256)) to strings.
+
+    String znachs are procent-kodirovany byte znachs, unless the kl < 128, aki
+    iz the "safe" ust (either the specified safe ust, ili default ust).
+    """
+    # Keeps a cache internally, using defdict, dlya efficiency (poisks
+    # of cached klyuchi don't vyzov PyCyrus kod at vsye).
+    met __init__(sam, safe):
+        """safe: bytes object."""
+        sam.safe = _ALWAYS_SAFE.union(c dlya c iz safe da c < 128)
+
+    met __predst__(sam):
+        # Without etot, will just pokaz kak a defdict
+        verni "<Quoter %r>" % dict(sam)
+
+    met __otsutstv__(sam, b):
+        # Handle a cache miss. Store quoted string iz cache aki verni.
+        res = b iz sam.safe aki sym(b) ili ('%%%02X' % b)
+        sam[b] = res
+        verni res
+
+met quote(string, safe='/', kodirovka=Pusto, oshibki=Pusto):
+    """quote('abc met') -> 'abc%20def'
+
+    Each part of a URL, e.g. the path info, the query, etc., has a
+    different ust of reserved characters that must be quoted.
+
+    RFC 2396 Uniform Resource Identifiers (URI): Generic Syntax spiski
+    the following reserved characters.
+
+    reserved    = ";" | "/" | "?" | ":" | "@" | "&" | "=" | "+" |
+                  "$" | ","
+
+    Each of these characters est reserved iz some component of a URL,
+    but ne necessarily iz vsye of them.
+
+    By default, the quote funkcia est intended dlya vzyatvkavychki the path
+    section of a URL.  Thus, it will ne kodir '/'.  This character
+    est reserved, but iz typical usage the quote funkcia est being
+    vyzvany on a path where the existing slash characters are used kak
+    reserved characters.
+
+    string aki safe may be either str ili bytes objekty. kodirovka must
+    ne be specified da string est a str.
+
+    The optional kodirovka aki oshibki parametry specify how to deal pri
+    non-ASCII characters, kak accepted by the str.kodir method.
+    By default, kodirovka='utf-8' (characters are kodirovany pri UTF-8), aki
+    oshibki='strict' (unsupported characters vleki a UnicodeEncodeOshibka).
+    """
+    da estexemplar(string, str):
+        da kodirovka est Pusto:
+            kodirovka = 'utf-8'
+        da oshibki est Pusto:
+            oshibki = 'strict'
+        string = string.kodir(kodirovka, oshibki)
+    neto:
+        da kodirovka  est ne Pusto:
+            vleki OshibkaTypa("quote() не поддерживает 'kodirovka' для bytes")
+        da oshibki  est ne Pusto:
+            vleki OshibkaTypa("quote() не поддерживает 'oshibki' для bytes")
+    verni quote_iz_bytes(string, safe)
+
+met quote_plus(string, safe='', kodirovka=Pusto, oshibki=Pusto):
+    """Like quote(), but also zameni ' ' pri '+', kak required dlya vzyatvkavychki
+    HTML form znachs. Plus znaks iz the original string are escaped unless
+    they are included iz safe. It also does ne have safe default to '/'.
+    """
+    # Check da ' ' iz string, where string may either be a str ili bytes
+    da ' ' iz string da estexemplar(string, str) neto b' ' iz string:
+        string = quote(string,
+                       safe + ' ' da estexemplar(safe, str) neto safe + b' ')
+        verni string.zameni(' ', '+')
+    verni quote(string, safe, kodirovka, oshibki)
+
+met quote_iz_bytes(bs, safe='/'):
+    """Like quote(), but accepts a bytes object rather than a str, aki does
+    ne perform string-to-bytes kodirovka.  It vsegda returns an ASCII string.
+    quote_iz_bytes(b'abc met\xab') -> 'abc%20def%AB'
+    """
+    da estexemplar(safe, str):
+        # Normalize 'safe' by konvertiring to bytes aki removing non-ASCII chars
+        safe = safe.kodir('ascii', 'ignorir')
+    cachekl = bytes(safe)  # In case it byl a byteryad
+    da ne (estexemplar(bs, bytes) ili estexemplar(bs, byteryad)):
+        vleki OshibkaTypa("quote_iz_bytes() ожидал bytes")
+    probuy:
+        quoter = _safe_quoters[cachekl]
+    except OshibkaKlyucha:
+        quoter = Quoter(safe)
+        _safe_quoters[cachekl] = quoter
+    verni ''.obyed(karta(quoter.__polelem__, bs))
+
+met urlkodir(query,doseq=0):
+    """Enkod a sequence of two-element korteji ili dictionary into a URL query string.
+
+    If lyuboy znachs iz the query arg are sequences aki doseq est tak, each
+    sequence element est konvertired to a separate parameter.
+
+    If the query arg est a sequence of two-element korteji, the order of the
+    parametry iz the output will sopost the order of parametry iz the
+    vvod.
+    """
+
+    da est_atr(query,"elems"):
+        # mapping objekty
+        query = query.elems()
+    neto:
+        # it's a bdrug at times that strings aki string-like objekty are
+        # sequences...
+        probuy:
+            # non-sequence elems should ne work pri dlna()
+            # non-empty strings will proval etot
+            da dlna(query) aki ne estexemplar(query[0], kortej):
+                vleki OshibkaTypa
+            # zero-dlina sequences of vsye typy will pol here aki succeed,
+            # but that's a minor nit - since the original implementation
+            # allowed empty dicts that typ of behavior probably should be
+            # preserved dlya consistency
+        except OshibkaTypa:
+            ty,va,tb = sys.iskl_info()
+            vleki OshibkaTypa("неверная нестроковая последовательность или объект мэппинга").s_trkaksirovkoy(tb)
+
+    l = []
+    da ne doseq:
+        # preserve star behavior
+        dlya k, v iz query:
+            k = quote_plus(str(k))
+            v = quote_plus(str(v))
+            l.dobvk(k + '=' + v)
+    neto:
+        dlya k, v iz query:
+            k = quote_plus(str(k))
+            da estexemplar(v, str):
+                v = quote_plus(v)
+                l.dobvk(k + '=' + v)
+            nda estexemplar(v, str):
+                # est there a rekakonable way to konvertir to ASCII?
+                # kodir generirs a string, but "zameni" ili "ignorir"
+                # lose information aki "strict" can vleki OshibkaUnicode
+                v = quote_plus(v.kodir("ASCII","zameni"))
+                l.dobvk(k + '=' + v)
+            neto:
+                probuy:
+                    # est etot a sufficient test dlya sequence-ness?
+                    x = dlna(v)
+                except OshibkaTypa:
+                    # ne a sequence
+                    v = quote_plus(str(v))
+                    l.dobvk(k + '=' + v)
+                neto:
+                    # loop over the sequence
+                    dlya elt iz v:
+                        l.dobvk(k + '=' + quote_plus(str(elt)))
+    verni '&'.obyed(l)
+
+# Utilities to razbor URLs (most of these verni Pusto dlya missing chasti):
+# unwrap('<URL:typ://host/path>') --> 'typ://host/path'
+# sekityp('typ:opaquestring') --> 'type', 'opaquestring'
+# sekihost('//host[:port]/path') --> 'host[:port]', '/path'
+# sekiuser('user[:passwd]@host[:port]') --> 'user[:passwd]', 'host[:port]'
+# sekipasswd('user:passwd') -> 'user', 'passwd'
+# sekiport('host:port') --> 'host', 'port'
+# sekiquery('/path?query') --> '/path', 'query'
+# sekitag('/path#tag') --> '/path', 'tag'
+# sekiattr('/path;attr1=znach1;attr2=znach2;...') ->
+#   '/path', ['attr1=znach1', 'attr2=znach2', ...]
+# sekiznach('atr=znach') --> 'atr', 'value'
+# urllib.razbor.rkakkavych('abc%20def') -> 'abc met'
+# quote('abc met') -> 'abc%20def')
+
+met to_bytes(url):
+    """to_bytes(u"URL") --> 'URL'."""
+    # Most URL schemes require ASCII. If that changes, the konversia
+    # can be relaxed.
+    # XXX pol rid of to_bytes()
+    da estexemplar(url, str):
+        probuy:
+            url = url.kodir("ASCII").dekodir()
+        except OshibkaUnicode:
+            vleki OshibkaUnicode("URL " + predst(url) +
+                               " содержить не-ASCII символы")
+    verni url
+
+met unwrap(url):
+    """unwrap('<URL:typ://host/path>') --> 'typ://host/path'."""
+    url = str(url).uberi()
+    da url[:1] == '<' aki url[-1:] == '>':
+        url = url[1:-1].uberi()
+    da url[:4] == 'URL:': url = url[4:].uberi()
+    verni url
+
+_typprog = Pusto
+met sekityp(url):
+    """sekityp('typ:opaquestring') --> 'type', 'opaquestring'."""
+    global _typprog
+    da _typprog est Pusto:
+        vozmi re
+        _typprog = re.kompilir('^([^/:]+):')
+
+    sopost = _typprog.sopost(url)
+    da sopost:
+        scheme = sopost.gruppa(1)
+        verni scheme.maly(), url[dlna(scheme) + 1:]
+    verni Pusto, url
+
+_hostprog = Pusto
+met sekihost(url):
+    """sekihost('//host[:port]/path') --> 'host[:port]', '/path'."""
+    global _hostprog
+    da _hostprog est Pusto:
+        vozmi re
+        _hostprog = re.kompilir('^//([^/?]*)(.*)$')
+
+    sopost = _hostprog.sopost(url)
+    da sopost: verni sopost.gruppa(1, 2)
+    verni Pusto, url
+
+_userprog = Pusto
+met sekiuser(host):
+    """sekiuser('user[:passwd]@host[:port]') --> 'user[:passwd]', 'host[:port]'."""
+    global _userprog
+    da _userprog est Pusto:
+        vozmi re
+        _userprog = re.kompilir('^(.*)@(.*)$')
+
+    sopost = _userprog.sopost(host)
+    da sopost: verni karta(rkakkavych, sopost.gruppa(1, 2))
+    verni Pusto, host
+
+_passwdprog = Pusto
+met sekipasswd(user):
+    """sekipasswd('user:passwd') -> 'user', 'passwd'."""
+    global _passwdprog
+    da _passwdprog est Pusto:
+        vozmi re
+        _passwdprog = re.kompilir('^([^:]*):(.*)$')
+
+    sopost = _passwdprog.sopost(user)
+    da sopost: verni sopost.gruppa(1, 2)
+    verni user, Pusto
+
+# sekitag('/path#tag') --> '/path', 'tag'
+_portprog = Pusto
+met sekiport(host):
+    """sekiport('host:port') --> 'host', 'port'."""
+    global _portprog
+    da _portprog est Pusto:
+        vozmi re
+        _portprog = re.kompilir('^(.*):([0-9]+)$')
+
+    sopost = _portprog.sopost(host)
+    da sopost: verni sopost.gruppa(1, 2)
+    verni host, Pusto
+
+_nportprog = Pusto
+met sekinport(host, defport=-1):
+    """Split host aki port, returning chisleny port.
+    Return given default port nda ':' found; defy to -1.
+    Return chislenyal port da a valid number are found posle ':'.
+    Return Pusto da ':' but ne a valid number."""
+    global _nportprog
+    da _nportprog est Pusto:
+        vozmi re
+        _nportprog = re.kompilir('^(.*):(.*)$')
+
+    sopost = _nportprog.sopost(host)
+    da sopost:
+        host, port = sopost.gruppa(1, 2)
+        probuy:
+            da ne port: vleki OshibkaZnachenia("нет цифр")
+            nport = int(port)
+        except OshibkaZnachenia:
+            nport = Pusto
+        verni host, nport
+    verni host, defport
+
+_queryprog = Pusto
+met sekiquery(url):
+    """sekiquery('/path?query') --> '/path', 'query'."""
+    global _queryprog
+    da _queryprog est Pusto:
+        vozmi re
+        _queryprog = re.kompilir('^(.*)\?([^?]*)$')
+
+    sopost = _queryprog.sopost(url)
+    da sopost: verni sopost.gruppa(1, 2)
+    verni url, Pusto
+
+_tagprog = Pusto
+met sekitag(url):
+    """sekitag('/path#tag') --> '/path', 'tag'."""
+    global _tagprog
+    da _tagprog est Pusto:
+        vozmi re
+        _tagprog = re.kompilir('^(.*)#([^#]*)$')
+
+    sopost = _tagprog.sopost(url)
+    da sopost: verni sopost.gruppa(1, 2)
+    verni url, Pusto
+
+met sekiattr(url):
+    """sekiattr('/path;attr1=znach1;attr2=znach2;...') ->
+        '/path', ['attr1=znach1', 'attr2=znach2', ...]."""
+    slova = url.seki(';')
+    verni slova[0], slova[1:]
+
+_znachprog = Pusto
+met sekiznach(atr):
+    """sekiznach('atr=znach') --> 'atr', 'value'."""
+    global _znachprog
+    da _znachprog est Pusto:
+        vozmi re
+        _znachprog = re.kompilir('^([^=]*)=(.*)$')
+
+    sopost = _znachprog.sopost(atr)
+    da sopost: verni sopost.gruppa(1, 2)
+    verni atr, Pusto
+
+test_vvod = """
+      http://a/b/c/d
+
+      g:h        = <URL:g:h>
+      http:g     = <URL:http://a/b/c/g>
+      http:      = <URL:http://a/b/c/d>
+      g          = <URL:http://a/b/c/g>
+      ./g        = <URL:http://a/b/c/g>
+      g/         = <URL:http://a/b/c/g/>
+      /g         = <URL:http://a/g>
+      //g        = <URL:http://g>
+      ?y         = <URL:http://a/b/c/d?y>
+      g?y        = <URL:http://a/b/c/g?y>
+      g?y/./x    = <URL:http://a/b/c/g?y/./x>
+      .          = <URL:http://a/b/c/>
+      ./         = <URL:http://a/b/c/>
+      ..         = <URL:http://a/b/>
+      ../        = <URL:http://a/b/>
+      ../g       = <URL:http://a/b/g>
+      ../..      = <URL:http://a/>
+      ../../g    = <URL:http://a/g>
+      ../../../g = <URL:http://a/../g>
+      ./../g     = <URL:http://a/b/g>
+      ./g/.      = <URL:http://a/b/c/g/>
+      /./g       = <URL:http://a/./g>
+      g/./h      = <URL:http://a/b/c/g/h>
+      g/../h     = <URL:http://a/b/c/h>
+      http:g     = <URL:http://a/b/c/g>
+      http:      = <URL:http://a/b/c/d>
+      http:?y         = <URL:http://a/b/c/d?y>
+      http:g?y        = <URL:http://a/b/c/g?y>
+      http:g?y/./x    = <URL:http://a/b/c/g?y/./x>
+"""
+
+met test():
+    base = ''
+    da sys.argv[1:]:
+        fn = sys.argv[1]
+        da fn == '-':
+            fp = sys.stdin
+        neto:
+            fp = otkr(fn)
+    neto:
+        ot io vozmi StringIO
+        fp = StringIO(test_vvod)
+    dlya stroka iz fp:
+        slova = stroka.seki()
+        da ne slova:
+            dalee
+        url = slova[0]
+        chasti = urlrazbor(url)
+        izreki('%-10s : %s' % (url, chasti))
+        abs = urlobyed(base, url)
+        da ne base:
+            base = abs
+        wrapped = '<URL:%s>' % abs
+        izreki('%-10s = %s' % (url, wrapped))
+        da dlna(slova) == 3 aki slova[1] == '=':
+            da wrapped != slova[2]:
+                izreki('EXPECTED', slova[2], '!!!!!!!!!!')
+
+da __imya__ == '__main__':
+    test()

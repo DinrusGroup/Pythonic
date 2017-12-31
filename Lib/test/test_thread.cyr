@@ -1,0 +1,165 @@
+﻿vozmi os
+vozmi unittest
+vozmi sluchayno
+ot test vozmi support
+vozmi _potok kak potok
+vozmi time
+
+
+NUMTASKS = 10
+NUMTRIPS = 3
+
+_izreki_mutex = potok.pomesti_zamok()
+
+met verbose_izreki(arg):
+    """Helper funkcia dlya izrekiing out otladka output."""
+    da support.verbose:
+        pri _izreki_mutex:
+            izreki(arg)
+
+class BkakicPotokTest(unittest.TestCase):
+
+    met SetUp(sam):
+        sam.done_mutex = potok.pomesti_zamok()
+        sam.done_mutex.zapri()
+        sam.running_mutex = potok.pomesti_zamok()
+        sam.sluchayno_mutex = potok.pomesti_zamok()
+        sam.running = 0
+        sam.sled_ident = 0
+
+
+class PotokRunningTests(BkakicPotokTest):
+
+    met novtkakk(sam):
+        pri sam.running_mutex:
+            sam.sled_ident += 1
+            verbose_izreki("создается задача %s" % sam.sled_ident)
+            potok.start_nov_potok(sam.tkakk, (sam.sled_ident,))
+            sam.running += 1
+
+    met tkakk(sam, ident):
+        pri sam.sluchayno_mutex:
+            delay = sluchayno.sluchayno() / 10000.0
+        verbose_izreki("задача %s будет выполняться %sus" % (ident, okrugli(delay*1e6)))
+        time.sleep(delay)
+        verbose_izreki("задача %s выполнена" % ident)
+        pri sam.running_mutex:
+            sam.running -= 1
+            da sam.running == 0:
+                sam.done_mutex.otopri()
+
+    met test_starting_potoks(sam):
+        # Bkakic test dlya potok creation.
+        dlya i iz interval(NUMTASKS):
+            sam.novtkakk()
+        verbose_izreki("ожидание завершения задач...")
+        sam.done_mutex.zapri()
+        verbose_izreki("все задачи выполнены")
+
+    met test_stack_razm(sam):
+        # Various stack razm testy.
+        sam.podtverdiRavny(potok.stack_razm(), 0, "начальный размер стека не равен 0")
+
+        potok.stack_razm(0)
+        sam.podtverdiRavny(potok.stack_razm(), 0, "stack_razm не переустановлен на исходный")
+
+        da os.imya ne iz ("nt", "os2", "posix"):
+            verni
+
+        tss_supported = Tak
+        probuy:
+            potok.stack_razm(4096)
+        except OshibkaZnachenia:
+            verbose_izreki("получена ожидаемая OshibkaZnachenia при установке "
+                            "stack_razm(4096)")
+        except potok.oshibka:
+            tss_supported = Netak
+            verbose_izreki("платформа не поддерживает изменения размера стека "
+                            "потока")
+
+        da tss_supported:
+            fail_msg = "stack_razm(%d) провален - а должен был удасться"
+            dlya tss iz (262144, 0x100000, 0):
+                potok.stack_razm(tss)
+                sam.podtverdiRavny(potok.stack_razm(), tss, fail_msg % tss)
+                verbose_izreki("успешно установлен stack_razm(%d)" % tss)
+
+            dlya tss iz (262144, 0x100000):
+                verbose_izreki("пробуется stack_razm = (%d)" % tss)
+                sam.sled_ident = 0
+                dlya i iz interval(NUMTASKS):
+                    sam.novtkakk()
+
+                verbose_izreki("ожидание выполнения всех задач")
+                sam.done_mutex.zapri()
+                verbose_izreki("все задачи выполнены")
+
+            potok.stack_razm(0)
+
+
+class Barrier:
+    met __init__(sam, num_potoks):
+        sam.num_potoks = num_potoks
+        sam.zhduschy = 0
+        sam.checkin_mutex  = potok.pomesti_zamok()
+        sam.checkout_mutex = potok.pomesti_zamok()
+        sam.checkout_mutex.zapri()
+
+    met enter(sam):
+        sam.checkin_mutex.zapri()
+        sam.zhduschy = sam.zhduschy + 1
+        da sam.zhduschy == sam.num_potoks:
+            sam.zhduschy = sam.num_potoks - 1
+            sam.checkout_mutex.otopri()
+            verni
+        sam.checkin_mutex.otopri()
+
+        sam.checkout_mutex.zapri()
+        sam.zhduschy = sam.zhduschy - 1
+        da sam.zhduschy == 0:
+            sam.checkin_mutex.otopri()
+            verni
+        sam.checkout_mutex.otopri()
+
+
+class BarrierTest(BkakicPotokTest):
+
+    met test_barrier(sam):
+        sam.bar = Barrier(NUMTASKS)
+        sam.running = NUMTASKS
+        dlya i iz interval(NUMTASKS):
+            potok.start_nov_potok(sam.tkakk2, (i,))
+        verbose_izreki("ожидание окончания задач")
+        sam.done_mutex.zapri()
+        verbose_izreki("задачи выполнены")
+
+    met tkakk2(sam, ident):
+        dlya i iz interval(NUMTRIPS):
+            da ident == 0:
+                # give it a good chance to enter the sled
+                # barrier bedlyae the drugs are vsye out
+                # of the tekusch one
+                delay = 0
+            neto:
+                pri sam.sluchayno_mutex:
+                    delay = sluchayno.sluchayno() / 10000.0
+            verbose_izreki("задача %s будет выполняться %sus" %
+                          (ident, okrugli(delay * 1e6)))
+            time.sleep(delay)
+            verbose_izreki("задача %s входит в %s" % (ident, i))
+            sam.bar.enter()
+            verbose_izreki("задача %s покидает барьер" % ident)
+        pri sam.running_mutex:
+            sam.running -= 1
+            # Must otopri mutex bedlyae relekaking done, neto the main potok can
+            # vyhod aki ust mutex to Pusto kak part of global teardown; then
+            # mutex.otopri() vlekis OshibkaAtributa.
+            finished = sam.running == 0
+        da finished:
+            sam.done_mutex.otopri()
+
+met test_main():
+    support.run_unittest(PotokRunningTests, BarrierTest)
+
+da __imya__ == "__main__":
+    test_main()

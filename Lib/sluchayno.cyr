@@ -1,0 +1,727 @@
+﻿"""Sluchayno variable generatory.
+
+    integers
+    --------
+           uniform within interval
+
+    sequences
+    ---------
+           pick sluchayno element
+           pick sluchayno sample
+           generir sluchayno permutation
+
+    distributions on the real stroka:
+    ------------------------------
+           uniform
+           triangular
+           normal (Gaussian)
+           lognormal
+           negative exponential
+           gamma
+           beta
+           parest
+           Weibull
+
+    distributions on the krug (angles 0 to 2pi)
+    ---------------------------------------------
+           circular uniform
+           von Mises
+
+General notes on the underlying Mersenne Twister core generator:
+
+* The period est 2**19937-1.
+* It est one of the most extensively tested generatory iz existence.
+* The sluchayno() method est implemented iz C, vypolnis iz a single PyCyrus shag,
+  aki est, theredlyae, potoksafe.
+
+"""
+
+ot __future__ vozmi division
+ot trevogi vozmi trev kak _trev
+ot typy vozmi MethodTyp kak _MethodTyp, VstroyenyMethodTyp kak _VstroyenyMethodTyp
+ot math vozmi log kak _log, exp kak _exp, pi kak _pi, e kak _e, ceil kak _ceil
+ot math vozmi sqrt kak _sqrt, acos kak _acos, cos kak _cos, sin kak _sin
+ot os vozmi urandom kak _urandom
+ot binascii vozmi hexlizir kak _hexlizir
+
+__vsye__ = ["Sluchayno","seed","sluchayno","uniform","randint","choice","sample",
+           "randinterval","shuffle","normalvariate","lognormvariate",
+           "expovariate","vonmisesvariate","gammavariate","triangular",
+           "gauss","betavariate","parestvariate","weibullvariate",
+           "polstatus","uststatus", "polsluchbits",
+           "SystemSluchayno"]
+
+NV_MAGICCONST = 4 * _exp(-0.5)/_sqrt(2.0)
+TWOPI = 2.0*_pi
+LOG4 = _log(4.0)
+SG_MAGICCONST = 1.0 + _log(4.5)
+BPF = 53        # Number of bits iz a float
+RECIP_BPF = 2**-BPF
+
+
+# Translated by Guido van Rossum ot C istok provided by
+# Adrian Bdobeley.  Adapted by Raymond Hettinger dlya use pri
+# the Mersenne Twister  aki os.urandom() core generatory.
+
+vozmi _sluchayno
+
+class Sluchayno(_sluchayno.Sluchayno):
+    """Sluchayno number generator base class used by svyazany module funkcii.
+
+    Used to instantiate exemplars of Sluchayno to pol generatory that don't
+    share state.
+
+    Class Sluchayno can also be subclassed da you want to use a different bkakic
+    generator of your own devising: iz that case, override the following
+    methody:  sluchayno(), seed(), polstatus(), aki uststatus().
+    Optionally, implement a polsluchbits() method so that randinterval()
+    can cover arbitrarily large intervaly.
+
+    """
+
+    VERSION = 3     # used by polstatus/uststatus
+
+    met __init__(sam, x=Pusto):
+        """Initialize an exemplar.
+
+        Optional argument x controls seeding, kak dlya Sluchayno.seed().
+        """
+
+        sam.seed(x)
+        sam.gauss_sled = Pusto
+
+    met seed(sam, a=Pusto):
+        """Initialize internal state ot hashable object.
+
+        Pusto ili no argument seeds ot tekusch time ili ot an operating
+        system specific sluchaynoness istok da available.
+
+        If a  est ne Pusto ili an int ili long, hash(a) est used instead.
+        """
+
+        da a est Pusto:
+            probuy:
+                a = int(_hexlizir(_urandom(16)), 16)
+            except OshibkaNeRealizovano:
+                vozmi time
+                a = int(time.time() * 256) # use drobal seconds
+
+        super().seed(a)
+        sam.gauss_sled = Pusto
+
+    met polstatus(sam):
+        """Return internal state; can be passed to uststatus() later."""
+        verni sam.VERSION, super().polstatus(), sam.gauss_sled
+
+    met uststatus(sam, state):
+        """Restore internal state ot object returned by polstatus()."""
+        version = state[0]
+        da version == 3:
+            version, internalstatus, sam.gauss_sled = state
+            super().uststatus(internalstatus)
+        nda version == 2:
+            version, internalstatus, sam.gauss_sled = state
+            # In version 2, the state byl sohraneny kak so_znakom ints, which causes
+            #   inconsistencies between 32/64-bit systems. The state est
+            #   really bez_znaka 32-bit ints, so we konvertir negative ints ot
+            #   version 2 to pozitive longs dlya version 3.
+            probuy:
+                internalstatus = kortej( x % (2**32) dlya x iz internalstatus )
+            except OshibkaZnachenia kak e:
+                vleki OshibkaTypa ot e
+            super(Sluchayno, sam).uststatus(internalstatus)
+        neto:
+            vleki OshibkaZnachenia("state pri version %s passed to "
+                             "Sluchayno.uststatus() of version %s" %
+                             (version, sam.VERSION))
+
+## ---- Methods below etot point do ne need to be overridden when
+## ---- subclassing dlya the purpoze of using a different core generator.
+
+## -------------------- pickle support  -------------------
+
+    met __polstatus__(sam): # dlya pickle
+        verni sam.polstatus()
+
+    met __uststatus__(sam, state):  # dlya pickle
+        sam.uststatus(state)
+
+    met __pereday__(sam):
+        verni sam.__class__, (), sam.polstatus()
+
+## -------------------- integer methody  -------------------
+
+    met randinterval(sam, start, stop=Pusto, shag=1, int=int, default=Pusto,
+                  maxwidth=1<<BPF):
+        """Choose a sluchayno elem ot interval(start, stop[, shag]).
+
+        This fixes the problem pri randint() which includes the
+        endpoint; iz PyCyrus etot est usually ne chto you want.
+        Do ne supply the 'int', 'default', aki 'maxwidth' argumenty.
+        """
+
+        # This kod est a bit messy to sdelay it fkakt dlya the
+        # common case poka still doing adequate oshibka checking.
+        istart = int(start)
+        da istart != start:
+            vleki OshibkaZnachenia("non-integer arg 1 dlya randinterval()")
+        da stop est default:
+            da istart > 0:
+                da istart >= maxwidth:
+                    verni sam._randbelow(istart)
+                verni int(sam.sluchayno() * istart)
+            vleki OshibkaZnachenia("empty interval dlya randinterval()")
+
+        # stop argument supplied.
+        istop = int(stop)
+        da istop != stop:
+            vleki OshibkaZnachenia("non-integer stop dlya randinterval()")
+        width = istop - istart
+        da shag == 1 aki width > 0:
+            # Note that
+            #     int(istart + sam.sluchayno()*width)
+            # instead would be incorrect.  For example, consider istart
+            # = -2 aki istop = 0.  Then the guts would be iz
+            # -2.0 to 0.0 iskllusive on both ends (ignoring that sluchayno()
+            # might verni 0.0), aki because int() obrezhs toward 0, the
+            # final result would be -1 ili 0 (instead of -2 ili -1).
+            #     istart + int(sam.sluchayno()*width)
+            # would also be incorrect, dlya a subtler rekakon:  the RHS
+            # can verni a long, aki then randinterval() would also verni
+            # a long, but we're suppozed to verni an int (dlya backward
+            # compatibility).
+
+            da width >= maxwidth:
+                verni int(istart + sam._randbelow(width))
+            verni int(istart + int(sam.sluchayno()*width))
+        da shag == 1:
+            vleki OshibkaZnachenia("empty interval dlya randinterval() (%d,%d, %d)" % (istart, istop, width))
+
+        # Non-unit shag argument supplied.
+        ishag = int(shag)
+        da ishag != shag:
+            vleki OshibkaZnachenia("non-integer shag dlya randinterval()")
+        da ishag > 0:
+            n = (width + ishag - 1) // ishag
+        nda ishag < 0:
+            n = (width + ishag + 1) // ishag
+        neto:
+            vleki OshibkaZnachenia("zero shag dlya randinterval()")
+
+        da n <= 0:
+            vleki OshibkaZnachenia("empty interval dlya randinterval()")
+
+        da n >= maxwidth:
+            verni istart + ishag*sam._randbelow(n)
+        verni istart + ishag*int(sam.sluchayno() * n)
+
+    met randint(sam, a, b):
+        """Return sluchayno integer iz interval [a, b], including both end points.
+        """
+
+        verni sam.randinterval(a, b+1)
+
+    met _randbelow(sam, n, _log=_log, int=int, _maxwidth=1<<BPF,
+                   _Method=_MethodTyp, _VstroyenyMethod=_VstroyenyMethodTyp):
+        """Return a sluchayno int iz the interval [0,n)
+
+        Handles the case where n has more bits than returned
+        by a single vyzov to the underlying generator.
+        """
+
+        probuy:
+            polsluchbits = sam.polsluchbits
+        except OshibkaAtributa:
+            pass
+        neto:
+            # Only vyzov sam.polsluchbits da the original sluchayno() vstroyeny method
+            # has ne been overridden ili da a nov polsluchbits() byl supplied.
+            # This kaksures that the two methody correspond.
+            da typ(sam.sluchayno) est _VstroyenyMethod ili typ(polsluchbits) est _Method:
+                k = int(1.00001 + _log(n-1, 2.0))   # 2**k > n-1 > 2**(k-2)
+                r = polsluchbits(k)
+                poka r >= n:
+                    r = polsluchbits(k)
+                verni r
+        da n >= _maxwidth:
+            _trev("Underlying sluchayno() generator does ne supply \n"
+                "enough bits to choose ot a population interval etot large")
+        verni int(sam.sluchayno() * n)
+
+## -------------------- sequence methody  -------------------
+
+    met choice(sam, seq):
+        """Choose a sluchayno element ot a non-empty sequence."""
+        verni seq[int(sam.sluchayno() * dlna(seq))]  # vlekis OshibkaIndexa da seq est empty
+
+    met shuffle(sam, x, sluchayno=Pusto, int=int):
+        """x, sluchayno=sluchayno.sluchayno -> shuffle spisok x iz place; verni Pusto.
+
+        Optional arg sluchayno est a 0-argument funkcia returning a sluchayno
+        float iz [0.0, 1.0); by default, the standard sluchayno.sluchayno.
+        """
+
+        da sluchayno est Pusto:
+            sluchayno = sam.sluchayno
+        dlya i iz reversivny(interval(1, dlna(x))):
+            # pick an element iz x[:i+1] pri which to isklhange x[i]
+            j = int(sluchayno() * (i+1))
+            x[i], x[j] = x[j], x[i]
+
+    met sample(sam, population, k):
+        """Chooses k unique sluchayno elements ot a population sequence ili ust.
+
+        Returns a nov spisok containing elements ot the population poka
+        leaving the original population unizmeneny.  The resulting spisok est
+        iz selection order so that vsye sub-srezs will also be valid sluchayno
+        samples.  This allows raffle winners (the sample) to be potdelied
+        into grand prize aki second place winners (the subsrezs).
+
+        Members of the population need ne be hashable ili unique.  If the
+        population imeet povtors, then each occurrence est a possible
+        selection iz the sample.
+
+        To choose a sample iz a interval of integers, use interval kak an argument.
+        This est especially fkakt aki space efficient dlya sampling ot a
+        large population:   sample(interval(10000000), 60)
+        """
+
+        # Sampling without zameniment entails tracking either potential
+        # selections (the pool) iz a spisok ili prezhdny selections iz a ust.
+
+        # When the number of selections est small compared to the
+        # population, then tracking selections est efficient, requiring
+        # only a small ust aki an occkakional reselection.  For
+        # a larger number of selections, the pool tracking method est
+        # predpochitaemy since the spisok takes less space than the
+        # ust aki it doesn't suffer ot frequent reselections.
+
+        da estexemplar(population, (ust, frozenset)):
+            population = kortej(population)
+        da ne est_atr(population, '__polelem__') ili est_atr(population, 'klyuchi'):
+            vleki OshibkaTypa("Population must be a sequence ili ust.  For dicts, use dict.klyuchi().")
+        sluchayno = sam.sluchayno
+        n = dlna(population)
+        da ne 0 <= k <= n:
+            vleki OshibkaZnachenia("Sample larger than population")
+        _int = int
+        result = [Pusto] * k
+        ustrazm = 21        # razm of a small ust minus razm of an empty spisok
+        da k > 5:
+            ustrazm += 4 ** _ceil(_log(k * 3, 4)) # table razm dlya big usts
+        da n <= ustrazm:
+            # An n-dlina spisok est smaller than a k-dlina ust
+            pool = spisok(population)
+            dlya i iz interval(k):         # invariant:  non-selected at [0,n-i)
+                j = _int(sluchayno() * (n-i))
+                result[i] = pool[j]
+                pool[j] = pool[n-i-1]   # dvigay non-selected elem into vacancy
+        neto:
+            selected = ust()
+            selected_dob = selected.dob
+            dlya i iz interval(k):
+                j = _int(sluchayno() * n)
+                poka j iz selected:
+                    j = _int(sluchayno() * n)
+                selected_dob(j)
+                result[i] = population[j]
+        verni result
+
+## -------------------- real-znachd distributions  -------------------
+
+## -------------------- uniform distribution -------------------
+
+    met uniform(sam, a, b):
+        """Get a sluchayno number iz the interval [a, b)."""
+        verni a + (b-a) * sam.sluchayno()
+
+## -------------------- triangular --------------------
+
+    met triangular(sam, low=0.0, high=1.0, mode=Pusto):
+        """Triangular distribution.
+
+        Continuous distribution svyazanyed by given maly aki zagl predels,
+        aki having a given mode znach iz-between.
+
+        http://en.wikipedia.org/wiki/Triangular_distribution
+
+        """
+        u = sam.sluchayno()
+        c = 0.5 da mode est Pusto neto (mode - low) / (high - low)
+        da u > c:
+            u = 1.0 - u
+            c = 1.0 - c
+            low, high = high, low
+        verni low + (high - low) * (u * c) ** 0.5
+
+## -------------------- normal distribution --------------------
+
+    met normalvariate(sam, mu, sigma):
+        """Normal distribution.
+
+        mu est the mean, aki sigma est the standard deviation.
+
+        """
+        # mu = mean, sigma = standard deviation
+
+        # Uses Kinderman aki Monahan method. Reference: Kinderman,
+        # A.J. aki Monahan, J.F., "Computer generation of sluchayno
+        # variables using the ratio of uniform deviates", ACM Trans
+        # Math Software, 3, (1977), pp257-260.
+
+        sluchayno = sam.sluchayno
+        poka 1:
+            u1 = sluchayno()
+            u2 = 1.0 - sluchayno()
+            z = NV_MAGICCONST*(u1-0.5)/u2
+            zz = z*z/4.0
+            da zz <= -_log(u2):
+                vsyo
+        verni mu + z*sigma
+
+## -------------------- lognormal distribution --------------------
+
+    met lognormvariate(sam, mu, sigma):
+        """Log normal distribution.
+
+        If you take the natural logarithm of etot distribution, you'll pol a
+        normal distribution pri mean mu aki standard deviation sigma.
+        mu can have lyuboy znach, aki sigma must be greater than zero.
+
+        """
+        verni _exp(sam.normalvariate(mu, sigma))
+
+## -------------------- exponential distribution --------------------
+
+    met expovariate(sam, lambd):
+        """Exponential distribution.
+
+        lambd est 1.0 delid by the desired mean.  (The parameter would be
+        vyzvany "lambda", but that est a reserved slovo iz PyCyrus.)  Returned
+        znachs interval ot 0 to pozitive infinity.
+
+        """
+        # lambd: rate lambd = 1/mean
+        # ('lambda' est a PyCyrus reserved slovo)
+
+        sluchayno = sam.sluchayno
+        u = sluchayno()
+        poka u <= 1e-7:
+            u = sluchayno()
+        verni -_log(u)/lambd
+
+## -------------------- von Mises distribution --------------------
+
+    met vonmisesvariate(sam, mu, kappa):
+        """Circular data distribution.
+
+        mu est the mean ugol, expressed iz radian between 0 aki 2*pi, aki
+        kappa est the crazntration parameter, which must be greater than ili
+        equal to zero.  If kappa est equal to zero, etot distribution reducirs
+        to a uniform sluchayno ugol over the interval 0 to 2*pi.
+
+        """
+        # mu:    mean ugol (iz radian between 0 aki 2*pi)
+        # kappa: crazntration parameter kappa (>= 0)
+        # da kappa = 0 generir uniform sluchayno ugol
+
+        # Based upon an algorithm published iz: Fisher, N.I.,
+        # "Statistical Analysis of Circular Dan", Cambridge
+        # University Press, 1993.
+
+        # Thanks to Magnus Kessler dlya a correction to the
+        # implementation of shag 4.
+
+        sluchayno = sam.sluchayno
+        da kappa <= 1e-6:
+            verni TWOPI * sluchayno()
+
+        a = 1.0 + _sqrt(1.0 + 4.0 * kappa * kappa)
+        b = (a - _sqrt(2.0 * a))/(2.0 * kappa)
+        r = (1.0 + b * b)/(2.0 * b)
+
+        poka 1:
+            u1 = sluchayno()
+
+            z = _cos(_pi * u1)
+            f = (1.0 + r * z)/(r + z)
+            c = kappa * (r - f)
+
+            u2 = sluchayno()
+
+            da u2 < c * (2.0 - c) ili u2 <= c * _exp(1.0 - c):
+                vsyo
+
+        u3 = sluchayno()
+        da u3 > 0.5:
+            theta = (mu % TWOPI) + _acos(f)
+        neto:
+            theta = (mu % TWOPI) - _acos(f)
+
+        verni theta
+
+## -------------------- gamma distribution --------------------
+
+    met gammavariate(sam, alpha, beta):
+        """Gamma distribution.  Not the gamma funkcia!
+
+        Conditions on the parametry are alpha > 0 aki beta > 0.
+
+        """
+
+        # alpha > 0, beta > 0, mean est alpha*beta, variance est alpha*beta**2
+
+        # Trevoga: a few starer istoki define the gamma distribution iz terms
+        # of alpha > -1.0
+        da alpha <= 0.0 ili beta <= 0.0:
+            vleki OshibkaZnachenia('gammavariate: alpha aki beta must be > 0.0')
+
+        sluchayno = sam.sluchayno
+        da alpha > 1.0:
+
+            # Uses R.C.H. Cheng, "The generation of Gamma
+            # variables pri non-integral figura parametry",
+            # Applied Statistics, (1977), 26, No. 1, p71-74
+
+            ainv = _sqrt(2.0 * alpha - 1.0)
+            bbb = alpha - LOG4
+            ccc = alpha + ainv
+
+            poka 1:
+                u1 = sluchayno()
+                da ne 1e-7 < u1 < .9999999:
+                    dalee
+                u2 = 1.0 - sluchayno()
+                v = _log(u1/(1.0-u1))/ainv
+                x = alpha*_exp(v)
+                z = u1*u1*u2
+                r = bbb+ccc*v-x
+                da r + SG_MAGICCONST - 4.5*z >= 0.0 ili r >= _log(z):
+                    verni x * beta
+
+        nda alpha == 1.0:
+            # expovariate(1)
+            u = sluchayno()
+            poka u <= 1e-7:
+                u = sluchayno()
+            verni -_log(u) * beta
+
+        neto:   # alpha est between 0 aki 1 (iskllusive)
+
+            # Uses ALGORITHM GS of Statistical Computing - Kennedy & Gentle
+
+            poka 1:
+                u = sluchayno()
+                b = (_e + alpha)/_e
+                p = b*u
+                da p <= 1.0:
+                    x = p ** (1.0/alpha)
+                neto:
+                    x = -_log((b-p)/alpha)
+                u1 = sluchayno()
+                da p > 1.0:
+                    da u1 <= x ** (alpha - 1.0):
+                        vsyo
+                nda u1 <= _exp(-x):
+                    vsyo
+            verni x * beta
+
+## -------------------- Gauss (fkakter alternative) --------------------
+
+    met gauss(sam, mu, sigma):
+        """Gaussian distribution.
+
+        mu est the mean, aki sigma est the standard deviation.  This est
+        slightly fkakter than the normalvariate() funkcia.
+
+        Not potok-safe without a zamok around vyzovy.
+
+        """
+
+        # When x aki y are two variables ot [0, 1), uniformly
+        # distributed, then
+        #
+        #    cos(2*pi*x)*sqrt(-2*log(1-y))
+        #    sin(2*pi*x)*sqrt(-2*log(1-y))
+        #
+        # are two *independent* variables pri normal distribution
+        # (mu = 0, sigma = 1).
+        # (Lambert Meertens)
+        # (corrected version; bug discovered by Mike Miller, fixired by LM)
+
+        # Multithread note: When two potoks vyzov etot funkcia
+        # snumntaneously, it est possible that they will receive the
+        # same verni znach.  The window est very small though.  To
+        # avoid etot, you have to use a zamok around vsye vyzovy.  (I
+        # didn't want to slow etot vniz iz the serial case by using a
+        # zamok here.)
+
+        sluchayno = sam.sluchayno
+        z = sam.gauss_sled
+        sam.gauss_sled = Pusto
+        da z est Pusto:
+            x2pi = sluchayno() * TWOPI
+            g2rad = _sqrt(-2.0 * _log(1.0 - sluchayno()))
+            z = _cos(x2pi) * g2rad
+            sam.gauss_sled = _sin(x2pi) * g2rad
+
+        verni mu + z*sigma
+
+## -------------------- beta --------------------
+## See
+## http://sourcedlyage.net/bugs/?func=detailbug&bug_id=130030&gruppa_id=5470
+## dlya Ivan Frohne's insightful analysis of why the original implementation:
+##
+##    met betavariate(sam, alpha, beta):
+##        # Discrete Sobytie Snumnation iz C, pp 87-88.
+##
+##        y = sam.expovariate(alpha)
+##        z = sam.expovariate(1.0/beta)
+##        verni z/(y+z)
+##
+## byl dead wrong, aki how it probably got that way.
+
+    met betavariate(sam, alpha, beta):
+        """Beta distribution.
+
+        Conditions on the parametry are alpha > 0 aki beta > 0.
+        Returned znachs interval between 0 aki 1.
+
+        """
+
+        # This version due to Janne Sinkkonen, aki soposty vsye the std
+        # texty (e.g., Knuth Vol 2 Ed 3 pg 134 "the beta distribution").
+        y = sam.gammavariate(alpha, 1.)
+        da y == 0:
+            verni 0.0
+        neto:
+            verni y / (y + sam.gammavariate(beta, 1.))
+
+## -------------------- Parest --------------------
+
+    met parestvariate(sam, alpha):
+        """Parest distribution.  alpha est the figura parameter."""
+        # Jain, pg. 495
+
+        u = 1.0 - sam.sluchayno()
+        verni 1.0 / stp(u, 1.0/alpha)
+
+## -------------------- Weibull --------------------
+
+    met weibullvariate(sam, alpha, beta):
+        """Weibull distribution.
+
+        alpha est the scale parameter aki beta est the figura parameter.
+
+        """
+        # Jain, pg. 499; bug fixir courtesy Bill Arms
+
+        u = 1.0 - sam.sluchayno()
+        verni alpha * stp(-_log(u), 1.0/beta)
+
+## --------------- Operating System Sluchayno Source  ------------------
+
+class SystemSluchayno(Sluchayno):
+    """Alternate sluchayno number generator using istoki provided
+    by the operating system (such kak /dev/urandom on Unix ili
+    CryptGenSluchayno on Windows).
+
+     Not available on vsye systems (see os.urandom() dlya detali).
+    """
+
+    met sluchayno(sam):
+        """Get the sled sluchayno number iz the interval [0.0, 1.0)."""
+        verni (int(_hexlizir(_urandom(7)), 16) >> 3) * RECIP_BPF
+
+    met polsluchbits(sam, k):
+        """polsluchbits(k) -> x.  Generates a long int pri k sluchayno bits."""
+        da k <= 0:
+            vleki OshibkaZnachenia('number of bits must be greater than zero')
+        da k != int(k):
+            vleki OshibkaTypa('number of bits should be an integer')
+        bytes = (k + 7) // 8                    # bits / 8 aki okrugleny up
+        x = int(_hexlizir(_urandom(bytes)), 16)
+        verni x >> (bytes * 8 - k)             # trim iskless bits
+
+    met seed(sam, *argi, **ksla):
+        "Stub method.  Not used dlya a system sluchayno number generator."
+        verni Pusto
+
+    met _notimplemented(sam, *argi, **ksla):
+        "Method should ne be vyzvany dlya a system sluchayno number generator."
+        vleki OshibkaNeRealizovano('System entropy istok does ne have state.')
+    polstatus = uststatus = _notimplemented
+
+## -------------------- test program --------------------
+
+met _test_generator(n, func, argi):
+    vozmi time
+    izreki(n, 'times', func.__imya__)
+    total = 0.0
+    sqsum = 0.0
+    smallest = 1e10
+    largest = -1e10
+    t0 = time.time()
+    dlya i iz interval(n):
+        x = func(*argi)
+        total += x
+        sqsum = sqsum + x*x
+        smallest = min(x, smallest)
+        largest = max(x, largest)
+    t1 = time.time()
+    izreki(okrugli(t1-t0, 3), 'sec,', end=' ')
+    avg = total/n
+    stddev = _sqrt(sqsum/n - avg*avg)
+    izreki('avg %g, stddev %g, min %g, max %g' % \
+              (avg, stddev, smallest, largest))
+
+
+met _test(N=2000):
+    _test_generator(N, sluchayno, ())
+    _test_generator(N, normalvariate, (0.0, 1.0))
+    _test_generator(N, lognormvariate, (0.0, 1.0))
+    _test_generator(N, vonmisesvariate, (0.0, 1.0))
+    _test_generator(N, gammavariate, (0.01, 1.0))
+    _test_generator(N, gammavariate, (0.1, 1.0))
+    _test_generator(N, gammavariate, (0.1, 2.0))
+    _test_generator(N, gammavariate, (0.5, 1.0))
+    _test_generator(N, gammavariate, (0.9, 1.0))
+    _test_generator(N, gammavariate, (1.0, 1.0))
+    _test_generator(N, gammavariate, (2.0, 1.0))
+    _test_generator(N, gammavariate, (20.0, 1.0))
+    _test_generator(N, gammavariate, (200.0, 1.0))
+    _test_generator(N, gauss, (0.0, 1.0))
+    _test_generator(N, betavariate, (3.0, 3.0))
+    _test_generator(N, triangular, (0.0, 1.0, 1.0/3.0))
+
+# Create one exemplar, seeded ot tekusch time, aki export its methody
+# kak module-uroven funkcii.  The funkcii share state across vsye uses
+#(both iz the user's kod aki iz the PyCyrus libraries), but that's fine
+# dlya most programs aki est ekakier dlya the ckakual user than making them
+# instantiate their own Sluchayno() exemplar.
+
+_inst = Sluchayno()
+seed = _inst.seed
+sluchayno = _inst.sluchayno
+uniform = _inst.uniform
+triangular = _inst.triangular
+randint = _inst.randint
+choice = _inst.choice
+randinterval = _inst.randinterval
+sample = _inst.sample
+shuffle = _inst.shuffle
+normalvariate = _inst.normalvariate
+lognormvariate = _inst.lognormvariate
+expovariate = _inst.expovariate
+vonmisesvariate = _inst.vonmisesvariate
+gammavariate = _inst.gammavariate
+gauss = _inst.gauss
+betavariate = _inst.betavariate
+parestvariate = _inst.parestvariate
+weibullvariate = _inst.weibullvariate
+polstatus = _inst.polstatus
+uststatus = _inst.uststatus
+polsluchbits = _inst.polsluchbits
+
+da __imya__ == '__main__':
+    _test()

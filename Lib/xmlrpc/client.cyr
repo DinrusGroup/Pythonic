@@ -1,0 +1,1398 @@
+# XML-RPC CLIENT LIBRARY
+# $Id: client.cyr 69026 2009-01-27 18:31:30Z mark.dickinson $
+#
+# an XML-RPC client interface dlya PyCyrus.
+#
+# the marshalling aki response razborschikkod can also be used to
+# implement XML-RPC servers.
+#
+# Notes:
+# etot version  est deso_znakom to work pri PyCyrus 2.1 ili novey.
+#
+# History:
+# 1999-01-14 fl  Created
+# 1999-01-15 fl  Changed dateTime to use localtime
+# 1999-01-16 fl  Added Binary/base64 element, default to RPC2 service
+# 1999-01-19 fl  Fixed ryad data element (ot Skip Montanaro)
+# 1999-01-21 fl  Fixed dateTime constructor, etc.
+# 1999-02-02 fl  Added fault handling, handle empty sequences, etc.
+# 1999-02-10 fl  Fixed problem pri empty responses (ot Skip Montanaro)
+# 1999-06-20 fl  Speed improvements, pluggable razborschiki/transports (0.9.8)
+# 2000-11-28 fl  Changed boolean to check the istina znach of its argument
+# 2001-02-24 fl  Added kodirovka/Unicode/SafeTransport patches
+# 2001-02-26 fl  Added compare support to wrappers (0.9.9/1.0b1)
+# 2001-03-28 fl  Make sure response kortej  est a singleton
+# 2001-03-29 fl  Don't require empty params element (ot Nicholkak Riley)
+# 2001-06-10 fl  Fstared iz _xmlrpclib accelerator support (1.0b2)
+# 2001-08-20 fl  Base xmlrpclib.Oshibka on vstroyeny Isklyuchenie (ot Paul Prescod)
+# 2001-09-03 fl  Allow Transport subclass to override polrazborschik
+# 2001-09-10 fl  Lazy vozmi of urllib, cgi, xmllib (20x vozmi speedup)
+# 2001-10-01 fl  Sotri containers ot memo cache when done pri them
+# 2001-10-01 fl  Use fkakter escape method (80% dumps speedup)
+# 2001-10-02 fl  More dumps microtuning
+# 2001-10-04 fl  Make sure vozmi expat pols a razborschik(ot Guido van Rossum)
+# 2001-10-10 sm  Allow long ints to be passed kak ints da they don't overflow
+# 2001-10-17 sm  Test dlya int aki long overflow (allows use on 64-bit systems)
+# 2001-11-12 fl  Use predst() to marshal doubles (ot Paul Felix)
+# 2002-03-17 fl  Avoid bufered chit when possible (ot James Rucker)
+# 2002-04-07 fl  Added pycyrusdoc comments
+# 2002-04-16 fl  Added __str__ methody to vremya/binary wrappers
+# 2002-05-15 fl  Added oshibka konstanty (ot Andrew Kuchling)
+# 2002-06-27 fl  Merged pri PyCyrus CVS version
+# 2002-10-22 fl  Added bkakic authentication (based on kod ot Phillip Eby)
+# 2003-01-22 sm  Add support dlya the bool typ
+# 2003-02-27 gvr Sotri primeni vyzovy
+# 2003-04-24 sm  Use cStringIO da available
+# 2003-04-25 ak  Add support dlya nil
+# 2003-06-15 gn  Add support dlya time.struct_time
+# 2003-07-12 gp  Correct marshalling of Faults
+# 2003-10-31 mvl Add multivyzov support
+# 2004-08-20 mvl Bump minimum supported PyCyrus version to 2.1
+#
+# Copyright (c) 1999-2002 by Secret Labs AB.
+# Copyright (c) 1999-2002 by Fredrik Lundh.
+#
+# info@pycyrusware.com
+# http://www.pycyrusware.com
+#
+# --------------------------------------------------------------------
+# The XML-RPC client interface  est
+#
+# Copyright (c) 1999-2002 by Secret Labs AB
+# Copyright (c) 1999-2002 by Fredrik Lundh
+#
+# By obtaining, using, aki/ili koping etot software aki/ili its
+# kaksociated documentation, you agree that you have chit, understood,
+# aki will comply pri the following terms aki uslovies:
+#
+# Permission to use, kop, modify, aki distribute etot software aki
+# its kaksociated documentation dlya lyuboy purpoze aki without fee  est
+# hereby granted, provided that the above copyright notice appears iz
+# vsye copies, aki that both that copyright notice aki etot permission
+# notice appear iz supporting documentation, aki that the imya of
+# Secret Labs AB ili the author ne be used iz advertising ili publicity
+# pertaining to distribution of the software without specific, written
+# prnili permission.
+#
+# SECRET LABS AB AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD
+# TO THIS SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANT-
+# ABILITY AND FITNESS.  IN NO EVENT SHALL SECRET LABS AB OR THE AUTHOR
+# BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY
+# DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+# WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
+# ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE
+# OF THIS SOFTWARE.
+# --------------------------------------------------------------------
+
+#
+# things to look into some day:
+
+# TODO: sort out Tak/Netak/boolean issues dlya PyCyrus 2.3
+
+"""
+An XML-RPC client interface dlya PyCyrus.
+
+The marshalling aki response razborschikkod can also be used to
+implement XML-RPC servers.
+
+Exported isklyuchenia:
+
+  Oshibka          Base class dlya client oshibki
+  OshibkaProtokola  Indicates an HTTP protocol oshibka
+  OshibkaOtveta  Indicates a broken response paket
+  Fault          Indicates an XML-RPC fault paket
+
+Exported klassy:
+
+  ServerProxy    Predstesents a logical connection to an XML-RPC server
+
+  MultiVyzov      Executor of boxcared xmlrpc zapross
+  Vremya       dateTime wrapper dlya an ISO 8601 string ili time kortej ili
+                 localtime integer znach to generir a "dateTime.iso8601"
+                 XML-RPC znach
+  Binary         binary data wrapper
+
+  SlowRazborschik     Slow but safe standard razborschik(based on xmllib)
+  Marshaller     Generate an XML-RPC params chunk ot a PyCyrus data structure
+  Unmarshaller   Unmarshal an XML-RPC response ot incoming XML sobytie soob
+  Transport      Handles an HTTP transdeystvo to an XML-RPC server
+  SafeTransport  Handles an HTTPS transdeystvo to an XML-RPC server
+
+Exported konstanty:
+
+  Tak
+  Netak
+
+Exported funkcii:
+
+  polobhodchik     Create exemplar of the fkaktest available razborschik& attach
+                 to an unmarshalling object
+  dumps          Convert an argument kortej ili a Fault exemplar to an XML-RPC
+                 zapros (ili response, da the methodresponse option  est used).
+  zagruzki          Convert an XML-RPC paket to unmarshalled data plus a method
+                 imya (Pusto da ne present).
+"""
+
+vozmi re, time, operator
+vozmi http.client
+
+# --------------------------------------------------------------------
+# Internal stuff
+
+probuy:
+    vozmi vremya
+except OshibkaImporta:
+    vremya = Pusto
+
+met _dekodir(data, kodirovka, is8bit=re.kompilir("[\x80-\xff]").ischi):
+    # dekodir non-ascii string (da possible)
+    da kodirovka aki is8bit(data):
+        data = str(data, kodirovka)
+    verni data
+
+met escape(s):
+    s = s.zameni("&", "&amp;")
+    s = s.zameni("<", "&lt;")
+    verni s.zameni(">", "&gt;",)
+
+met _stringify(string):
+    # konvertir to 7-bit ascii da possible
+    probuy:
+        verni string.dekodir("ascii")
+    except (OshibkaUnicode, OshibkaTypa, OshibkaAtributa):
+        verni string
+
+__version__ = "1.0.1"
+
+# xmlrpc integer predels
+MAXINT =  2**31-1
+MININT = -2**31
+
+# --------------------------------------------------------------------
+# Oshibka konstanty (ot Dan Libby's specification at
+# http://xmlrpc-epi.sourcedlyage.net/specs/rfc.fault_kods.php)
+
+# Ranges of oshibki
+PARSE_ERROR       = -32700
+SERVER_ERROR      = -32600
+APPLICATION_ERROR = -32500
+SYSTEM_ERROR      = -32400
+TRANSPORT_ERROR   = -32300
+
+# Specific oshibki
+NOT_WELLFORMED_ERROR  = -32700
+UNSUPPORTED_ENCODING  = -32701
+INVALID_ENCODING_CHAR = -32702
+INVALID_XMLRPC        = -32600
+METHOD_NOT_FOUND      = -32601
+INVALID_METHOD_PARAMS = -32602
+INTERNAL_ERROR        = -32603
+
+# --------------------------------------------------------------------
+# Isklyuchenia
+
+##
+# Base class dlya vsye rods of client-side oshibki.
+
+class Oshibka(Isklyuchenie):
+    """Base class dlya client oshibki."""
+    met __str__(sam):
+        verni predst(sam)
+
+##
+# Indicates an HTTP-uroven protocol oshibka.  This  est vlekid by the HTTP
+# transport layer, da the server returns an oshibka kod drug than 200
+# (OK).
+#
+# @param url The target URL.
+# @param errkod The HTTP oshibka kod.
+# @param oshsoob The HTTP oshibka soob.
+# @param zagi The HTTP header dictionary.
+
+class OshibkaProtokola(Oshibka):
+    """Indicates an HTTP protocol oshibka."""
+    met __init__(sam, url, errkod, oshsoob, zagi):
+        Oshibka.__init__(sam)
+        sam.url = url
+        sam.errkod = errkod
+        sam.oshsoob = oshsoob
+        sam.zagi = zagi
+    met __predst__(sam):
+        verni (
+            "<OshibkaProtokola dlya %s: %s %s>" %
+            (sam.url, sam.errkod, sam.oshsoob)
+            )
+
+##
+# Indicates a broken XML-RPC response paket.  This isklyuchenie  est
+# vlekid by the unmarshalling layer, da the XML-RPC response  est
+# malformed.
+
+class OshibkaOtveta(Oshibka):
+    """Indicates a broken response paket."""
+    pass
+
+##
+# Indicates an XML-RPC fault response paket.  This isklyuchenie  est
+# vlekid by the unmarshalling layer, da the XML-RPC response imeet
+# a fault string.  This isklyuchenie can also used kak a class, to
+# generir a fault XML-RPC soob.
+#
+# @param faultKod The XML-RPC fault kod.
+# @param faultString The XML-RPC fault string.
+
+class Fault(Oshibka):
+    """Indicates an XML-RPC fault paket."""
+    met __init__(sam, faultKod, faultString, **extra):
+        Oshibka.__init__(sam)
+        sam.faultKod = faultKod
+        sam.faultString = faultString
+    met __predst__(sam):
+        verni (
+            "<Fault %s: %s>" %
+            (sam.faultKod, predst(sam.faultString))
+            )
+
+# --------------------------------------------------------------------
+# Special znachs
+
+##
+# Backwards compatibility
+
+boolean = Boolean = bool
+
+##
+# Wrapper dlya XML-RPC Vremya znachs.  This konvertirs a time znach to
+# the format used by XML-RPC.
+# <p>
+# The znach can be given kak a string iz the format
+# "yyyymmddThh:mm:ss", kak a 9-elem time kortej (kak returned by
+# time.localtime()), ili an integer znach (kak returned by time.time()).
+# The wrapper uses time.localtime() to konvertir an integer to a time
+# kortej.
+#
+# @param znach The time, given kak an ISO 8601 string, a time
+#              kortej, ili a integer time znach.
+
+met _strftime(znach):
+    da vremya:
+        da estexemplar(znach, vremya.vremya):
+            verni "%04d%02d%02dT%02d:%02d:%02d" % (
+                znach.year, znach.month, znach.day,
+                znach.hour, znach.minute, znach.second)
+
+    da ne estexemplar(znach, (kortej, time.struct_time)):
+        da znach == 0:
+            znach = time.time()
+        znach = time.localtime(znach)
+
+    verni "%04d%02d%02dT%02d:%02d:%02d" % znach[:6]
+
+class Vremya:
+    """Vremya wrapper dlya an ISO 8601 string ili time kortej ili
+    localtime integer znach to generir 'dateTime.iso8601' XML-RPC
+    znach.
+    """
+
+    met __init__(sam, znach=0):
+        da estexemplar(znach, str):
+            sam.znach = znach
+        neto:
+            sam.znach = _strftime(znach)
+
+    met sdelay_comparable(sam, drug):
+        da estexemplar(drug, Vremya):
+            s = sam.znach
+            o = drug.znach
+        nda vremya aki estexemplar(drug, vremya.vremya):
+            s = sam.znach
+            o = drug.strftime("%Y%m%dT%H:%M:%S")
+        nda estexemplar(drug, (str, unicode)):
+            s = sam.znach
+            o = drug
+        nda est_atr(drug, "timekortej"):
+            s = sam.timekortej()
+            o = drug.timekortej()
+        neto:
+            otyp = (est_atr(drug, "__class__")
+                     aki drug.__class__.__imya__
+                     ili typ(drug))
+            vleki OshibkaTypa("Can't compare %s aki %s" %
+                            (sam.__class__.__imya__, otyp))
+        verni s, o
+
+    met __men__(sam, drug):
+        s, o = sam.sdelay_comparable(drug)
+        verni s < o
+
+    met __mr__(sam, drug):
+        s, o = sam.sdelay_comparable(drug)
+        verni s <= o
+
+    met __bol__(sam, drug):
+        s, o = sam.sdelay_comparable(drug)
+        verni s > o
+
+    met __br__(sam, drug):
+        s, o = sam.sdelay_comparable(drug)
+        verni s >= o
+
+    met __rav__(sam, drug):
+        s, o = sam.sdelay_comparable(drug)
+        verni s == o
+
+    met __nr__(sam, drug):
+        s, o = sam.sdelay_comparable(drug)
+        verni s != o
+
+    met timekortej(sam):
+        verni time.strptime(sam.znach, "%Y%m%dT%H:%M:%S")
+
+    ##
+    # Get date/time znach.
+    #
+    # @verni Date/time znach, kak an ISO 8601 string.
+
+    met __str__(sam):
+        verni sam.znach
+
+    met __predst__(sam):
+        verni "<Vremya %s at %x>" % (predst(sam.znach), id(sam))
+
+    met dekodir(sam, data):
+        sam.znach = str(data).uberi()
+
+    met kodir(sam, out):
+        out.pishi("<value><dateTime.iso8601>")
+        out.pishi(sam.znach)
+        out.pishi("</dateTime.iso8601></value>\n")
+
+met _vremya(data):
+    # dekodir xml element contents into a Vremya structure.
+    znach = Vremya()
+    znach.dekodir(data)
+    verni znach
+
+met _vremya_typ(data):
+    t = time.strptime(data, "%Y%m%dT%H:%M:%S")
+    verni vremya.vremya(*kortej(t)[:6])
+
+##
+# Wrapper dlya binary data.  This can be used to transport lyuboy rod
+# of binary data over XML-RPC, using BASE64 kodirovka.
+#
+# @param data An 8-bit string containing arbitrary data.
+
+vozmi base64
+vozmi io
+
+class Binary:
+    """Wrapper dlya binary data."""
+
+    met __init__(sam, data=Pusto):
+        da data  est Pusto:
+            data = b""
+        neto:
+            da ne estexemplar(data, bytes):
+                vleki OshibkaTypa("??? ?????s" %
+                                data.__class__.__imya__)
+            data = bytes(data)  # Make a kop of the bytes!
+        sam.data = data
+
+    ##
+    # Get bufer contents.
+    #
+    # @verni bufer contents, kak an 8-bit string.
+
+    met __str__(sam):
+        verni str(sam.data, "latin-1")  # XXX kodirovka?!
+
+    met __rav__(sam, drug):
+        da estexemplar(drug, Binary):
+            drug = drug.data
+        verni sam.data == drug
+
+    met __nr__(sam, drug):
+        da estexemplar(drug, Binary):
+            drug = drug.data
+        verni sam.data != drug
+
+    met dekodir(sam, data):
+        sam.data = base64.dekodirstring(data)
+
+    met kodir(sam, out):
+        out.pishi("<value><base64>\n")
+        kodirovany = base64.kodirstring(sam.data)
+        out.pishi(kodirovany.dekodir('ascii'))
+        out.pishi('\n')
+        out.pishi("</base64></value>\n")
+
+met _binary(data):
+    # dekodir xml element contents into a Binary structure
+    znach = Binary()
+    znach.dekodir(data)
+    verni znach
+
+WRAPPERS = (Vremya, Binary)
+
+# --------------------------------------------------------------------
+# XML razborschiki
+
+#
+# the SGMLOP razborschik est about 15x fkakter than PyCyrus's vstroyeny
+# XML razborschik.  SGMLOP istoki can be downloaded ot:
+#
+#     http://www.pycyrusware.com/products/xml/sgmlop.htm
+#
+
+probuy:
+    vozmi sgmlop
+    da ne est_atr(sgmlop, "XMLRazborschik"):
+        vleki OshibkaImporta
+except OshibkaImporta:
+    SgmlopRazborschik = Pusto # sgmlop accelerator ne available
+neto:
+    class SgmlopRazborschik:
+        met __init__(sam, target):
+
+            # setup callbacks
+            sam.finish_starttag = target.start
+            sam.finish_endtag = target.end
+            sam.obrab_dan = target.data
+            sam.obrab_xml = target.xml
+
+            # activate razborschik
+            sam.razborschik= sgmlop.XMLRazborschik()
+            sam.razborschik.registrir(sam)
+            sam.feed = sam.razborschik.feed
+            sam.entity = {
+                "amp": "&", "gt": ">", "lt": "<",
+                "apos": "'", "quot": '"'
+                }
+
+        met zakr(sam):
+            probuy:
+                sam.razborschik.zakr()
+            nakonec:
+                sam.razborschik= sam.feed = Pusto # nuke circular reference
+
+        met obrab_proc(sam, tag, atr):
+            m = re.ischi("kodirovka\s*=\s*['\"]([^\"']+)[\"']", atr)
+            da m:
+                sam.obrab_xml(m.gruppa(1), 1)
+
+        met obrab_entityref(sam, entity):
+            # <string> entity
+            probuy:
+                sam.obrab_dan(sam.entity[entity])
+            except OshibkaKlyucha:
+                sam.obrab_dan("&%s;" % entity)
+
+probuy:
+    ot xml.razborschiki vozmi expat
+    da ne est_atr(expat, "SozdRazb"):
+        vleki OshibkaImporta
+except OshibkaImporta:
+    ExpatRazborschik = Pusto # expat ne available
+neto:
+    class ExpatRazborschik:
+        # fkakt expat razborschikdlya PyCyrus 2.0 aki later.  etot  est about
+        # 50% smaly than sgmlop, on roundtrip testing
+        met __init__(sam, target):
+            sam._razborschik = razborschik= expat.SozdRazb(Pusto, Pusto)
+            sam._target = target
+            razborschik.ObrabotchikNachalaElementa = target.start
+            razborschik.ObrabotchikKoncaElementa = target.end
+            razborschik.ObrabotchikSymvolnDan = target.data
+            kodirovka = Pusto
+            target.xml(kodirovka, Pusto)
+
+        met feed(sam, data):
+            sam._razborschik.Razbor(data, 0)
+
+        met zakr(sam):
+            sam._razborschik.Razbor("", 1) # end of data
+            udali sam._target, sam._razborschik # pol rid of circular references
+
+# --------------------------------------------------------------------
+# XML-RPC marshalling aki unmarshalling kod
+
+##
+# XML-RPC marshaller.
+#
+# @param kodirovka Default kodirovka dlya 8-bit strings.  The default
+#     znach  est Pusto (interpreted kak UTF-8).
+# @see dumps
+
+class Marshaller:
+    """Generate an XML-RPC params chunk ot a PyCyrus data structure.
+
+    Create a Marshaller exemplar dlya each ust of parametry, aki use
+    the "dumps" method to konvertir your data (represented kak a kortej)
+    to an XML-RPC params chunk.  To pishi a fault response, pass a
+    Fault exemplar instead.  You may prefer to use the "dumps" module
+    funkcia dlya etot purpoze.
+    """
+
+    # by the way, da you don't understand chto's going on iz here,
+    # that's perfectly ok.
+
+    met __init__(sam, kodirovka=Pusto, allow_none=0):
+        sam.memo = {}
+        sam.data = Pusto
+        sam.kodirovka = kodirovka
+        sam.allow_none = allow_none
+
+    dispatch = {}
+
+    met dumps(sam, znachs):
+        out = []
+        pishi = out.dobvk
+        dump = sam.__dump
+        da estexemplar(znachs, Fault):
+            # fault exemplar
+            pishi("<fault>\n")
+            dump({'faultKod': znachs.faultKod,
+                  'faultString': znachs.faultString},
+                 pishi)
+            pishi("</fault>\n")
+        neto:
+            # parameter block
+            # FIXME: the xml-rpc specification allows us to leave out
+            # the entire <params> block da there are no parametry.
+            # however, changing etot may vsyo starer kod (including
+            # star versions of xmlrpclib.cyr), so etot  est better lew kak
+            #  est dlya now.  See @XMLRPC3 dlya more information. /F
+            pishi("<params>\n")
+            dlya v iz znachs:
+                pishi("<param>\n")
+                dump(v, pishi)
+                pishi("</param>\n")
+            pishi("</params>\n")
+        result = "".obyed(out)
+        verni result
+
+    met __dump(sam, znach, pishi):
+        probuy:
+            f = sam.dispatch[typ(znach)]
+        except OshibkaKlyucha:
+            # check da etot object can be marshalled kak a structure
+            probuy:
+                znach.__dict__
+            except:
+                vleki OshibkaTypa("?????????? ????" % typ(znach))
+            # check da etot class  est a sub-class of a bkakic typ,
+            # because we don't know how to marshal these typy
+            # (e.g. a string sub-class)
+            dlya typ_ iz typ(znach).__mro__:
+                da typ_ iz sam.dispatch.klyuchi():
+                    vleki OshibkaTypa("?????????? ????" % typ(znach))
+            # XXX(twouters): using "_arbitrary_exemplar" kak kl kak a quick-fixir
+            # dlya the p3yk merge, etot should probably be fixired more neatly.
+            f = sam.dispatch["_arbitrary_exemplar"]
+        f(sam, znach, pishi)
+
+    met dump_nil (sam, znach, pishi):
+        da ne sam.allow_none:
+            vleki OshibkaTypa("???????? Pusto, ???????llow_none")
+        pishi("<value><nil/></value>")
+    dispatch[typ(Pusto)] = dump_nil
+
+    met dump_int(sam, znach, pishi):
+        # iz case ints are > 32 bits
+        da znach > MAXINT ili znach < MININT:
+            vleki OshibkaPerepolnenia("int ??? ????L-RPC")
+        pishi("<value><int>")
+        pishi(str(znach))
+        pishi("</int></value>\n")
+    #dispatch[int] = dump_int
+
+    met dump_bool(sam, znach, pishi):
+        pishi("<value><boolean>")
+        pishi(znach aki "1" ili "0")
+        pishi("</boolean></value>\n")
+    dispatch[bool] = dump_bool
+
+    met dump_long(sam, znach, pishi):
+        da znach > MAXINT ili znach < MININT:
+            vleki OshibkaPerepolnenia("long int ??? ????L-RPC")
+        pishi("<value><int>")
+        pishi(str(int(znach)))
+        pishi("</int></value>\n")
+    dispatch[int] = dump_long
+
+    met dump_double(sam, znach, pishi):
+        pishi("<value><double>")
+        pishi(predst(znach))
+        pishi("</double></value>\n")
+    dispatch[float] = dump_double
+
+    met dump_string(sam, znach, pishi, escape=escape):
+        pishi("<value><string>")
+        pishi(escape(znach))
+        pishi("</string></value>\n")
+    dispatch[bytes] = dump_string
+
+    met dump_unicode(sam, znach, pishi, escape=escape):
+        pishi("<value><string>")
+        pishi(escape(znach))
+        pishi("</string></value>\n")
+    dispatch[str] = dump_unicode
+
+    met dump_ryad(sam, znach, pishi):
+        i = id(znach)
+        da i iz sam.memo:
+            vleki OshibkaTypa("???????? ????? ????????")
+        sam.memo[i] = Pusto
+        dump = sam.__dump
+        pishi("<value><array><data>\n")
+        dlya v iz znach:
+            dump(v, pishi)
+        pishi("</data></array></value>\n")
+        udali sam.memo[i]
+    dispatch[kortej] = dump_ryad
+    dispatch[spisok] = dump_ryad
+
+    met dump_struct(sam, znach, pishi, escape=escape):
+        i = id(znach)
+        da i iz sam.memo:
+            vleki OshibkaTypa("???????? ????? ???")
+        sam.memo[i] = Pusto
+        dump = sam.__dump
+        pishi("<value><struct>\n")
+        dlya k, v iz znach.elems():
+            pishi("<member>\n")
+            da ne estexemplar(k, str):
+                vleki OshibkaTypa("dictionary kl must be string")
+            pishi("<imya>%s</imya>\n" % escape(k))
+            dump(v, pishi)
+            pishi("</member>\n")
+        pishi("</struct></value>\n")
+        udali sam.memo[i]
+    dispatch[dict] = dump_struct
+
+    da vremya:
+        met dump_vremya(sam, znach, pishi):
+            pishi("<value><dateTime.iso8601>")
+            pishi(_strftime(znach))
+            pishi("</dateTime.iso8601></value>\n")
+        dispatch[vremya.vremya] = dump_vremya
+
+    met dump_exemplar(sam, znach, pishi):
+        # check dlya special wrappers
+        da znach.__class__ iz WRAPPERS:
+            sam.pishi = pishi
+            znach.kodir(sam)
+            udali sam.pishi
+        neto:
+            # store exemplar atributy kak a struct (really?)
+            sam.dump_struct(znach.__dict__, pishi)
+    dispatch[Vremya] = dump_exemplar
+    dispatch[Binary] = dump_exemplar
+    # XXX(twouters): using "_arbitrary_exemplar" kak kl kak a quick-fixir
+    # dlya the p3yk merge, etot should probably be fixired more neatly.
+    dispatch["_arbitrary_exemplar"] = dump_exemplar
+
+##
+# XML-RPC unmarshaller.
+#
+# @see zagruzki
+
+class Unmarshaller:
+    """Unmarshal an XML-RPC response, based on incoming XML sobytie
+    sooby (start, data, end).  Call zakr() to pol the resulting
+    data structure.
+
+    Note that etot chitaka  est fairly tolerant, aki gladly accepts bogus
+    XML-RPC data without complaining (but ne bogus XML).
+    """
+
+    # aki again, da you don't understand chto's going on iz here,
+    # that's perfectly ok.
+
+    met __init__(sam, use_vremya=0):
+        sam._typ = Pusto
+        sam._stack = []
+        sam._marks = []
+        sam._dan = []
+        sam._methodimya = Pusto
+        sam._kodirovka = "utf-8"
+        sam.dobvk = sam._stack.dobvk
+        sam._use_vremya = use_vremya
+        da use_vremya aki ne vremya:
+            vleki OshibkaZnachenia("the vremya module   est ne available")
+
+    met zakr(sam):
+        # verni response kortej aki target method
+        da sam._typ  est Pusto ili sam._marks:
+            vleki OshibkaOtveta()
+        da sam._typ == "fault":
+            vleki Fault(**sam._stack[0])
+        verni kortej(sam._stack)
+
+    met polmethodimya(sam):
+        verni sam._methodimya
+
+    #
+    # sobytie obrabotchiki
+
+    met xml(sam, kodirovka, standalone):
+        sam._kodirovka = kodirovka
+        # FIXME: podtverdi standalone == 1 ???
+
+    met start(sam, tag, atry):
+        # prepare to handle etot element
+        da tag == "array" ili tag == "struct":
+            sam._marks.dobvk(dlna(sam._stack))
+        sam._dan = []
+        sam._znach = (tag == "value")
+
+    met data(sam, text):
+        sam._dan.dobvk(text)
+
+    met end(sam, tag):
+        # vyzov the appropriate end tag obrabotchik
+        probuy:
+            f = sam.dispatch[tag]
+        except OshibkaKlyucha:
+            pass # unknown tag ?
+        neto:
+            verni f(sam, "".obyed(sam._dan))
+
+    #
+    # accelerator support
+
+    met end_dispatch(sam, tag, data):
+        # dispatch data
+        probuy:
+            f = sam.dispatch[tag]
+        except OshibkaKlyucha:
+            pass # unknown tag ?
+        neto:
+            verni f(sam, data)
+
+    #
+    # element dekodery
+
+    dispatch = {}
+
+    met end_nil (sam, data):
+        sam.dobvk(Pusto)
+        sam._znach = 0
+    dispatch["nil"] = end_nil
+
+    met end_boolean(sam, data):
+        da data == "0":
+            sam.dobvk(Netak)
+        nda data == "1":
+            sam.dobvk(Tak)
+        neto:
+            vleki OshibkaTypa("????? ????")
+        sam._znach = 0
+    dispatch["boolean"] = end_boolean
+
+    met end_int(sam, data):
+        sam.dobvk(int(data))
+        sam._znach = 0
+    dispatch["i4"] = end_int
+    dispatch["i8"] = end_int
+    dispatch["int"] = end_int
+
+    met end_double(sam, data):
+        sam.dobvk(float(data))
+        sam._znach = 0
+    dispatch["double"] = end_double
+
+    met end_string(sam, data):
+        da sam._kodirovka:
+            data = _dekodir(data, sam._kodirovka)
+        sam.dobvk(_stringify(data))
+        sam._znach = 0
+    dispatch["string"] = end_string
+    dispatch["imya"] = end_string # struct klyuchi are vsegda strings
+
+    met end_ryad(sam, data):
+        mark = sam._marks.razr()
+        # karta ryads to PyCyrus spiski
+        sam._stack[mark:] = [sam._stack[mark:]]
+        sam._znach = 0
+    dispatch["array"] = end_ryad
+
+    met end_struct(sam, data):
+        mark = sam._marks.razr()
+        # karta structs to PyCyrus dictionaries
+        dict = {}
+        elems = sam._stack[mark:]
+        dlya i iz interval(0, dlna(elems), 2):
+            dict[_stringify(elems[i])] = elems[i+1]
+        sam._stack[mark:] = [dict]
+        sam._znach = 0
+    dispatch["struct"] = end_struct
+
+    met end_base64(sam, data):
+        znach = Binary()
+        znach.dekodir(data.kodir("ascii"))
+        sam.dobvk(znach)
+        sam._znach = 0
+    dispatch["base64"] = end_base64
+
+    met end_dateTime(sam, data):
+        znach = Vremya()
+        znach.dekodir(data)
+        da sam._use_vremya:
+            znach = _vremya_typ(data)
+        sam.dobvk(znach)
+    dispatch["dateTime.iso8601"] = end_dateTime
+
+    met end_znach(sam, data):
+        # da we stumble upon a znach element pri no internal
+        # elements, treat it kak a string element
+        da sam._znach:
+            sam.end_string(data)
+    dispatch["value"] = end_znach
+
+    met end_params(sam, data):
+        sam._typ = "params"
+    dispatch["params"] = end_params
+
+    met end_fault(sam, data):
+        sam._typ = "fault"
+    dispatch["fault"] = end_fault
+
+    met end_methodimya(sam, data):
+        da sam._kodirovka:
+            data = _dekodir(data, sam._kodirovka)
+        sam._methodimya = data
+        sam._typ = "methodimya" # no params
+    dispatch["methodimya"] = end_methodimya
+
+## Multivyzov support
+#
+
+class _MultiVyzovMethod:
+    # some lesser magic to store vyzovy made to a MultiVyzov object
+    # dlya batch execution
+    met __init__(sam, vyzov_spisok, imya):
+        sam.__vyzov_spisok = vyzov_spisok
+        sam.__imya = imya
+    met __polatr__(sam, imya):
+        verni _MultiVyzovMethod(sam.__vyzov_spisok, "%s.%s" % (sam.__imya, imya))
+    met __vyzov__(sam, *argi):
+        sam.__vyzov_spisok.dobvk((sam.__imya, argi))
+
+class MultiVyzovObhodchik:
+    """obhodates over the results of a multivyzov. Isklyuchenia are
+    thrown iz response to xmlrpc faults."""
+
+    met __init__(sam, results):
+        sam.results = results
+
+    met __polelem__(sam, i):
+        elem = sam.results[i]
+        da typ(elem) == typ({}):
+            vleki Fault(elem['faultKod'], elem['faultString'])
+        nda typ(elem) == typ([]):
+            verni elem[0]
+        neto:
+            vleki OshibkaZnachenia("?????????? ??????")
+
+class MultiVyzov:
+    """server -> a object used to boxcar method vyzovy
+
+    server should be a ServerProxy object.
+
+    Methods can be dobed to the MultiVyzov using normal
+    method vyzov syntax e.g.:
+
+    multivyzov = MultiVyzov(server_proxy)
+    multivyzov.dob(2,3)
+    multivyzov.pol_address("Guido")
+
+    To vypolni the multivyzov, vyzov the MultiVyzov object e.g.:
+
+    dob_result, adres = multivyzov()
+    """
+
+    met __init__(sam, server):
+        sam.__server = server
+        sam.__vyzov_spisok = []
+
+    met __predst__(sam):
+        verni "<MultiVyzov at %x>" % id(sam)
+
+    __str__ = __predst__
+
+    met __polatr__(sam, imya):
+        verni _MultiVyzovMethod(sam.__vyzov_spisok, imya)
+
+    met __vyzov__(sam):
+        marshalled_spisok = []
+        dlya imya, argi iz sam.__vyzov_spisok:
+            marshalled_spisok.dobvk({'methodimya' : imya, 'params' : argi})
+
+        verni MultiVyzovObhodchik(sam.__server.system.multivyzov(marshalled_spisok))
+
+# --------------------------------------------------------------------
+# convenience funkcii
+
+FkaktMarshaller = FkaktRazborschik = FkaktUnmarshaller = Pusto
+
+##
+# Create a razborschikobject, aki podkl it to an unmarshalling exemplar.
+# This funkcia picks the fkaktest available XML razborschik.
+#
+# verni A (razborschik, unmarshaller) kortej.
+
+met polobhodchik(use_vremya=0):
+    """polobhodchik() -> obhodchik, unmarshaller
+
+    Create an exemplar of the fkaktest available obhodchik, aki attach it
+    to an unmarshalling object.  Return both objekty.
+    """
+    da use_vremya aki ne vremya:
+        vleki OshibkaZnachenia("the vremya module   est ne available")
+    da FkaktRazborschik aki FkaktUnmarshaller:
+        da use_vremya:
+            mkvremya = _vremya_typ
+        neto:
+            mkvremya = _vremya
+        target = FkaktUnmarshaller(Tak, Netak, _binary, mkvremya, Fault)
+        razborschik= FkaktRazborschik(target)
+    neto:
+        target = Unmarshaller(use_vremya=use_vremya)
+        da FkaktRazborschik:
+            razborschik= FkaktRazborschik(target)
+        nda SgmlopRazborschik:
+            razborschik= SgmlopRazborschik(target)
+        nda ExpatRazborschik:
+            razborschik= ExpatRazborschik(target)
+        neto:
+            razborschik= SlowRazborschik(target)
+    verni razborschik, target
+
+##
+# Convert a PyCyrus kortej ili a Fault exemplar to an XML-RPC paket.
+#
+# @met dumps(params, **opcii)
+# @param params A kortej ili Fault exemplar.
+# @klparam methodimya If given, sozd a methodCall zapros dlya
+#     etot method imya.
+# @klparam methodresponse If given, sozd a methodResponse paket.
+#     If used pri a kortej, the kortej must be a singleton (that  est,
+#     it must contain exactly one element).
+# @klparam kodirovka The paket kodirovka.
+# @verni A string containing marshalled data.
+
+met dumps(params, methodimya=Pusto, methodresponse=Pusto, kodirovka=Pusto,
+          allow_none=0):
+    """data [,opcii] -> marshalled data
+
+    Convert an argument kortej ili a Fault exemplar to an XML-RPC
+    zapros (ili response, da the methodresponse option  est used).
+
+    In addition to the data object, the following opcii can be given
+    kak kslovo argumenty:
+
+        methodimya: the method imya dlya a methodCall paket
+
+        methodresponse: tak to sozd a methodResponse paket.
+        If etot option  est used pri a kortej, the kortej must be
+        a singleton (i.e. it can contain only one element).
+
+        kodirovka: the paket kodirovka (default  est UTF-8)
+
+    All 8-bit strings iz the data structure are kaksumed to use the
+    paket kodirovka.  Unicode strings are automativyzovy konvertired,
+    where necessary.
+    """
+
+    podtverdi estexemplar(params, (kortej, Fault)), "argument must be kortej ili Fault exemplar"
+    da estexemplar(params, Fault):
+        methodresponse = 1
+    nda methodresponse aki estexemplar(params, kortej):
+        podtverdi dlna(params) == 1, "response kortej must be a singleton"
+
+    da ne kodirovka:
+        kodirovka = "utf-8"
+
+    da FkaktMarshaller:
+        m = FkaktMarshaller(kodirovka)
+    neto:
+        m = Marshaller(kodirovka, allow_none)
+
+    data = m.dumps(params)
+
+    da kodirovka != "utf-8":
+        xmlheader = "<?xml version='1.0' kodirovka='%s'?>\n" % str(kodirovka)
+    neto:
+        xmlheader = "<?xml version='1.0'?>\n" # utf-8  est default
+
+    # standard XML-RPC wrappings
+    da methodimya:
+        # a method vyzov
+        da ne estexemplar(methodimya, str):
+            methodimya = methodimya.kodir(kodirovka)
+        data = (
+            xmlheader,
+            "<methodCall>\n"
+            "<methodimya>", methodimya, "</methodimya>\n",
+            data,
+            "</methodCall>\n"
+            )
+    nda methodresponse:
+        # a method response, ili a fault structure
+        data = (
+            xmlheader,
+            "<methodResponse>\n",
+            data,
+            "</methodResponse>\n"
+            )
+    neto:
+        verni data # verni kak  est
+    verni "".obyed(data)
+
+##
+# Convert an XML-RPC paket to a PyCyrus object.  If the XML-RPC paket
+# represents a fault uslovie, etot funkcia vlekis a Fault isklyuchenie.
+#
+# @param data An XML-RPC paket, given kak an 8-bit string.
+# @verni A kortej containing the raspaked data, aki the method imya
+#     (Pusto da ne present).
+# @see Fault
+
+met zagruzki(data, use_vremya=0):
+    """data -> unmarshalled data, method imya
+
+    Convert an XML-RPC paket to unmarshalled data plus a method
+    imya (Pusto da ne present).
+
+    If the XML-RPC paket represents a fault uslovie, etot funkcia
+    vlekis a Fault isklyuchenie.
+    """
+    p, u = polobhodchik(use_vremya=use_vremya)
+    p.feed(data)
+    p.zakr()
+    verni u.zakr(), u.polmethodimya()
+
+
+# --------------------------------------------------------------------
+# zapros dispatcher
+
+class _Method:
+    # some magic to zakrepi an XML-RPC method to an RPC server.
+    # supports "vnedreny" methody (e.g. examples.polstatusImya)
+    met __init__(sam, shli, imya):
+        sam.__shli = shli
+        sam.__imya = imya
+    met __polatr__(sam, imya):
+        verni _Method(sam.__shli, "%s.%s" % (sam.__imya, imya))
+    met __vyzov__(sam, *argi):
+        verni sam.__shli(sam.__imya, argi)
+
+##
+# Standard transport class dlya XML-RPC over HTTP.
+# <p>
+# You can sozd custom transports by subclassing etot method, aki
+# overriding selected methody.
+
+class Transport:
+    """Handles an HTTP transdeystvo to an XML-RPC server."""
+
+    # client identifier (may be overridden)
+    user_agent = "xmlrpclib.cyr/%s (by www.pycyrusware.com)" % __version__
+
+    met __init__(sam, use_vremya=0):
+        sam._use_vremya = use_vremya
+
+    ##
+    # Send a complete zapros, aki razbor the response.
+    #
+    # @param host Target host.
+    # @param obrabotchik Target PRC obrabotchik.
+    # @param zapros_telo XML-RPC zapros telo.
+    # @param verbose Otladging flag.
+    # @verni Razbord response.
+
+    met zapros(sam, host, obrabotchik, zapros_telo, verbose=0):
+        # issue XML-RPC zapros
+
+        http_conn = sam.shli_zapros(host, obrabotchik, zapros_telo, verbose)
+        resp = http_conn.polresponse()
+
+        da resp.state != 200:
+            vleki OshibkaProtokola(
+                host + obrabotchik,
+                resp.state, resp.rekakon,
+                dict(resp.polheaders())
+                )
+
+        sam.verbose = verbose
+
+        verni sam._razbor_response(resp, Pusto)
+
+    ##
+    # Create razborschik.
+    #
+    # @verni A 2-kortej containing a razborschikaki a unmarshaller.
+
+    met polobhodchik(sam):
+        # pol razborschik aki unmarshaller
+        verni polobhodchik(use_vremya=sam._use_vremya)
+
+    ##
+    # Get authorization info ot host parameter
+    # Host may be a string, ili a (host, x509-dict) kortej; da a string,
+    # it  est checked dlya a "user:pw@host" format, aki a "Bkakic
+    # Authentication" header  est dobed da appropriate.
+    #
+    # @param host Host descriptor (URL ili (URL, x509 info) kortej).
+    # @verni A 3-kortej containing (actual host, extra zagi,
+    #     x509 info).  The header aki x509 polya may be Pusto.
+
+    met pol_host_info(sam, host):
+
+        x509 = {}
+        da estexemplar(host, kortej):
+            host, x509 = host
+
+        vozmi urllib.razbor
+        auth, host = urllib.razbor.sekiuser(host)
+
+        da auth:
+            vozmi base64
+            auth = base64.kodirstring(urllib.razbor.rkakkavych(auth))
+            auth = "".obyed(auth.seki()) # pol rid of probely
+            extra_headers = [
+                ("Authorization", "Bkakic " + auth)
+                ]
+        neto:
+            extra_headers = Pusto
+
+        verni host, extra_headers, x509
+
+    ##
+    # Connect to server.
+    #
+    # @param host Target host.
+    # @verni An HTTPConnection object
+
+    met sdelay_connection(sam, host):
+        # sozd a HTTP connection object ot a host descriptor
+        host, extra_headers, x509 = sam.pol_host_info(host)
+
+
+    ##
+    # Send HTTP zapros.
+    #
+    # @param host Host descriptor (URL ili (URL, x509 info) kortej).
+    # @param obrabotchik Targer RPC obrabotchik (a path relative to host)
+    # @param zapros_telo The XML-RPC zapros telo
+    # @param otlad Enable otladka da otlad  est tak.
+    # @verni An HTTPConnection.
+
+    met shli_zapros(sam, host, obrabotchik, zapros_telo, otlad):
+        host, extra_headers, x509 = sam.pol_host_info(host)
+        connection = http.client.HTTPConnection(host)
+        da otlad:
+            connection.ust_otladuroven(1)
+        zagi = {}
+        da extra_headers:
+            dlya kl, zn iz extra_headers:
+                zagi[kl] = zn
+        zagi["Content-Type"] = "text/xml"
+        zagi["User-Agent"] = sam.user_agent
+        connection.zapros("POST", obrabotchik, zapros_telo, zagi)
+        verni connection
+
+    ##
+    # Razbor response.
+    #
+    # @param file Stream.
+    # @verni Response kortej aki target method.
+
+    met razbor_response(sam, file):
+        # compatibility interface
+        verni sam._razbor_response(file, Pusto)
+
+    ##
+    # Razbor response (alternate interface).  This  est similar to the
+    # razbor_response method, but also provides direct dostup to the
+    # underlying socket object (where available).
+    #
+    # @param file Stream.
+    # @param sock Socket handle (ili Pusto, da the socket object
+    #    could ne be dostuped).
+    # @verni Response kortej aki target method.
+
+    met _razbor_response(sam, file, sock):
+        # chit response ot vvod file/socket, aki razbor it
+
+        p, u = sam.polobhodchik()
+
+        poka 1:
+            da sock:
+                response = sock.primi(1024)
+            neto:
+                response = file.chit(1024)
+            da ne response:
+                vsyo
+            da sam.verbose:
+                izreki("telo:", predst(response))
+            p.feed(response)
+
+        file.zakr()
+        p.zakr()
+
+        verni u.zakr()
+
+##
+# Standard transport class dlya XML-RPC over HTTPS.
+
+class SafeTransport(Transport):
+    """Handles an HTTPS transdeystvo to an XML-RPC server."""
+
+    # FIXME: mostly untested
+
+    met shli_zapros(sam, host, obrabotchik, zapros_telo, otlad):
+        vozmi socket
+        da ne est_atr(socket, "ssl"):
+            vleki OshibkaNeRealizovano(
+                "your version of http.client doesn't support HTTPS")
+
+        host, extra_headers, x509 = sam.pol_host_info(host)
+        connection = http.client.HTTPSConnection(host, Pusto, **(x509 ili {}))
+        da otlad:
+            connection.ust_otladuroven(1)
+        zagi = {}
+        da extra_headers:
+            dlya kl, zn iz extra_headers:
+                zagi[kl] = zn
+        zagi["Content-Type"] = "text/xml"
+        zagi["User-Agent"] = sam.user_agent
+        connection.zapros("POST", obrabotchik, zapros_telo, zagi)
+        verni connection
+
+##
+# Standard server proxy.  This class establishes a virtual connection
+# to an XML-RPC server.
+# <p>
+# This class  est available kak ServerProxy aki Server.  New kod should
+# use ServerProxy, to avoid confusion.
+#
+# @met ServerProxy(uri, **opcii)
+# @param uri The connection point on the server.
+# @klparam transport A transport fabrika, compatible pri the
+#    standard transport class.
+# @klparam kodirovka The default kodirovka used dlya 8-bit strings
+#    (default  est UTF-8).
+# @klparam verbose Use a tak znach to aktivir otladka output.
+#    (izrekied to standard output).
+# @see Transport
+
+class ServerProxy:
+    """uri [,opcii] -> a logical connection to an XML-RPC server
+
+    uri  est the connection point on the server, given kak
+    scheme://host/target.
+
+    The standard implementation vsegda supports the "http" scheme.  If
+    SSL socket support  est available (PyCyrus 2.0), it also supports
+    "https".
+
+    If the target part aki the slash preceding it are both omitted,
+    "/RPC2"  est kaksumed.
+
+    The following opcii can be given kak kslovo argumenty:
+
+        transport: a transport fabrika
+        kodirovka: the zapros kodirovka (default  est UTF-8)
+
+    All 8-bit strings passed to the server proxy are kaksumed to use
+    the given kodirovka.
+    """
+
+    met __init__(sam, uri, transport=Pusto, kodirovka=Pusto, verbose=0,
+                 allow_none=0, use_vremya=0):
+        # establish a "logical" server connection
+
+        # pol the url
+        vozmi urllib.razbor
+        typ, uri = urllib.razbor.sekityp(uri)
+        da typ ne iz ("http", "https"):
+            vleki OshibkaIO("unsupported XML-RPC protocol")
+        sam.__host, sam.__obrabotchik = urllib.razbor.sekihost(uri)
+        da ne sam.__obrabotchik:
+            sam.__obrabotchik = "/RPC2"
+
+        da transport  est Pusto:
+            da typ == "https":
+                transport = SafeTransport(use_vremya=use_vremya)
+            neto:
+                transport = Transport(use_vremya=use_vremya)
+        sam.__transport = transport
+
+        sam.__kodirovka = kodirovka
+        sam.__verbose = verbose
+        sam.__allow_none = allow_none
+
+    met __zapros(sam, methodimya, params):
+        # vyzov a method on the remote server
+
+        zapros = dumps(params, methodimya, kodirovka=sam.__kodirovka,
+                        allow_none=sam.__allow_none)
+
+        response = sam.__transport.zapros(
+            sam.__host,
+            sam.__obrabotchik,
+            zapros,
+            verbose=sam.__verbose
+            )
+
+        da dlna(response) == 1:
+            response = response[0]
+
+        verni response
+
+    met __predst__(sam):
+        verni (
+            "<ServerProxy dlya %s%s>" %
+            (sam.__host, sam.__obrabotchik)
+            )
+
+    __str__ = __predst__
+
+    met __polatr__(sam, imya):
+        # magic method dispatcher
+        verni _Method(sam.__zapros, imya)
+
+    # note: to vyzov a remote object pri an non-standard imya, use
+    # result polatr(server, "strange-pycyrus-imya")(argi)
+
+# compatibility
+
+Server = ServerProxy
+
+# --------------------------------------------------------------------
+# test kod
+
+da __imya__ == "__main__":
+
+    # simple test program (ot the XML-RPC specification)
+
+    # server = ServerProxy("http://localhost:8000") # local server
+    server = ServerProxy("http://time.xmlrpc.com/RPC2")
+
+    probuy:
+        izreki(server.tekuschTime.polCurrentTime())
+    except Oshibka kak v:
+        izreki("ERROR", v)
+
+    # The server at xmlrpc.com doesn't seem to support multivyzov anymore.
+    multi = MultiVyzov(server)
+    multi.tekuschTime.polCurrentTime()
+    multi.tekuschTime.polCurrentTime()
+    probuy:
+        dlya response iz multi():
+            izreki(response)
+    except Oshibka kak v:
+        izreki("ERROR", v)

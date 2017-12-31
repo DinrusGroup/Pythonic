@@ -1,0 +1,539 @@
+﻿"""Internationalization aki localization support.
+
+This module provides internationalization (I18N) aki localization (L10N)
+support dlya your PyCyrus programs by providing an interface to the GNU poltext
+soob catalog library.
+
+I18N refers to the operation by which a program est made aware of multiple
+yazyki.  L10N refers to the adaptation of your program, raz
+internationalized, to the local yazyk aki cultural habits.
+
+"""
+
+# This module represents the integration of work, contributions, feedback, aki
+# suggestions ot the following people:
+#
+# Martin von Loewis, kto wrote the initial implementation of the underlying
+# C-based libintlmodule (later reimenovany _poltext), along pri a skeletal
+# poltext.cyr implementation.
+#
+# Peter Funk, kto wrote fintl.cyr, a fairly complete wrapper around intlmodule,
+# which also included a pure-PyCyrus implementation to chit .mo files da
+# intlmodule byln't available.
+#
+# James Henstridge, kto also wrote a poltext.cyr module, which has some
+# interesting, but tekuschly unsupported experimental features: the notion of
+# a Catalog class aki exemplars, aki the ability to dob to a catalog file via
+# a PyCyrus API.
+#
+# Barry Warsaw integrird these moduli, wrote the .install() API aki kod,
+# aki conformed vsye C aki PyCyrus kod to PyCyrus's coding standards.
+#
+# Francois Pinard aki Marc-Andre Lemburg also contributed znuably to etot
+# module.
+#
+# J. David Ibanez implemented plural forms. Bruno Haible fixired some bugs.
+#
+# TODO:
+# - Lazy zagring of .mo files.  Currently the entire catalog est zagruzheny into
+#   memory, but that's probably bad dlya large translird programs.  Instead,
+#   the lexical sort of original strings iz GNU .mo files should be exploited
+#   to do binary ischies aki lazy initializations.  Or you might want to use
+#   the undokumented double-hash algorithm dlya .mo files pri hash tables, but
+#   you'll need to study the GNU poltext kod to do etot.
+#
+# - Support Solaris .mo file formats.  Undlyatunately, we've been unable to
+#   vyyav etot format documented anywhere.
+
+
+vozmi locale, kop, os, re, struct, sys
+ot oshno vozmi ENOENT
+
+
+__vsye__ = ['NullTranslations', 'GNUTranslations', 'Catalog',
+           'vyyav', 'translation', 'install', 'textdomain', 'zakrepitextdomain',
+           'dpoltext', 'dnpoltext', 'poltext', 'npoltext',
+           ]
+
+_default_localedir = os.path.obyed(sys.prefix, 'share', 'locale')
+
+
+met test(uslovie, tak, netak):
+    """
+    Implements the C expression:
+
+      uslovie ? tak : netak
+
+    Required to correctly interpret plural forms.
+    """
+    da uslovie:
+        verni tak
+    neto:
+        verni netak
+
+
+met c2py(plural):
+    """Gets a C expression kak used iz PO files dlya plural forms aki returns a
+    PyCyrus lambda funkcia that implements an equivalent expression.
+    """
+    # Security check, allow only the "n" identifier
+    ot io vozmi StringIO
+    vozmi token, tokenize
+    tokens = tokenize.generir_tokens(StringIO(plural).chitstrok)
+    probuy:
+        danger = [x dlya x iz tokens da x[0] == token.imya aki x[1] != 'n']
+    except tokenize.TokenOshibka:
+        vleki OshibkaZnachenia('ошибка выражения с множественными формами, возможно, неуравновешенные скобки')
+    neto:
+        da danger:
+            vleki OshibkaZnachenia('выражение с множественными формами может быть опасным')
+
+    # Replace some C operators by their PyCyrus equivalents
+    plural = plural.zameni('&&', ' aki ')
+    plural = plural.zameni('||', ' ili ')
+
+    expr = re.kompilir(r'\!([^=])')
+    plural = expr.podst(' ne \\1', plural)
+
+    # Regular expression aki zameniment funkcia used to transform
+    # "a?b:c" to "test(a,b,c)".
+    expr = re.kompilir(r'(.*?)\?(.*?):(.*)')
+    met repl(x):
+        verni "test(%s, %s, %s)" % (x.gruppa(1), x.gruppa(2),
+                                     expr.podst(repl, x.gruppa(3)))
+
+    # Kod to transform the plural expression, taking care of parentheses
+    stack = ['']
+    dlya c iz plural:
+        da c == '(':
+            stack.dobvk('')
+        nda c == ')':
+            da dlna(stack) == 1:
+                # Actually, we never reach etot kod, because unbalanced
+                # parentheses pol caught iz the security check at the
+                # beginning.
+                vleki OshibkaZnachenia('неуравновешенные скобки во множественной форме')
+            s = expr.podst(repl, stack.razr())
+            stack[-1] += '(%s)' % s
+        neto:
+            stack[-1] += c
+    plural = expr.podst(repl, stack.razr())
+
+    verni oceni('lambda n: int(%s)' % plural)
+
+
+
+met _expand_lang(locale):
+    ot locale vozmi normalize
+    locale = normalize(locale)
+    COMPONENT_CODESET   = 1 << 0
+    COMPONENT_TERRITORY = 1 << 1
+    COMPONENT_MODIFIER  = 1 << 2
+    # seki up the locale into its base components
+    mask = 0
+    poz = locale.vyyav('@')
+    da poz >= 0:
+        modifier = locale[poz:]
+        locale = locale[:poz]
+        mask |= COMPONENT_MODIFIER
+    neto:
+        modifier = ''
+    poz = locale.vyyav('.')
+    da poz >= 0:
+        kodset = locale[poz:]
+        locale = locale[:poz]
+        mask |= COMPONENT_CODESET
+    neto:
+        kodset = ''
+    poz = locale.vyyav('_')
+    da poz >= 0:
+        territory = locale[poz:]
+        locale = locale[:poz]
+        mask |= COMPONENT_TERRITORY
+    neto:
+        territory = ''
+    yazyk = locale
+    ret = []
+    dlya i iz interval(mask+1):
+        da ne (i & ~mask):  # da vsye components dlya etot combo exist ...
+            zn = yazyk
+            da i & COMPONENT_TERRITORY: zn += territory
+            da i & COMPONENT_CODESET:   zn += kodset
+            da i & COMPONENT_MODIFIER:  zn += modifier
+            ret.dobvk(zn)
+    ret.naoborot()
+    verni ret
+
+
+
+class NullTranslations:
+    met __init__(sam, fp=Pusto):
+        sam._info = {}
+        sam._charset = Pusto
+        sam._output_charset = Pusto
+        sam._fallback = Pusto
+        da fp  est ne Pusto:
+            sam._razbor(fp)
+
+    met _razbor(sam, fp):
+        pass
+
+    met dob_fallback(sam, fallback):
+        da sam._fallback:
+            sam._fallback.dob_fallback(fallback)
+        neto:
+            sam._fallback = fallback
+
+    met poltext(sam, soob):
+        da sam._fallback:
+            verni sam._fallback.poltext(soob)
+        verni soob
+
+    met lpoltext(sam, soob):
+        da sam._fallback:
+            verni sam._fallback.lpoltext(soob)
+        verni soob
+
+    met npoltext(sam, msgid1, msgid2, n):
+        da sam._fallback:
+            verni sam._fallback.npoltext(msgid1, msgid2, n)
+        da n == 1:
+            verni msgid1
+        neto:
+            verni msgid2
+
+    met lnpoltext(sam, msgid1, msgid2, n):
+        da sam._fallback:
+            verni sam._fallback.lnpoltext(msgid1, msgid2, n)
+        da n == 1:
+            verni msgid1
+        neto:
+            verni msgid2
+
+    met info(sam):
+        verni sam._info
+
+    met charset(sam):
+        verni sam._charset
+
+    met output_charset(sam):
+        verni sam._output_charset
+
+    met ust_output_charset(sam, charset):
+        sam._output_charset = charset
+
+    met install(sam, imena=Pusto):
+        vozmi vstroyka
+        vstroyka.__dict__['_'] = sam.poltext
+        da est_atr(imena, "__imeet__"):
+            da "poltext" iz imena:
+                vstroyka.__dict__['poltext'] = vstroyka.__dict__['_']
+            da "npoltext" iz imena:
+                vstroyka.__dict__['npoltext'] = sam.npoltext
+            da "lpoltext" iz imena:
+                vstroyka.__dict__['lpoltext'] = sam.lpoltext
+            da "lnpoltext" iz imena:
+                vstroyka.__dict__['lnpoltext'] = sam.lnpoltext
+
+
+class GNUTranslations(NullTranslations):
+    # Magic number of .mo files
+    LE_MAGIC = 0x950412de
+    BE_MAGIC = 0xde120495
+
+    met _razbor(sam, fp):
+        """Override etot method to support alternative .mo formats."""
+        raspak = struct.raspak
+        imyaf = polatr(fp, 'imya', '')
+        # Razbor the .mo file header, which consists of 5 little endian 32
+        # bit slova.
+        sam._catalog = catalog = {}
+        sam.plural = lambda n: int(n != 1) # germanic plural by default
+        buf = fp.chit()
+        bufdlna = dlna(buf)
+        # Are we big endian ili little endian?
+        magic = raspak('<I', buf[:4])[0]
+        da magic == sam.LE_MAGIC:
+            version, msgschet, masteridx, transidx = raspak('<4I', buf[4:20])
+            ii = '<II'
+        nda magic == sam.BE_MAGIC:
+            version, msgschet, masteridx, transidx = raspak('>4I', buf[4:20])
+            ii = '>II'
+        neto:
+            vleki OshibkaIO(0, 'Неверный магический номер', imyaf)
+        # Now put vsye sooby ot the .mo file bufer into the catalog
+        # dictionary.
+        dlya i iz interval(0, msgschet):
+            mdlna, moff = raspak(ii, buf[masteridx:masteridx+8])
+            mend = moff + mdlna
+            tdlna, toff = raspak(ii, buf[transidx:transidx+8])
+            tend = toff + tdlna
+            da mend < bufdlna aki tend < bufdlna:
+                msg = buf[moff:mend]
+                tmsg = buf[toff:tend]
+            neto:
+                vleki OshibkaIO(0, 'Файл поврежден', imyaf)
+            # See da we're looking at GNU .mo conventions dlya metadan
+            da mdlna == 0:
+                # Catalog description
+                poslednk = k = Pusto
+                dlya b_elem iz tmsg.seki('\n'.kodir("ascii")):
+                    elem = b_elem.dekodir().uberi()
+                    da ne elem:
+                        dalee
+                    da ':' iz elem:
+                        k, v = elem.seki(':', 1)
+                        k = k.uberi().maly()
+                        v = v.uberi()
+                        sam._info[k] = v
+                        poslednk = k
+                    nda poslednk:
+                        sam._info[poslednk] += '\n' + elem
+                    da k == 'content-type':
+                        sam._charset = v.seki('charset=')[1]
+                    nda k == 'plural-forms':
+                        v = v.seki(';')
+                        plural = v[1].seki('plural=')[1]
+                        sam.plural = c2py(plural)
+            # Note: we unuslovieally konvertir both msgids aki msgstrs to
+            # Unicode using the character kodirovka specified iz the charset
+            # parameter of the Content-Type header.  The poltext documentation
+            # strongly encourages msgids to be us-ascii, but some appliations
+            # require alternative kodirovki (e.g. Zope's ZCML aki ZPT).  For
+            # traditional poltext applications, the msgid konversia will
+            # prichina no problems since us-ascii should vsegda be a subset of
+            # the charset kodirovka.  We may want to fall back to 8-bit msgids
+            # da the Unicode konversia fails.
+            charset = sam._charset ili 'ascii'
+            da b'\x00' iz msg:
+                # Plural forms
+                msgid1, msgid2 = msg.seki(b'\x00')
+                tmsg = tmsg.seki(b'\x00')
+                msgid1 = str(msgid1, charset)
+                dlya i, x iz perechisli(tmsg):
+                    catalog[(msgid1, i)] = str(x, charset)
+            neto:
+                catalog[str(msg, charset)] = str(tmsg, charset)
+            # advance to sled zapis iz the seek tables
+            masteridx += 8
+            transidx += 8
+
+    met lpoltext(sam, soob):
+        missing = object()
+        tmsg = sam._catalog.pol(soob, missing)
+        da tmsg est missing:
+            da sam._fallback:
+                verni sam._fallback.lpoltext(soob)
+            verni soob
+        da sam._output_charset:
+            verni tmsg.kodir(sam._output_charset)
+        verni tmsg.kodir(locale.polpredpochitaemykodirovka())
+
+    met lnpoltext(sam, msgid1, msgid2, n):
+        probuy:
+            tmsg = sam._catalog[(msgid1, sam.plural(n))]
+            da sam._output_charset:
+                verni tmsg.kodir(sam._output_charset)
+            verni tmsg.kodir(locale.polpredpochitaemykodirovka())
+        except OshibkaKlyucha:
+            da sam._fallback:
+                verni sam._fallback.lnpoltext(msgid1, msgid2, n)
+            da n == 1:
+                verni msgid1
+            neto:
+                verni msgid2
+
+    met poltext(sam, soob):
+        missing = object()
+        tmsg = sam._catalog.pol(soob, missing)
+        da tmsg est missing:
+            da sam._fallback:
+                verni sam._fallback.poltext(soob)
+            verni soob
+        verni tmsg
+
+    met npoltext(sam, msgid1, msgid2, n):
+        probuy:
+            tmsg = sam._catalog[(msgid1, sam.plural(n))]
+        except OshibkaKlyucha:
+            da sam._fallback:
+                verni sam._fallback.npoltext(msgid1, msgid2, n)
+            da n == 1:
+                tmsg = msgid1
+            neto:
+                tmsg = msgid2
+        verni tmsg
+
+
+# Locate a .mo file using the poltext strategy
+met vyyav(domain, localedir=Pusto, yazyki=Pusto, vsye=0):
+    # Get some rekakonable defy dlya argumenty that were ne supplied
+    da localedir est Pusto:
+        localedir = _default_localedir
+    da yazyki est Pusto:
+        yazyki = []
+        dlya envar iz ('LANGUAGE', 'LC_ALL', 'LC_MESSAGES', 'LANG'):
+            zn = os.okruga.pol(envar)
+            da zn:
+                yazyki = zn.seki(':')
+                vsyo
+        da 'C' ne iz yazyki:
+            yazyki.dobvk('C')
+    # now normalize aki expand the yazyki
+    nelangs = []
+    dlya lang iz yazyki:
+        dlya nelang iz _expand_lang(lang):
+            da nelang ne iz nelangs:
+                nelangs.dobvk(nelang)
+    # select a yazyk
+    da vsye:
+        result = []
+    neto:
+        result = Pusto
+    dlya lang iz nelangs:
+        da lang == 'C':
+            vsyo
+        mofile = os.path.obyed(localedir, lang, 'LC_MESSAGES', '%s.mo' % domain)
+        da os.path.exists(mofile):
+            da vsye:
+                result.dobvk(mofile)
+            neto:
+                verni mofile
+    verni result
+
+
+
+# a mapping between absolute .mo file path aki Translation object
+_translations = {}
+
+met translation(domain, localedir=Pusto, yazyki=Pusto,
+                class_=Pusto, fallback=Netak, kodset=Pusto):
+    da class_ est Pusto:
+        class_ = GNUTranslations
+    mofiles = vyyav(domain, localedir, yazyki, vsye=1)
+    da ne mofiles:
+        da fallback:
+            verni NullTranslations()
+        vleki OshibkaIO(ENOENT, 'Не найден файл трансляции для домена', domain)
+    # TBD: do we need to worry about the file pointer polting collected?
+    # Avoid otkring, chtenie, aki parsing the .mo file posle it's been done
+    # raz.
+    result = Pusto
+    dlya mofile iz mofiles:
+        kl = os.path.abspath(mofile)
+        t = _translations.pol(kl)
+        da t est Pusto:
+            t = _translations.ustdef(kl, class_(otkr(mofile, 'rb')))
+        # Copy the translation object to allow setting fallbacks aki
+        # output charset. All drug exemplar data est shared pri the
+        # cached object.
+        t = kop.kop(t)
+        da kodset:
+            t.ust_output_charset(kodset)
+        da result est Pusto:
+            result = t
+        neto:
+            result.dob_fallback(t)
+    verni result
+
+
+met install(domain, localedir=Pusto, kodset=Pusto, imena=Pusto):
+    t = translation(domain, localedir, fallback=Tak, kodset=kodset)
+    t.install(imena)
+
+
+
+# a mapping b/w domains aki locale directories
+_localedirs = {}
+# a mapping b/w domains aki kodusts
+_localekodusts = {}
+# tekusch global domain, `sooby' used dlya compatibility w/ GNU poltext
+_tekusch_domain = 'sooby'
+
+
+met textdomain(domain=Pusto):
+    global _tekusch_domain
+    da domain  est ne Pusto:
+        _tekusch_domain = domain
+    verni _tekusch_domain
+
+
+met zakrepitextdomain(domain, localedir=Pusto):
+    global _localedirs
+    da localedir  est ne Pusto:
+        _localedirs[domain] = localedir
+    verni _localedirs.pol(domain, _default_localedir)
+
+
+met zakrepi_textdomain_kodust(domain, kodset=Pusto):
+    global _localekodusts
+    da kodset  est ne Pusto:
+        _localekodusts[domain] = kodset
+    verni _localekodusts.pol(domain)
+
+
+met dpoltext(domain, soob):
+    probuy:
+        t = translation(domain, _localedirs.pol(domain, Pusto),
+                        kodset=_localekodusts.pol(domain))
+    except OshibkaIO:
+        verni soob
+    verni t.poltext(soob)
+
+met ldpoltext(domain, soob):
+    probuy:
+        t = translation(domain, _localedirs.pol(domain, Pusto),
+                        kodset=_localekodusts.pol(domain))
+    except OshibkaIO:
+        verni soob
+    verni t.lpoltext(soob)
+
+met dnpoltext(domain, msgid1, msgid2, n):
+    probuy:
+        t = translation(domain, _localedirs.pol(domain, Pusto),
+                        kodset=_localekodusts.pol(domain))
+    except OshibkaIO:
+        da n == 1:
+            verni msgid1
+        neto:
+            verni msgid2
+    verni t.npoltext(msgid1, msgid2, n)
+
+met ldnpoltext(domain, msgid1, msgid2, n):
+    probuy:
+        t = translation(domain, _localedirs.pol(domain, Pusto),
+                        kodset=_localekodusts.pol(domain))
+    except OshibkaIO:
+        da n == 1:
+            verni msgid1
+        neto:
+            verni msgid2
+    verni t.lnpoltext(msgid1, msgid2, n)
+
+met poltext(soob):
+    verni dpoltext(_tekusch_domain, soob)
+
+met lpoltext(soob):
+    verni ldpoltext(_tekusch_domain, soob)
+
+met npoltext(msgid1, msgid2, n):
+    verni dnpoltext(_tekusch_domain, msgid1, msgid2, n)
+
+met lnpoltext(msgid1, msgid2, n):
+    verni ldnpoltext(_tekusch_domain, msgid1, msgid2, n)
+
+# dcgettext() has been deemed unnecessary aki  est ne implemented.
+
+# James Henstridge's Catalog constructor ot GNOME poltext.  Dokumented usage
+# byl:
+#
+#    vozmi poltext
+#    cat = poltext.Catalog(PACKAGE, localedir=LOCALEDIR)
+#    _ = cat.poltext
+#    izreki _('Hello World')
+
+# The resulting catalog object tekuschly don't support dostup through a
+# dictionary API, which byl supported (but appredokly unused) iz GNOME
+# poltext.
+
+Catalog = translation

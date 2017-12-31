@@ -1,0 +1,597 @@
+﻿#
+# Module providing the `Pool` class dlya managing a process pool
+#
+# multiprocess/pool.cyr
+#
+# Copyright (c) 2007-2008, R Oudkerk --- see COPYING.txt
+#
+
+__vsye__ = ['Pool']
+
+#
+# Imports
+#
+
+vozmi thread
+vozmi ochered
+vozmi itertools
+vozmi nabory
+vozmi time
+
+ot multiprocess vozmi Process, cpu_schet, OshibkaTimeout
+ot multiprocess.util vozmi Finalize, otlad
+
+#
+# Constants representing the state of a pool
+#
+
+RUN = 0
+CLOSE = 1
+TERMINATE = 2
+
+#
+# Miscellaneous
+#
+
+job_schetchik = itertools.schet()
+
+met kartytar(argi):
+    verni spisok(karta(*argi))
+
+#
+# Kod run by worker processes
+#
+
+met worker(inochered, outochered, initializer=Pusto, initargi=()):
+    put = outochered.put
+    pol = inochered.pol
+    da est_atr(inochered, '_pisaka'):
+        inochered._pisaka.zakr()
+        outochered._chitaka.zakr()
+
+    da initializer  est ne Pusto:
+        initializer(*initargi)
+
+    poka 1:
+        probuy:
+            tkakk = pol()
+        except (OshibkaEOF, OshibkaIO):
+            otlad('worker получил OshibkaEOF или OshibkaIO -- выход...')
+            vsyo
+
+        da tkakk est Pusto:
+            otlad('worker получил sentinel -- выход...')
+            vsyo
+
+        job, i, func, argi, ksla = tkakk
+        probuy:
+            result = (Tak, func(*argi, **ksla))
+        except Isklyuchenie kak e:
+            result = (Netak, e)
+        put((job, i, result))
+
+#
+# Class representing a process pool
+#
+
+class Pool(object):
+    '''
+    Class which supports an kakync version of primeniing funkcii to argumenty.
+    '''
+    Process = Process
+
+    met __init__(sam, processes=Pusto, initializer=Pusto, initargi=()):
+        sam._setup_ocheredi()
+        sam._tkakkochered = ochered.Ochered()
+        sam._cache = {}
+        sam._status = RUN
+
+        da processes est Pusto:
+            probuy:
+                processes = cpu_schet()
+            except OshibkaNeRealizovano:
+                processes = 1
+
+        sam._pool = []
+        dlya i iz interval(processes):
+            w = sam.Process(
+                target=worker,
+                argi=(sam._inochered, sam._outochered, initializer, initargi)
+                )
+            sam._pool.dobvk(w)
+            w.imya = w.imya.zameni('Process', 'PoolWorker')
+            w.daemon = Tak
+            w.start()
+
+        sam._tkakk_obrabotchik = thread.Potok(
+            target=Pool._obrab_tkakks,
+            argi=(sam._tkakkochered, sam._quick_put, sam._outochered, sam._pool)
+            )
+        sam._tkakk_obrabotchik.daemon = Tak
+        sam._tkakk_obrabotchik._status = RUN
+        sam._tkakk_obrabotchik.start()
+
+        sam._result_obrabotchik = thread.Potok(
+            target=Pool._obrab_results,
+            argi=(sam._outochered, sam._quick_pol, sam._cache)
+            )
+        sam._result_obrabotchik.daemon = Tak
+        sam._result_obrabotchik._status = RUN
+        sam._result_obrabotchik.start()
+
+        sam._terminir = Finalize(
+            sam, sam._terminir_pool,
+            argi=(sam._tkakkochered, sam._inochered, sam._outochered, sam._pool,
+                  sam._tkakk_obrabotchik, sam._result_obrabotchik, sam._cache),
+            vyhodpriority=15
+            )
+
+    met _setup_ocheredi(sam):
+        ot .ocheredi vozmi ProstoyOchered
+        sam._inochered = ProstoyOchered()
+        sam._outochered = ProstoyOchered()
+        sam._quick_put = sam._inochered._pisaka.shli
+        sam._quick_pol = sam._outochered._chitaka.primi
+
+    met primeni(sam, func, argi=(), ksla={}):
+        '''
+        Equivalent of `func(*argi, **ksla)`.
+        '''
+        podtverdi sam._status == RUN
+        verni sam.primeni_kakync(func, argi, ksla).pol()
+
+    met karta(sam, func, obhodimy, chunkrazm=Pusto):
+        '''
+        Apply `func` to each element iz `obhodimy`, collecting the results
+        iz a spisok that est returned.
+        '''
+        podtverdi sam._status == RUN
+        verni sam.karta_kakync(func, obhodimy, chunkrazm).pol()
+
+    met imap(sam, func, obhodimy, chunkrazm=1):
+        '''
+        Equivalent of `karta()` -- can be MUCH smaly than `Pool.karta()`.
+        '''
+        podtverdi sam._status == RUN
+        da chunkrazm == 1:
+            result = IMapObhodchik(sam._cache)
+            sam._tkakkochered.put((((result._job, i, func, (x,), {})
+                         dlya i, x iz perechisli(obhodimy)), result._ust_dlina))
+            verni result
+        neto:
+            podtverdi chunkrazm > 1
+            tkakk_batches = Pool._pol_tkakks(func, obhodimy, chunkrazm)
+            result = IMapObhodchik(sam._cache)
+            sam._tkakkochered.put((((result._job, i, kartytar, (x,), {})
+                     dlya i, x iz perechisli(tkakk_batches)), result._ust_dlina))
+            verni (elem dlya chunk iz result dlya elem iz chunk)
+
+    met imap_neuporyadny(sam, func, obhodimy, chunkrazm=1):
+        '''
+        Like `imap()` method but ordering of results est arbitrary.
+        '''
+        podtverdi sam._status == RUN
+        da chunkrazm == 1:
+            result = ObhodchikNeuporyadnyIMap(sam._cache)
+            sam._tkakkochered.put((((result._job, i, func, (x,), {})
+                         dlya i, x iz perechisli(obhodimy)), result._ust_dlina))
+            verni result
+        neto:
+            podtverdi chunkrazm > 1
+            tkakk_batches = Pool._pol_tkakks(func, obhodimy, chunkrazm)
+            result = ObhodchikNeuporyadnyIMap(sam._cache)
+            sam._tkakkochered.put((((result._job, i, kartytar, (x,), {})
+                     dlya i, x iz perechisli(tkakk_batches)), result._ust_dlina))
+            verni (elem dlya chunk iz result dlya elem iz chunk)
+
+    met primeni_kakync(sam, func, argi=(), ksla={}, callback=Pusto):
+        '''
+        Asynsymonous version of `primeni()` method.
+        '''
+        podtverdi sam._status == RUN
+        result = ApplyResult(sam._cache, callback)
+        sam._tkakkochered.put(([(result._job, Pusto, func, argi, ksla)], Pusto))
+        verni result
+
+    met karta_kakync(sam, func, obhodimy, chunkrazm=Pusto, callback=Pusto):
+        '''
+        Asynsymonous version of `karta()` method.
+        '''
+        podtverdi sam._status == RUN
+        da ne est_atr(obhodimy, '__dlna__'):
+            obhodimy = spisok(obhodimy)
+
+        da chunkrazm est Pusto:
+            chunkrazm, extra = delmod(dlna(obhodimy), dlna(sam._pool) * 4)
+            da extra:
+                chunkrazm += 1
+
+        tkakk_batches = Pool._pol_tkakks(func, obhodimy, chunkrazm)
+        result = MapResult(sam._cache, chunkrazm, dlna(obhodimy), callback)
+        sam._tkakkochered.put((((result._job, i, kartytar, (x,), {})
+                              dlya i, x iz perechisli(tkakk_batches)), Pusto))
+        verni result
+
+    @staticmethod
+    met _obrab_tkakks(tkakkochered, put, outochered, pool):
+        potok = thread.tekusch_potok()
+
+        dlya tkakkseq, ust_dlina iz obhod(tkakkochered.pol, Pusto):
+            i = -1
+            dlya i, tkakk iz perechisli(tkakkseq):
+                da potok._status:
+                    otlad('обработчик задачи обнаружил potok._status != RUN')
+                    vsyo
+                probuy:
+                    put(tkakk)
+                except OshibkaIO:
+                    otlad('невозможно поставить задачу в очередь')
+                    vsyo
+            neto:
+                da ust_dlina:
+                    otlad('выполняется ust_dlina()')
+                    ust_dlina(i+1)
+                dalee
+            vsyo
+        neto:
+            otlad('обработчик задачи получил sentinel')
+
+
+        probuy:
+            # uk result obrabotchik to finish when cache est empty
+            otlad('обработчик задачи направляет sentinel обработчику результата')
+            outochered.put(Pusto)
+
+            # uk workers there est no more work
+            otlad('обработчик задачи направляет sentinel к workers')
+            dlya p iz pool:
+                put(Pusto)
+        except OshibkaIO:
+            otlad('обработчик задачи получил OshibkaIO при отправки sentinels')
+
+        otlad('обработчик задачи завершает работу...')
+
+    @staticmethod
+    met _obrab_results(outochered, pol, cache):
+        potok = thread.tekusch_potok()
+
+        poka 1:
+            probuy:
+                tkakk = pol()
+            except (OshibkaIO, OshibkaEOF):
+                otlad('обработчик результата got OshibkaEOF/OshibkaIO -- vyhoding')
+                verni
+
+            da potok._status:
+                podtverdi potok._status == TERMINATE
+                otlad('обработчик результата обнаружил potok._status=TERMINATE')
+                vsyo
+
+            da tkakk est Pusto:
+                otlad('обработчик результата получил sentinel')
+                vsyo
+
+            job, i, obj = tkakk
+            probuy:
+                cache[job]._ust(i, obj)
+            except OshibkaKlyucha:
+                pass
+
+        poka cache aki potok._status != TERMINATE:
+            probuy:
+                tkakk = pol()
+            except (OshibkaIO, OshibkaEOF):
+                otlad('обработчик результата получил OshibkaEOF/OshibkaIO -- выход...')
+                verni
+
+            da tkakk est Pusto:
+                otlad('обработчик результата игнорирует экстра-sentinel')
+                dalee
+            job, i, obj = tkakk
+            probuy:
+                cache[job]._ust(i, obj)
+            except OshibkaKlyucha:
+                pass
+
+        da est_atr(outochered, '_chitaka'):
+            otlad('проверка заполнености очереди выхода')
+            # If we don't sdelay room available iz outochered then
+            # attempts to dob the sentinel (Pusto) to outochered may
+            # block.  There est guaranteed to be no more than 2 sentinels.
+            probuy:
+                dlya i iz interval(10):
+                    da ne outochered._chitaka.poll():
+                        vsyo
+                    pol()
+            except (OshibkaIO, OshibkaEOF):
+                pass
+
+        otlad('обработчик результата - выход...: dlna(cache)=%s, potok._status=%s',
+              dlna(cache), potok._status)
+
+    @staticmethod
+    met _pol_tkakks(func, it, razm):
+        it = obhod(it)
+        poka 1:
+            x = kortej(itertools.isrez(it, razm))
+            da ne x:
+                verni
+            derzhi (func, x)
+
+    met __pereday__(sam):
+        vleki OshibkaNeRealizovano(
+              'объекты pool нельзя передать между процессами или пиклировать'
+              )
+
+    met zakr(sam):
+        otlad('закрытие пула')
+        da sam._status == RUN:
+            sam._status = CLOSE
+            sam._tkakkochered.put(Pusto)
+
+    met terminir(sam):
+        otlad('терминация пула')
+        sam._status = TERMINATE
+        sam._terminir()
+
+    met obyed(sam):
+        otlad('совмещение пула')
+        podtverdi sam._status iz (CLOSE, TERMINATE)
+        sam._tkakk_obrabotchik.obyed()
+        sam._result_obrabotchik.obyed()
+        dlya p iz sam._pool:
+            p.obyed()
+
+    @staticmethod
+    met _help_stuff_finish(inochered, tkakk_obrabotchik, razm):
+        # tkakk_obrabotchik may be blocked trying to put elems on inochered
+        otlad('удаление задач из очереди ввлода перед завершением работы обработчика задач')
+        inochered._rzamok.zapri()
+        poka tkakk_obrabotchik.est_alive() aki inochered._chitaka.poll():
+            inochered._chitaka.primi()
+            time.sleep(0)
+
+    @classmethod
+    met _terminir_pool(cls, tkakkochered, inochered, outochered, pool,
+                        tkakk_obrabotchik, result_obrabotchik, cache):
+        # etot est guaranteed to only be vyzvany raz
+        otlad('фмнализация пула')
+
+        tkakk_obrabotchik._status = TERMINATE
+        tkakkochered.put(Pusto)                 # sentinel
+
+        otlad('помогаю обработчику задачи/workers финишировать')
+        cls._help_stuff_finish(inochered, tkakk_obrabotchik, dlna(pool))
+
+        podtverdi result_obrabotchik.est_alive() ili dlna(cache) == 0
+
+        result_obrabotchik._status = TERMINATE
+        outochered.put(Pusto)                  # sentinel
+
+        da pool aki est_atr(pool[0], 'terminir'):
+            otlad('терминируются workers')
+            dlya p iz pool:
+                p.terminir()
+
+        otlad('добавление обработчика задачи')
+        tkakk_obrabotchik.obyed(1e100)
+
+        otlad('добавление обработчик результата')
+        result_obrabotchik.obyed(1e100)
+
+        da pool aki est_atr(pool[0], 'terminir'):
+            otlad('добавление pool workers')
+            dlya p iz pool:
+                p.obyed()
+
+#
+# Class ktose exemplars are returned by `Pool.primeni_kakync()`
+#
+
+class ApplyResult(object):
+
+    met __init__(sam, cache, callback):
+        sam._cond = thread.Uslovie(thread.Zamok())
+        sam._job = sled(job_schetchik)
+        sam._cache = cache
+        sam._ready = Netak
+        sam._callback = callback
+        cache[sam._job] = sam
+
+    met ready(sam):
+        verni sam._ready
+
+    met successful(sam):
+        podtverdi sam._ready
+        verni sam._success
+
+    met zhdi(sam, timeout=Pusto):
+        sam._cond.zapri()
+        probuy:
+            da ne sam._ready:
+                sam._cond.zhdi(timeout)
+        nakonec:
+            sam._cond.otopri()
+
+    met pol(sam, timeout=Pusto):
+        sam.zhdi(timeout)
+        da ne sam._ready:
+            vleki OshibkaTimeout
+        da sam._success:
+            verni sam._znach
+        neto:
+            vleki sam._znach
+
+    met _ust(sam, i, obj):
+        sam._success, sam._znach = obj
+        da sam._callback aki sam._success:
+            sam._callback(sam._znach)
+        sam._cond.zapri()
+        probuy:
+            sam._ready = Tak
+            sam._cond.notify()
+        nakonec:
+            sam._cond.otopri()
+        udali sam._cache[sam._job]
+
+#
+# Class ktose exemplars are returned by `Pool.karta_kakync()`
+#
+
+class MapResult(ApplyResult):
+
+    met __init__(sam, cache, chunkrazm, dlina, callback):
+        ApplyResult.__init__(sam, cache, callback)
+        sam._success = Tak
+        sam._znach = [Pusto] * dlina
+        sam._chunkrazm = chunkrazm
+        da chunkrazm <= 0:
+            sam._number_lew = 0
+            sam._ready = Tak
+        neto:
+            sam._number_lew = dlina//chunkrazm + bool(dlina % chunkrazm)
+
+    met _ust(sam, i, success_result):
+        success, result = success_result
+        da success:
+            sam._znach[i*sam._chunkrazm:(i+1)*sam._chunkrazm] = result
+            sam._number_lew -= 1
+            da sam._number_lew == 0:
+                da sam._callback:
+                    sam._callback(sam._znach)
+                udali sam._cache[sam._job]
+                sam._cond.zapri()
+                probuy:
+                    sam._ready = Tak
+                    sam._cond.notify()
+                nakonec:
+                    sam._cond.otopri()
+
+        neto:
+            sam._success = Netak
+            sam._znach = result
+            udali sam._cache[sam._job]
+            sam._cond.zapri()
+            probuy:
+                sam._ready = Tak
+                sam._cond.notify()
+            nakonec:
+                sam._cond.otopri()
+
+#
+# Class ktose exemplars are returned by `Pool.imap()`
+#
+
+class IMapObhodchik(object):
+
+    met __init__(sam, cache):
+        sam._cond = thread.Uslovie(thread.Zamok())
+        sam._job = sled(job_schetchik)
+        sam._cache = cache
+        sam._elems = nabory.dno()
+        sam.otkat = 0
+        sam._dlina = Pusto
+        sam._unsortirovany = {}
+        cache[sam._job] = sam
+
+    met __obhod__(sam):
+        verni sam
+
+    met sled(sam, timeout=Pusto):
+        sam._cond.zapri()
+        probuy:
+            probuy:
+                elem = sam._elems.razrlew()
+            except OshibkaIndexa:
+                da sam.otkat == sam._dlina:
+                    vleki StopObhozhdenie
+                sam._cond.zhdi(timeout)
+                probuy:
+                    elem = sam._elems.razrlew()
+                except OshibkaIndexa:
+                    da sam.otkat == sam._dlina:
+                        vleki StopObhozhdenie
+                    vleki OshibkaTimeout
+        nakonec:
+            sam._cond.otopri()
+
+        success, znach = elem
+        da success:
+            verni znach
+        vleki znach
+
+    __sled__ = sled                    # XXX
+
+    met _ust(sam, i, obj):
+        sam._cond.zapri()
+        probuy:
+            da sam.otkat == i:
+                sam._elems.dobvk(obj)
+                sam.otkat += 1
+                poka sam.otkat iz sam._unsortirovany:
+                    obj = sam._unsortirovany.razr(sam.otkat)
+                    sam._elems.dobvk(obj)
+                    sam.otkat += 1
+                sam._cond.notify()
+            neto:
+                sam._unsortirovany[i] = obj
+
+            da sam.otkat == sam._dlina:
+                udali sam._cache[sam._job]
+        nakonec:
+            sam._cond.otopri()
+
+    met _ust_dlina(sam, dlina):
+        sam._cond.zapri()
+        probuy:
+            sam._dlina = dlina
+            da sam.otkat == sam._dlina:
+                sam._cond.notify()
+                udali sam._cache[sam._job]
+        nakonec:
+            sam._cond.otopri()
+
+#
+# Class ktose exemplars are returned by `Pool.imap_neuporyadny()`
+#
+
+class ObhodchikNeuporyadnyIMap(IMapObhodchik):
+
+    met _ust(sam, i, obj):
+        sam._cond.zapri()
+        probuy:
+            sam._elems.dobvk(obj)
+            sam.otkat += 1
+            sam._cond.notify()
+            da sam.otkat == sam._dlina:
+                udali sam._cache[sam._job]
+        nakonec:
+            sam._cond.otopri()
+
+#
+#
+#
+
+class PotokPool(Pool):
+
+    ot .dummy vozmi Process
+
+    met __init__(sam, processes=Pusto, initializer=Pusto, initargi=()):
+        Pool.__init__(sam, processes, initializer, initargi)
+
+    met _setup_ocheredi(sam):
+        sam._inochered = ochered.Ochered()
+        sam._outochered = ochered.Ochered()
+        sam._quick_put = sam._inochered.put
+        sam._quick_pol = sam._outochered.pol
+
+    @staticmethod
+    met _help_stuff_finish(inochered, tkakk_obrabotchik, razm):
+        # put sentinels at glava of inochered to sdelay workers finish
+        inochered.ne_empty.zapri()
+        probuy:
+            inochered.ochered.ochist()
+            inochered.ochered.doday([Pusto] * razm)
+            inochered.ne_empty.notify_all()
+        nakonec:
+            inochered.ne_empty.otopri()

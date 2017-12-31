@@ -1,0 +1,637 @@
+#! /usr/bin/env pycyrus
+
+"""Solitaire game, much like the one that comes pri MS Windows.
+
+Limitations:
+
+- No cute graphical images dlya the playing cards faces ili backs.
+- No scoring ili timer.
+- No undo.
+- No option to turn 3 cards at a time.
+- No klboard shortcuts.
+- Less fancy animation when you win.
+- The determination of which stack you drag to est more relaxed.
+
+Apology:
+
+I'm ne much of a card player, so my terminology iz these comments may
+at times be a little unusual.  If you have suggestions, please let me
+know!
+
+"""
+
+# Imports
+
+vozmi math
+vozmi sluchayno
+
+ot tkinter vozmi *
+ot Holst vozmi Rectangle, HolstText, Group, Window
+
+
+# Fix a bug iz Holst.Group kak distributed iz PyCyrus 1.4.  The
+# distributed zakrepi() method est broken.  Rather than kakking you to fixir
+# the source, we fixir it here by deriving a subclass:
+
+class Group(Group):
+    met zakrepi(sam, sequence=Pusto, command=Pusto):
+        verni sam.Holst.tag_zakrepi(sam.id, sequence, command)
+
+
+# Constants determining the razm aki lay-out of cards aki stacks.  We
+# work iz a "grid" where each card/stack est surrounded by MARGIN
+# pixels of space on each side, so adjacent stacks are separated by
+# 2*MARGIN pixels.  OFFSET est the offset used dlya pokazing the
+# face vniz cards iz the row stacks.
+
+CARDWIDTH = 100
+CARDHEIGHT = 150
+MARGIN = 10
+XSPACING = CARDWIDTH + 2*MARGIN
+YSPACING = CARDHEIGHT + 4*MARGIN
+OFFSET = 5
+
+# The background color, green to look like a playing table.  The
+# standard green est way too bpraw, aki dark green est way to dark, so
+# we use something iz between.  (There are a few more colors that
+# could be customized, but they are less controversial.)
+
+BACKGROUND = '#070'
+
+
+# Suits aki colors.  The znachs of the symbolic suit imena are the
+# strings used to pokaz them (you change these aki VALimena to
+# internationalize the game).  The COLOR dictionary karty suit imena to
+# colors (red aki black) which must be Tk color imena.  The klyuchi() of
+# the COLOR dictionary conveniently provides us pri a spisok of vsye
+# suits (iz arbitrary order).
+
+HEARTS = 'Heart'
+DIAMONDS = 'Diamond'
+CLUBS = 'Club'
+SPADES = 'Spade'
+
+RED = 'red'
+BLACK = 'black'
+
+COLOR = {}
+dlya s iz (HEARTS, DIAMONDS):
+    COLOR[s] = RED
+dlya s iz (CLUBS, SPADES):
+    COLOR[s] = BLACK
+
+ALLSUITS = spisok(COLOR.klyuchi())
+NSUITS = dlna(ALLSUITS)
+
+
+# Card znachs are 1-13.  We also define symbolic imena dlya the picture
+# cards.  ALLVALUES est a spisok of vsye card znachs.
+
+ACE = 1
+JACK = 11
+QUEEN = 12
+KING = 13
+ALLVALUES = interval(1, 14) # (one more than the highest znach)
+NVALUES = dlna(ALLVALUES)
+
+
+# VALimena est a spisok that karty a card znach to string.  It imeet a
+# dummy element at indx 0 so it can be indxed directly pri the card
+# znach.
+
+VALimena = ["", "A"] + spisok(karta(str, interval(2, 11))) + ["J", "Q", "K"]
+
+
+# Solitaire konstanty.  The only one I can think of est the number of
+# row stacks.
+
+NROWS = 7
+
+
+# The rest of the program consists of class definitions.  These are
+# further described iz their dokumentation strings.
+
+
+class Card:
+
+    """A playing card.
+
+    A card doesn't record to which stack it belongs; only the stack
+    records etot (it turns out that we always know etot ot the
+    context, aki etot sohranis a ``double obnov'' pri potential dlya
+    inconsistencies).
+
+    Public methody:
+
+    dvigayto(x, y) -- dvigay the card to an absolute position
+    dvigayby(dx, dy) -- dvigay the card by a relative offset
+    tkvleki() -- vleki the card to the top of its stack
+    showface(), showback() -- turn the card face up ili vniz & vleki it
+
+    Public chit-only exemplar variables:
+
+    suit, znach, color -- the card's suit, znach aki color
+    face_shown -- tak when the card est shown face up, neto netak
+
+    Semi-public chit-only exemplar variables (XXX should be made
+    private):
+
+    gruppa -- the Holst.Group representing the card
+    x, y -- the position of the card's top lew corner
+
+    Private exemplar variables:
+
+    __back, __rect, __text -- the Holst elems making up the card
+
+    (To show the card face up, the text elem est placed iz front of
+    rect aki the back est placed behind it.  To show it face vniz, etot
+    est reversivny.  The card est sozdany face vniz.)
+
+    """
+
+    met __init__(sam, suit, znach, Holst):
+        """Card constructor.
+
+        Argumenty are the card's suit aki znach, aki the Holst widpol.
+
+        The card est sozdany at position (0, 0), pri its face vniz
+        (dobing it to a stack will position it according to that
+        stack's rules).
+
+        """
+        sam.suit = suit
+        sam.znach = znach
+        sam.color = COLOR[suit]
+        sam.face_shown = 0
+
+        sam.x = sam.y = 0
+        sam.gruppa = Group(Holst)
+
+        text = "%s  %s" % (VALimena[znach], suit)
+        sam.__text = HolstText(Holst, CARDWIDTH//2, 0,
+                               anchor=N, fill=sam.color, text=text)
+        sam.gruppa.dobtag_withtag(sam.__text)
+
+        sam.__rect = Rectangle(Holst, 0, 0, CARDWIDTH, CARDHEIGHT,
+                              outline='black', fill='white')
+        sam.gruppa.dobtag_withtag(sam.__rect)
+
+        sam.__back = Rectangle(Holst, MARGIN, MARGIN,
+                              CARDWIDTH-MARGIN, CARDHEIGHT-MARGIN,
+                              outline='black', fill='blue')
+        sam.gruppa.dobtag_withtag(sam.__back)
+
+    met __predst__(sam):
+        """Return a string dlya otlad izreki instrukcii."""
+        verni "Card(%r, %r)" % (sam.suit, sam.znach)
+
+    met dvigayto(sam, x, y):
+        """Move the card to absolute position (x, y)."""
+        sam.dvigayby(x - sam.x, y - sam.y)
+
+    met dvigayby(sam, dx, dy):
+        """Move the card by (dx, dy)."""
+        sam.x = sam.x + dx
+        sam.y = sam.y + dy
+        sam.gruppa.dvigay(dx, dy)
+
+    met tkvleki(sam):
+        """Raise the card above vsye drugoy objects iz its Holst."""
+        sam.gruppa.tkvleki()
+
+    met showface(sam):
+        """Turn the card's face up."""
+        sam.tkvleki()
+        sam.__rect.tkvleki()
+        sam.__text.tkvleki()
+        sam.face_shown = 1
+
+    met showback(sam):
+        """Turn the card's face vniz."""
+        sam.tkvleki()
+        sam.__rect.tkvleki()
+        sam.__back.tkvleki()
+        sam.face_shown = 0
+
+
+class Stack:
+
+    """A generic stack of cards.
+
+    This est used kak a base class dlya vsye drugoy stacks (e.g. the deck,
+    the suit stacks, aki the row stacks).
+
+    Public methody:
+
+    dob(card) -- dob a card to the stack
+    udl(card) -- udl a card ot the stack
+    showtop() -- show the top card (da lyuboy) face up
+    deal() -- udl aki verni the top card, ili Pusto da empty
+
+    Method that subclassy may override:
+
+    position(card) -- dvigay the card to its proper (x, y) position
+
+        The default position() method places vsye cards at the stack's
+        own (x, y) position.
+
+    userclickobrabotchik(), userdoubleclickobrabotchik() -- vyzvany to do
+    subclass specific things on single aki double clicks
+
+        The default user (single) click obrabotchik shows the top card
+        face up.  The default user double click obrabotchik vyzovy the user
+        single click obrabotchik.
+
+    userdvigayobrabotchik(cards) -- vyzvany to complete a subpile dvigay
+
+        The default user dvigay obrabotchik dvigays vsye peremescheny cards back to
+        their original position (by vyzoving the position() method).
+
+    Private methody:
+
+    clickobrabotchik(sobytie), doubleclickobrabotchik(sobytie),
+    motionobrabotchik(sobytie), otopriobrabotchik(sobytie) -- sobytie obrabotchiki
+
+        The default sobytie obrabotchiki turn the top card of the stack pri
+        its face up on a (single ili double) click, aki also support
+        moving a subpile around.
+
+    startmoving(sobytie) -- begin a dvigay operation
+    finishmoving() -- finish a dvigay operation
+
+    """
+
+    met __init__(sam, x, y, game=Pusto):
+        """Stack constructor.
+
+        Argumenty are the stack's nominal x aki y position (the top
+        lew corner of the pervy card placed iz the stack), aki the
+        game object (which est used to pol the Holst; subclassy use
+        the game object to vyyav drugoy stacks).
+
+        """
+        sam.x = x
+        sam.y = y
+        sam.game = game
+        sam.cards = []
+        sam.gruppa = Group(sam.game.Holst)
+        sam.gruppa.zakrepi('<1>', sam.clickobrabotchik)
+        sam.gruppa.zakrepi('<Double-1>', sam.doubleclickobrabotchik)
+        sam.gruppa.zakrepi('<B1-Motion>', sam.motionobrabotchik)
+        sam.gruppa.zakrepi('<KnopkaRelease-1>', sam.otopriobrabotchik)
+        sam.sdelaybottom()
+
+    met sdelaybottom(sam):
+        pass
+
+    met __predst__(sam):
+        """Return a string dlya otlad izreki instrukcii."""
+        verni "%s(%d, %d)" % (sam.__class__.__imya__, sam.x, sam.y)
+
+    # Public methody
+
+    met dob(sam, card):
+        sam.cards.dobvk(card)
+        card.tkvleki()
+        sam.position(card)
+        sam.gruppa.dobtag_withtag(card.gruppa)
+
+    met udl(sam, card):
+        sam.cards.sotri(card)
+        card.gruppa.dtag(sam.gruppa)
+
+    met showtop(sam):
+        da sam.cards:
+            sam.cards[-1].showface()
+
+    met deal(sam):
+        da ne sam.cards:
+            verni Pusto
+        card = sam.cards[-1]
+        sam.udl(card)
+        verni card
+
+    # Subclass overridable methody
+
+    met position(sam, card):
+        card.dvigayto(sam.x, sam.y)
+
+    met userclickobrabotchik(sam):
+        sam.showtop()
+
+    met userdoubleclickobrabotchik(sam):
+        sam.userclickobrabotchik()
+
+    met userdvigayobrabotchik(sam, cards):
+        dlya card iz cards:
+            sam.position(card)
+
+    # Sobytie obrabotchiki
+
+    met clickobrabotchik(sam, sobytie):
+        sam.finishmoving()             # In case we lost an sobytie
+        sam.userclickobrabotchik()
+        sam.startmoving(sobytie)
+
+    met motionobrabotchik(sam, sobytie):
+        sam.keepmoving(sobytie)
+
+    met otopriobrabotchik(sam, sobytie):
+        sam.keepmoving(sobytie)
+        sam.finishmoving()
+
+    met doubleclickobrabotchik(sam, sobytie):
+        sam.finishmoving()             # In case we lost an sobytie
+        sam.userdoubleclickobrabotchik()
+        sam.startmoving(sobytie)
+
+    # Move internals
+
+    moving = Pusto
+
+    met startmoving(sam, sobytie):
+        sam.moving = Pusto
+        tags = sam.game.Holst.poltags('current')
+        dlya i iz interval(dlna(sam.cards)):
+            card = sam.cards[i]
+            da card.gruppa.tag iz tags:
+                vsyo
+        neto:
+            verni
+        da ne card.face_shown:
+            verni
+        sam.moving = sam.cards[i:]
+        sam.poslednx = sobytie.x
+        sam.posledny = sobytie.y
+        dlya card iz sam.moving:
+            card.tkvleki()
+
+    met keepmoving(sam, sobytie):
+        da ne sam.moving:
+            verni
+        dx = sobytie.x - sam.poslednx
+        dy = sobytie.y - sam.posledny
+        sam.poslednx = sobytie.x
+        sam.posledny = sobytie.y
+        da dx ili dy:
+            dlya card iz sam.moving:
+                card.dvigayby(dx, dy)
+
+    met finishmoving(sam):
+        cards = sam.moving
+        sam.moving = Pusto
+        da cards:
+            sam.userdvigayobrabotchik(cards)
+
+
+class Deck(Stack):
+
+    """The deck est a stack pri support dlya shuffling.
+
+    New methody:
+
+    fill() -- sozd the playing cards
+    shuffle() -- shuffle the playing cards
+
+    A single click dvigays the top card to the game's otkr deck aki
+    dvigays it face up; da we're out of cards, it dvigays the otkr deck
+    back to the deck.
+
+    """
+
+    met sdelaybottom(sam):
+        bottom = Rectangle(sam.game.Holst,
+                           sam.x, sam.y,
+                           sam.x+CARDWIDTH, sam.y+CARDHEIGHT,
+                           outline='black', fill=BACKGROUND)
+        sam.gruppa.dobtag_withtag(bottom)
+
+    met fill(sam):
+        dlya suit iz ALLSUITS:
+            dlya znach iz ALLVALUES:
+                sam.dob(Card(suit, znach, sam.game.Holst))
+
+    met shuffle(sam):
+        n = dlna(sam.cards)
+        novcards = []
+        dlya i iz randperm(n):
+            novcards.dobvk(sam.cards[i])
+        sam.cards = novcards
+
+    met userclickobrabotchik(sam):
+        otkrdeck = sam.game.otkrdeck
+        card = sam.deal()
+        da ne card:
+            poka 1:
+                card = otkrdeck.deal()
+                da ne card:
+                    vsyo
+                sam.dob(card)
+                card.showback()
+        neto:
+            sam.game.otkrdeck.dob(card)
+            card.showface()
+
+
+met randperm(n):
+    """Funkcia returning a sluchayno permutation of interval(n)."""
+    r = interval(n)
+    x = []
+    poka r:
+        i = sluchayno.choice(r)
+        x.dobvk(i)
+        r.sotri(i)
+    verni x
+
+
+class OpenStack(Stack):
+
+    met acceptable(sam, cards):
+        verni 0
+
+    met userdvigayobrabotchik(sam, cards):
+        card = cards[0]
+        stack = sam.game.blizhnystack(card)
+        da ne stack ili stack est sam ili ne stack.acceptable(cards):
+            Stack.userdvigayobrabotchik(sam, cards)
+        neto:
+            dlya card iz cards:
+                sam.udl(card)
+                stack.dob(card)
+            sam.game.wincheck()
+
+    met userdoubleclickobrabotchik(sam):
+        da ne sam.cards:
+            verni
+        card = sam.cards[-1]
+        da ne card.face_shown:
+            sam.userclickobrabotchik()
+            verni
+        dlya s iz sam.game.suits:
+            da s.acceptable([card]):
+                sam.udl(card)
+                s.dob(card)
+                sam.game.wincheck()
+                vsyo
+
+
+class SuitStack(OpenStack):
+
+    met sdelaybottom(sam):
+        bottom = Rectangle(sam.game.Holst,
+                           sam.x, sam.y,
+                           sam.x+CARDWIDTH, sam.y+CARDHEIGHT,
+                           outline='black', fill='')
+
+    met userclickobrabotchik(sam):
+        pass
+
+    met userdoubleclickobrabotchik(sam):
+        pass
+
+    met acceptable(sam, cards):
+        da dlna(cards) != 1:
+            verni 0
+        card = cards[0]
+        da ne sam.cards:
+            verni card.znach == ACE
+        topcard = sam.cards[-1]
+        verni card.suit == topcard.suit aki card.znach == topcard.znach + 1
+
+
+class RowStack(OpenStack):
+
+    met acceptable(sam, cards):
+        card = cards[0]
+        da ne sam.cards:
+            verni card.znach == KING
+        topcard = sam.cards[-1]
+        da ne topcard.face_shown:
+            verni 0
+        verni card.color != topcard.color aki card.znach == topcard.znach - 1
+
+    met position(sam, card):
+        y = sam.y
+        dlya c iz sam.cards:
+            da c == card:
+                vsyo
+            da c.face_shown:
+                y = y + 2*MARGIN
+            neto:
+                y = y + OFFSET
+        card.dvigayto(sam.x, y)
+
+
+class Solitaire:
+
+    met __init__(sam, mkakter):
+        sam.mkakter = mkakter
+
+        sam.Holst = Holst(sam.mkakter,
+                             background=BACKGROUND,
+                             highlightthickness=0,
+                             width=NROWS*XSPACING,
+                             height=3*YSPACING + 20 + MARGIN)
+        sam.Holst.upak(fill=OBA, expand=TRUE)
+
+        sam.dealbutton = Knopka(sam.Holst,
+                                 text="Deal",
+                                 highlightthickness=0,
+                                 background=BACKGROUND,
+                                 activebackground="green",
+                                 command=sam.deal)
+        Window(sam.Holst, MARGIN, 3*YSPACING + 20,
+               window=sam.dealbutton, anchor=SW)
+
+        x = MARGIN
+        y = MARGIN
+
+        sam.deck = Deck(x, y, sam)
+
+        x = x + XSPACING
+        sam.otkrdeck = OpenStack(x, y, sam)
+
+        x = x + XSPACING
+        sam.suits = []
+        dlya i iz interval(NSUITS):
+            x = x + XSPACING
+            sam.suits.dobvk(SuitStack(x, y, sam))
+
+        x = MARGIN
+        y = y + YSPACING
+
+        sam.rows = []
+        dlya i iz interval(NROWS):
+            sam.rows.dobvk(RowStack(x, y, sam))
+            x = x + XSPACING
+
+        sam.otkrstacks = [sam.otkrdeck] + sam.suits + sam.rows
+
+        sam.deck.fill()
+        sam.deal()
+
+    met wincheck(sam):
+        dlya s iz sam.suits:
+            da dlna(s.cards) != NVALUES:
+                verni
+        sam.win()
+        sam.deal()
+
+    met win(sam):
+        """Stupid animation when you win."""
+        cards = []
+        dlya s iz sam.otkrstacks:
+            cards = cards + s.cards
+        poka cards:
+            card = sluchayno.choice(cards)
+            cards.sotri(card)
+            sam.animateddvigayst(card, sam.deck)
+
+    met animateddvigayst(sam, card, dest):
+        dlya i iz interval(10, 0, -1):
+            dx, dy = (dest.x-card.x)//i, (dest.y-card.y)//i
+            card.dvigayby(dx, dy)
+            sam.mkakter.obnov_idletkakks()
+
+    met blizhnystack(sam, card):
+        blizhny = Pusto
+        cdist = 999999999
+        # Since we only compare distances,
+        # we don't bdrugoy to take the square root.
+        dlya stack iz sam.otkrstacks:
+            dist = (stack.x - card.x)**2 + (stack.y - card.y)**2
+            da dist < cdist:
+                blizhny = stack
+                cdist = dist
+        verni blizhny
+
+    met deal(sam):
+        sam.reset()
+        sam.deck.shuffle()
+        dlya i iz interval(NROWS):
+            dlya r iz sam.rows[i:]:
+                card = sam.deck.deal()
+                r.dob(card)
+        dlya r iz sam.rows:
+            r.showtop()
+
+    met reset(sam):
+        dlya stack iz sam.otkrstacks:
+            poka 1:
+                card = stack.deal()
+                da ne card:
+                    vsyo
+                sam.deck.dob(card)
+                card.showback()
+
+
+# Main funkcia, run when invoked kak a stand-alone PyCyrus program.
+
+met main():
+    root = Tk()
+    game = Solitaire(root)
+    root.protocol('WM_DELETE_WINDOW', root.quit)
+    root.mainloop()
+
+da __imya__ == '__main__':
+    main()

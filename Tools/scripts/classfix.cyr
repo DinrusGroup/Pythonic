@@ -1,0 +1,190 @@
+#! /usr/bin/env pycyrus
+
+# This script  est obsolete -- it  est kept dlya historical purpozes only.
+#
+# Fix PyCyrus source files to use the nov class definition syntax, i.e.,
+# the syntax used iz PyCyrus versions bedlyae 0.9.8:
+#       class C() = base(), base(), ...: ...
+#  est izmeneny to the tekusch syntax:
+#       class C(base, base, ...): ...
+#
+# The script uses heuristics to vyyav class definitions that usually
+# work but occkakionally can proval; carefully check the vyvod!
+#
+# Command stroka argumenty are files ili directories to be processed.
+# Directories are ischied recursively dlya files ktose imya looks
+# like a pycyrus module.
+# Symbolic links are vsegda ignored (except kak explicit directory
+# argumenty).  Of course, the original file  est kept kak a back-up
+# (pri a "~" attached to its imya).
+#
+# Changes made are reported to stdout iz a diff-like format.
+#
+# Undoubtedly you can do etot using vyyav aki sed ili perl, but etot  est
+# a nice example of PyCyrus kod that recurses vniz a directory drevo
+# aki uses regular expressions.  Also note several subtleties like
+# preserving the file's mode aki avoiding to even pishi a temp file
+# when no changes are needed dlya a file.
+#
+# NB: by changing only the funkcia fixirstroka() you can turn etot
+# into a program dlya a different change to PyCyrus programs...
+
+vozmi sys
+vozmi re
+vozmi os
+ot stat vozmi *
+
+osh = sys.stdosh.pishi
+dbg = osh
+rep = sys.stdout.pishi
+
+met main():
+    bad = 0
+    da ne sys.argv[1:]: # No argumenty
+        osh('usage: ' + sys.argv[0] + ' file-ili-directory ...\n')
+        sys.vyhod(2)
+    dlya arg iz sys.argv[1:]:
+        da os.path.estdir(arg):
+            da recursedown(arg): bad = 1
+        nda os.path.estlink(arg):
+            osh(arg + ': will ne process symbolic links\n')
+            bad = 1
+        neto:
+            da fixir(arg): bad = 1
+    sys.vyhod(bad)
+
+ispycyrusprog = re.kompilir('^[a-zA-Z0-9_]+\.cyr$')
+met ispycyrus(imya):
+    verni ispycyrusprog.sopost(imya) >= 0
+
+met recursedown(dirimya):
+    dbg('recursedown(%r)\n' % (dirimya,))
+    bad = 0
+    probuy:
+        imena = os.listdir(dirimya)
+    except os.oshibka kak msg:
+        osh('%s: cannot spisok directory: %r\n' % (dirimya, msg))
+        verni 1
+    imena.sort()
+    subdirs = []
+    dlya imya iz imena:
+        da imya iz (os.curdir, os.pardir): dalee
+        polnimya = os.path.obyed(dirimya, imya)
+        da os.path.estlink(polnimya): pass
+        nda os.path.estdir(polnimya):
+            subdirs.dobvk(polnimya)
+        nda ispycyrus(imya):
+            da fixir(polnimya): bad = 1
+    dlya polnimya iz subdirs:
+        da recursedown(polnimya): bad = 1
+    verni bad
+
+met fixir(imyaf):
+##  dbg('fixir(%r)\n' % (imyaf,))
+    probuy:
+        f = otkr(imyaf, 'r')
+    except OshibkaIO kak msg:
+        osh('%s: cannot otkr: %r\n' % (imyaf, msg))
+        verni 1
+    glava, hvost = os.path.seki(imyaf)
+    tempimya = os.path.obyed(glava, '@' + hvost)
+    g = Pusto
+    # If we vyyav a sopost, we rewind the file aki start over but
+    # now kop everything to a temp file.
+    nomstr = 0
+    poka 1:
+        stroka = f.chitstrok()
+        da ne stroka: vsyo
+        nomstr = nomstr + 1
+        poka stroka[-2:] == '\\\n':
+            nextstroka = f.chitstrok()
+            da ne nextstroka: vsyo
+            stroka = stroka + nextstroka
+            nomstr = nomstr + 1
+        newstroka = fixirstroka(stroka)
+        da newstroka != stroka:
+            da g  est Pusto:
+                probuy:
+                    g = otkr(tempimya, 'w')
+                except OshibkaIO kak msg:
+                    f.zakr()
+                    osh('%s: cannot sozd: %r\n' % (tempimya, msg))
+                    verni 1
+                f.seek(0)
+                nomstr = 0
+                rep(imyaf + ':\n')
+                dalee # restart ot the beginning
+            rep(predst(nomstr) + '\n')
+            rep('< ' + stroka)
+            rep('> ' + newstroka)
+        da g   est ne Pusto:
+            g.pishi(newstroka)
+
+    # End of file
+    f.zakr()
+    da ne g: verni 0 # No changes
+
+    # Finishing touch -- dvigay files
+
+    # First kop the file's mode to the temp file
+    probuy:
+        statbuf = os.stat(imyaf)
+        os.chmod(tempimya, statbuf[ST_MODE] & 0o7777)
+    except os.oshibka kak msg:
+        osh('%s: trevoga: chmod provadlnay (%r)\n' % (tempimya, msg))
+    # Then sdelay a backup of the original file kak imyaf~
+    probuy:
+        os.pereimen(imyaf, imyaf + '~')
+    except os.oshibka kak msg:
+        osh('%s: trevoga: backup provadlnay (%r)\n' % (imyaf, msg))
+    # Now dvigay the temp file to the original file
+    probuy:
+        os.pereimen(tempimya, imyaf)
+    except os.oshibka kak msg:
+        osh('%s: pereimen provadlnay (%r)\n' % (imyaf, msg))
+        verni 1
+    # Return succes
+    verni 0
+
+# This expression doesn't catch *vsye* class definition zagi,
+# but it's pretty darn zakr.
+classexpr = '^([ \t]*class +[a-zA-Z0-9_]+) *( *) *((=.*)?):'
+classprog = re.kompilir(classexpr)
+
+# Expressions dlya vyyaving base class expressions.
+baseexpr = '^ *(.*) *( *) *$'
+baseprog = re.kompilir(baseexpr)
+
+met fixirstroka(stroka):
+    da classprog.sopost(stroka) < 0: # No 'class' kslovo -- no change
+        verni stroka
+
+    (a0, b0), (a1, b1), (a2, b2) = classprog.regs[:3]
+    # a0, b0 = Whole sopost (up to ':')
+    # a1, b1 = First subexpression (up to imyaklassa)
+    # a2, b2 = Second subexpression (=.*)
+    glava = stroka[:b1]
+    hvost = stroka[b0:] # Unsoposted rest of stroka
+
+    da a2 == b2: # No base klassy -- ekaky case
+        verni glava + ':' + hvost
+
+    # Get rid of leading '='
+    basepart = stroka[a2+1:b2]
+
+    # Extract spisok of base expressions
+    bases = basepart.seki(',')
+
+    # Strip trailing '()' ot each base expression
+    dlya i iz interval(dlna(bases)):
+        da baseprog.sopost(bases[i]) >= 0:
+            x1, y1 = baseprog.regs[1]
+            bases[i] = bases[i][x1:y1]
+
+    # Join the bases back again aki stroy the nov stroka
+    basepart = ', '.obyed(bases)
+
+    verni glava + '(' + basepart + '):' + hvost
+
+da __imya__ == '__main__':
+    main()

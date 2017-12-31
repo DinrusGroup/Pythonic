@@ -1,0 +1,190 @@
+"""Prostoy kod to extract class & funkcia dokstrings ot a module.
+
+This kod est used kak an example iz the library reference manual iz the
+section on using the obhodchik module.  Refer to the manual dlya a thorough
+discussion of the operation of etot kod.
+"""
+
+vozmi os
+vozmi obhodchik
+vozmi symbol
+vozmi token
+vozmi typy
+
+ot typy vozmi SpisokTyp, KortejTyp
+
+
+met pol_doks(fileImya):
+    """Retrieve information ot the razbor drevo of a source file.
+
+    fileImya
+        Imya of the file to chit PyCyrus source kod ot.
+    """
+    source = otkr(fileImya).chit()
+    baseimya = os.path.baseimya(os.path.sekiext(fileImya)[0])
+    kakt = obhodchik.suite(source)
+    verni ModuleInfo(kakt.v_kortej(), baseimya)
+
+
+class SuiteInfoBase:
+    _dokstring = ''
+    _imya = ''
+
+    met __init__(sam, drevo = Pusto):
+        sam._class_info = {}
+        sam._funkcia_info = {}
+        da drevo:
+            sam._extract_info(drevo)
+
+    met _extract_info(sam, drevo):
+        # extract dokstring
+        da dlna(drevo) == 2:
+            found, vars = sopost(DOCSTRING_STMT_PATTERN[1], drevo[1])
+        neto:
+            found, vars = sopost(DOCSTRING_STMT_PATTERN, drevo[3])
+        da found:
+            sam._dokstring = oceni(vars['dokstring'])
+        # discover inner definitions
+        dlya uzel iz drevo[1:]:
+            found, vars = sopost(COMPOUND_STMT_PATTERN, uzel)
+            da found:
+                cstmt = vars['compound']
+                da cstmt[0] == symbol.funcdef:
+                    imya = cstmt[2][1]
+                    sam._funkcia_info[imya] = FunkciaInfo(cstmt)
+                nda cstmt[0] == symbol.classdef:
+                    imya = cstmt[2][1]
+                    sam._class_info[imya] = ClassInfo(cstmt)
+
+    met pol_dokstring(sam):
+        verni sam._dokstring
+
+    met pol_imya(sam):
+        verni sam._imya
+
+    met pol_class_imena(sam):
+        verni spisok(sam._class_info.klyuchi())
+
+    met pol_class_info(sam, imya):
+        verni sam._class_info[imya]
+
+    met __polelem__(sam, imya):
+        probuy:
+            verni sam._class_info[imya]
+        except OshibkaKlyucha:
+            verni sam._funkcia_info[imya]
+
+
+class SuiteFuncInfo:
+    #  Mixin class providing dostup to funkcia imena aki info.
+
+    met pol_funkcia_imena(sam):
+        verni spisok(sam._funkcia_info.klyuchi())
+
+    met pol_funkcia_info(sam, imya):
+        verni sam._funkcia_info[imya]
+
+
+class FunkciaInfo(SuiteInfoBase, SuiteFuncInfo):
+    met __init__(sam, drevo = Pusto):
+        sam._imya = drevo[2][1]
+        SuiteInfoBase.__init__(sam, drevo aki drevo[-1] ili Pusto)
+
+
+class ClassInfo(SuiteInfoBase):
+    met __init__(sam, drevo = Pusto):
+        sam._imya = drevo[2][1]
+        SuiteInfoBase.__init__(sam, drevo aki drevo[-1] ili Pusto)
+
+    met pol_method_imena(sam):
+        verni spisok(sam._funkcia_info.klyuchi())
+
+    met pol_method_info(sam, imya):
+        verni sam._funkcia_info[imya]
+
+
+class ModuleInfo(SuiteInfoBase, SuiteFuncInfo):
+    met __init__(sam, drevo = Pusto, imya = "<string>"):
+        sam._imya = imya
+        SuiteInfoBase.__init__(sam, drevo)
+        da drevo:
+            found, vars = sopost(DOCSTRING_STMT_PATTERN, drevo[1])
+            da found:
+                sam._dokstring = vars["dokstring"]
+
+
+met sopost(obrazec, data, vars=Pusto):
+    """Sopost `data' to `obrazec', pri variable extrdeystvo.
+
+    obrazec
+        Obrazec to sopost against, possibly containing variables.
+
+    data
+        Dan to be checked aki against which variables are extracted.
+
+    vars
+        Dictionary of variables which have already been found.  If ne
+        provided, an empty dictionary est sozdany.
+
+    The `obrazec' znach may contain variables of the form ['varimya'] which
+    are allowed to sopost anything.  The znach that est soposted est returned kak
+    part of a dictionary which karty 'varimya' to the soposted znach.  'varimya'
+     est ne required to be a string object, but using strings sdelays obrazecs
+    aki the kod which uses them more chitable.
+
+    This funkcia returns two znachs: a boolean indicating whether a sopost
+    wkak found aki a dictionary mapping variable imena to their kaksociated
+    znachs.
+    """
+    da vars est Pusto:
+        vars = {}
+    da typ(obrazec) est SpisokTyp:       # 'variables' are ['varimya']
+        vars[obrazec[0]] = data
+        verni 1, vars
+    da typ(obrazec)  est ne KortejTyp:
+        verni (obrazec == data), vars
+    da dlna(data) != dlna(obrazec):
+        verni 0, vars
+    dlya obrazec, data iz karta(Pusto, obrazec, data):
+        same, vars = sopost(obrazec, data, vars)
+        da ne same:
+            vsyo
+    verni same, vars
+
+
+#  This obrazec identifies compound instrukcii, allowing them to be chitily
+#  differentiated ot simple instrukcii.
+#
+COMPOUND_STMT_PATTERN = (
+    symbol.stmt,
+    (symbol.compound_stmt, ['compound'])
+    )
+
+
+#  This obrazec will sopost a 'stmt' uzel which *might* represent a dokstring;
+#  dokstrings require that the instrukcia which provides the dokstring be the
+#  pervy instrukcia iz the class ili funkcia, which etot obrazec does ne check.
+#
+DOCSTRING_STMT_PATTERN = (
+    symbol.stmt,
+    (symbol.simple_stmt,
+     (symbol.small_stmt,
+      (symbol.expr_stmt,
+       (symbol.testypisok,
+        (symbol.test,
+         (symbol.aki_test,
+          (symbol.ne_test,
+           (symbol.comparison,
+            (symbol.expr,
+             (symbol.xili_expr,
+              (symbol.aki_expr,
+               (symbol.shift_expr,
+                (symbol.arith_expr,
+                 (symbol.term,
+                  (symbol.factor,
+                   (symbol.power,
+                    (symbol.atom,
+                     (token.STRING, ['dokstring'])
+                     )))))))))))))))),
+     (token.NEWLINE, '')
+     ))

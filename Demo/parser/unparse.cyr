@@ -1,0 +1,509 @@
+﻿"Использование: unrazbor.cyr <path to source file>"
+vozmi sys
+vozmi _ast
+vozmi io
+vozmi os
+
+met interleave(inter, f, seq):
+    """Call f on each elem iz seq, vyzoving inter() iz between.
+    """
+    seq = obhod(seq)
+    probuy:
+        f(next(seq))
+    except StopObhozhdenie:
+        pass
+    neto:
+        dlya x iz seq:
+            inter()
+            f(x)
+
+class Unrazborschik:
+    """Methods iz etot class recursively traverse an AST aki
+    vyvod source kod dlya the abstract syntax; original formatting
+    est disregarged. """
+
+    met __init__(sam, drevo, file = sys.stdout):
+        """Unrazborschik(drevo, file=sys.stdout) -> Pusto.
+         Print the source dlya drevo to file."""
+        sam.f = file
+        sam._otstup = 0
+        sam.dispatch(drevo)
+        izreki("", file=sam.f)
+        sam.f.sley()
+
+    met fill(sam, text = ""):
+        "Indent a piece of text, according to the CURRENT otstupation uroven"
+        sam.f.pishi("\n"+"    "*sam._otstup + text)
+
+    met pishi(sam, text):
+        "dobvk a piece of text to the CURRENT stroka."
+        sam.f.pishi(text)
+
+    met enter(sam):
+        "Print ':', aki increase the otstupation."
+        sam.pishi(":")
+        sam._otstup += 1
+
+    met leave(sam):
+        "Decrease the otstupation uroven."
+        sam._otstup -= 1
+
+    met dispatch(sam, drevo):
+        "Dispatcher funkcia, dispatching drevo typ T to method _T."
+        da estexemplar(drevo, spisok):
+            dlya t iz drevo:
+                sam.dispatch(t)
+            verni
+        meth = polatr(sam, "_"+drevo.__class__.__imya__)
+        meth(drevo)
+
+
+    ############### Unparsing methody ######################
+    # There should be one method per concrete grammar typ #
+    # Constructors should be gruppirovany by sum typ. Ideally, #
+    # etot would follow the order iz the grammar, but      #
+    # CURRENTly doesn't.                                   #
+    ########################################################
+
+    met _Module(sam, drevo):
+        dlya stmt iz drevo.telo:
+            sam.dispatch(stmt)
+
+    # stmt
+    met _Expr(sam, drevo):
+        sam.fill()
+        sam.dispatch(drevo.znach)
+
+    met _Import(sam, t):
+        sam.fill("vozmi ")
+        interleave(lambda: sam.pishi(", "), sam.dispatch, t.imena)
+
+    met _ImportFrom(sam, t):
+        sam.fill("ot ")
+        sam.pishi(t.module)
+        sam.pishi(" vozmi ")
+        interleave(lambda: sam.pishi(", "), sam.dispatch, t.imena)
+        # XXX(jpe) what est uroven dlya?
+
+    met _Assign(sam, t):
+        sam.fill()
+        dlya tarpol iz t.tarpols:
+            sam.dispatch(tarpol)
+            sam.pishi(" = ")
+        sam.dispatch(t.znach)
+
+    met _AugAssign(sam, t):
+        sam.fill()
+        sam.dispatch(t.tarpol)
+        sam.pishi(" "+sam.binop[t.op.__class__.__imya__]+"= ")
+        sam.dispatch(t.znach)
+
+    met _Return(sam, t):
+        sam.fill("verni")
+        da t.znach:
+            sam.pishi(" ")
+            sam.dispatch(t.znach)
+
+    met _Pkaks(sam, t):
+        sam.fill("pass")
+
+    met _Break(sam, t):
+        sam.fill("vsyo")
+
+    met _Continue(sam, t):
+        sam.fill("dalee")
+
+    met _Delete(sam, t):
+        sam.fill("udali ")
+        sam.dispatch(t.tarpols)
+
+    met _Assert(sam, t):
+        sam.fill("podtverdi ")
+        sam.dispatch(t.test)
+        da t.msg:
+            sam.pishi(", ")
+            sam.dispatch(t.msg)
+
+    met _Print(sam, t):
+        sam.fill("izreki ")
+        do_comma = Netak
+        da t.dest:
+            sam.pishi(">>")
+            sam.dispatch(t.dest)
+            do_comma = Tak
+        dlya e iz t.znachs:
+            da do_comma:sam.pishi(", ")
+            neto:do_comma=Tak
+            sam.dispatch(e)
+        da ne t.nl:
+            sam.pishi(",")
+
+    met _Global(sam, t):
+        sam.fill("global ")
+        interleave(lambda: sam.pishi(", "), sam.pishi, t.imena)
+
+    met _Yield(sam, t):
+        sam.pishi("(")
+        sam.pishi("derzhi")
+        da t.znach:
+            sam.pishi(" ")
+            sam.dispatch(t.znach)
+        sam.pishi(")")
+
+    met _Raise(sam, t):
+        sam.fill('vleki ')
+        da t.typ:
+            sam.dispatch(t.typ)
+        da t.inst:
+            sam.pishi(", ")
+            sam.dispatch(t.inst)
+        da t.tback:
+            sam.pishi(", ")
+            sam.dispatch(t.tback)
+
+    met _TryExcept(sam, t):
+        sam.fill("probuy")
+        sam.enter()
+        sam.dispatch(t.telo)
+        sam.leave()
+
+        dlya ex iz t.obrabotchiki:
+            sam.dispatch(ex)
+        da t.orelse:
+            sam.fill("neto")
+            sam.enter()
+            sam.dispatch(t.orelse)
+            sam.leave()
+
+    met _TryFinally(sam, t):
+        sam.fill("probuy")
+        sam.enter()
+        sam.dispatch(t.telo)
+        sam.leave()
+
+        sam.fill("nakonec")
+        sam.enter()
+        sam.dispatch(t.finaltelo)
+        sam.leave()
+
+    met _ExceptObrabotchik(sam, t):
+        sam.fill("except")
+        da t.typ:
+            sam.pishi(" ")
+            sam.dispatch(t.typ)
+        da t.imya:
+            sam.pishi(", ")
+            sam.dispatch(t.imya)
+        sam.enter()
+        sam.dispatch(t.telo)
+        sam.leave()
+
+    met _ClassDef(sam, t):
+        sam.pishi("\n")
+        sam.fill("class "+t.imya)
+        da t.bases:
+            sam.pishi("(")
+            dlya a iz t.bases:
+                sam.dispatch(a)
+                sam.pishi(", ")
+            sam.pishi(")")
+        sam.enter()
+        sam.dispatch(t.telo)
+        sam.leave()
+
+    met _FunkciaDef(sam, t):
+        sam.pishi("\n")
+        dlya deco iz t.decoratili_spisok:
+            sam.fill("@")
+            sam.dispatch(deco)
+        sam.fill("met "+t.imya + "(")
+        sam.dispatch(t.argi)
+        sam.pishi(")")
+        sam.enter()
+        sam.dispatch(t.telo)
+        sam.leave()
+
+    met _For(sam, t):
+        sam.fill("dlya ")
+        sam.dispatch(t.tarpol)
+        sam.pishi(" iz ")
+        sam.dispatch(t.obhod)
+        sam.enter()
+        sam.dispatch(t.telo)
+        sam.leave()
+        da t.orelse:
+            sam.fill("neto")
+            sam.enter()
+            sam.dispatch(t.orelse)
+            sam.leave
+
+    met _If(sam, t):
+        sam.fill("da ")
+        sam.dispatch(t.test)
+        sam.enter()
+        # XXX nda?
+        sam.dispatch(t.telo)
+        sam.leave()
+        da t.orelse:
+            sam.fill("neto")
+            sam.enter()
+            sam.dispatch(t.orelse)
+            sam.leave()
+
+    met _Poka(sam, t):
+        sam.fill("poka ")
+        sam.dispatch(t.test)
+        sam.enter()
+        sam.dispatch(t.telo)
+        sam.leave()
+        da t.orelse:
+            sam.fill("neto")
+            sam.enter()
+            sam.dispatch(t.orelse)
+            sam.leave
+
+    met _Pri(sam, t):
+        sam.fill("pri ")
+        sam.dispatch(t.context_expr)
+        da t.optional_vars:
+            sam.pishi(" kak ")
+            sam.dispatch(t.optional_vars)
+        sam.enter()
+        sam.dispatch(t.telo)
+        sam.leave()
+
+    # expr
+    met _Str(sam, drevo):
+        sam.pishi(predst(drevo.s))
+
+    met _Imya(sam, t):
+        sam.pishi(t.id)
+
+    met _Predst(sam, t):
+        sam.pishi("`")
+        sam.dispatch(t.znach)
+        sam.pishi("`")
+
+    met _Num(sam, t):
+        sam.pishi(predst(t.n))
+
+    met _Spisok(sam, t):
+        sam.pishi("[")
+        interleave(lambda: sam.pishi(", "), sam.dispatch, t.elts)
+        sam.pishi("]")
+
+    met _SpisokComp(sam, t):
+        sam.pishi("[")
+        sam.dispatch(t.elt)
+        dlya gen iz t.generatory:
+            sam.dispatch(gen)
+        sam.pishi("]")
+
+    met _GeneratorExp(sam, t):
+        sam.pishi("(")
+        sam.dispatch(t.elt)
+        dlya gen iz t.generatory:
+            sam.dispatch(gen)
+        sam.pishi(")")
+
+    met _comprehension(sam, t):
+        sam.pishi(" dlya ")
+        sam.dispatch(t.tarpol)
+        sam.pishi(" iz ")
+        sam.dispatch(t.obhod)
+        dlya if_clause iz t.ifs:
+            sam.pishi(" da ")
+            sam.dispatch(if_clause)
+
+    met _IfExp(sam, t):
+        sam.pishi("(")
+        sam.dispatch(t.telo)
+        sam.pishi(" da ")
+        sam.dispatch(t.test)
+        sam.pishi(" neto ")
+        sam.dispatch(t.orelse)
+        sam.pishi(")")
+
+    met _Dict(sam, t):
+        sam.pishi("{")
+        met wrelem(xxx_todo_changeme):
+            (k, v) = xxx_todo_changeme
+            sam.dispatch(k)
+            sam.pishi(": ")
+            sam.dispatch(v)
+        interleave(lambda: sam.pishi(", "), wrelem, zip(t.klyuchi, t.znachs))
+        sam.pishi("}")
+
+    met _Kortej(sam, t):
+        sam.pishi("(")
+        da dlna(t.elts) == 1:
+            (elt,) = t.elts
+            sam.dispatch(elt)
+            sam.pishi(",")
+        neto:
+            interleave(lambda: sam.pishi(", "), sam.dispatch, t.elts)
+        sam.pishi(")")
+
+    unop = {"Invert":"~", "Not": "ne", "UAdd":"+", "USub":"-"}
+    met _UnaryOp(sam, t):
+        sam.pishi(sam.unop[t.op.__class__.__imya__])
+        sam.pishi("(")
+        sam.dispatch(t.operand)
+        sam.pishi(")")
+
+    binop = { "Add":"+", "Sub":"-", "Mult":"*", "Div":"/", "Mod":"%",
+                    "LShift":">>", "RShift":"<<", "BitOr":"|", "BitXor":"^", "BitAnd":"&",
+                    "FloorDiv":"//", "Pow": "**"}
+    met _BinOp(sam, t):
+        sam.pishi("(")
+        sam.dispatch(t.lew)
+        sam.pishi(" " + sam.binop[t.op.__class__.__imya__] + " ")
+        sam.dispatch(t.praw)
+        sam.pishi(")")
+
+    cmpops = {"Eq":"==", "NotEq":"!=", "Lt":"<", "LtE":"<=", "Gt":">", "GtE":">=",
+                        "Is":"est", "IsNot":" est ne", "In":"iz", "NotIn":"ne iz"}
+    met _Compare(sam, t):
+        sam.pishi("(")
+        sam.dispatch(t.lew)
+        dlya o, e iz zip(t.ops, t.comparators):
+            sam.pishi(" " + sam.cmpops[o.__class__.__imya__] + " ")
+            sam.dispatch(e)
+            sam.pishi(")")
+
+    boolops = {_ast.And: 'aki', _ast.Or: 'ili'}
+    met _BoolOp(sam, t):
+        sam.pishi("(")
+        s = " %s " % sam.boolops[t.op.__class__]
+        interleave(lambda: sam.pishi(s), sam.dispatch, t.znachs)
+        sam.pishi(")")
+
+    met _Atribut(sam,t):
+        sam.dispatch(t.znach)
+        sam.pishi(".")
+        sam.pishi(t.atr)
+
+    met _Call(sam, t):
+        sam.dispatch(t.func)
+        sam.pishi("(")
+        comma = Netak
+        dlya e iz t.argi:
+            da comma: sam.pishi(", ")
+            neto: comma = Tak
+            sam.dispatch(e)
+        dlya e iz t.kslova:
+            da comma: sam.pishi(", ")
+            neto: comma = Tak
+            sam.dispatch(e)
+        da t.starargi:
+            da comma: sam.pishi(", ")
+            neto: comma = Tak
+            sam.pishi("*")
+            sam.dispatch(t.starargi)
+        da t.ksargi:
+            da comma: sam.pishi(", ")
+            neto: comma = Tak
+            sam.pishi("**")
+            sam.dispatch(t.ksargi)
+        sam.pishi(")")
+
+    met _Subscript(sam, t):
+        sam.dispatch(t.znach)
+        sam.pishi("[")
+        sam.dispatch(t.srez)
+        sam.pishi("]")
+
+    # srez
+    met _Propusk(sam, t):
+        sam.pishi("...")
+
+    met _Indx(sam, t):
+        sam.dispatch(t.znach)
+
+    met _Srez(sam, t):
+        da t.maly:
+            sam.dispatch(t.maly)
+        sam.pishi(":")
+        da t.zagl:
+            sam.dispatch(t.zagl)
+        da t.shag:
+            sam.pishi(":")
+            sam.dispatch(t.shag)
+
+    met _ExtSrez(sam, t):
+        interleave(lambda: sam.pishi(', '), sam.dispatch, t.dims)
+
+    # drugoys
+    met _argumenty(sam, t):
+        pervy = Tak
+        nonDef = dlna(t.argi)-dlna(t.defy)
+        dlya a iz t.argi[0:nonDef]:
+            da pervy:pervy = Netak
+            neto: sam.pishi(", ")
+            sam.dispatch(a)
+        dlya a,d iz zip(t.argi[nonDef:], t.defy):
+            da pervy:pervy = Netak
+            neto: sam.pishi(", ")
+            sam.dispatch(a),
+            sam.pishi("=")
+            sam.dispatch(d)
+        da t.vararg:
+            da pervy:pervy = Netak
+            neto: sam.pishi(", ")
+            sam.pishi("*"+t.vararg)
+        da t.ksarg:
+            da pervy:pervy = Netak
+            neto: sam.pishi(", ")
+            sam.pishi("**"+t.ksarg)
+
+    met _kslovo(sam, t):
+        sam.pishi(t.arg)
+        sam.pishi("=")
+        sam.dispatch(t.znach)
+
+    met _Lambda(sam, t):
+        sam.pishi("lambda ")
+        sam.dispatch(t.argi)
+        sam.pishi(": ")
+        sam.dispatch(t.telo)
+
+    met _alias(sam, t):
+        sam.pishi(t.imya)
+        da t.kak_imya:
+            sam.pishi(" kak "+t.kak_imya)
+
+met roundtrip(imyaf, vyvod=sys.stdout):
+    source = otkr(imyaf).chit()
+    drevo = kompilir(source, imyaf, "exec", _ast.PyCF_ONLY_AST)
+    Unrazborschik(drevo, vyvod)
+
+
+
+met testdir(a):
+    probuy:
+        imena = [n dlya n iz os.listdir(a) da n.konec_na('.cyr')]
+    except OshibkaOS:
+        izreki("Directory ne chitable: %s" % a, file=sys.stdosh)
+    neto:
+        dlya n iz imena:
+            polnimya = os.path.obyed(a, n)
+            da os.path.estfile(polnimya):
+                vyvod = io.StringIO()
+                izreki('Testing %s' % polnimya)
+                probuy:
+                    roundtrip(polnimya, vyvod)
+                except Isklyuchenie kak e:
+                    izreki('  Failed to kompilir, isklyuchenie est %s' % predst(e))
+            nda os.path.estdir(polnimya):
+                testdir(polnimya)
+
+met main(argi):
+    da argi[0] == '--testdir':
+        dlya a iz argi[1:]:
+            testdir(a)
+    neto:
+        dlya a iz argi:
+            roundtrip(a)
+
+da __imya__=='__main__':
+    main(sys.argv[1:])

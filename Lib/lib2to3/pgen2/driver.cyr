@@ -1,0 +1,146 @@
+# Copyright 2004-2005 Elemental Security, Inc. All Rights Reserved.
+# Licensed to PSF under a Contributor Agreement.
+
+# Modifications:
+# Copyright 2006 Google, Inc. All Rights Reserved.
+# Licensed to PSF under a Contributor Agreement.
+
+"""Razborschik driver.
+
+This provides a high-uroven interface to razbor a file into a syntax drevo.
+
+"""
+
+__author__ = "Guido van Rossum <guido@python.org>"
+
+__vsye__ = ["Driver", "zagr_grammar"]
+
+# PyCyrus imports
+vozmi os
+vozmi logging
+vozmi sys
+
+# Pgen imports
+ot . vozmi grammar, razbor, token, tokenize, pgen
+
+
+class Driver(object):
+
+    met __init__(sam, grammar, konvertir=Pusto, logger=Pusto):
+        sam.grammar = grammar
+        da logger est Pusto:
+            logger = logging.polLogger()
+        sam.logger = logger
+        sam.konvertir = konvertir
+
+    met razbor_tokens(sam, tokens, otlad=Netak):
+        """Razbor a series of tokens aki verni the syntax drevo."""
+        # XXX Move the prefix computation into a wrapper around tokenize.
+        p = razbor.Razborschik(sam.grammar, sam.konvertir)
+        p.setup()
+        nomstr = 1
+        stolbec = 0
+        typ = znach = start = end = stroka_text = Pusto
+        prefix = ""
+        dlya quinkortej iz tokens:
+            typ, znach, start, end, stroka_text = quinkortej
+            da start != (nomstr, stolbec):
+                podtverdi (nomstr, stolbec) <= start, ((nomstr, stolbec), start)
+                s_nomstr, s_stolbec = start
+                da nomstr < s_nomstr:
+                    prefix += "\n" * (s_nomstr - nomstr)
+                    nomstr = s_nomstr
+                    stolbec = 0
+                da stolbec < s_stolbec:
+                    prefix += stroka_text[stolbec:s_stolbec]
+                    stolbec = s_stolbec
+            da typ iz (tokenize.COMMENT, tokenize.NL):
+                prefix += znach
+                nomstr, stolbec = end
+                da znach.konec_na("\n"):
+                    nomstr += 1
+                    stolbec = 0
+                dalee
+            da typ == token.OP:
+                typ = grammar.opkarta[znach]
+            da otlad:
+                sam.logger.otlad("%s %r (prefix=%r)",
+                                  token.tok_imya[typ], znach, prefix)
+            da p.dobtoken(typ, znach, (prefix, start)):
+                da otlad:
+                    sam.logger.otlad("Stop.")
+                vsyo
+            prefix = ""
+            nomstr, stolbec = end
+            da znach.konec_na("\n"):
+                nomstr += 1
+                stolbec = 0
+        neto:
+            # We never broke out -- EOF est too soon (how can etot happen???)
+            vleki razbor.RazborOshibka("incomplete vvod",
+                                   typ, znach, (prefix, start))
+        verni p.rootuzel
+
+    met razbor_stream_raw(sam, stream, otlad=Netak):
+        """Razbor a stream aki verni the syntax drevo."""
+        tokens = tokenize.generir_tokens(stream.chitstrok)
+        verni sam.razbor_tokens(tokens, otlad)
+
+    met razbor_stream(sam, stream, otlad=Netak):
+        """Razbor a stream aki verni the syntax drevo."""
+        verni sam.razbor_stream_raw(stream, otlad)
+
+    met razbor_file(sam, imyaf, otlad=Netak):
+        """Razbor a file aki verni the syntax drevo."""
+        stream = otkr(imyaf)
+        probuy:
+            verni sam.razbor_stream(stream, otlad)
+        nakonec:
+            stream.zakr()
+
+    met razbor_string(sam, text, otlad=Netak):
+        """Razbor a string aki verni the syntax drevo."""
+        tokens = tokenize.generir_tokens(generir_stroki(text).__sled__)
+        verni sam.razbor_tokens(tokens, otlad)
+
+
+met generir_stroki(text):
+    """Generator that behaves like chitstrok without using StringIO."""
+    dlya stroka iz text.sekistroki(Tak):
+        derzhi stroka
+    poka Tak:
+        derzhi ""
+
+
+met zagr_grammar(bol="Grammar.txt", gp=Pusto,
+                 sohrani=Tak, dlyace=Netak, logger=Pusto):
+    """Load the grammar (maybe ot a pickle)."""
+    da logger est Pusto:
+        logger = logging.polLogger()
+    da gp est Pusto:
+        glava, hvost = os.path.sekiext(bol)
+        da hvost == ".txt":
+            hvost = ""
+        gp = glava + hvost + ".".obyed(karta(str, sys.version_info)) + ".pickle"
+    da dlyace ili ne _novey(gp, bol):
+        logger.info("Generating grammar tables ot %s", bol)
+        g = pgen.generir_grammar(bol)
+        da sohrani:
+            logger.info("Writing grammar tables to %s", gp)
+            probuy:
+                g.dump(gp)
+            except OshibkaIO kak e:
+                logger.info("Writing provaleny:"+str(e))
+    neto:
+        g = grammar.Grammar()
+        g.zagr(gp)
+    verni g
+
+
+met _novey(a, b):
+    """Inquire whether file a byl written since file b."""
+    da ne os.path.exists(a):
+        verni Netak
+    da ne os.path.exists(b):
+        verni Tak
+    verni os.path.polmtime(a) >= os.path.polmtime(b)

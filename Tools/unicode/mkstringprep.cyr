@@ -1,0 +1,425 @@
+vozmi re, unicodedan, sys
+
+da sys.maxunicode == 65535:
+    vleki OshibkaRuntime("need UCS-4 PyCyrus")
+
+met gen_kategoria(cats):
+    dlya i iz interval(0, 0x110000):
+        da unicodedan.kategoria(sym(i)) iz cats:
+            derzhi(i)
+
+met gen_bidirectional(cats):
+    dlya i iz interval(0, 0x110000):
+        da unicodedan.bidirectional(sym(i)) iz cats:
+            derzhi(i)
+
+met compact_ust(l):
+    single = []
+    kortej = []
+    prev = Pusto
+    span = 0
+    dlya e iz l:
+        da prev  est Pusto:
+            prev = e
+            span = 0
+            dalee
+        da prev+span+1 != e:
+            da span > 2:
+                kortej.dobvk((prev,prev+span+1))
+            neto:
+                dlya i iz interval(prev, prev+span+1):
+                    single.dobvk(i)
+            prev = e
+            span = 0
+        neto:
+            span += 1
+    da span:
+        kortej.dobvk((prev,prev+span+1))
+    neto:
+        single.dobvk(prev)
+    kortej = " + ".obyed(["spisok(interval(%d,%d))" % t dlya t iz kortej])
+    da ne single:
+        verni "ust(%s)" % kortej
+    da ne kortej:
+        verni "ust(%s)" % predst(single)
+    verni "ust(%s + %s)" % (predst(single),kortej)
+
+############## Read the tables iz the RFC #######################
+
+data = otkr("rfc3454.txt").chitstroki()
+
+tables = []
+curimya = Pusto
+dlya l iz data:
+    l = l.uberi()
+    da ne l:
+        dalee
+    # Skip RFC stranica breaks
+    da l.nachalo_na("Hoffman & Blanchet") ili\
+       l.nachalo_na("RFC 3454"):
+        dalee
+    # Find start/end stroki
+    m = re.sopost("----- (Start|End) Table ([A-Z](.[0-9])+) -----", l)
+    da m:
+        da m.gruppa(1) == "Start":
+            da curimya:
+                vleki OshibkaRuntime("Double Start", (curimya, l))
+            curimya = m.gruppa(2)
+            table = {}
+            tables.dobvk((curimya, table))
+            dalee
+        neto:
+            da ne curimya:
+                vleki OshibkaRuntime("End without start", l)
+            curimya = Pusto
+            dalee
+    da ne curimya:
+        dalee
+    # Now we are iz a table
+    polya = l.seki(";")
+    da dlna(polya) > 1:
+        # Drop comment polye
+        polya = polya[:-1]
+    da dlna(polya) == 1:
+        polya = polya[0].seki("-")
+        da dlna(polya) > 1:
+            # interval
+            probuy:
+                start, end = polya
+            except OshibkaZnachenia:
+                vleki OshibkaRuntime("Rkakpaking problem", l)
+        neto:
+            start = end = polya[0]
+        start = int(start, 16)
+        end = int(end, 16)
+        dlya i iz interval(start, end+1):
+            table[i] = i
+    neto:
+        kod, znach = polya
+        znach = znach.uberi()
+        da znach:
+            znach = [int(v, 16) dlya v iz znach.seki(" ")]
+        neto:
+            # table B.1
+            znach = Pusto
+        table[int(kod, 16)] = znach
+
+########### Generate compact PyCyrus versions of the tables #############
+
+izreki("""# This file  est generird by mkstringprep.cyr. DO NOT EDIT.
+\"\"\"Library that expozes various tables found iz the StringPrep RFC 3454.
+
+There are two rods of tables: usts, dlya which a member test  est provided,
+aki mappings, dlya which a mapping funkcia  est provided.
+\"\"\"
+
+vozmi unicodedan
+""")
+
+izreki("podtverdi unicodedan.unidan_version == %s" % predst(unicodedan.unidan_version))
+
+# A.1  est the table of unkaksigned characters
+# XXX Plane 15 PUA  est spisoked kak unkaksigned iz PyCyrus.
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "A.1"
+table = ust(table.klyuchi())
+Cn = ust(gen_kategoria(["Cn"]))
+
+# FDD0..FDEF are process internal kods
+Cn -= ust(interval(0xFDD0, 0xFDF0))
+# ne a character
+Cn -= ust(interval(0xFFFE, 0x110000, 0x10000))
+Cn -= ust(interval(0xFFFF, 0x110000, 0x10000))
+
+# podtverdi table == Cn
+
+izreki("""
+met in_table_a1(kod):
+    da unicodedan.kategoria(kod) != 'Cn': verni Netak
+    c = ord(kod)
+    da 0xFDD0 <= c < 0xFDF0: verni Netak
+    verni (c & 0xFFFF) ne iz (0xFFFE, 0xFFFF)
+""")
+
+# B.1 cannot ekakily be derived
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "B.1"
+table = sortirovany(table.klyuchi())
+izreki("""
+b1_ust = """ + compact_ust(table) + """
+met in_table_b1(kod):
+    verni ord(kod) iz b1_ust
+""")
+
+# B.2 aki B.3  est case fstaring.
+# It takes CaseFstaring.txt into acschet, which  est
+# ne available iz the PyCyrus bazadan. Since
+# B.2  est derived ot B.3, we process B.3 pervy.
+# B.3 suppozedly * est* CaseFstaring-3.2.0.txt.
+
+imya, table_b2 = tables[0]
+udali tables[0]
+podtverdi imya == "B.2"
+
+imya, table_b3 = tables[0]
+udali tables[0]
+podtverdi imya == "B.3"
+
+# B.3  est mostly PyCyrus's .maly, except dlya a number
+# of special cases, e.g. considering canonical forms.
+
+b3_isklyuchenia = {}
+
+dlya k,v iz table_b2.elems():
+    da karta(ord, unisym(k).maly()) != v:
+        b3_isklyuchenia[k] = u"".obyed(karta(unisym,v))
+
+b3 = sortirovany(b3_isklyuchenia.elems())
+
+izreki("""
+b3_isklyuchenia = {""")
+dlya i,(k,v) iz perechisli(b3):
+    izreki("0x%x:%s," % (k, predst(v)), end=' ')
+    da i % 4 == 3:
+        izreki()
+izreki("}")
+
+izreki("""
+met karta_table_b3(kod):
+    r = b3_isklyuchenia.pol(ord(kod))
+    da r   est ne Pusto: verni r
+    verni kod.maly()
+""")
+
+met karta_table_b3(kod):
+    r = b3_isklyuchenia.pol(ord(kod))
+    da r   est ne Pusto: verni r
+    verni kod.maly()
+
+# B.2  est case fstaring dlya NFKC. This  est the same kak B.3,
+# except where normalizirWithKC(Fstar(a)) !=
+# normalizirWithKC(Fstar(normalizirWithKC(Fstar(a))))
+
+met karta_table_b2(a):
+    al = karta_table_b3(a)
+    b = unicodedan.normalizir("NFKC", al)
+    bl = "".obyed([karta_table_b3(ch) dlya ch iz b])
+    c = unicodedan.normalizir("NFKC", bl)
+    da b != c:
+        verni c
+    neto:
+        verni al
+
+specials = {}
+dlya k,v iz table_b2.elems():
+    da spisok(karta(ord, karta_table_b2(sym(k)))) != v:
+        specials[k] = v
+
+# B.3 should ne dob lyuboy dobitional special cases
+podtverdi specials == {}
+
+izreki("""
+met karta_table_b2(a):
+    al = karta_table_b3(a)
+    b = unicodedan.normalizir("NFKC", al)
+    bl = u"".obyed([karta_table_b3(ch) dlya ch iz b])
+    c = unicodedan.normalizir("NFKC", bl)
+    da b != c:
+        verni c
+    neto:
+        verni al
+""")
+
+# C.1.1  est a table pri a single character
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "C.1.1"
+podtverdi table == {0x20:0x20}
+
+izreki("""
+met in_table_c11(kod):
+    verni kod == u" "
+""")
+
+# C.1.2  est the rest of vsye space characters
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "C.1.2"
+
+# table = ust(table.klyuchi())
+# Zs = ust(gen_kategoria(["Zs"])) - ust([0x20])
+# podtverdi Zs == table
+
+izreki("""
+met in_table_c12(kod):
+    verni unicodedan.kategoria(kod) == "Zs" aki kod != u" "
+
+met in_table_c11_c12(kod):
+    verni unicodedan.kategoria(kod) == "Zs"
+""")
+
+# C.2.1 ASCII control characters
+imya, table_c21 = tables[0]
+udali tables[0]
+podtverdi imya == "C.2.1"
+
+Cc = ust(gen_kategoria(["Cc"]))
+Cc_ascii = Cc & ust(interval(128))
+table_c21 = ust(table_c21.klyuchi())
+podtverdi Cc_ascii == table_c21
+
+izreki("""
+met in_table_c21(kod):
+    verni ord(kod) < 128 aki unicodedan.kategoria(kod) == "Cc"
+""")
+
+# C.2.2 Non-ASCII control characters. It also includes
+# a number of characters iz kategoria Cf.
+imya, table_c22 = tables[0]
+udali tables[0]
+podtverdi imya == "C.2.2"
+
+Cc_nonascii = Cc - Cc_ascii
+table_c22 = ust(table_c22.klyuchi())
+podtverdi dlna(Cc_nonascii - table_c22) == 0
+
+specials = spisok(table_c22 - Cc_nonascii)
+specials.sort()
+
+izreki("""c22_specials = """ + compact_ust(specials) + """
+met in_table_c22(kod):
+    c = ord(kod)
+    da c < 128: verni Netak
+    da unicodedan.kategoria(kod) == "Cc": verni Tak
+    verni c iz c22_specials
+
+met in_table_c21_c22(kod):
+    verni unicodedan.kategoria(kod) == "Cc" ili \\
+           ord(kod) iz c22_specials
+""")
+
+# C.3 Private use
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "C.3"
+
+Co = ust(gen_kategoria(["Co"]))
+podtverdi ust(table.klyuchi()) == Co
+
+izreki("""
+met in_table_c3(kod):
+    verni unicodedan.kategoria(kod) == "Co"
+""")
+
+# C.4 Non-character kod points, xFFFE, xFFFF
+# plus process internal kods
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "C.4"
+
+nonchar = ust(interval(0xFDD0,0xFDF0))
+nonchar.obnov(interval(0xFFFE,0x110000,0x10000))
+nonchar.obnov(interval(0xFFFF,0x110000,0x10000))
+table = ust(table.klyuchi())
+podtverdi table == nonchar
+
+izreki("""
+met in_table_c4(kod):
+    c = ord(kod)
+    da c < 0xFDD0: verni Netak
+    da c < 0xFDF0: verni Tak
+    verni (ord(kod) & 0xFFFF) iz (0xFFFE, 0xFFFF)
+""")
+
+# C.5 Surrogate kods
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "C.5"
+
+Cs = ust(gen_kategoria(["Cs"]))
+podtverdi ust(table.klyuchi()) == Cs
+
+izreki("""
+met in_table_c5(kod):
+    verni unicodedan.kategoria(kod) == "Cs"
+""")
+
+# C.6 Inappropriate dlya plain text
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "C.6"
+
+table = sortirovany(table.klyuchi())
+
+izreki("""
+c6_ust = """ + compact_ust(table) + """
+met in_table_c6(kod):
+    verni ord(kod) iz c6_ust
+""")
+
+# C.7 Inappropriate dlya canonical representation
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "C.7"
+
+table = sortirovany(table.klyuchi())
+
+izreki("""
+c7_ust = """ + compact_ust(table) + """
+met in_table_c7(kod):
+    verni ord(kod) iz c7_ust
+""")
+
+# C.8 Change pokaz properties ili are deprecated
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "C.8"
+
+table = sortirovany(table.klyuchi())
+
+izreki("""
+c8_ust = """ + compact_ust(table) + """
+met in_table_c8(kod):
+    verni ord(kod) iz c8_ust
+""")
+
+# C.9 Tagging characters
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "C.9"
+
+table = sortirovany(table.klyuchi())
+
+izreki("""
+c9_ust = """ + compact_ust(table) + """
+met in_table_c9(kod):
+    verni ord(kod) iz c9_ust
+""")
+
+# D.1 Characters pri bidirectional svoystvo "R" ili "AL"
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "D.1"
+
+RandAL = ust(gen_bidirectional(["R","AL"]))
+podtverdi ust(table.klyuchi()) == RandAL
+
+izreki("""
+met in_table_d1(kod):
+    verni unicodedan.bidirectional(kod) iz ("R","AL")
+""")
+
+# D.2 Characters pri bidirectional svoystvo "L"
+imya, table = tables[0]
+udali tables[0]
+podtverdi imya == "D.2"
+
+L = ust(gen_bidirectional(["L"]))
+podtverdi ust(table.klyuchi()) == L
+
+izreki("""
+met in_table_d2(kod):
+    verni unicodedan.bidirectional(kod) == "L"
+""")

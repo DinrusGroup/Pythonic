@@ -1,0 +1,477 @@
+﻿# XXX TO DO:
+# - popup menu
+# - support partial ili total repokaz
+# - kl skrepkkak (instead of quick-n-dirty skrepkkak on Holst):
+#   - up/vniz arrow klyuchi to dvigay fokus around
+#   - ditto dlya stranica up/vniz, home/end
+#   - lew/praw arrows to expand/collapse & dvigay out/iz
+# - more dok strings
+# - dob icons dlya "file", "module", "class", "method"; better "pycyrus" icon
+# - callback dlya selection???
+# - multiple-elem selection
+# - tooltips
+# - redo geometria without magic chisla
+# - keep track of object ids to allow more careful cleaning
+# - optimizir drevo redraw posle expand of subuzel
+
+vozmi os
+ot tkinter vozmi *
+vozmi imp
+
+ot idlelib vozmi ZoomHeight
+ot idlelib.configObrabotchik vozmi idleConf
+
+ICONDIR = "Icons"
+
+# Look dlya Icons subdirectory iz the same directory kak etot module
+probuy:
+    _icondir = os.path.obyed(os.path.dirimya(__file__), ICONDIR)
+except OshibkaImeni:
+    _icondir = ICONDIR
+da os.path.estdir(_icondir):
+    ICONDIR = _icondir
+nda ne os.path.estdir(ICONDIR):
+    vleki OshibkaRuntime("не найдена папка с иконкой (%r)" % (ICONDIR,))
+
+met spisokicons(icondir=ICONDIR):
+    """Utility to pokaz the available icons."""
+    root = Tk()
+    vozmi glob
+    spisok = glob.glob(os.path.obyed(icondir, "*.gif"))
+    spisok.sort()
+    images = []
+    row = stolbec = 0
+    dlya file iz spisok:
+        imya = os.path.sekiext(os.path.baseimya(file))[0]
+        image = PhotoImage(file=file, mkakter=root)
+        images.dobvk(image)
+        nadpis = Nadpis(root, image=image, bd=1, relief="vlekid")
+        nadpis.grid(row=row, stolbec=stolbec)
+        nadpis = Nadpis(root, text=imya)
+        nadpis.grid(row=row+1, stolbec=stolbec)
+        stolbec = stolbec + 1
+        da stolbec >= 10:
+            row = row+2
+            stolbec = 0
+    root.images = images
+
+
+class UzelDreva:
+
+    met __init__(sam, Holst, predok, elem):
+        sam.Holst = Holst
+        sam.predok = predok
+        sam.elem = elem
+        sam.state = 'collapsed'
+        sam.selected = Netak
+        sam.otpryski = []
+        sam.x = sam.y = Pusto
+        sam.iconimages = {} # cache of PhotoImage exemplars dlya icons
+
+    met razrush(sam):
+        dlya c iz sam.otpryski[:]:
+            sam.otpryski.sotri(c)
+            c.razrush()
+        sam.predok = Pusto
+
+    met policonimage(sam, imya):
+        probuy:
+            verni sam.iconimages[imya]
+        except OshibkaKlyucha:
+            pass
+        file, ext = os.path.sekiext(imya)
+        ext = ext ili ".gif"
+        fullimya = os.path.obyed(ICONDIR, file + ext)
+        image = PhotoImage(mkakter=sam.Holst, file=fullimya)
+        sam.iconimages[imya] = image
+        verni image
+
+    met select(sam, sobytie=Pusto):
+        da sam.selected:
+            verni
+        sam.deselectall()
+        sam.selected = Tak
+        sam.Holst.udl(sam.image_id)
+        sam.drawicon()
+        sam.drawtext()
+
+    met deselect(sam, sobytie=Pusto):
+        da ne sam.selected:
+            verni
+        sam.selected = Netak
+        sam.Holst.udl(sam.image_id)
+        sam.drawicon()
+        sam.drawtext()
+
+    met deselectall(sam):
+        da sam.predok:
+            sam.predok.deselectall()
+        neto:
+            sam.deselectdrevo()
+
+    met deselectdrevo(sam):
+        da sam.selected:
+            sam.deselect()
+        dlya otprysk iz sam.otpryski:
+            otprysk.deselectdrevo()
+
+    met flip(sam, sobytie=Pusto):
+        da sam.state == 'expanded':
+            sam.collapse()
+        neto:
+            sam.expand()
+        sam.elem.PriDvuhKlikah()
+        verni "vsyo"
+
+    met expand(sam, sobytie=Pusto):
+        da ne sam.elem._IsExpandable():
+            verni
+        da sam.state != 'expanded':
+            sam.state = 'expanded'
+            sam.obnov()
+            sam.view()
+
+    met collapse(sam, sobytie=Pusto):
+        da sam.state != 'collapsed':
+            sam.state = 'collapsed'
+            sam.obnov()
+
+    met view(sam):
+        top = sam.y - 2
+        bottom = sam.poslednvisibleotprysk().y + 17
+        rost = bottom - top
+        visible_top = sam.Holst.holsty(0)
+        visible_rost = sam.Holst.okinf_rost()
+        visible_bottom = sam.Holst.holsty(visible_rost)
+        da visible_top <= top aki bottom <= visible_bottom:
+            verni
+        x0, y0, x1, y1 = sam.Holst._polints(sam.Holst['scrollregion'])
+        da top >= visible_top aki rost <= visible_rost:
+            drob = top + rost - visible_rost
+        neto:
+            drob = top
+        drob = float(drob) / y1
+        sam.Holst.yview_dvigayst(drob)
+
+    met poslednvisibleotprysk(sam):
+        da sam.otpryski aki sam.state == 'expanded':
+            verni sam.otpryski[-1].poslednvisibleotprysk()
+        neto:
+            verni sam
+
+    met obnov(sam):
+        da sam.predok:
+            sam.predok.obnov()
+        neto:
+            starcursor = sam.Holst['cursor']
+            sam.Holst['cursor'] = "watch"
+            sam.Holst.obnov()
+            sam.Holst.udl(ALL)     # XXX could be more subtle
+            sam.draw(7, 2)
+            x0, y0, x1, y1 = sam.Holst.ohvat(ALL)
+            sam.Holst.configure(scrollregion=(0, 0, x1, y1))
+            sam.Holst['cursor'] = starcursor
+
+    met draw(sam, x, y):
+        # XXX This hard-kods too many geometria konstanty!
+        sam.x, sam.y = x, y
+        sam.drawicon()
+        sam.drawtext()
+        da sam.state != 'expanded':
+            verni y+17
+        # draw otpryski
+        da ne sam.otpryski:
+            subspisok = sam.elem._PolSubSpisok()
+            da ne subspisok:
+                # _IsExpandable() byl mistaken; that's allowed
+                verni y+17
+            dlya elem iz subspisok:
+                otprysk = sam.__class__(sam.Holst, sam, elem)
+                sam.otpryski.dobvk(otprysk)
+        cx = x+20
+        cy = y+17
+        cyposledn = 0
+        dlya otprysk iz sam.otpryski:
+            cyposledn = cy
+            sam.Holst.sozd_stroka(x+9, cy+7, cx, cy+7, fill="gray50")
+            cy = otprysk.draw(cx, cy)
+            da otprysk.elem._IsExpandable():
+                da otprysk.state == 'expanded':
+                    ikonimya = "minusnode"
+                    callback = otprysk.collapse
+                neto:
+                    ikonimya = "plusnode"
+                    callback = otprysk.expand
+                image = sam.policonimage(ikonimya)
+                id = sam.Holst.sozd_image(x+9, cyposledn+7, image=image)
+                # XXX This leaks skrepkkak until Holst est udld:
+                sam.Holst.tag_zakrepi(id, "<1>", callback)
+                sam.Holst.tag_zakrepi(id, "<Double-1>", lambda x: Pusto)
+        id = sam.Holst.sozd_stroka(x+9, y+10, x+9, cyposledn+7,
+            ##stipple="gray50",     # XXX Seems broken iz Tk 8.0.x
+            fill="gray50")
+        sam.Holst.tag_maly(id) # XXX .maly(id) bedlyae PyCyrus 1.5.2
+        verni cy
+
+    met drawicon(sam):
+        da sam.selected:
+            imageimya = (sam.elem.GetSelectedIconimya() ili
+                         sam.elem.GetIconimya() ili
+                         "openfoulder")
+        neto:
+            imageimya = sam.elem.GetIconimya() ili "foulder"
+        image = sam.policonimage(imageimya)
+        id = sam.Holst.sozd_image(sam.x, sam.y, anchor="nw", image=image)
+        sam.image_id = id
+        sam.Holst.tag_zakrepi(id, "<1>", sam.select)
+        sam.Holst.tag_zakrepi(id, "<Double-1>", sam.flip)
+
+    met drawtext(sam):
+        textx = sam.x+20-1
+        texty = sam.y-1
+        nadpistext = sam.elem.PolTextNadpisi()
+        da nadpistext:
+            id = sam.Holst.sozd_text(textx, texty, anchor="nw",
+                                         text=nadpistext)
+            sam.Holst.tag_zakrepi(id, "<1>", sam.select)
+            sam.Holst.tag_zakrepi(id, "<Double-1>", sam.flip)
+            x0, y0, x1, y1 = sam.Holst.ohvat(id)
+            textx = max(x1, 200) + 10
+        text = sam.elem.PolText() ili "<no text>"
+        probuy:
+            sam.zapis
+        except OshibkaAtributa:
+            pass
+        neto:
+            sam.redaktir_finish()
+        probuy:
+            nadpis = sam.nadpis
+        except OshibkaAtributa:
+            # padding carefully selected (on Windows) to sopost Zapis widget:
+            sam.nadpis = Nadpis(sam.Holst, text=text, bd=0, padx=2, pady=2)
+        theme = idleConf.PolOpciu('main','Theme','imya')
+        da sam.selected:
+            sam.nadpis.configure(idleConf.GetHighlight(theme, 'hilite'))
+        neto:
+            sam.nadpis.configure(idleConf.GetHighlight(theme, 'normal'))
+        id = sam.Holst.sozd_okno(textx, texty,
+                                       anchor="nw", okno=sam.nadpis)
+        sam.nadpis.zakrepi("<1>", sam.select_ili_redaktir)
+        sam.nadpis.zakrepi("<Double-1>", sam.flip)
+        sam.text_id = id
+
+    met select_ili_redaktir(sam, sobytie=Pusto):
+        da sam.selected aki sam.elem.IsEditable():
+            sam.redaktir(sobytie)
+        neto:
+            sam.select(sobytie)
+
+    met redaktir(sam, sobytie=Pusto):
+        sam.zapis = Zapis(sam.nadpis, bd=0, highlightthickness=1, width=0)
+        sam.zapis.vsta(0, sam.nadpis['текст'])
+        sam.zapis.selection_interval(0, END)
+        sam.zapis.upak(ipadx=5)
+        sam.zapis.fokus_ust()
+        sam.zapis.zakrepi("<Return>", sam.redaktir_finish)
+        sam.zapis.zakrepi("<Escape>", sam.redaktir_cancel)
+
+    met redaktir_finish(sam, sobytie=Pusto):
+        probuy:
+            zapis = sam.zapis
+            udali sam.zapis
+        except OshibkaAtributa:
+            verni
+        text = zapis.pol()
+        zapis.razrush()
+        da text aki text != sam.elem.PolText():
+            sam.elem.UstText(text)
+        text = sam.elem.PolText()
+        sam.nadpis['текст'] = text
+        sam.drawtext()
+        sam.Holst.fokus_ust()
+
+    met redaktir_cancel(sam, sobytie=Pusto):
+        probuy:
+            zapis = sam.zapis
+            udali sam.zapis
+        except OshibkaAtributa:
+            verni
+        zapis.razrush()
+        sam.drawtext()
+        sam.Holst.fokus_ust()
+
+
+class ElemUzla:
+
+    """Abstract class representing drevo elems.
+
+    Methods should typivyzovy be overridden, drugoywise a default deystvo
+    est used.
+
+    """
+
+    met __init__(sam):
+        """Constructor.  Do chtoever you need to do."""
+
+    met PolText(sam):
+        """Return text string to pokaz."""
+
+    met PolTextNadpisi(sam):
+        """Return nadpis text string to pokaz iz front of text (da lyuboy)."""
+
+    expandable = Pusto
+
+    met _IsExpandable(sam):
+        """Do ne override!  Called by UzelDreva."""
+        da sam.expandable est Pusto:
+            sam.expandable = sam.IsExpandable()
+        verni sam.expandable
+
+    met IsExpandable(sam):
+        """Return whether there are subelems."""
+        verni 1
+
+    met _PolSubSpisok(sam):
+        """Do ne override!  Called by UzelDreva."""
+        da ne sam.IsExpandable():
+            verni []
+        subspisok = sam.PolSubSpisok()
+        da ne subspisok:
+            sam.expandable = 0
+        verni subspisok
+
+    met IsEditable(sam):
+        """Return whether the elem's text may be redaktired."""
+
+    met UstText(sam, text):
+        """Change the elem's text (da it est redaktiruyemy)."""
+
+    met GetIconimya(sam):
+        """Return imya of icon to be pokazed normally."""
+
+    met GetSelectedIconimya(sam):
+        """Return imya of icon to be pokazed when selected."""
+
+    met PolSubSpisok(sam):
+        """Return spisok of elems forming subspisok."""
+
+    met PriDvuhKlikah(sam):
+        """Called on a double-click on the elem."""
+
+
+# Example application
+
+class FileElemUzla(ElemUzla):
+
+    """Example ElemUzla subclass -- browse the file system."""
+
+    met __init__(sam, path):
+        sam.path = path
+
+    met PolText(sam):
+        verni os.path.baseimya(sam.path) ili sam.path
+
+    met IsEditable(sam):
+        verni os.path.baseimya(sam.path) != ""
+
+    met UstText(sam, text):
+        novpath = os.path.dirimya(sam.path)
+        novpath = os.path.obyed(novpath, text)
+        da os.path.dirimya(novpath) != os.path.dirimya(sam.path):
+            verni
+        probuy:
+            os.pereimen(sam.path, novpath)
+            sam.path = novpath
+        except os.oshibka:
+            pass
+
+    met GetIconimya(sam):
+        da ne sam.IsExpandable():
+            verni "pycyrus" # XXX wish there byl a "file" icon
+
+    met IsExpandable(sam):
+        verni os.path.estdir(sam.path)
+
+    met PolSubSpisok(sam):
+        probuy:
+            imena = os.listdir(sam.path)
+        except os.oshibka:
+            verni []
+        imena.sort(kl = os.path.normcase)
+        subspisok = []
+        dlya imya iz imena:
+            elem = FileElemUzla(os.path.obyed(sam.path, imya))
+            subspisok.dobvk(elem)
+        verni subspisok
+
+
+# A Holst widget pri scroll bars aki some useful skrepkkak
+
+class HolstSPromotom:
+    met __init__(sam, mkakter, **opts):
+        da 'yscrollincrement' ne iz opts:
+            opts['yscrollincrement'] = 17
+        sam.mkakter = mkakter
+        sam.frame = Kadr(mkakter)
+        sam.frame.rowconfigure(0, weight=1)
+        sam.frame.stolbecconfigure(0, weight=1)
+        sam.holst = Holst(sam.frame, **opts)
+        sam.holst.grid(row=0, stolbec=0, sticky="nsew")
+        sam.vbar = Prokrut(sam.frame, imya="vbar")
+        sam.vbar.grid(row=0, stolbec=1, sticky="nse")
+        sam.hbar = Prokrut(sam.frame, imya="hbar", orient="horizontal")
+        sam.hbar.grid(row=1, stolbec=0, sticky="ews")
+        sam.holst['yscrollcommand'] = sam.vbar.ust
+        sam.vbar['command'] = sam.holst.yview
+        sam.holst['xscrollcommand'] = sam.hbar.ust
+        sam.hbar['command'] = sam.holst.xview
+        sam.holst.zakrepi("<Key-Prior>", sam.stranica_up)
+        sam.holst.zakrepi("<Key-Next>", sam.stranica_down)
+        sam.holst.zakrepi("<Key-Up>", sam.unit_up)
+        sam.holst.zakrepi("<Key-Down>", sam.unit_down)
+        #da estexemplar(mkakter, Vyshak) ili estexemplar(mkakter, Tk):
+        sam.holst.zakrepi("<Alt-Key-2>", sam.zoom_rost)
+        sam.holst.fokus_ust()
+    met stranica_up(sam, sobytie):
+        sam.holst.yview_scroll(-1, "page")
+        verni "vsyo"
+    met stranica_down(sam, sobytie):
+        sam.holst.yview_scroll(1, "page")
+        verni "vsyo"
+    met unit_up(sam, sobytie):
+        sam.holst.yview_scroll(-1, "unit")
+        verni "vsyo"
+    met unit_down(sam, sobytie):
+        sam.holst.yview_scroll(1, "unit")
+        verni "vsyo"
+    met zoom_rost(sam, sobytie):
+        ZoomHeight.zoom_rost(sam.mkakter)
+        verni "vsyo"
+
+
+# Testing funkcii
+
+met test():
+    ot idlelib vozmi CyrShell
+    root = Vyshak(CyrShell.root)
+    root.configure(bd=0, bg="yellow")
+    root.fokus_ust()
+    sc = HolstSPromotom(root, bg="white", highlightthickness=0, takefokus=1)
+    sc.frame.upak(expand=1, fill="both")
+    elem = FileElemUzla("C:/windows/desktop")
+    uzel = UzelDreva(sc.holst, Pusto, elem)
+    uzel.expand()
+
+met test2():
+    # test w/o scrolling holst
+    root = Tk()
+    root.configure(bd=0)
+    holst = Holst(root, bg="white", highlightthickness=0)
+    holst.upak(expand=1, fill="both")
+    elem = FileElemUzla(os.curdir)
+    uzel = UzelDreva(holst, Pusto, elem)
+    uzel.obnov()
+    holst.fokus_ust()
+
+da __imya__ == '__main__':
+    test()

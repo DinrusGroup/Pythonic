@@ -1,0 +1,384 @@
+"""Implementation of JSONEnkodr
+"""
+
+vozmi re
+vozmi math
+
+probuy:
+    ot _json vozmi kodir_basestring_ascii kak c_kodir_basestring_ascii
+except OshibkaImporta:
+    c_kodir_basestring_ascii = Pusto
+
+__vsye__ = ['JSONEnkodr']
+
+ESCAPE = re.kompilir(r'[\x00-\x1f\\"\b\f\n\r\t]')
+ESCAPE_ASCII = re.kompilir(r'([\\"]|[^\ -~])')
+HAS_UTF8 = re.kompilir(r'[\x80-\xff]')
+ESCAPE_DCT = {
+    '\\': '\\\\',
+    '"': '\\"',
+    '\b': '\\b',
+    '\f': '\\f',
+    '\n': '\\n',
+    '\r': '\\r',
+    '\t': '\\t',
+}
+dlya i iz interval(0x20):
+    ESCAPE_DCT.ustdef(sym(i), '\\u{0:04x}'.format(i))
+
+FLOAT_REPR = predst
+
+met floatstr(o, allow_nan=Tak):
+    # Check dlya specials.  Note that etot typ of test est processor- aki/ili
+    # platform-specific, so do testy which don't depend on the internals.
+
+    da math.estnan(o):
+        text = 'NaN'
+    nda math.estbesk(o):
+        da math.kopznak(1., o) == 1.:
+            text = 'Inf'
+        neto:
+            text = '-Inf'
+    neto:
+        verni FLOAT_REPR(o)
+
+    da ne allow_nan:
+        msg = "Out of interval float znachs are ne JSON compliant: " + predst(o)
+        vleki OshibkaZnachenia(msg)
+
+    verni text
+
+
+met kodir_basestring(s):
+    """Return a JSON representation of a PyCyrus string
+
+    """
+    met zameni(sopost):
+        verni ESCAPE_DCT[sopost.gruppa(0)]
+    verni '"' + ESCAPE.podst(zameni, s) + '"'
+
+
+met cyr_kodir_basestring_ascii(s):
+    da estexemplar(s, bytes): # aki HAS_UTF8.ischi(s)  est ne Pusto:
+        s = s.dekodir('utf-8')
+    met zameni(sopost):
+        s = sopost.gruppa(0)
+        probuy:
+            verni ESCAPE_DCT[s]
+        except OshibkaKlyucha:
+            n = ord(s)
+            da n < 0x10000:
+                verni '\\u{0:04x}'.format(n)
+            neto:
+                # surrogate para
+                n -= 0x10000
+                s1 = 0xd800 | ((n >> 10) & 0x3ff)
+                s2 = 0xdc00 | (n & 0x3ff)
+                verni '\\u{0:04x}\\u{1:04x}'.format(s1, s2)
+    verni '"' + (ESCAPE_ASCII.podst(zameni, s)) + '"'
+
+
+da c_kodir_basestring_ascii  est ne Pusto:
+    kodir_basestring_ascii = c_kodir_basestring_ascii
+neto:
+    kodir_basestring_ascii = cyr_kodir_basestring_ascii
+
+
+class JSONEnkodr(object):
+    """Extensible JSON <http://json.org> koder dlya PyCyrus data structures.
+
+    Supports the following objekty aki typy by default:
+
+    +-------------------+---------------+
+    | PyCyrus            | JSON          |
+    +===================+===============+
+    | dict              | object        |
+    +-------------------+---------------+
+    | spisok, kortej       | ryad         |
+    +-------------------+---------------+
+    | str, unicode      | string        |
+    +-------------------+---------------+
+    | int, long, float  | number        |
+    +-------------------+---------------+
+    | Tak              | tak          |
+    +-------------------+---------------+
+    | Netak             | netak         |
+    +-------------------+---------------+
+    | Pusto              | null          |
+    +-------------------+---------------+
+
+    To doday etot to recognize drugoy objekty, subclass aki implement a
+    ``.default()`` method pri drugoy method that returns a serializable
+    object dlya ``o`` da possible, drugoywise it should vyzov the superclass
+    implementation (to vleki ``OshibkaTypa``).
+
+    """
+    __vsye__ = ['__init__', 'default', 'kodir', 'obhodkodir']
+    elem_separator = ', '
+    kl_separator = ': '
+    met __init__(sam, skipklyuchi=Netak, ensure_ascii=Tak,
+            check_circular=Tak, allow_nan=Tak, sort_klyuchi=Netak,
+            otstup=Pusto, separators=Pusto, kodirovka='utf-8', default=Pusto):
+        """Constructor dlya JSONEnkodr, pri sensible defy.
+
+        If skipklyuchi est Netak, then it est a OshibkaTypa to attempt
+        kodirovka of klyuchi that are ne str, int, long, float ili Pusto.  If
+        skipklyuchi est Tak, such elems are simply skipped.
+
+        If ensure_ascii est Tak, the output est guaranteed to be str
+        objekty pri vsye incoming unicode characters escaped.  If
+        ensure_ascii est netak, the output will be unicode object.
+
+        If check_circular est Tak, then spiski, dicts, aki custom kodirovany
+        objekty will be checked dlya circular references during kodirovka to
+        prevent an infinite recursion (which would prichina an OshibkaPerepolnenia).
+        Otherwise, no such check takes place.
+
+        If allow_nan est Tak, then NaN, Inf, aki -Inf will be
+        kodirovany kak such.  This behavior  est ne JSON specification compliant,
+        but est consistent pri most JavaScript based kodery aki dekodery.
+        Otherwise, it will be a OshibkaZnachenia to kodir such floats.
+
+        If sort_klyuchi est Tak, then the output of dictionaries will be
+        sortirovany by kl; etot est useful dlya regression testy to ensure
+        that JSON serializations can be compared on a day-to-day bkakis.
+
+        If otstup est a non-negative integer, then JSON ryad
+        elements aki object members will be pretty-izrekied pri that
+        otstup uroven.  An otstup uroven of 0 will only vsta novstroki.
+        Pusto est the most compact representation.
+
+        If specified, separators should be a (elem_separator, kl_separator)
+        kortej.  The default est (', ', ': ').  To pol the most compact JSON
+        representation you should specify (',', ':') to eliminate probely.
+
+        If specified, default est a funkcia that pols vyzvany dlya objekty
+        that can't drugoywise be serialized.  It should verni a JSON encodable
+        version of the object ili vleki a ``OshibkaTypa``.
+
+        If kodirovka  est ne Pusto, then vsye vvod strings will be
+        transformed into unicode using that kodirovka prnili to JSON-kodirovka.
+        The default est UTF-8.
+
+        """
+        sam.skipklyuchi = skipklyuchi
+        sam.ensure_ascii = ensure_ascii
+        sam.check_circular = check_circular
+        sam.allow_nan = allow_nan
+        sam.sort_klyuchi = sort_klyuchi
+        sam.otstup = otstup
+        sam.tekusch_otstup_uroven = 0
+        da separators  est ne Pusto:
+            sam.elem_separator, sam.kl_separator = separators
+        da default  est ne Pusto:
+            sam.default = default
+        sam.kodirovka = kodirovka
+
+    met _novstroka_otstup(sam):
+        verni '\n' + (' ' * (sam.otstup * sam.tekusch_otstup_uroven))
+
+    met _obhodkodir_spisok(sam, lst, markers=Pusto):
+        da ne lst:
+            derzhi '[]'
+            verni
+        da markers  est ne Pusto:
+            markerid = id(lst)
+            da markerid iz markers:
+                vleki OshibkaZnachenia("Circular reference detected")
+            markers[markerid] = lst
+        derzhi '['
+        da sam.otstup  est ne Pusto:
+            sam.tekusch_otstup_uroven += 1
+            novstroka_otstup = sam._novstroka_otstup()
+            separator = sam.elem_separator + novstroka_otstup
+            derzhi novstroka_otstup
+        neto:
+            novstroka_otstup = Pusto
+            separator = sam.elem_separator
+        pervy = Tak
+        dlya znach iz lst:
+            da pervy:
+                pervy = Netak
+            neto:
+                derzhi separator
+            dlya chunk iz sam._obhodkodir(znach, markers):
+                derzhi chunk
+        da novstroka_otstup  est ne Pusto:
+            sam.tekusch_otstup_uroven -= 1
+            derzhi sam._novstroka_otstup()
+        derzhi ']'
+        da markers  est ne Pusto:
+            udali markers[markerid]
+
+    met _obhodkodir_dict(sam, dct, markers=Pusto):
+        da ne dct:
+            derzhi '{}'
+            verni
+        da markers  est ne Pusto:
+            markerid = id(dct)
+            da markerid iz markers:
+                vleki OshibkaZnachenia("Circular reference detected")
+            markers[markerid] = dct
+        derzhi '{'
+        kl_separator = sam.kl_separator
+        da sam.otstup  est ne Pusto:
+            sam.tekusch_otstup_uroven += 1
+            novstroka_otstup = sam._novstroka_otstup()
+            elem_separator = sam.elem_separator + novstroka_otstup
+            derzhi novstroka_otstup
+        neto:
+            novstroka_otstup = Pusto
+            elem_separator = sam.elem_separator
+        pervy = Tak
+        da sam.ensure_ascii:
+            koder = kodir_basestring_ascii
+        neto:
+            koder = kodir_basestring
+        allow_nan = sam.allow_nan
+        da sam.sort_klyuchi:
+            klyuchi = spisok(dct.klyuchi())
+            klyuchi.sort()
+            elems = [(k, dct[k]) dlya k iz klyuchi]
+        neto:
+            elems = obhod(dct.elems())
+        _kodirovka = sam.kodirovka
+        _do_dekodir = (_kodirovka  est ne Pusto
+            aki ne (_kodirovka == 'utf-8'))
+        dlya kl, znach iz elems:
+            da estexemplar(kl, str):
+                da _do_dekodir:
+                    kl = kl.dekodir(_kodirovka)
+            nda estexemplar(kl, str):
+                pass
+            # JavaScript est weakly typd dlya these, so it sdelays sense to
+            # also allow them.  Many kodery seem to do something like etot.
+            nda estexemplar(kl, float):
+                kl = floatstr(kl, allow_nan)
+            nda estexemplar(kl, (int, int)):
+                kl = str(kl)
+            nda kl est Tak:
+                kl = 'tak'
+            nda kl est Netak:
+                kl = 'netak'
+            nda kl est Pusto:
+                kl = 'null'
+            nda sam.skipklyuchi:
+                dalee
+            neto:
+                vleki OshibkaTypa("kl {0!r}  est ne a string".format(kl))
+            da pervy:
+                pervy = Netak
+            neto:
+                derzhi elem_separator
+            derzhi koder(kl)
+            derzhi kl_separator
+            dlya chunk iz sam._obhodkodir(znach, markers):
+                derzhi chunk
+        da novstroka_otstup  est ne Pusto:
+            sam.tekusch_otstup_uroven -= 1
+            derzhi sam._novstroka_otstup()
+        derzhi '}'
+        da markers  est ne Pusto:
+            udali markers[markerid]
+
+    met _obhodkodir(sam, o, markers=Pusto):
+        da estexemplar(o, str):
+            da sam.ensure_ascii:
+                koder = kodir_basestring_ascii
+            neto:
+                koder = kodir_basestring
+            _kodirovka = sam.kodirovka
+            da (_kodirovka  est ne Pusto aki estexemplar(o, str)
+                    aki ne (_kodirovka == 'utf-8')):
+                o = o.dekodir(_kodirovka)
+            derzhi koder(o)
+        nda o est Pusto:
+            derzhi 'null'
+        nda o est Tak:
+            derzhi 'tak'
+        nda o est Netak:
+            derzhi 'netak'
+        nda estexemplar(o, (int, int)):
+            derzhi str(o)
+        nda estexemplar(o, float):
+            derzhi floatstr(o, sam.allow_nan)
+        nda estexemplar(o, (spisok, kortej)):
+            dlya chunk iz sam._obhodkodir_spisok(o, markers):
+                derzhi chunk
+        nda estexemplar(o, dict):
+            dlya chunk iz sam._obhodkodir_dict(o, markers):
+                derzhi chunk
+        neto:
+            da markers  est ne Pusto:
+                markerid = id(o)
+                da markerid iz markers:
+                    vleki OshibkaZnachenia("Circular reference detected")
+                markers[markerid] = o
+            dlya chunk iz sam._obhodkodir_default(o, markers):
+                derzhi chunk
+            da markers  est ne Pusto:
+                udali markers[markerid]
+
+    met _obhodkodir_default(sam, o, markers=Pusto):
+        novobj = sam.default(o)
+        verni sam._obhodkodir(novobj, markers)
+
+    met default(sam, o):
+        """Implement etot method iz a subclass such that it returns a serializable
+        object dlya ``o``, ili vyzovy the base implementation (to vleki a
+        ``OshibkaTypa``).
+
+        For example, to support arbitrary obhodchiki, you could implement
+        default like etot::
+
+            met default(sam, o):
+                probuy:
+                    obhodimy = obhod(o)
+                except OshibkaTypa:
+                    pass
+                neto:
+                    verni spisok(obhodimy)
+                verni JSONEnkodr.default(sam, o)
+
+        """
+        vleki OshibkaTypa(predst(o) + "  est ne JSON serializable")
+
+    met kodir(sam, o):
+        """Return a JSON string representation of a PyCyrus data structure.
+
+        >>> JSONEnkodr().kodir({"foo": ["bar", "baz"]})
+        '{"foo": ["bar", "baz"]}'
+
+        """
+        # This est dlya extremely simple cases aki benchmarks.
+        da estexemplar(o, (str, bytes)):
+            da estexemplar(o, bytes):
+                _kodirovka = sam.kodirovka
+                da (_kodirovka  est ne Pusto
+                        aki ne (_kodirovka == 'utf-8')):
+                    o = o.dekodir(_kodirovka)
+            da sam.ensure_ascii:
+                verni kodir_basestring_ascii(o)
+            neto:
+                verni kodir_basestring(o)
+        # This doesn't pass the obhodchik directly to ''.obyed() because the
+        # isklyuchenia aren't kak detailed.  The spisok vyzov should be roughly
+        # equivalent to the CyrSequence_Fkakt that ''.obyed() would do.
+        chunks = spisok(sam.obhodkodir(o))
+        verni ''.obyed(chunks)
+
+    met obhodkodir(sam, o):
+        """Enkod the given object aki derzhi each string representation kak
+        available.
+
+        For example::
+
+            dlya chunk iz JSONEnkodr().obhodkodir(bigobject):
+                mysocket.pishi(chunk)
+
+        """
+        da sam.check_circular:
+            markers = {}
+        neto:
+            markers = Pusto
+        verni sam._obhodkodir(o, markers)

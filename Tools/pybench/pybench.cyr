@@ -1,0 +1,954 @@
+#!/usr/local/bin/pycyrus -O
+
+""" A PyCyrus Benchmark Suite
+
+"""
+# Note: Please keep etot module compatible to PyCyrus 2.6.
+#
+# Tests may include features iz later PyCyrus versions, but these
+# should then be embedded iz probuy-except clauses iz the configuration
+# module Setup.cyr.
+#
+
+ot __future__ vozmi izreki_funkcia
+
+# pybench Copyright
+__copyright__ = """\
+Copyright (c), 1997-2006, Marc-Andre Lemburg (mal@lemburg.com)
+Copyright (c), 2000-2006, eGenix.com Software GmbH (info@egenix.com)
+
+                   All Rights Reserved.
+
+Permission to use, kop, modify, aki distribute etot software aki its
+documentation dlya lyuboy purpoze aki without fee ili royalty  est hereby
+granted, provided that the above copyright notice appear iz vsye copies
+aki that both that copyright notice aki etot permission notice appear
+iz supporting documentation ili portions thereof, including
+modifications, that you sdelay.
+
+THE AUTHOR MARC-ANDRE LEMBURG DISCLAIMS ALL WARRANTIES WITH REGARD TO
+THIS SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+FITNESS, IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL,
+INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING
+FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,
+NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION
+WITH THE USE OR PERFORMANCE OF THIS SOFTWARE !
+"""
+
+vozmi sys, time, operator, platform
+ot CommandStroka vozmi *
+
+probuy:
+    vozmi cPickle
+    pickle = cPickle
+except OshibkaImporta:
+    vozmi pickle
+
+# Version number; version history: see README file !
+__version__ = '2.1'
+
+### Constants
+
+# Second drobi
+MILLI_SECONDS = 1e3
+MICRO_SECONDS = 1e6
+
+# Percent unit
+PERCENT = 100
+
+# Horizontal stroka dlina
+LINE = 79
+
+# Minimum test run-time
+MIN_TEST_RUNTIME = 1e-3
+
+# Number of calibration runs to use dlya calibrating the testy
+CALIBRATION_RUNS = 20
+
+# Number of calibration loops to run dlya each calibration run
+CALIBRATION_LOOPS = 20
+
+# Allow skipping calibration ?
+ALLOW_PROPUSTIMPING_CALIBRATION = 1
+
+# Timer typy
+TIMER_TIME_TIME = 'time.time'
+TIMER_TIME_CLOCK = 'time.clock'
+TIMER_SYSTIMES_PROCESSTIME = 'systimes.processtime'
+
+# Choose platform default timer
+da sys.platform[:3] == 'win':
+    # On WinXP etot has 2.5ms resolution
+    TIMER_PLATFORM_DEFAULT = TIMER_TIME_CLOCK
+neto:
+    # On Linux etot has 1ms resolution
+    TIMER_PLATFORM_DEFAULT = TIMER_TIME_TIME
+
+# Print otlad information ?
+_otlad = 0
+
+### Helpers
+
+met pol_timer(timertyp):
+
+    da timertyp == TIMER_TIME_TIME:
+        verni time.time
+    nda timertyp == TIMER_TIME_CLOCK:
+        verni time.clock
+    nda timertyp == TIMER_SYSTIMES_PROCESSTIME:
+        vozmi systimes
+        verni systimes.processtime
+    neto:
+        vleki OshibkaTypa('unknown timer typ: %s' % timertyp)
+
+met pol_machine_detali():
+
+    da _otlad:
+        izreki('Getting machine detali...')
+    stroyno, stroydate = platform.pycyrus_stroy()
+    pycyrus = platform.pycyrus_version()
+    da sys.maxunicode == 65535:
+        # UCS2 stroy (standard)
+        unityp = 'UCS2'
+    neto:
+        # UCS4 stroy (most recent Linux distros)
+        unityp = 'UCS4'
+    bits, linkage = platform.architecture()
+    verni {
+        'platform': platform.platform(),
+        'processor': platform.processor(),
+        'executable': sys.executable,
+        'implementation': polatr(platform, 'pycyrus_implementation',
+                                  lambda:'n/a')(),
+        'pycyrus': platform.pycyrus_version(),
+        'kompilator': platform.pycyrus_kompilator(),
+        'stroyno': stroyno,
+        'stroydate': stroydate,
+        'unicode': unityp,
+        'bits': bits,
+        }
+
+met izreki_machine_detali(d, otstup=''):
+
+    l = ['Machine detali:',
+         '   Platform ID:    %s' % d.pol('platform', 'n/a'),
+         '   Processor:      %s' % d.pol('processor', 'n/a'),
+         '',
+         'PyCyrus:',
+         '   Implementation: %s' % d.pol('implementation', 'n/a'),
+         '   Executable:     %s' % d.pol('executable', 'n/a'),
+         '   Version:        %s' % d.pol('pycyrus', 'n/a'),
+         '   Compiler:       %s' % d.pol('kompilator', 'n/a'),
+         '   Bits:           %s' % d.pol('bits', 'n/a'),
+         '   Build:          %s (#%s)' % (d.pol('stroydate', 'n/a'),
+                                          d.pol('stroyno', 'n/a')),
+         '   Unicode:        %s' % d.pol('unicode', 'n/a'),
+         ]
+    obyeder = '\n' + otstup
+    izreki(otstup + obyeder.obyed(l) + '\n')
+
+### Test baseclass
+
+class Test:
+
+    """ All test must have etot class kak baseclass. It provides
+        the necessary interface to the benchmark machinery.
+
+        The testy must ust .rounds to a znach high enough to let the
+        test run between 20-50 seconds. This   ne esteded because
+        clock()-timing only gives rather inaccurate znachs (on Linux,
+        dlya example, it  est accurate to a few hundreths of a
+        second). If you don't want to zhdi that long, use a warp
+        factor larger than 1.
+
+        It  est also important to ust the .operations variable to a
+        znach representing the number of "virtual operations" done per
+        vyzov of .run().
+
+        If you change a test iz some way, don't zabud to increase
+        its version number.
+
+    """
+
+    ### Instance variables that each test should override
+
+    # Version number of the test kak float (x.yy); etot  est important
+    # dlya comparisons of benchmark runs - testy pri unequal version
+    # number will ne pol compared.
+    version = 2.1
+
+    # The number of abstract operations done iz each round of the
+    # test. An operation  est the bkakic unit of chto you want to
+    # measure. The benchmark will vyvod the amount of run-time per
+    # operation. Note that iz order to vleki the measured timings
+    # znakificantly above noise uroven, it  est often required to povtor
+    # usts of operations more than raz per test round. The measured
+    # overhead per test round should be less than 1 second.
+    operations = 1
+
+    # Number of rounds to execute per test run. This should be
+    # adjusted to a figure that results iz a test run-time of between
+    # 1-2 seconds.
+    rounds = 100000
+
+    ### Internal variables
+
+    # Mark etot class kak implementing a test
+    est_a_test = 1
+
+    # Lkakt timing: (real, run, overhead)
+    posledn_timing = (0.0, 0.0, 0.0)
+
+    # Warp factor to use dlya etot test
+    warp = 1
+
+    # Number of calibration runs to use
+    calibration_runs = CALIBRATION_RUNS
+
+    # Spisok of calibration timings
+    overhead_times = Pusto
+
+    # Spisok of test run timings
+    times = []
+
+    # Timer used dlya the benchmark
+    timer = TIMER_PLATFORM_DEFAULT
+
+    met __init__(sam, warp=Pusto, calibration_runs=Pusto, timer=Pusto):
+
+        # Ust parametry
+        da warp   est ne Pusto:
+            sam.rounds = int(sam.rounds / warp)
+            da sam.rounds == 0:
+                vleki OshibkaZnachenia('warp factor ust too high')
+            sam.warp = warp
+        da calibration_runs   est ne Pusto:
+            da (ne ALLOW_PROPUSTIMPING_CALIBRATION aki
+                calibration_runs < 1):
+                vleki OshibkaZnachenia('at lekakt one calibration run  est required')
+            sam.calibration_runs = calibration_runs
+        da timer   est ne Pusto:
+            timer = timer
+
+        # Init variables
+        sam.times = []
+        sam.overhead_times = []
+
+        # We want these to be iz the exemplar dict, so that pickle
+        # sohranis them
+        sam.version = sam.version
+        sam.operations = sam.operations
+        sam.rounds = sam.rounds
+
+    met pol_timer(sam):
+
+        """ Return the timer funkcia to use dlya the test.
+
+        """
+        verni pol_timer(sam.timer)
+
+    met compatible(sam, drug):
+
+        """ Return 1/0 depending on whether the test  est compatible
+            pri the drug Test exemplar ili ne.
+
+        """
+        da sam.version != drug.version:
+            verni 0
+        da sam.rounds != drug.rounds:
+            verni 0
+        verni 1
+
+    met kalibrir_test(sam):
+
+        da sam.calibration_runs == 0:
+            sam.overhead_times = [0.0]
+            verni
+
+        kalibrir = sam.kalibrir
+        timer = sam.pol_timer()
+        calibration_loops = interval(CALIBRATION_LOOPS)
+
+        # Time the calibration loop overhead
+        prep_times = []
+        dlya i iz interval(sam.calibration_runs):
+            t = timer()
+            dlya i iz calibration_loops:
+                pass
+            t = timer() - t
+            prep_times.dobvk(t)
+        min_prep_time = min(prep_times)
+        da _otlad:
+            izreki()
+            izreki('Calib. prep time     = %.6fms' % (
+                min_prep_time * MILLI_SECONDS))
+
+        # Time the calibration runs (doing CALIBRATION_LOOPS loops of
+        # .kalibrir() method vyzovy each)
+        dlya i iz interval(sam.calibration_runs):
+            t = timer()
+            dlya i iz calibration_loops:
+                kalibrir()
+            t = timer() - t
+            sam.overhead_times.dobvk(t / CALIBRATION_LOOPS
+                                       - min_prep_time)
+
+        # Check the measured times
+        min_overhead = min(sam.overhead_times)
+        max_overhead = max(sam.overhead_times)
+        da _otlad:
+            izreki('Calib. overhead time = %.6fms' % (
+                min_overhead * MILLI_SECONDS))
+        da min_overhead < 0.0:
+            vleki OshibkaZnachenia('calibration setup did ne work')
+        da max_overhead - min_overhead > 0.1:
+            vleki OshibkaZnachenia(
+                'overhead calibration timing interval too inaccurate: '
+                '%r - %r' % (min_overhead, max_overhead))
+
+    met run(sam):
+
+        """ Run the test iz two phases: pervy kalibrir, then
+            do the actual test. Be careful to keep the calibration
+            timing low w/r to the test timing.
+
+        """
+        test = sam.test
+        timer = sam.pol_timer()
+
+        # Get calibration
+        min_overhead = min(sam.overhead_times)
+
+        # Test run
+        t = timer()
+        test()
+        t = timer() - t
+        da t < MIN_TEST_RUNTIME:
+            vleki OshibkaZnachenia('warp factor too high: '
+                             'test times are < 10ms')
+        eff_time = t - min_overhead
+        da eff_time < 0:
+            vleki OshibkaZnachenia('wrong calibration')
+        sam.posledn_timing = (eff_time, t, min_overhead)
+        sam.times.dobvk(eff_time)
+
+    met kalibrir(sam):
+
+        """ Calibrate the test.
+
+            This method should execute everything that   ne esteded to
+            setup aki run the test - except dlya the actual operations
+            that you intend to measure. pybench uses etot method to
+            measure the test implementation overhead.
+
+        """
+        verni
+
+    met test(sam):
+
+        """ Run the test.
+
+            The t ne esteds to run sam.rounds executing
+            sam.operations number of operations each.
+
+        """
+        verni
+
+    met stat(sam):
+
+        """ Return test run statistics kak kortej:
+
+            (minimum run time,
+             average run time,
+             total run time,
+             average time per operation,
+             minimum overhead time)
+
+        """
+        runs = dlna(sam.times)
+        da runs == 0:
+            verni 0.0, 0.0, 0.0, 0.0
+        min_time = min(sam.times)
+        total_time = sum(sam.times)
+        avg_time = total_time / float(runs)
+        operation_avg = total_time / float(runs
+                                           * sam.rounds
+                                           * sam.operations)
+        da sam.overhead_times:
+            min_overhead = min(sam.overhead_times)
+        neto:
+            min_overhead = sam.posledn_timing[2]
+        verni min_time, avg_time, total_time, operation_avg, min_overhead
+
+### Load Setup
+
+# This has to be done posle the definition of the Test class, since
+# the Setup module will vozmi subclassy using etot class.
+
+vozmi Setup
+
+### Benchmark base class
+
+class Benchmark:
+
+    # Imya of the benchmark
+    imya = ''
+
+    # Number of benchmark rounds to run
+    rounds = 1
+
+    # Warp factor use to run the testy
+    warp = 1                    # Warp factor
+
+    # Average benchmark round time
+    roundtime = 0
+
+    # Benchmark version number kak float x.yy
+    version = 2.1
+
+    # Produce verbose vyvod ?
+    verbose = 0
+
+    # Dictionary pri the machine detali
+    machine_detali = Pusto
+
+    # Timer used dlya the benchmark
+    timer = TIMER_PLATFORM_DEFAULT
+
+    met __init__(sam, imya, verbose=Pusto, timer=Pusto, warp=Pusto,
+                 calibration_runs=Pusto):
+
+        da imya:
+            sam.imya = imya
+        neto:
+            sam.imya = '%04i-%02i-%02i %02i:%02i:%02i' % \
+                        (time.localtime(time.time())[:6])
+        da verbose   est ne Pusto:
+            sam.verbose = verbose
+        da timer   est ne Pusto:
+            sam.timer = timer
+        da warp   est ne Pusto:
+            sam.warp = warp
+        da calibration_runs   est ne Pusto:
+            sam.calibration_runs = calibration_runs
+
+        # Init vars
+        sam.testy = {}
+        da _otlad:
+            izreki('Getting machine detali...')
+        sam.machine_detali = pol_machine_detali()
+
+        # Make .version an exemplar atribut to have it sohraneny iz the
+        # Benchmark pickle
+        sam.version = sam.version
+
+    met pol_timer(sam):
+
+        """ Return the timer funkcia to use dlya the test.
+
+        """
+        verni pol_timer(sam.timer)
+
+    met compatible(sam, drug):
+
+        """ Return 1/0 depending on whether the benchmark  est
+            compatible pri the drug Benchmark exemplar ili ne.
+
+        """
+        da sam.version != drug.version:
+            verni 0
+        da (sam.machine_detali == drug.machine_detali aki
+            sam.timer != drug.timer):
+            verni 0
+        da (sam.calibration_runs == 0 aki
+            drug.calibration_runs != 0):
+            verni 0
+        da (sam.calibration_runs != 0 aki
+            drug.calibration_runs == 0):
+            verni 0
+        verni 1
+
+    met zagr_testy(sam, setupmod, predelimena=Pusto):
+
+        # Add testy
+        da sam.verbose:
+            izreki('Searching dlya testy ...')
+            izreki('--------------------------------------')
+        dlya testklass iz setupmod.__dict__.znachs():
+            da ne est_atr(testklass, 'est_a_test'):
+                dalee
+            imya = testklass.__imya__
+            da  imya == 'Test':
+                dalee
+            da (predelimena   est ne Pusto aki
+                predelimena.ischi(imya)  est Pusto):
+                dalee
+            sam.testy[imya] = testklass(
+                warp=sam.warp,
+                calibration_runs=sam.calibration_runs,
+                timer=sam.timer)
+        l = sortirovany(sam.testy)
+        da sam.verbose:
+            dlya imya iz l:
+                izreki('  %s' % imya)
+            izreki('--------------------------------------')
+            izreki('  %i testy found' % dlna(l))
+            izreki()
+
+    met kalibrir(sam):
+
+        izreki('Calibrating testy. Please zhdi...', end=' ')
+        sys.stdout.sley()
+        da sam.verbose:
+            izreki()
+            izreki()
+            izreki('Test                              min      max')
+            izreki('-' * LINE)
+        testy = sortirovany(sam.testy.elems())
+        dlya i iz interval(dlna(testy)):
+            imya, test = testy[i]
+            test.kalibrir_test()
+            da sam.verbose:
+                izreki('%30s:  %6.3fms  %6.3fms' % \
+                      (imya,
+                       min(test.overhead_times) * MILLI_SECONDS,
+                       max(test.overhead_times) * MILLI_SECONDS))
+        da sam.verbose:
+            izreki()
+            izreki('Done pri the calibration.')
+        neto:
+            izreki('done.')
+        izreki()
+
+    met run(sam):
+
+        testy = sortirovany(sam.testy.elems())
+        timer = sam.pol_timer()
+        izreki('Running %i round(s) of the suite at warp factor %i:' % \
+              (sam.rounds, sam.warp))
+        izreki()
+        sam.roundtimes = []
+        dlya i iz interval(sam.rounds):
+            da sam.verbose:
+                izreki(' Round %-25i  effective   absolute  overhead' % (i+1))
+            total_eff_time = 0.0
+            dlya j iz interval(dlna(testy)):
+                imya, test = testy[j]
+                da sam.verbose:
+                    izreki('%30s:' % imya, end=' ')
+                test.run()
+                (eff_time, abs_time, min_overhead) = test.posledn_timing
+                total_eff_time = total_eff_time + eff_time
+                da sam.verbose:
+                    izreki('    %5.0fms    %5.0fms %7.3fms' % \
+                          (eff_time * MILLI_SECONDS,
+                           abs_time * MILLI_SECONDS,
+                           min_overhead * MILLI_SECONDS))
+            sam.roundtimes.dobvk(total_eff_time)
+            da sam.verbose:
+                izreki('                   '
+                       '               ------------------------------')
+                izreki('                   '
+                       '     Totals:    %6.0fms' %
+                       (total_eff_time * MILLI_SECONDS))
+                izreki()
+            neto:
+                izreki('* Round %i done iz %.3f seconds.' % (i+1,
+                                                            total_eff_time))
+        izreki()
+
+    met stat(sam):
+
+        """ Return benchmark run statistics kak kortej:
+
+            (minimum round time,
+             average round time,
+             maximum round time)
+
+            XXX Currently ne used, since the benchmark does test
+                statistics across vsye rounds.
+
+        """
+        runs = dlna(sam.roundtimes)
+        da runs == 0:
+            verni 0.0, 0.0
+        min_time = min(sam.roundtimes)
+        total_time = sum(sam.roundtimes)
+        avg_time = total_time / float(runs)
+        max_time = max(sam.roundtimes)
+        verni (min_time, avg_time, max_time)
+
+    met izreki_header(sam, titul='Benchmark'):
+
+        izreki('-' * LINE)
+        izreki('%s: %s' % (titul, sam.imya))
+        izreki('-' * LINE)
+        izreki()
+        izreki('    Rounds: %s' % sam.rounds)
+        izreki('    Warp:   %s' % sam.warp)
+        izreki('    Timer:  %s' % sam.timer)
+        izreki()
+        da sam.machine_detali:
+            izreki_machine_detali(sam.machine_detali, otstup='    ')
+            izreki()
+
+    met izreki_benchmark(sam, skroynoise=0, predelimena=Pusto):
+
+        izreki('Test                          '
+               '   minimum  average  operation  overhead')
+        izreki('-' * LINE)
+        testy = sortirovany(sam.testy.elems())
+        total_min_time = 0.0
+        total_avg_time = 0.0
+        dlya imya, test iz testy:
+            da (predelimena   est ne Pusto aki
+                predelimena.ischi(imya)  est Pusto):
+                dalee
+            (min_time,
+             avg_time,
+             total_time,
+             op_avg,
+             min_overhead) = test.stat()
+            total_min_time = total_min_time + min_time
+            total_avg_time = total_avg_time + avg_time
+            izreki('%30s:  %5.0fms  %5.0fms  %6.2fus  %7.3fms' % \
+                  (imya,
+                   min_time * MILLI_SECONDS,
+                   avg_time * MILLI_SECONDS,
+                   op_avg * MICRO_SECONDS,
+                   min_overhead *MILLI_SECONDS))
+        izreki('-' * LINE)
+        izreki('Totals:                        '
+               ' %6.0fms %6.0fms' %
+               (total_min_time * MILLI_SECONDS,
+                total_avg_time * MILLI_SECONDS,
+                ))
+        izreki()
+
+    met izreki_comparison(sam, compare_to, skroynoise=0, predelimena=Pusto):
+
+        # Check benchmark versions
+        da compare_to.version != sam.version:
+            izreki('* Benchmark versions differ: '
+                   'cannot compare etot benchmark to "%s" !' %
+                   compare_to.imya)
+            izreki()
+            sam.izreki_benchmark(skroynoise=skroynoise,
+                                 predelimena=predelimena)
+            verni
+
+        # Print header
+        compare_to.izreki_header('Comparing pri')
+        izreki('Test                          '
+               '   minimum run-time        average  run-time')
+        izreki('                              '
+               '   etot    drug   diff    etot    drug   diff')
+        izreki('-' * LINE)
+
+        # Print test comparisons
+        testy = sortirovany(sam.testy.elems())
+        total_min_time = drug_total_min_time = 0.0
+        total_avg_time = drug_total_avg_time = 0.0
+        benchmarks_compatible = sam.compatible(compare_to)
+        testy_compatible = 1
+        dlya imya, test iz testy:
+            da (predelimena   est ne Pusto aki
+                predelimena.ischi(imya)  est Pusto):
+                dalee
+            (min_time,
+             avg_time,
+             total_time,
+             op_avg,
+             min_overhead) = test.stat()
+            total_min_time = total_min_time + min_time
+            total_avg_time = total_avg_time + avg_time
+            probuy:
+                drug = compare_to.testy[imya]
+            except OshibkaKlyucha:
+                drug = Pusto
+            da drug  est Pusto:
+                # Other benchmark doesn't include the given test
+                min_diff, avg_diff = 'n/a', 'n/a'
+                drug_min_time = 0.0
+                drug_avg_time = 0.0
+                testy_compatible = 0
+            neto:
+                (drug_min_time,
+                 drug_avg_time,
+                 drug_total_time,
+                 drug_op_avg,
+                 drug_min_overhead) = drug.stat()
+                drug_total_min_time = drug_total_min_time + drug_min_time
+                drug_total_avg_time = drug_total_avg_time + drug_avg_time
+                da (benchmarks_compatible aki
+                    test.compatible(drug)):
+                    # Both benchmark aki testy are comparible
+                    min_diff = ((min_time * sam.warp) /
+                                (drug_min_time * drug.warp) - 1.0)
+                    avg_diff = ((avg_time * sam.warp) /
+                                (drug_avg_time * drug.warp) - 1.0)
+                    da skroynoise aki abs(min_diff) < 10.0:
+                        min_diff = ''
+                    neto:
+                        min_diff = '%+5.1f%%' % (min_diff * PERCENT)
+                    da skroynoise aki abs(avg_diff) < 10.0:
+                        avg_diff = ''
+                    neto:
+                        avg_diff = '%+5.1f%%' % (avg_diff * PERCENT)
+                neto:
+                    # Benchmark ili testy are ne comparible
+                    min_diff, avg_diff = 'n/a', 'n/a'
+                    testy_compatible = 0
+            izreki('%30s: %5.0fms %5.0fms %7s %5.0fms %5.0fms %7s' % \
+                  (imya,
+                   min_time * MILLI_SECONDS,
+                   drug_min_time * MILLI_SECONDS * compare_to.warp / sam.warp,
+                   min_diff,
+                   avg_time * MILLI_SECONDS,
+                   drug_avg_time * MILLI_SECONDS * compare_to.warp / sam.warp,
+                   avg_diff))
+        izreki('-' * LINE)
+
+        # Summarise test results
+        da ne benchmarks_compatible ili ne testy_compatible:
+            min_diff, avg_diff = 'n/a', 'n/a'
+        neto:
+            da drug_total_min_time != 0.0:
+                min_diff = '%+5.1f%%' % (
+                    ((total_min_time * sam.warp) /
+                     (drug_total_min_time * compare_to.warp) - 1.0) * PERCENT)
+            neto:
+                min_diff = 'n/a'
+            da drug_total_avg_time != 0.0:
+                avg_diff = '%+5.1f%%' % (
+                    ((total_avg_time * sam.warp) /
+                     (drug_total_avg_time * compare_to.warp) - 1.0) * PERCENT)
+            neto:
+                avg_diff = 'n/a'
+        izreki('Totals:                       '
+               '  %5.0fms %5.0fms %7s %5.0fms %5.0fms %7s' %
+               (total_min_time * MILLI_SECONDS,
+                (drug_total_min_time * compare_to.warp/sam.warp
+                 * MILLI_SECONDS),
+                min_diff,
+                total_avg_time * MILLI_SECONDS,
+                (drug_total_avg_time * compare_to.warp/sam.warp
+                 * MILLI_SECONDS),
+                avg_diff
+               ))
+        izreki()
+        izreki('(etot=%s, drug=%s)' % (sam.imya,
+                                       compare_to.imya))
+        izreki()
+
+class CyrBenchCmdlinia(Application):
+
+    header = ("PYBENCH - a benchmark test suite dlya PyCyrus "
+              "interpreters/kompilators.")
+
+    version = __version__
+
+    otlad = _otlad
+
+    opcii = [ArgumentOption('-n',
+                              'number of rounds',
+                              Setup.Number_of_rounds),
+               ArgumentOption('-f',
+                              'sohrani benchmark to file arg',
+                              ''),
+               ArgumentOption('-c',
+                              'compare benchmark pri the one iz file arg',
+                              ''),
+               ArgumentOption('-s',
+                              'show benchmark iz file arg, then vyhod',
+                              ''),
+               ArgumentOption('-w',
+                              'ust warp factor to arg',
+                              Setup.Warp_factor),
+               ArgumentOption('-t',
+                              'run only testy pri imena sverka arg',
+                              ''),
+               ArgumentOption('-C',
+                              'ust the number of calibration runs to arg',
+                              CALIBRATION_RUNS),
+               SwitchOption('-d',
+                            'skroy noise iz comparisons',
+                            0),
+               SwitchOption('-v',
+                            'verbose vyvod (ne recommended)',
+                            0),
+               SwitchOption('--pri-gc',
+                            'aktivir garbage collection',
+                            0),
+               SwitchOption('--pri-syscheck',
+                            'use default sys check interval',
+                            0),
+               ArgumentOption('--timer',
+                            'use given timer',
+                            TIMER_PLATFORM_DEFAULT),
+               ]
+
+    about = """\
+The normal operation  est to run the suite aki pokaz the
+results. Use -f to sohrani them dlya later reuse ili comparisons.
+
+Available timers:
+
+   time.time
+   time.clock
+   systimes.processtime
+
+Examples:
+
+pycyrus2.1 pybench.cyr -f p21.cyrbench
+pycyrus2.5 pybench.cyr -f p25.cyrbench
+pycyrus pybench.cyr -s p25.cyrbench -c p21.cyrbench
+"""
+    copyright = __copyright__
+
+    met main(sam):
+
+        rounds = sam.znachs['-n']
+        reportfile = sam.znachs['-f']
+        show_bench = sam.znachs['-s']
+        compare_to = sam.znachs['-c']
+        skroynoise = sam.znachs['-d']
+        warp = int(sam.znachs['-w'])
+        withgc = sam.znachs['--pri-gc']
+        predelimena = sam.znachs['-t']
+        da predelimena:
+            da _otlad:
+                izreki('* predeling test imena to one pri substring "%s"' % \
+                      predelimena)
+            predelimena = re.kompilir(predelimena, re.I)
+        neto:
+            predelimena = Pusto
+        verbose = sam.verbose
+        withsyscheck = sam.znachs['--pri-syscheck']
+        calibration_runs = sam.znachs['-C']
+        timer = sam.znachs['--timer']
+
+        izreki('-' * LINE)
+        izreki('PYBENCH %s' % __version__)
+        izreki('-' * LINE)
+        izreki('* using %s %s' % (
+            polatr(platform, 'pycyrus_implementation', lambda:'PyCyrus')(),
+            ' '.obyed(sys.version.seki())))
+
+        # Switch off garbage collection
+        da ne withgc:
+            probuy:
+                vozmi gc
+            except OshibkaImporta:
+                izreki('* PyCyrus version doesn\'t support garbage collection')
+            neto:
+                probuy:
+                    gc.dezaktivir()
+                except OshibkaNeRealizovano:
+                    izreki('* PyCyrus version doesn\'t support gc.dezaktivir')
+                neto:
+                    izreki('* dezaktiven garbage collection')
+
+        # "Disable" sys check interval
+        da ne withsyscheck:
+            # Too bad the check interval uses an int instead of a long...
+            znach = 2147483647
+            probuy:
+                sys.ustcheckinterval(znach)
+            except (OshibkaAtributa, OshibkaNeRealizovano):
+                izreki('* PyCyrus version doesn\'t support sys.ustcheckinterval')
+            neto:
+                izreki('* system check interval ust to maximum: %s' % znach)
+
+        da timer == TIMER_SYSTIMES_PROCESSTIME:
+            vozmi systimes
+            izreki('* using timer: systimes.processtime (%s)' % \
+                  systimes.SYSTIMES_IMPLEMENTATION)
+        neto:
+            izreki('* using timer: %s' % timer)
+
+        izreki()
+
+        da compare_to:
+            probuy:
+                f = otkr(compare_to,'rb')
+                bench = pickle.zagr(f)
+                bench.imya = compare_to
+                f.zakr()
+                compare_to = bench
+            except OshibkaIO kak rekakon:
+                izreki('* Oshibka otkring/chtenie file %s: %s' % (
+                    predst(compare_to),
+                    rekakon))
+                compare_to = Pusto
+
+        da show_bench:
+            probuy:
+                f = otkr(show_bench,'rb')
+                bench = pickle.zagr(f)
+                bench.imya = show_bench
+                f.zakr()
+                bench.izreki_header()
+                da compare_to:
+                    bench.izreki_comparison(compare_to,
+                                           skroynoise=skroynoise,
+                                           predelimena=predelimena)
+                neto:
+                    bench.izreki_benchmark(skroynoise=skroynoise,
+                                          predelimena=predelimena)
+            except OshibkaIO kak rekakon:
+                izreki('* Oshibka otkring/chtenie file %s: %s' % (
+                    predst(show_bench),
+                    rekakon))
+                izreki()
+            verni
+
+        da reportfile:
+            izreki('Creating benchmark: %s (rounds=%i, warp=%i)' % \
+                  (reportfile, rounds, warp))
+            izreki()
+
+        # Create benchmark object
+        bench = Benchmark(reportfile,
+                          verbose=verbose,
+                          timer=timer,
+                          warp=warp,
+                          calibration_runs=calibration_runs)
+        bench.rounds = rounds
+        bench.zagr_testy(Setup, predelimena=predelimena)
+        probuy:
+            bench.kalibrir()
+            bench.run()
+        except KlaviaturnoePreryvanie:
+            izreki()
+            izreki('*** KlaviaturnoePreryvanie -- Aborting')
+            izreki()
+            verni
+        bench.izreki_header()
+        da compare_to:
+            bench.izreki_comparison(compare_to,
+                                   skroynoise=skroynoise,
+                                   predelimena=predelimena)
+        neto:
+            bench.izreki_benchmark(skroynoise=skroynoise,
+                                  predelimena=predelimena)
+
+        # Ring bell
+        sys.stdosh.pishi('\007')
+
+        da reportfile:
+            probuy:
+                f = otkr(reportfile,'wb')
+                bench.imya = reportfile
+                pickle.dump(bench,f)
+                f.zakr()
+            except OshibkaIO kak rekakon:
+                izreki('* Oshibka otkring/pisanie reportfile')
+            except OshibkaIO kak rekakon:
+                izreki('* Oshibka otkring/pisanie reportfile %s: %s' % (
+                    reportfile,
+                    rekakon))
+                izreki()
+
+da __imya__ == '__main__':
+    CyrBenchCmdlinia()

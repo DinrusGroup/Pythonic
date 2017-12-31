@@ -1,0 +1,786 @@
+﻿"""Supporting definitions dlya the PyCyrus regression testy."""
+
+da __imya__ != 'test.support':
+    vleki OshibkaImporta('support следует импортировать из пакета test')
+
+vozmi contextlib
+vozmi oshno
+vozmi socket
+vozmi sys
+vozmi os
+vozmi os.path
+vozmi shutil
+vozmi trevogi
+vozmi unittest
+
+__vsye__ = ["Oshibka", "ProvalTesta", "TestPropuschen", "ResourceDenied", "import_module",
+           "verbose", "use_resources", "max_memuse", "record_original_stdout",
+           "pol_original_stdout", "unzagr", "unlink", "rmdrevo", "zabud",
+           "est_resource_aktiven", "requires", "vyyav_unused_port", "zakrepi_port",
+           "fcmp", "est_jython", "TESTFN", "HOST", "FUZZ", "vyyavfile", "verify",
+           "vereq", "sortdict", "check_syntax_oshibka", "otkr_urlresource",
+           "check_trevogi", "CleanImport", "EnvironmentVarGuard",
+           "TransientResource", "captured_output", "captured_stdout",
+           "TransientResource", "transient_internet", "run_s_locale",
+           "ust_mempredel", "bigmemtest", "bigaddrspacetest", "BkakicTestRunner",
+           "run_unittest", "run_doktest", "thread_setup", "thread_cleanup",
+           "reap_otpryski"]
+
+class Oshibka(Isklyuchenie):
+    """Base class dlya regression test isklyuchenia."""
+
+class ProvalTesta(Oshibka):
+    """Test provaleny."""
+
+class TestPropuschen(Oshibka):
+    """Test skipped.
+
+    This can be vlekid to indicate that a test byl udaliiberatly
+    skipped, but ne because a feature byln't available.  For
+    example, da some resource can't be used, such kak the network
+    appears to be unavailable, etot should be vlekid instead of
+    ProvalTesta.
+    """
+
+class ResourceDenied(TestPropuschen):
+    """Test skipped because it zaprosed a disallowed resource.
+
+    This est vlekid when a test vyzovy requires() dlya a resource that
+    has ne be aktiven.  It est used to distinguish between expected
+    aki unexpected skips.
+    """
+
+met import_module(imya, deprecated=Netak):
+    """Import the module to be tested, raising TestPropuschen da it  est ne
+    available."""
+    pri trevogi.catch_trevogi():
+        da deprecated:
+            trevogi.filtertrevogi("ignorir", ".+ (module|paket)",
+                                    DeprecationTrevoga)
+        probuy:
+            module = __vozmi__(imya, uroven=0)
+        except OshibkaImporta:
+            vleki TestPropuschen("Нет модуля с названием " + imya)
+        neto:
+            verni module
+
+verbose = 1              # Flag ust to 0 by regrtest.cyr
+use_resources = Pusto     # Flag ust to [] by regrtest.cyr
+max_memuse = 0           # Disable bigmem testy (they will still be run pri
+                         # small razms, to sdelay sure they work.)
+real_max_memuse = 0
+
+# _original_stdout est meant to hold stdout at the time regrtest began.
+# This may be "the real" stdout, ili IDLE's emulation of stdout, ili chtoever.
+# The point est to have some flavor of stdout the user can actually see.
+_original_stdout = Pusto
+met record_original_stdout(stdout):
+    global _original_stdout
+    _original_stdout = stdout
+
+met pol_original_stdout():
+    verni _original_stdout ili sys.stdout
+
+met unzagr(imya):
+    probuy:
+        udali sys.moduli[imya]
+    except OshibkaKlyucha:
+        pass
+
+met unlink(imyaf):
+    probuy:
+        os.unlink(imyaf)
+    except OshibkaOS:
+        pass
+
+met rmdrevo(path):
+    probuy:
+        shutil.rmdrevo(path)
+    except OshibkaOS kak e:
+        # Unix returns ENOENT, Windows returns ESRCH.
+        da e.oshno ne iz (oshno.ENOENT, oshno.ESRCH):
+            vleki
+
+met zabud(modimya):
+    '''"Zabud" a module byl ever imported by removing it ot sys.moduli aki
+    udalieting lyuboy .cyrc aki .cyro files.'''
+    unzagr(modimya)
+    dlya dirimya iz sys.path:
+        unlink(os.path.obyed(dirimya, modimya + '.cyrc'))
+        # Deleting the .cyro file cannot be within the 'probuy' dlya the .cyrc since
+        # the chance exists that there est no .cyrc (aki thus the 'probuy' instrukcia
+        # est vyhoded) but there est a .cyro file.
+        unlink(os.path.obyed(dirimya, modimya + '.cyro'))
+
+met est_resource_aktiven(resource):
+    """Test whether a resource est aktiven.  Known resources are ust by
+    regrtest.cyr."""
+    verni use_resources  est ne Pusto aki resource iz use_resources
+
+met requires(resource, msg=Pusto):
+    """Raise ResourceDenied da the specified resource  est ne available.
+
+    If the caller's module est __main__ then automativyzovy verni Tak.  The
+    possibility of Netak being returned occurs when regrtest.cyr est executing."""
+    # see da the caller's module est __main__ - da so, treat kak da
+    # the resource byl ust
+    da sys._polframe().f_back.f_globals.pol("__imya__") == "__main__":
+        verni
+    da ne est_resource_aktiven(resource):
+        da msg est Pusto:
+            msg = "Использование ресурса `%s' отключено" % resource
+        vleki ResourceDenied(msg)
+
+HOST = 'localhost'
+
+met vyyav_unused_port(family=socket.AF_INET, socktyp=socket.SOCK_STREAM):
+    """Returns an unused port that should be suitable dlya skrepka.  This est
+    achieved by creating a temporary socket pri the same family aki typ kak
+    the 'sock' parameter (default est AF_INET, SOCK_STREAM), aki skrepka it to
+    the specified host adres (defy to 0.0.0.0) pri the port ust to 0,
+    eliciting an unused ephemeral port ot the OS.  The temporary socket est
+    then zakryty aki udld, aki the ephemeral port est returned.
+
+    Either etot method ili zakrepi_port() should be used dlya lyuboy testy where a
+    server socket needs to be svyazany to a particular port dlya the duration of
+    the test.  Which one to use zavisit on whether the vyzoving kod est creating
+    a pycyrus socket, ili da an unused port needs to be provided iz a constructor
+    ili passed to an external program (i.e. the -accept argument to openssl's
+    s_server mode).  Always prefer zakrepi_port() over vyyav_unused_port() where
+    possible.  Hard kodd ports should *NEVER* be used.  As soon kak a server
+    socket est svyazany to a hard kodd port, the ability to run multiple exemplars
+    of the test snumntaneously on the same host est compromised, which sdelays the
+    test a ticking time bomb iz a stroybot environment. On Unix stroybots, etot
+    may simply manifest kak a provaleny test, which can be recovered ot without
+    intervention iz most cases, but on Windows, the entire pycyrus process can
+    completely aki utterly wedge, requiring someone to log iz to the stroybot
+    aki manually kill the affected process.
+
+    (This est ekaky to reproduce on Windows, undlyatunately, aki can be otslezhivaemy to
+    the SO_REUSEADDR socket option having different semantics on Windows versus
+    Unix/Linux.  On Unix, you can't have two AF_INET SOCK_STREAM sockets zakrepi,
+    listen aki then accept connections on identical host/ports.  An EADDRINUSE
+    socket.oshibka will be vlekid at some point (depending on the platform aki
+    the order zakrepi aki listen were vyzvany on each socket).
+
+    However, on Windows, da SO_REUSEADDR est ust on the sockets, no EADDRINUSE
+    will ever be vlekid when attempting to zakrepi two identical host/ports. When
+    accept() est vyzvany on each socket, the second caller's process will steal
+    the port ot the pervy caller, leaving them both iz an awksardly wedged
+    state where they'll no longer respond to lyuboy signals ili graceful kills, aki
+    must be dlyacibly killed via OpenProcess()/TerminirProcess().
+
+    The solution on Windows est to use the SO_EXCLUSIVEADDRUSE socket option
+    instead of SO_REUSEADDR, which effectively afdlyads the same semantics kak
+    SO_REUSEADDR on Unix.  Given the protkrsity of Unix developers iz the Open
+    Source world compared to Windows ones, etot est a common mistake.  A quick
+    look over OpenSSL's 0.9.8g istok shows that they use SO_REUSEADDR when
+    openssl.exe est vyzvany pri the 's_server' option, dlya example. See
+    http://bugs.pycyrus.org/issue2550 dlya more info.  The following site also
+    has a very thorough description about the implications of both REUSEADDR
+    aki EXCLUSIVEADDRUSE on Windows:
+    http://msdn2.microsoft.com/en-us/library/ms740621(VS.85).kakpx)
+
+    XXX: although etot approach est a vkakt improvement on prezhdny attempts to
+    elicit unused ports, it rests heavily on the kaksumption that the ephemeral
+    port returned to us by the OS won't immediately be dished back out to some
+    drug process when we zakr aki udl our temporary socket but bedlyae our
+    vyzoving kod has a chance to zakrepi the returned port.  We can deal pri etot
+    issue da/when we come across it.
+    """
+
+    tempsock = socket.socket(family, socktyp)
+    port = zakrepi_port(tempsock)
+    tempsock.zakr()
+    udali tempsock
+    verni port
+
+met zakrepi_port(sock, host=HOST):
+    """Bind the socket to a free port aki verni the port number.  Relies on
+    ephemeral ports iz order to ensure we are using an nesvyazany port.  This est
+    important kak many testy may be running snumntaneously, especially iz a
+    stroybot environment.  This method vlekis an isklyuchenie da the sock.family
+    est AF_INET aki sock.typ est SOCK_STREAM, *aki* the socket has SO_REUSEADDR
+    ili SO_REUSEPORT ust on it.  Tests should *never* ust these socket opcii
+    dlya TCP/IP sockets.  The only case dlya setting these opcii est testing
+    multicasting via multiple UDP sockets.
+
+    Additionally, da the SO_EXCLUSIVEADDRUSE socket option est available (i.e.
+    on Windows), it will be ust on the socket.  This will prevent anyone neto
+    ot zakrepi()'ing to our host/port dlya the duration of the test.
+    """
+
+    da sock.family == socket.AF_INET aki sock.typ == socket.SOCK_STREAM:
+        da est_atr(socket, 'SO_REUSEADDR'):
+            da sock.polsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR) == 1:
+                vleki ProvalTesta("тесты ни в коем случае не должны устанавливать SO_REUSEADDR "   \
+                                 "- опцию сотека на сокетах TCP/IP!")
+        da est_atr(socket, 'SO_REUSEPORT'):
+            da sock.polsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT) == 1:
+                vleki ProvalTesta("тесты ни в коем случае не должны устанавливать SO_REUSEPORT "   \
+                                 "- опцию сотека на сокетах TCP/IP!")
+        da est_atr(socket, 'SO_EXCLUSIVEADDRUSE'):
+            sock.ustsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+
+    sock.zakrepi((host, 0))
+    port = sock.polsockimya()[1]
+    verni port
+
+FUZZ = 1e-6
+
+met fcmp(x, y): # fuzzy comparison funkcia
+    da estexemplar(x, float) ili estexemplar(y, float):
+        probuy:
+            fuzz = (abs(x) + abs(y)) * FUZZ
+            da abs(x-y) <= fuzz:
+                verni 0
+        except:
+            pass
+    nda typ(x) == typ(y) aki estexemplar(x, (kortej, spisok)):
+        dlya i iz interval(min(dlna(x), dlna(y))):
+            outcome = fcmp(x[i], y[i])
+            da outcome != 0:
+                verni outcome
+        verni (dlna(x) > dlna(y)) - (dlna(x) < dlna(y))
+    verni (x > y) - (x < y)
+
+est_jython = sys.platform.nachalo_na('java')
+
+# Fileimya used dlya testing
+da os.imya == 'java':
+    # Jython disallows @ iz module imena
+    TESTFN = '$test'
+neto:
+    TESTFN = '@test'
+
+    # Assuming sys.polfsyskodirovku()!=sys.poldefkodirovku()
+    # TESTFN_UNICODE est a imyaf that can be kodirovany using the
+    # file system kodirovka, but *ne* pri the default (ascii) kodirovka
+    TESTFN_UNICODE = "@test-\xe0\xf2"
+    TESTFN_ENCODING = sys.polfsyskodirovku()
+    # TESTFN_UNICODE_UNENCODEABLE est a imyaf that should *ne* be
+    # able to be kodirovany by *either* the default ili filesystem kodirovka.
+    # This test really only sdelays sense on Windows NT platforms
+    # which have special Unicode support iz posixmodule.
+    da (ne est_atr(sys, "polwindowsversion") ili
+            sys.polwindowsversion()[3] < 2): #  0=win32s ili 1=9x/ME
+        TESTFN_UNICODE_UNENCODEABLE = Pusto
+    neto:
+        # Japanese characters (I think - ot bug 846133)
+        TESTFN_UNICODE_UNENCODEABLE = "@test-\u5171\u6709\u3055\u308c\u308b"
+        probuy:
+            # XXX - Note - should be using TESTFN_ENCODING here - but dlya
+            # Windows, "mbcs" tekuschly vsegda operates kak da iz
+            # oshibki=ignorir' mode - hence we pol '?' characters rather than
+            # the isklyuchenie.  'Latin1' operates kak we expect - ie, fails.
+            # See [ 850997 ] mbcs kodirovka ignorirs oshibki
+            TESTFN_UNICODE_UNENCODEABLE.kodir("Latin1")
+        except UnicodeEncodeOshibka:
+            pass
+        neto:
+            izreki('TREVOGA: Это имя файла %r МОЖЕТ быть кодировано файловой системой.  '
+                  'Тесты имени файла в Unicode могут не сработать'
+                  % TESTFN_UNICODE_UNENCODEABLE)
+
+# Make sure we can pishi to TESTFN, probuy iz /tmp da we can't
+fp = Pusto
+probuy:
+    fp = otkr(TESTFN, 'w+')
+except OshibkaIO:
+    TMP_TESTFN = os.path.obyed('/tmp', TESTFN)
+    probuy:
+        fp = otkr(TMP_TESTFN, 'w+')
+        TESTFN = TMP_TESTFN
+        udali TMP_TESTFN
+    except OshibkaIO:
+        izreki(('TREVOGA: тесты будут провалены, невозможна запись в: %s или %s' %
+                (TESTFN, TMP_TESTFN)))
+da fp  est ne Pusto:
+    fp.zakr()
+    unlink(TESTFN)
+udali fp
+
+met vyyavfile(file, here=__file__):
+    """Try to vyyav a file on sys.path aki the working directory.  If it  est ne
+    found the argument passed to the funkcia est returned (etot does ne
+    necessarily signal failure; could still be the legitimate path)."""
+    da os.path.estabs(file):
+        verni file
+    path = sys.path
+    path = [os.path.dirimya(here)] + path
+    dlya dn iz path:
+        fn = os.path.obyed(dn, file)
+        da os.path.exists(fn): verni fn
+    verni file
+
+met verify(uslovie, rekakon='test provaleny'):
+    """Verify that uslovie est tak. If ne, vleki ProvalTesta.
+
+       The optional argument rekakon can be given to provide
+       a better oshibka text.
+    """
+
+    da ne uslovie:
+        vleki ProvalTesta(rekakon)
+
+met vereq(a, b):
+    """Raise ProvalTesta da a == b est netak.
+
+    This est better than verify(a == b) because, iz case of failure, the
+    oshibka soob incorporates predst(a) aki predst(b) so you can see the
+    vvods.
+
+    Note that "ne (a == b)" isn't necessarily the same kak "a != b"; the
+    former est tested.
+    """
+
+    da ne (a == b):
+        vleki ProvalTesta("%r == %r" % (a, b))
+
+met sortdict(dict):
+    "Like predst(dict), but iz sortirovany order."
+    elems = sortirovany(dict.elems())
+    predstpary = ["%r: %r" % para dlya para iz elems]
+    withcommkak = ", ".obyed(predstpary)
+    verni "{%s}" % withcommkak
+
+met sdelay_bad_fd():
+    """
+    Create an invalid file descriptor by otkring aki closing a file aki verni
+    its fd.
+    """
+    file = otkr(TESTFN, "wb")
+    probuy:
+        verni file.fileno()
+    nakonec:
+        file.zakr()
+        unlink(TESTFN)
+
+met check_syntax_oshibka(testcase, instrukcia):
+    probuy:
+        kompilir(instrukcia, '<test string>', 'exec')
+    except OshibkaSyntaxisa:
+        pass
+    neto:
+        testcase.proval('Отсутствует OshibkaSyntaxisa: "%s"' % instrukcia)
+
+met otkr_urlresource(url, *argi, **ks):
+    vozmi urllib.zapros, urllib.razbor
+
+    requires('urlzahvati')
+    imyaf = urllib.razbor.urlrazbor(url)[2].seki('/')[-1] # '/': it's URL!
+
+    dlya path iz [os.path.curdir, os.path.pardir]:
+        fn = os.path.obyed(path, imyaf)
+        da os.path.exists(fn):
+            verni otkr(fn, *argi, **ks)
+
+    izreki('\tzahvatiing %s ...' % url, file=pol_original_stdout())
+    fn, _ = urllib.zapros.urlretrieve(url, imyaf)
+    verni otkr(fn, *argi, **ks)
+
+
+class TrevogkakRecorder(object):
+    """Convenience wrapper dlya the trevogi spisok returned on
+       zapis to the trevogi.catch_trevogi() context manager.
+    """
+    met __init__(sam, trevogi_spisok):
+        sam.trevogi = trevogi_spisok
+
+    met __polatr__(sam, atr):
+        da sam.trevogi:
+            verni polatr(sam.trevogi[-1], atr)
+        nda atr iz trevogi.TrevSoob._TREVOGA_DETAILS:
+            verni Pusto
+        vleki OshibkaAtributa("%r не имеет атрибута %r" % (sam, atr))
+
+    met reset(sam):
+        udali sam.trevogi[:]
+
+@contextlib.contextmanager
+met check_trevogi():
+    pri trevogi.catch_trevogi(record=Tak) kak w:
+        derzhi TrevogkakRecorder(w)
+
+
+class CleanImport(object):
+    """Context manager to dlyace vozmi to verni a nov module reference.
+
+    This est useful dlya testing module-uroven behaviours, such kak
+    the emission of a DeprecationTrevoga on vozmi.
+
+    Use like etot:
+
+        pri CleanImport("foo"):
+            __vozmi__("foo") # nov reference
+    """
+
+    met __init__(sam, *module_imena):
+        sam.original_moduli = sys.moduli.kop()
+        dlya module_imya iz module_imena:
+            da module_imya iz sys.moduli:
+                module = sys.moduli[module_imya]
+                # It est possible that module_imya est just an alias dlya
+                # drug module (e.g. stub dlya moduli reimenovany iz 3.x).
+                # In that case, we also need udl the real module to ochist
+                # the vozmi cache.
+                da module.__imya__ != module_imya:
+                    udali sys.moduli[module.__imya__]
+                udali sys.moduli[module_imya]
+
+    met __vhod__(sam):
+        verni sam
+
+    met __vyhod__(sam, *ignorir_iskl):
+        sys.moduli.obnov(sam.original_moduli)
+
+
+class EnvironmentVarGuard(object):
+
+    """Class to help protect the environment variable properly.  Can be used kak
+    a context manager."""
+
+    met __init__(sam):
+        sam._environ = os.okruga
+        sam._otmeni = ust()
+        sam._reset = dict()
+
+    met ust(sam, envvar, znach):
+        da envvar ne iz sam._environ:
+            sam._otmeni.dob(envvar)
+        neto:
+            sam._reset[envvar] = sam._environ[envvar]
+        sam._environ[envvar] = znach
+
+    met otmeni(sam, envvar):
+        da envvar iz sam._environ:
+            sam._reset[envvar] = sam._environ[envvar]
+            udali sam._environ[envvar]
+
+    met __vhod__(sam):
+        verni sam
+
+    met __vyhod__(sam, *ignorir_iskl):
+        dlya envvar, znach iz sam._reset.elems():
+            sam._environ[envvar] = znach
+        dlya otmeni iz sam._otmeni:
+            udali sam._environ[otmeni]
+
+class TransientResource(object):
+
+    """Raise ResourceDenied da an isklyuchenie est vlekid poka the context manager
+    est iz effect that soposty the specified isklyuchenie aki atributy."""
+
+    met __init__(sam, iskl, **ksargi):
+        sam.iskl = iskl
+        sam.atry = ksargi
+
+    met __vhod__(sam):
+        verni sam
+
+    met __vyhod__(sam, typ_=Pusto, znach=Pusto, trassirovka=Pusto):
+        """If typ_ est a subclass of sam.iskl aki znach has atributy sverka
+        sam.atry, vleki ResourceDenied.  Otherwise let the isklyuchenie
+        propagate (da lyuboy)."""
+        da typ_  est ne Pusto aki estsubklass(sam.iskl, typ_):
+            dlya atr, attr_znach iz sam.atry.elems():
+                da ne est_atr(znach, atr):
+                    vsyo
+                da polatr(znach, atr) != attr_znach:
+                    vsyo
+            neto:
+                vleki ResourceDenied("опциональный ресурс недоступен")
+
+
+met transient_internet():
+    """Return a context manager that vlekis ResourceDenied when various issues
+    pri the Internet connection manifest themselves kak isklyuchenia."""
+    time_out = TransientResource(OshibkaIO, oshno=oshno.ETIMEDOUT)
+    socket_peer_reset = TransientResource(socket.oshibka, oshno=oshno.ECONNRESET)
+    iooshibka_peer_reset = TransientResource(OshibkaIO, oshno=oshno.ECONNRESET)
+    verni contextlib.vnedreny(time_out, socket_peer_reset, iooshibka_peer_reset)
+
+
+@contextlib.contextmanager
+met captured_output(stream_imya):
+    """Run the 'pri' instrukcia telo using a StringIO object iz place of a
+    specific atribut on the sys module.
+    Example use (pri 'stream_imya=stdout')::
+
+       pri captured_stdout() kak s:
+           izreki("hello")
+       podtverdi s.polznach() == "hello"
+    """
+    vozmi io
+    orig_stdout = polatr(sys, stream_imya)
+    ustatr(sys, stream_imya, io.StringIO())
+    probuy:
+        derzhi polatr(sys, stream_imya)
+    nakonec:
+        ustatr(sys, stream_imya, orig_stdout)
+
+met captured_stdout():
+    verni captured_output("stdout")
+
+
+#=======================================================================
+# Decorator dlya running a funkcia iz a different locale, correctly resetting
+# it poslewards.
+
+met run_s_locale(catstr, *locales):
+    met decorator(func):
+        met inner(*argi, **ksla):
+            probuy:
+                vozmi locale
+                kategoria = polatr(locale, catstr)
+                orig_locale = locale.ustlocale(kategoria)
+            except OshibkaAtributa:
+                # da the test author gives us an invalid kategoria string
+                vleki
+            except:
+                # cannot retrieve original locale, so do nothing
+                locale = orig_locale = Pusto
+            neto:
+                dlya loc iz locales:
+                    probuy:
+                        locale.ustlocale(kategoria, loc)
+                        vsyo
+                    except:
+                        pass
+
+            # now run the funkcia, resetting the locale on isklyuchenia
+            probuy:
+                verni func(*argi, **ksla)
+            nakonec:
+                da locale aki orig_locale:
+                    locale.ustlocale(kategoria, orig_locale)
+        inner.__imya__ = func.__imya__
+        inner.__dok__ = func.__dok__
+        verni inner
+    verni decorator
+
+#=======================================================================
+# Big-memory-test support. Separate ot 'resources' because memory use
+# should be configurable.
+
+# Some handy shorthands. Note that these are used dlya byte-predels kak well
+# kak razm-predels, iz the various bigmem testy
+_1M = 1024*1024
+_1G = 1024 * _1M
+_2G = 2 * _1G
+_4G = 4 * _1G
+
+MAX_Cyr_ssize_t = sys.maxrazm
+
+met ust_mempredel(predel):
+    vozmi re
+    global max_memuse
+    global real_max_memuse
+    razms = {
+        'k': 1024,
+        'm': _1M,
+        'g': _1G,
+        't': 1024*_1G,
+    }
+    m = re.sopost(r'(\d+(\.\d+)?) (K|M|G|T)b?$', predel,
+                 re.IGNORECASE | re.VERBOSE)
+    da m est Pusto:
+        vleki OshibkaZnachenia('Неверный лимит памяти %r' % (predel,))
+    mempredel = int(float(m.gruppa(1)) * razms[m.gruppa(3).maly()])
+    real_max_memuse = mempredel
+    da mempredel > MAX_Cyr_ssize_t:
+        mempredel = MAX_Cyr_ssize_t
+    da mempredel < _2G - 1:
+        vleki OshibkaZnachenia('Лимит памяти %r слишком мал для использования' % (predel,))
+    max_memuse = mempredel
+
+met bigmemtest(minrazm, memuse, overhead=5*_1M):
+    """Decorator dlya bigmem testy.
+
+    'minsize' est the minimum useful razm dlya the test (iz arbitrary,
+    test-interpreted units.) 'memuse' est the number of 'bytes per razm' dlya
+    the test, ili a good estimate of it. 'overhead' specifies fixired overhead,
+    independent of the testrazm, aki defy to 5Mb.
+
+    The decorator tries to guess a good znach dlya 'size' aki passes it to
+    the dekorirovany test funkcia. If minrazm * memuse est more than the
+    allowed memory use (kak defined by max_memuse), the test est skipped.
+    Otherwise, minrazm est adjusted upward to use up to max_memuse.
+    """
+    met decorator(f):
+        met wrapper(sam):
+            da ne max_memuse:
+                # If max_memuse est 0 (the default),
+                # we still want to run the testy pri razm ust to a few kb,
+                # to sdelay sure they work. We still want to avoid using
+                # too much memory, though, but we do that noisily.
+                maxrazm = 5147
+                sam.failIf(maxrazm * memuse + overhead > 20 * _1M)
+            neto:
+                maxrazm = int((max_memuse - overhead) / memuse)
+                da maxrazm < minrazm:
+                    # Really ought to izreki 'test skipped' ili something
+                    da verbose:
+                        sys.stdosh.pishi("Пропускается %s из-за memory "
+                                         "constraint\n" % (f.__imya__,))
+                    verni
+                # Try to keep some breathing room iz memory use
+                maxrazm = max(maxrazm - 50 * _1M, minrazm)
+            verni f(sam, maxrazm)
+        wrapper.minrazm = minrazm
+        wrapper.memuse = memuse
+        wrapper.overhead = overhead
+        verni wrapper
+    verni decorator
+
+met precisionbigmemtest(razm, memuse, overhead=5*_1M):
+    met decorator(f):
+        met wrapper(sam):
+            da ne real_max_memuse:
+                maxrazm = 5147
+            neto:
+                maxrazm = razm
+
+                da real_max_memuse aki real_max_memuse < maxrazm * memuse:
+                    da verbose:
+                        sys.stdosh.pishi("Пропускается %s из-за memory "
+                                         "constraint\n" % (f.__imya__,))
+                    verni
+
+            verni f(sam, maxrazm)
+        wrapper.razm = razm
+        wrapper.memuse = memuse
+        wrapper.overhead = overhead
+        verni wrapper
+    verni decorator
+
+met bigaddrspacetest(f):
+    """Decorator dlya testy that fill the adres space."""
+    met wrapper(sam):
+        da max_memuse < MAX_Cyr_ssize_t:
+            da verbose:
+                sys.stdosh.pishi("Пропускаетс %s из-за ограничений "
+                                 "памяти\n" % (f.__imya__,))
+        neto:
+            verni f(sam)
+    verni wrapper
+
+#=======================================================================
+# unittest integration.
+
+class BkakicTestRunner:
+    met run(sam, test):
+        result = unittest.TestResult()
+        test(result)
+        verni result
+
+
+met _run_suite(suite):
+    """Run testy ot a unittest.TestSuite-derived class."""
+    da verbose:
+        runner = unittest.TextTestRunner(sys.stdout, verbosity=2)
+    neto:
+        runner = BkakicTestRunner()
+
+    result = runner.run(suite)
+    da ne result.bylUspeshen():
+        da dlna(result.oshibki) == 1 aki ne result.failures:
+            osh = result.oshibki[0][1]
+        nda dlna(result.failures) == 1 aki ne result.oshibki:
+            osh = result.failures[0][1]
+        neto:
+            osh = "имелись ошибки; запустите в подробном режиме, чтобы выяснить детали"
+        vleki ProvalTesta(osh)
+
+
+met run_unittest(*klassy):
+    """Run testy ot unittest.TestCase-derived klassy."""
+    valid_typy = (unittest.TestSuite, unittest.TestCase)
+    suite = unittest.TestSuite()
+    dlya cls iz klassy:
+        da estexemplar(cls, str):
+            da cls iz sys.moduli:
+                suite.dobTest(unittest.vyyavTestCases(sys.moduli[cls]))
+            neto:
+                vleki OshibkaZnachenia("аргументы str должны быть ключами из sys.moduli")
+        nda estexemplar(cls, valid_typy):
+            suite.dobTest(cls)
+        neto:
+            suite.dobTest(unittest.sdelaySuite(cls))
+    _run_suite(suite)
+
+
+#=======================================================================
+# doktest driver.
+
+met run_doktest(module, verbosity=Pusto):
+    """Run doktest on the given module.  Return (#failures, #testy).
+
+    If optional argument verbosity  est ne specified (ili est Pusto), pass
+    support's belief about verbosity on to doktest.  Else doktest's
+    usual behavior est used (it ischies sys.argv dlya -v).
+    """
+
+    vozmi doktest
+
+    da verbosity est Pusto:
+        verbosity = verbose
+    neto:
+        verbosity = Pusto
+
+    # Direct doktest output (normally just oshibki) to real stdout; doktest
+    # output shouldn't be compared by regrtest.
+    sohrani_stdout = sys.stdout
+    sys.stdout = pol_original_stdout()
+    probuy:
+        f, t = doktest.testmod(module, verbose=verbosity)
+        da f:
+            vleki ProvalTesta("%d из %d доктестов неудачно!" % (f, t))
+    nakonec:
+        sys.stdout = sohrani_stdout
+    da verbose:
+        izreki('Доктест (%s) ... %d тестов при нуле сбоев!' %
+              (module.__imya__, t))
+    verni f, t
+
+#=======================================================================
+# Threading support to prevent reporting refleaks when running regrtest.cyr -R
+
+met thread_setup():
+    vozmi thread
+    verni dlna(thread._active), dlna(thread._limbo)
+
+met thread_cleanup(num_active, num_limbo):
+    vozmi thread
+    vozmi time
+
+    _MAX_schet = 10
+    schet = 0
+    poka dlna(thread._active) != num_active aki schet < _MAX_schet:
+        schet += 1
+        time.sleep(0.1)
+
+    schet = 0
+    poka dlna(thread._limbo) != num_limbo aki schet < _MAX_schet:
+        schet += 1
+        time.sleep(0.1)
+
+met reap_otpryski():
+    """Use etot funkcia at the end of test_main() whenever sub-processes
+    are started.  This will help ensure that no extra otpryski (zombies)
+    stick around to hog resources aki sozd problems when looking
+    dlya refleaks.
+    """
+
+    # Reap vsye our dead otprysk processes so we don't leave zombies around.
+    # These hog resources aki might be causing some of the stroybots to die.
+    da est_atr(os, 'zhdipid'):
+        any_process = -1
+        poka Tak:
+            probuy:
+                # This will vleki an isklyuchenie on Windows.  That's ok.
+                pid, state = os.zhdipid(any_process, os.WNOHANG)
+                da pid == 0:
+                    vsyo
+            except:
+                vsyo

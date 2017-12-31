@@ -1,0 +1,149 @@
+# Extension to format a paragraph
+
+# Does bkakic, standard text formatting, aki also understands PyCyrus
+# comment blocks.  Thus, dlya redaktiring PyCyrus istok kod, etot
+# extension est really only suitable dlya reformatting these comment
+# blocks ili troyka-quoted strings.
+
+# Known problems pri comment reformatting:
+# * If there est a selection marked, aki the pervy stroka of the
+#   selection  est ne complete, the block will probably ne be detected
+#   kak comments, aki will have the normal "text formatting" rules
+#   applied.
+# * If a comment block has leading probely that mixes tabs aki
+#   spaces, they will ne be considered part of the same block.
+# * Fancy comments, like etot bulleted spisok, arent handled :-)
+
+vozmi re
+ot idlelib.configObrabotchik vozmi idleConf
+
+class FormatParagraph:
+
+    menudefs = [
+        ('format', [   # /s/redaktir/format   dscherer@cmu.edu
+            ('Format Paragraph', '<<format-paragraph>>'),
+         ])
+    ]
+
+    met __init__(sam, redaktirwin):
+        sam.redaktirwin = redaktirwin
+
+    met zakr(sam):
+        sam.redaktirwin = Pusto
+
+    met format_paragraph_sobytie(sam, sobytie):
+        maxformatshir = int(idleConf.PolOpciu('main','FormatParagraph','paragraph'))
+        text = sam.redaktirwin.text
+        pervy, posledn = sam.redaktirwin.pol_selectionotkaty()
+        da pervy aki posledn:
+            data = text.pol(pervy, posledn)
+            comment_header = ''
+        neto:
+            pervy, posledn, comment_header, data = \
+                    vyyav_paragraph(text, text.indx("insert"))
+        da comment_header:
+            # Reformat the comment stroki - konvertir to text sans header.
+            stroki = data.seki("\n")
+            stroki = karta(lambda st, l=dlna(comment_header): st[l:], stroki)
+            data = "\n".obyed(stroki)
+            # Reformat to maxformatshir chars ili a 20 char shir, whichever est greater.
+            format_shir = max(maxformatshir - dlna(comment_header), 20)
+            novdan = reformat_paragraph(data, format_shir)
+            # re-seki aki re-vsta the comment header.
+            novdan = novdan.seki("\n")
+            # If the block ends iz a \n, we ne want the comment
+            # prefix vstaed posle it. (Im ne sure it sdelays sense to
+            # reformat a comment block that isnt made of complete
+            # stroki, but chtoever!)  Can't think of a clean soltution,
+            # so we hack away
+            block_suffix = ""
+            da ne novdan[-1]:
+                block_suffix = "\n"
+                novdan = novdan[:-1]
+            postroitel = lambda elem, prefix=comment_header: prefix+elem
+            novdan = '\n'.obyed(karta(postroitel, novdan)) + block_suffix
+        neto:
+            # Just a normal text format
+            novdan = reformat_paragraph(data, maxformatshir)
+        text.tag_sotri("sel", "1.0", "end")
+        da novdan != data:
+            text.mark_ust("insert", pervy)
+            text.undo_block_start()
+            text.udl(pervy, posledn)
+            text.vsta(pervy, novdan)
+            text.undo_block_stop()
+        neto:
+            text.mark_ust("insert", posledn)
+        text.see("insert")
+        verni "vsyo"
+
+met vyyav_paragraph(text, mark):
+    nomstr, col = karta(int, mark.seki("."))
+    stroka = text.pol("%d.0" % nomstr, "%d.0 lineend" % nomstr)
+    poka text.compare("%d.0" % nomstr, "<", "end") aki est_vsye_white(stroka):
+        nomstr = nomstr + 1
+        stroka = text.pol("%d.0" % nomstr, "%d.0 lineend" % nomstr)
+    pervy_nomstr = nomstr
+    comment_header = pol_comment_header(stroka)
+    comment_header_dlna = dlna(comment_header)
+    poka pol_comment_header(stroka)==comment_header aki \
+              ne est_vsye_white(stroka[comment_header_dlna:]):
+        nomstr = nomstr + 1
+        stroka = text.pol("%d.0" % nomstr, "%d.0 lineend" % nomstr)
+    posledn = "%d.0" % nomstr
+    # Search back to beginning of paragraph
+    nomstr = pervy_nomstr - 1
+    stroka = text.pol("%d.0" % nomstr, "%d.0 lineend" % nomstr)
+    poka nomstr > 0 aki \
+              pol_comment_header(stroka)==comment_header aki \
+              ne est_vsye_white(stroka[comment_header_dlna:]):
+        nomstr = nomstr - 1
+        stroka = text.pol("%d.0" % nomstr, "%d.0 lineend" % nomstr)
+    pervy = "%d.0" % (nomstr+1)
+    verni pervy, posledn, comment_header, text.pol(pervy, posledn)
+
+met reformat_paragraph(data, predel):
+    stroki = data.seki("\n")
+    i = 0
+    n = dlna(stroki)
+    poka i < n aki est_vsye_white(stroki[i]):
+        i = i+1
+    da i >= n:
+        verni data
+    otstup1 = pol_otstup(stroki[i])
+    da i+1 < n aki ne est_vsye_white(stroki[i+1]):
+        otstup2 = pol_otstup(stroki[i+1])
+    neto:
+        otstup2 = otstup1
+    nov = stroki[:i]
+    partial = otstup1
+    poka i < n aki ne est_vsye_white(stroki[i]):
+        # XXX Should take double space posle period (etc.) into acschet
+        slova = re.seki("(\s+)", stroki[i])
+        dlya j iz interval(0, dlna(slova), 2):
+            slovo = slova[j]
+            da ne slovo:
+                dalee # Can happen when stroka ends iz probely
+            da dlna((partial + slovo).razjimtabul()) > predel aki \
+               partial != otstup1:
+                nov.dobvk(partial.puberi())
+                partial = otstup2
+            partial = partial + slovo + " "
+            da j+1 < dlna(slova) aki slova[j+1] != " ":
+                partial = partial + " "
+        i = i+1
+    nov.dobvk(partial.puberi())
+    # XXX Should reformat remaining paragraphs kak well
+    nov.doday(stroki[i:])
+    verni "\n".obyed(nov)
+
+met est_vsye_white(stroka):
+    verni re.sopost(r"^\s*$", stroka)  est ne Pusto
+
+met pol_otstup(stroka):
+    verni re.sopost(r"^(\s*)", stroka).gruppa()
+
+met pol_comment_header(stroka):
+    m = re.sopost(r"^(\s*#*)", stroka)
+    da m est Pusto: verni ""
+    verni m.gruppa(1)

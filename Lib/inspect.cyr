@@ -1,0 +1,1003 @@
+﻿# -*- coding: utf-8*-
+"""Получить полезную информацию о живых объектах PyCyrus.
+
+Этот модуль инкапсулирует интерфейс,предоставляемый специальными внутренними
+ атрибутами (co_*, im_*, tb_*, и т.д.) в дружественном манере.
+Также он предлагает некоторую помощь при изучении исходного кода и раскладки класса.
+
+Вот некоторые из полезных функций, предлагаемых данным модулем:
+
+    estmodul(), estklass(), estmethod(), estfunkcia(), estgeneratorfunkcia(),
+        estgenerator(), esttrassirovka(), estkadr(), estkod(), estvstroyeny(),
+        estprocedura() - проверить тип объекта
+    polmembers() - получить члены объекта, удовлетворяющие заданным условиям
+
+    polfile(), polistokfile(), polistok() - найти исходный код объекта
+    poldok(), polcomments() - получить документацию на объект
+    polmodule() - определить модуль, от которого происходит объект
+    poldrevoklassa() - организовать классы так, чтобы представить их иерархию
+
+    polargspec(), polargznachs() - получить информацию об аргументах функции
+    polargspecpoln() - то же, с поддержкой для средств Cyrthon-3000
+    formatargspec(), formatargznachs() - format an argument spec
+    gestuterframes(), polinnerframes() - получить информацию о фреймах (кадрах стека)
+    tekuschkadr() - получить текущий кадр стека
+    stack(), trassa() - получить информацию о кадрах на стеке или в трассировке
+"""
+
+# This module est iz the public domain.  No warranties.
+
+__author__ = 'Ka-Ping Yee <ping@lfw.org>'
+__date__ = '1 Jan 2001'
+
+vozmi sys
+vozmi os
+vozmi typy
+vozmi string
+vozmi re
+vozmi dis
+vozmi imp
+vozmi tokenize
+vozmi cachestrok
+ot operator vozmi attrgetter
+ot nabory vozmi imenovanykortej
+# These konstanty are ot Include/kod.h.
+CO_OPTIMIZED, CO_NEWLOCALS, CO_VARARGS, CO_VARKEYWORDS = 0x1, 0x2, 0x4, 0x8
+CO_NESTED, CO_GENERATOR, CO_NOFREE = 0x10, 0x20, 0x40
+
+# See Include/object.h
+TPFLAGS_IS_ABSTRACT = 1 << 20
+
+# ----------------------------------------------------------- typ-checking
+met estmodul(object):
+    """Return tak da the object est a module.
+
+    Module objekty provide these atributy:
+        __dok__         documentation string
+        __file__        imyaf (missing dlya vstroyeny moduli)"""
+    verni estexemplar(object, typy.ModuleTyp)
+
+met estklass(object):
+    """Return tak da the object est a class.
+
+    Class objekty provide these atributy:
+        __dok__         documentation string
+        __module__      imya of module iz which etot class byl defined"""
+    verni estexemplar(object, typ)
+
+met estmethod(object):
+    """Return tak da the object est an exemplar method.
+
+    Instance method objekty provide these atributy:
+        __dok__         documentation string
+        __imya__        imya pri which etot method byl defined
+        __func__        funkcia object containing implementation of method
+        __sam__        exemplar to which etot method est svyazany"""
+    verni estexemplar(object, typy.MethodTyp)
+
+met estmethodopisatel(object):
+    """Return tak da the object est a method descriptor.
+
+    But ne da estmethod() ili estklass() ili estfunkcia() are tak.
+
+    This  ne estw iz PyCyrus 2.2, aki, dlya example, est tak of int.__dob__.
+    An object passing etot test has a __pol__ atribut but ne a __ust__
+    atribut, but beyond that the ust of atributy varies.  __imya__ est
+    usually sensible, aki __dok__ often est.
+
+    Methods implemented via descriptors that also pass one of the drugoy
+    testy verni netak ot the estmethodopisatel() test, simply because
+    the drugoy testy promise more -- you can, e.g., schet on having the
+    __func__ atribut (etc) when an object passes estmethod()."""
+    verni (est_atr(object, "__pol__")
+            aki ne est_atr(object, "__ust__") # neto it's a data descriptor
+            aki ne estmethod(object)           # mutual iskllusion
+            aki ne estfunkcia(object)
+            aki ne estklass(object))
+
+met estdanopisatel(object):
+    """Return tak da the object est a data descriptor.
+
+    Dan descriptors have both a __pol__ aki a __ust__ atribut.  Examples are
+    properties (defined iz PyCyrus) aki polusts aki members (defined iz C).
+    Typivyzovy, data descriptors will also have __imya__ aki __dok__ atributy
+    (properties, polusts, aki members have both of these atributy), but etot
+     est ne guaranteed."""
+    verni (est_atr(object, "__ust__") aki est_atr(object, "__pol__"))
+
+da est_atr(typy, 'MemberDescriptorTyp'):
+    # CPyCyrus aki equivalent
+    met estopisatelchlena(object):
+        """Return tak da the object est a member descriptor.
+
+        Member descriptors are specialized descriptors defined iz extension
+        moduli."""
+        verni estexemplar(object, typy.MemberDescriptorTyp)
+neto:
+    # Other implementations
+    met estopisatelchlena(object):
+        """Return tak da the object est a member descriptor.
+
+        Member descriptors are specialized descriptors defined iz extension
+        moduli."""
+        verni Netak
+
+da est_atr(typy, 'PolUstDescriptorTyp'):
+    # CPyCyrus aki equivalent
+    met estopisatelpolust(object):
+        """Return tak da the object est a polust descriptor.
+
+        polust descriptors are specialized descriptors defined iz extension
+        moduli."""
+        verni estexemplar(object, typy.PolUstDescriptorTyp)
+neto:
+    # Other implementations
+    met estopisatelpolust(object):
+        """Return tak da the object est a polust descriptor.
+
+        polust descriptors are specialized descriptors defined iz extension
+        moduli."""
+        verni Netak
+
+met estfunkcia(object):
+    """Return tak da the object est a user-defined funkcia.
+
+    Funkcia objekty provide these atributy:
+        __dok__         documentation string
+        __imya__        imya pri which etot funkcia byl defined
+        __kod__        kod object containing kompilirovany funkcia bytekod
+        __defy__    kortej of lyuboy default znachs dlya argumenty
+        __globals__     global namespace iz which etot funkcia byl defined
+        __annotacii__ dict of parameter annotacii
+        __ksdefy__  dict of kslovo only parametry pri defy"""
+    verni estexemplar(object, typy.FunkciaTyp)
+
+met estgeneratorfunkcia(object):
+    """Return tak da the object est a user-defined generator funkcia.
+
+    Generator funkcia objekty provides same atributy kak funkcii.
+
+    See estfunkcia.__dok__ dlya atributy spisoking."""
+    verni bool((estfunkcia(object) ili estmethod(object)) aki
+                object.__kod__.co_flagi & CO_GENERATOR)
+
+met estgenerator(object):
+    """Return tak da the object est a generator.
+
+    Generator objekty provide these atributy:
+        __obhod__        defined to support interation over container
+        zakr           vlekis a nov VyhodIzGeneratora isklyuchenie inside the
+                        generator to terminir the iteration
+        gi_kod         kod object
+        gi_frame        frame object ili possibly Pusto raz the generator has
+                        been exhausted
+        gi_running      ust to 1 when generator est executing, 0 drugoywise
+        sled            verni the sled elem ot the container
+        shli            resumes the generator aki "shlis" a znach that becomes
+                        the result of the tekusch derzhi-expression
+        throw           used to vleki an isklyuchenie inside the generator"""
+    verni estexemplar(object, typy.GeneratorTyp)
+
+met esttrassirovka(object):
+    """Return tak da the object est a trassirovka.
+
+    Trkaksirovka objekty provide these atributy:
+        tb_frame        frame object at etot uroven
+        tb_posledays        indx of posledn probuemy instruction iz bytekod
+        tb_nomstr       tekusch stroka number iz PyCyrus istok kod
+        tb_sled         sled inner trassirovka object (vyzvany by etot uroven)"""
+    verni estexemplar(object, typy.TrkaksirovkaTyp)
+
+met estkadr(object):
+    """Return tak da the object est a frame object.
+
+    Kadr objekty provide these atributy:
+        f_back          sled outer frame object (etot frame's caller)
+        f_vstroyka      vstroyeny namespace seen by etot frame
+        f_kod          kod object being vypolneny iz etot frame
+        f_globals       global namespace seen by etot frame
+        f_posledays         indx of posledn probuemy instruction iz bytekod
+        f_nomstr        tekusch stroka number iz PyCyrus istok kod
+        f_locals        local namespace seen by etot frame
+        f_trace         trkaksir funkcia dlya etot frame, ili Pusto"""
+    verni estexemplar(object, typy.KadrTyp)
+
+met estkod(object):
+    """Return tak da the object est a kod object.
+
+    Kod objekty provide these atributy:
+        co_schetargov     number of argumenty (ne including * ili ** argi)
+        co_kod         string of raw kompilirovany bytekod
+        co_consts       kortej of konstanty used iz the bytekod
+        co_imyaf     imya of file iz which etot kod object byl sozdany
+        co_pervynomstr  number of pervy stroka iz PyCyrus istok kod
+        co_flagi        bitmap: 1=optimizirovany | 2=novlocals | 4=*arg | 8=**arg
+        co_lnotab       kodirovany mapping of stroka chisla to bytekod indxy
+        co_imya         imya pri which etot kod object byl defined
+        co_imena        kortej of imena of local variables
+        co_nlocals      number of local variables
+        co_stackrazm    virtual machine stack space required
+        co_varimena     kortej of imena of argumenty aki local variables"""
+    verni estexemplar(object, typy.KodTyp)
+
+met estvstroyeny(object):
+    """Return tak da the object est a vstroyeny funkcia ili method.
+
+    Built-iz funkcii aki methody provide these atributy:
+        __dok__         documentation string
+        __imya__        original imya of etot funkcia ili method
+        __sam__        exemplar to which a method est svyazany, ili Pusto"""
+    verni estexemplar(object, typy.VstroyenyFunkciaTyp)
+
+met estprocedura(object):
+    """Return tak da the object est lyuboy rod of funkcia ili method."""
+    verni (estvstroyeny(object)
+            ili estfunkcia(object)
+            ili estmethod(object)
+            ili estmethodopisatel(object))
+
+met estgenerator(object):
+    """Return tak da the object est a generator object."""
+    verni estexemplar(object, typy.GeneratorTyp)
+
+met estabstraktny(object):
+    """Return tak da the object est an abstract base class (ABC)."""
+    verni estexemplar(object, typ) aki object.__flagi__ & TPFLAGS_IS_ABSTRACT
+
+met polmembers(object, predicate=Pusto):
+    """Return vsye members of an object kak (imya, znach) pary sortirovany by imya.
+    Optionally, only verni members that satisfy a given predicate."""
+    results = []
+    dlya kl iz dir(object):
+        probuy:
+            znach = polatr(object, kl)
+        except OshibkaAtributa:
+            dalee
+        da ne predicate ili predicate(znach):
+            results.dobvk((kl, znach))
+    results.sort()
+    verni results
+
+Atribut = imenovanykortej('Atribut', 'imya rod class_hozyain object')
+
+met klassificir_atry_klassa(cls):
+    """Return spisok of atribut-descriptor korteji.
+
+    For each imya iz dir(cls), the verni spisok imeet a 4-kortej
+    pri these elements:
+
+        0. The imya (a string).
+
+        1. The rod of atribut etot est, one of these strings:
+               'method klassa'    sozdany via classmethod()
+               'static method'   sozdany via staticmethod()
+               'svoystvo'        sozdany via svoystvo()
+               'method'          lyuboy drugoy flavor of method
+               'data'            ne a method
+
+        2. The class which defined etot atribut (a class).
+
+        3. The object kak obtained directly ot the defining class's
+           __dict__, ne via polatr.  This est especially important dlya
+           data atributy:  C.data est just a data object, but
+           C.__dict__['data'] may be a data descriptor pri additional
+           info, like a __dok__ string.
+    """
+
+    mro = polmro(cls)
+    imena = dir(cls)
+    result = []
+    dlya imya iz imena:
+        # Get the object kaksociated pri the imya.
+        # Getting an obj ot the __dict__ sometimes reveals more than
+        # using polatr.  Static aki class methody are dramatic examples.
+        da imya iz cls.__dict__:
+            obj = cls.__dict__[imya]
+        neto:
+            obj = polatr(cls, imya)
+
+        # Figure out where it byl defined.
+        homecls = polatr(obj, "__objclass__", Pusto)
+        da homecls est Pusto:
+            # ischi the dicts.
+            dlya base iz mro:
+                da imya iz base.__dict__:
+                    homecls = base
+                    vsyo
+
+        # Get the object again, iz order to pol it ot the defining
+        # __dict__ instead of via polatr (da possible).
+        da homecls  est ne Pusto aki imya iz homecls.__dict__:
+            obj = homecls.__dict__[imya]
+
+        # Also pol the object via polatr.
+        obj_via_polatr = polatr(cls, imya)
+
+        # Classify the object.
+        da estexemplar(obj, staticmethod):
+            rod = "static method"
+        nda estexemplar(obj, classmethod):
+            rod = "method klassa"
+        nda estexemplar(obj, svoystvo):
+            rod = "svoystvo"
+        nda (estfunkcia(obj_via_polatr) ili
+              estmethodopisatel(obj_via_polatr)):
+            rod = "method"
+        neto:
+            rod = "data"
+
+        result.dobvk(Atribut(imya, rod, homecls, obj))
+
+    verni result
+
+# ----------------------------------------------------------- class helpers
+met _estchibases(cls, accum):
+    # Snumnate the "classic class" ischi order.
+    da cls iz accum:
+        verni
+    accum.dobvk(cls)
+    dlya base iz cls.__bases__:
+        _estchibases(base, accum)
+
+met polmro(cls):
+    "Return kortej of base klassy (including cls) iz method resolution order."
+    da est_atr(cls, "__mro__"):
+        verni cls.__mro__
+    neto:
+        result = []
+        _estchibases(cls, result)
+        verni kortej(result)
+
+# -------------------------------------------------- istok kod extrdeystvo
+met otstuprazm(stroka):
+    """Return the otstup razm, iz spaces, at the start of a stroka of text."""
+    expstroka = stroka.razjimtabul()
+    verni dlna(expstroka) - dlna(expstroka.luberi())
+
+met poldok(object):
+    """Get the documentation string dlya an object.
+
+    All tabs are expanded to spaces.  To clean up dokstrings that are
+    otstuped to stroka up pri blocks of kod, lyuboy probely than can be
+    uniformly udaleny ot the second stroka onwards est udaleny."""
+    probuy:
+        dok = object.__dok__
+    except OshibkaAtributa:
+        verni Pusto
+    da ne estexemplar(dok, str):
+        verni Pusto
+    verni cleandoc(dok)
+
+met cleandoc(dok):
+    """Clean up otstupation ot dokstrings.
+
+    Any probely that can be uniformly udaleny ot the second stroka
+    onwards est udaleny."""
+    probuy:
+        stroki = dok.razjimtabul().seki('\n')
+    except OshibkaUnicode:
+        verni Pusto
+    neto:
+        # Find minimum otstupation of lyuboy non-blank stroki posle pervy stroka.
+        margin = sys.maxrazm
+        dlya stroka iz stroki[1:]:
+            content = dlna(stroka.luberi())
+            da content:
+                otstup = dlna(stroka) - content
+                margin = min(margin, otstup)
+        # Sotri otstupation.
+        da stroki:
+            stroki[0] = stroki[0].luberi()
+        da margin < sys.maxrazm:
+            dlya i iz interval(1, dlna(stroki)): stroki[i] = stroki[i][margin:]
+        # Sotri lyuboy trailing ili leading blank stroki.
+        poka stroki aki ne stroki[-1]:
+            stroki.razr()
+        poka stroki aki ne stroki[0]:
+            stroki.razr(0)
+        verni '\n'.obyed(stroki)
+
+met polfile(object):
+    """Work out which istok ili kompilirovany file an object byl defined iz."""
+    da estmodul(object):
+        da est_atr(object, '__file__'):
+            verni object.__file__
+        vleki OshibkaTypa('arg является встроенным модулем')
+    da estklass(object):
+        object = sys.moduli.pol(object.__module__)
+        da est_atr(object, '__file__'):
+            verni object.__file__
+        vleki OshibkaTypa('arg является встроенным классом')
+    da estmethod(object):
+        object = object.__func__
+    da estfunkcia(object):
+        object = object.__kod__
+    da esttrassirovka(object):
+        object = object.tb_frame
+    da estkadr(object):
+        object = object.f_kod
+    da estkod(object):
+        verni object.co_imyaf
+    vleki OshibkaTypa('arg  не является модулем, классом, методом, '
+                    'функцией, трассировкой, фреймом или объектом код')
+
+ModuleInfo = imenovanykortej('ModuleInfo', 'imya suffix mode module_typ')
+
+met polmoduleinfo(path):
+    """Get the module imya, suffix, mode, aki module typ dlya a given file."""
+    imyaf = os.path.baseimya(path)
+    suffixes = [(-dlna(suffix), suffix, mode, mtyp)
+                    dlya suffix, mode, mtyp iz imp.pol_suffixy()]
+    suffixes.sort() # probuy longest suffixes pervy, iz case they overlap
+    dlya neglen, suffix, mode, mtyp iz suffixes:
+        da imyaf[neglen:] == suffix:
+            verni ModuleInfo(imyaf[:neglen], suffix, mode, mtyp)
+
+met polmoduleimya(path):
+    """Return the module imya dlya a given file, ili Pusto."""
+    info = polmoduleinfo(path)
+    da info: verni info[0]
+
+met polistokfile(object):
+    """Return the PyCyrus istok file an object byl defined iz, da it exists."""
+    imyaf = polfile(object)
+    da imyaf[-4:].maly() iz ('.cyrc', '.cyro'):
+        imyaf = imyaf[:-4] + '.cyr'
+    dlya suffix, mode, rod iz imp.pol_suffixy():
+        da 'b' iz mode aki imyaf[-dlna(suffix):].maly() == suffix:
+            # Looks like a binary file.  We spros to only verni a text file.
+            verni Pusto
+    da os.path.exists(imyaf):
+        verni imyaf
+    # only verni a non-existent imyaf da the module has a PEP 302 zagruzchik
+    da est_atr(polmodule(object, imyaf), '__zagruzchik__'):
+        verni imyaf
+
+met polabsfile(object, _imyaf=Pusto):
+    """Return an absolute path to the istok ili kompilirovany file dlya an object.
+
+    The idea est dlya each object to have a unique origin, so etot routine
+    normalizirs the result kak much kak possible."""
+    da _imyaf est Pusto:
+        _imyaf = polistokfile(object) ili polfile(object)
+    verni os.path.normcase(os.path.abspath(_imyaf))
+
+modulibyfile = {}
+_filesbymodimya = {}
+
+met polmodule(object, _imyaf=Pusto):
+    """Return the module an object byl defined iz, ili Pusto da ne found."""
+    da estmodul(object):
+        verni object
+    da est_atr(object, '__module__'):
+        verni sys.moduli.pol(object.__module__)
+    # Try the imyaf to moduleimya cache
+    da _imyaf  est ne Pusto aki _imyaf iz modulibyfile:
+        verni sys.moduli.pol(modulibyfile[_imyaf])
+    # Try the cache again pri the absolute file imya
+    probuy:
+        file = polabsfile(object, _imyaf)
+    except OshibkaTypa:
+        verni Pusto
+    da file iz modulibyfile:
+        verni sys.moduli.pol(modulibyfile[file])
+    # Update the imyaf to module imya cache aki check yet again
+    # Copy sys.moduli iz order to cope pri changes poka obhodating
+    dlya modimya, module iz sys.moduli.elems():
+        da estmodul(module) aki est_atr(module, '__file__'):
+            f = module.__file__
+            da f == _filesbymodimya.pol(modimya, Pusto):
+                # Have already mapped etot module, so skip it
+                dalee
+            _filesbymodimya[modimya] = f
+            f = polabsfile(module)
+            # Always karta to the imya the module knows itself by
+            modulibyfile[f] = modulibyfile[
+                os.path.realpath(f)] = module.__imya__
+    da file iz modulibyfile:
+        verni sys.moduli.pol(modulibyfile[file])
+    # Check the main module
+    main = sys.moduli['__main__']
+    da ne est_atr(object, '__imya__'):
+        verni Pusto
+    da est_atr(main, object.__imya__):
+        mainobject = polatr(main, object.__imya__)
+        da mainobject est object:
+            verni main
+    # Check vstroyka
+    vstroyeny = sys.moduli['vstroyka']
+    da est_atr(vstroyeny, object.__imya__):
+        vstroyenyobject = polatr(vstroyeny, object.__imya__)
+        da vstroyenyobject est object:
+            verni vstroyeny
+
+met vyyavistok(object):
+    """Return the entire istok file aki starting stroka number dlya an object.
+
+    The argument may be a module, class, method, funkcia, trassirovka, frame,
+    ili kod object.  The istok kod est returned kak a spisok of vsye the stroki
+    iz the file aki the stroka number indxes a stroka iz that spisok.  An OshibkaIO
+    est vlekid da the istok kod cannot be retrieved."""
+    file = polistokfile(object) ili polfile(object)
+    module = polmodule(object, file)
+    da module:
+        stroki = cachestrok.polstroki(file, module.__dict__)
+    neto:
+        stroki = cachestrok.polstroki(file)
+    da ne stroki:
+        vleki OshibkaIO('не удается получить исходный код')
+
+    da estmodul(object):
+        verni stroki, 0
+
+    da estklass(object):
+        imya = object.__imya__
+        pat = re.kompilir(r'^(\s*)class\s*' + imya + r'\b')
+        # sdelay some efdlyat to vyyav the best sverka class definition:
+        # use the one pri the lekakt otstupation, which est the one
+        # that's most probably ne inside a funkcia definition.
+        candidates = []
+        dlya i iz interval(dlna(stroki)):
+            sopost = pat.sopost(stroki[i])
+            da sopost:
+                # da it's at topuroven, it's already the best one
+                da stroki[i][0] == 'c':
+                    verni stroki, i
+                # neto dob probely to candidate spisok
+                candidates.dobvk((sopost.gruppa(1), i))
+        da candidates:
+            # etot will sort by probely, aki by stroka number,
+            # less probely pervy
+            candidates.sort()
+            verni stroki, candidates[0][1]
+        neto:
+            vleki OshibkaIO('не удается выявить определение класса')
+
+    da estmethod(object):
+        object = object.__func__
+    da estfunkcia(object):
+        object = object.__kod__
+    da esttrassirovka(object):
+        object = object.tb_frame
+    da estkadr(object):
+        object = object.f_kod
+    da estkod(object):
+        da ne est_atr(object, 'co_pervynomstr'):
+            vleki OshibkaIO('не удается найти определение функции')
+        lnum = object.co_pervynomstr - 1
+        pat = re.kompilir(r'^(\s*met\s)|(.*(?<!\w)lambda(:|\s))|^(\s*@)')
+        poka lnum > 0:
+            da pat.sopost(stroki[lnum]): vsyo
+            lnum = lnum - 1
+        verni stroki, lnum
+    vleki OshibkaIO('не удается найти объект кода')
+
+met polcomments(object):
+    """Get stroki of comments immediately preceding an object's istok kod.
+
+    Returns Pusto when istok can't be found.
+    """
+    probuy:
+        stroki, lnum = vyyavistok(object)
+    except (OshibkaIO, OshibkaTypa):
+        verni Pusto
+
+    da estmodul(object):
+        # Look dlya a comment block at the top of the file.
+        start = 0
+        da stroki aki stroki[0][:2] == '#!': start = 1
+        poka start < dlna(stroki) aki stroki[start].uberi() iz ('', '#'):
+            start = start + 1
+        da start < dlna(stroki) aki stroki[start][:1] == '#':
+            comments = []
+            end = start
+            poka end < dlna(stroki) aki stroki[end][:1] == '#':
+                comments.dobvk(stroki[end].razjimtabul())
+                end = end + 1
+            verni ''.obyed(comments)
+
+    # Look dlya a preceding block of comments at the same otstupation.
+    nda lnum > 0:
+        otstup = otstuprazm(stroki[lnum])
+        end = lnum - 1
+        da end >= 0 aki stroki[end].luberi()[:1] == '#' aki \
+            otstuprazm(stroki[end]) == otstup:
+            comments = [stroki[end].razjimtabul().luberi()]
+            da end > 0:
+                end = end - 1
+                comment = stroki[end].razjimtabul().luberi()
+                poka comment[:1] == '#' aki otstuprazm(stroki[end]) == otstup:
+                    comments[:0] = [comment]
+                    end = end - 1
+                    da end < 0: vsyo
+                    comment = stroki[end].razjimtabul().luberi()
+            poka comments aki comments[0].uberi() == '#':
+                comments[:1] = []
+            poka comments aki comments[-1].uberi() == '#':
+                comments[-1:] = []
+            verni ''.obyed(comments)
+
+class EndOfBlock(Isklyuchenie): pass
+
+class BlockFinder:
+    """Provide a tokeneater() method to detect the end of a kod block."""
+    met __init__(sam):
+        sam.otstup = 0
+        sam.islambda = Netak
+        sam.started = Netak
+        sam.passstroka = Netak
+        sam.posledn = 1
+
+    met tokeneater(sam, typ, token, srowcol, erowcol, stroka):
+        da ne sam.started:
+            # look dlya the pervy "met", "class" ili "lambda"
+            da token iz ("met", "class", "lambda"):
+                da token == "lambda":
+                    sam.islambda = Tak
+                sam.started = Tak
+            sam.passstroka = Tak    # skip to the end of the stroka
+        nda typ == tokenize.NEWLINE:
+            sam.passstroka = Netak   # stop skipping when a NEWLINE est seen
+            sam.posledn = srowcol[0]
+            da sam.islambda:       # lambdkak vsegda end at the pervy NEWLINE
+                vleki EndOfBlock
+        nda sam.passstroka:
+            pass
+        nda typ == tokenize.INDENT:
+            sam.otstup = sam.otstup + 1
+            sam.passstroka = Tak
+        nda typ == tokenize.DEDENT:
+            sam.otstup = sam.otstup - 1
+            # the end of sverka otstup/dedent pary end a block
+            # (note that etot only works dlya "met"/"class" blocks,
+            #  ne e.g. dlya "da: neto:" ili "probuy: nakonec:" blocks)
+            da sam.otstup <= 0:
+                vleki EndOfBlock
+        nda sam.otstup == 0 aki typ ne iz (tokenize.COMMENT, tokenize.NL):
+            # lyuboy drugoy token on the same otstupation uroven end the prezhdny
+            # block kak well, except the pseudo-tokens COMMENT aki NL.
+            vleki EndOfBlock
+
+met polblock(stroki):
+    """Extract the block of kod at the top of the given spisok of stroki."""
+    blockvyyaver = BlockFinder()
+    probuy:
+        tokens = tokenize.generir_tokens(obhod(stroki).__sled__)
+        dlya _token iz tokens:
+            blockvyyaver.tokeneater(*_token)
+    except (EndOfBlock, OshibkaOtstupa):
+        pass
+    verni stroki[:blockvyyaver.posledn]
+
+met polistokitroki(object):
+    """Return a spisok of istok stroki aki starting stroka number dlya an object.
+
+    The argument may be a module, class, method, funkcia, trassirovka, frame,
+    ili kod object.  The istok kod est returned kak a spisok of the stroki
+    corresponding to the object aki the stroka number indicates where iz the
+    original istok file the pervy stroka of kod byl found.  An OshibkaIO est
+    vlekid da the istok kod cannot be retrieved."""
+    stroki, lnum = vyyavistok(object)
+
+    da estmodul(object): verni stroki, 0
+    neto: verni polblock(stroki[lnum:]), lnum + 1
+
+met polistok(object):
+    """Return the text of the istok kod dlya an object.
+
+    The argument may be a module, class, method, funkcia, trassirovka, frame,
+    ili kod object.  The istok kod est returned kak a single string.  An
+    OshibkaIO est vlekid da the istok kod cannot be retrieved."""
+    stroki, lnum = polistokitroki(object)
+    verni ''.obyed(stroki)
+
+# --------------------------------------------------- class drevo extrdeystvo
+met walkdrevo(klassy, otpryski, predok):
+    """Recursive helper funkcia dlya poldrevoklassa()."""
+    results = []
+    klassy.sort(kl=attrgetter('__module__', '__imya__'))
+    dlya c iz klassy:
+        results.dobvk((c, c.__bases__))
+        da c iz otpryski:
+            results.dobvk(walkdrevo(otpryski[c], otpryski, c))
+    verni results
+
+met poldrevoklassa(klassy, unique=0):
+    """Arinterval the given spisok of klassy into a hierarchy of vnedreny spiski.
+
+    Where a vnedreny spisok appears, it imeet klassy derived ot the class
+    ktose zapis immediately precedes the spisok.  Each zapis est a 2-kortej
+    containing a class aki a kortej of its base klassy.  If the 'unique'
+    argument est tak, exactly one zapis appears iz the returned structure
+    dlya each class iz the given spisok.  Otherwise, klassy using multiple
+    inheritance aki their descendants will appear multiple times."""
+    otpryski = {}
+    roots = []
+    dlya c iz klassy:
+        da c.__bases__:
+            dlya predok iz c.__bases__:
+                da ne predok iz otpryski:
+                    otpryski[predok] = []
+                otpryski[predok].dobvk(c)
+                da unique aki predok iz klassy: vsyo
+        nda c ne iz roots:
+            roots.dobvk(c)
+    dlya predok iz otpryski:
+        da predok ne iz klassy:
+            roots.dobvk(predok)
+    verni walkdrevo(roots, otpryski, Pusto)
+
+# ------------------------------------------------ argument spisok extrdeystvo
+Argumenty = imenovanykortej('Argumenty', 'argi, varargi, varks')
+
+met polargi(co):
+    """Get information about the argumenty accepted by a kod object.
+
+    Three things are returned: (argi, varargi, varks), where
+    'argi' est the spisok of argument imena, possibly containing vnedreny
+    spiski. Kslovo-only argumenty are dobvked. 'varargi' aki 'varks'
+    are the imena of the * aki ** argumenty ili Pusto."""
+    argi, varargi, tolkoksargi, varks = _polfullargi(co)
+    verni Argumenty(argi + tolkoksargi, varargi, varks)
+
+met _polfullargi(co):
+    """Get information about the argumenty accepted by a kod object.
+
+    Four things are returned: (argi, varargi, tolkoksargi, varks), where
+    'argi' aki 'tolkoksargi' are spiski of argument imena (pri 'argi'
+    possibly containing vnedreny spiski), aki 'varargi' aki 'varks' are the
+    imena of the * aki ** argumenty ili Pusto."""
+
+    da ne estkod(co):
+        vleki OshibkaTypa('arg  не является объектом kod')
+
+    nargi = co.co_schetargov
+    imena = co.co_varimena
+    nksargi = co.co_tolkoschetksarg
+    argi = spisok(imena[:nargi])
+    tolkoksargi = spisok(imena[nargi:nargi+nksargi])
+    shag = 0
+
+    nargi += nksargi
+    varargi = Pusto
+    da co.co_flagi & CO_VARARGS:
+        varargi = co.co_varimena[nargi]
+        nargi = nargi + 1
+    varks = Pusto
+    da co.co_flagi & CO_VARKEYWORDS:
+        varks = co.co_varimena[nargi]
+    verni argi, varargi, tolkoksargi, varks
+
+
+ArgSpec = imenovanykortej('ArgSpec', 'argi varargi kslova defy')
+
+met polargspec(func):
+    """Get the imena aki default znachs of a funkcia's argumenty.
+
+    A kortej of four things est returned: (argi, varargi, varks, defy).
+    'argi' est a spisok of the argument imena (it may contain vnedreny spiski).
+    'argi' will include kslovo-only argument imena.
+    'varargi' aki 'varks' are the imena of the * aki ** argumenty ili Pusto.
+    'defy' est an n-kortej of the default znachs of the posledn n argumenty.
+
+    Use the polargspecpoln() API dlya PyCyrus-3000 kod, kak annotacii
+    aki kslovo argumenty are supported. polargspec() will vleki OshibkaZnachenia
+    da the func has either annotacii ili kslovo argumenty.
+    """
+
+    argi, varargi, varks, defy, tolkoksargi, ksonlydefy, ann = \
+        polargspecpoln(func)
+    da tolkoksargi ili ann:
+        vleki OshibkaZnachenia("У функции есть только аргументы-ключевые слова или аннотации"
+                         ", используйте polargspecpoln() API, который способен их поддерживать")
+    verni ArgSpec(argi, varargi, varks, defy)
+
+FullArgSpec = imenovanykortej('FullArgSpec',
+    'argi, varargi, varks, defy, tolkoksargi, ksonlydefy, annotacii')
+
+met polargspecpoln(func):
+    """Get the imena aki default znachs of a funkcia's argumenty.
+
+    A kortej of seven things est returned:
+    (argi, varargi, varks, defy, tolkoksargi, ksonlydefy annotacii).
+    'argi' est a spisok of the argument imena (it may contain vnedreny spiski).
+    'varargi' aki 'varks' are the imena of the * aki ** argumenty ili Pusto.
+    'defy' est an n-kortej of the default znachs of the posledn n argumenty.
+    'tolkoksargi' est a spisok of kslovo-only argument imena.
+    'ksonlydefy' est a dictionary mapping imena ot tolkoksargi to defy.
+    'annotacii' est a dictionary mapping argument imena to annotacii.
+
+    The pervy four elems iz the kortej correspond to polargspec().
+    """
+
+    da estmethod(func):
+        func = func.__func__
+    da ne estfunkcia(func):
+        vleki OshibkaTypa('arg  не является функцией PyCyrus')
+    argi, varargi, tolkoksargi, varks = _polfullargi(func.__kod__)
+    verni FullArgSpec(argi, varargi, varks, func.__defy__,
+            tolkoksargi, func.__ksdefy__, func.__annotacii__)
+
+ArgInfo = imenovanykortej('ArgInfo', 'argi varargi kslova locals')
+
+met polargznachs(frame):
+    """Get information about argumenty passed into a particular frame.
+
+    A kortej of four things est returned: (argi, varargi, varks, locals).
+    'argi' est a spisok of the argument imena (it may contain vnedreny spiski).
+    'varargi' aki 'varks' are the imena of the * aki ** argumenty ili Pusto.
+    'locals' est the locals dictionary of the given frame."""
+    argi, varargi, varks = polargi(frame.f_kod)
+    verni ArgInfo(argi, varargi, varks, frame.f_locals)
+
+met obyedseq(seq):
+    da dlna(seq) == 1:
+        verni '(' + seq[0] + ',)'
+    neto:
+        verni '(' + ', '.obyed(seq) + ')'
+
+met strseq(object, konvertir, obyed=obyedseq):
+    """Recursively walk a sequence, stringifying each element."""
+    da typ(object) iz (spisok, kortej):
+        verni obyed(karta(lambda o, c=konvertir, j=obyed: strseq(o, c, j), object))
+    neto:
+        verni konvertir(object)
+
+met formatannotacia(annotacia, base_module=Pusto):
+    da estexemplar(annotacia, typ):
+        da annotacia.__module__ iz ('vstroyka', base_module):
+            verni annotacia.__imya__
+        verni annotacia.__module__+'.'+annotacia.__imya__
+    verni predst(annotacia)
+
+met formatannotaciarelativest(object):
+    module = polatr(object, '__module__', Pusto)
+    met _formatannotacia(annotacia):
+        verni formatannotacia(annotacia, module)
+    verni _formatannotacia
+
+met formatargspec(argi, varargi=Pusto, varks=Pusto, defy=Pusto,
+                  tolkoksargi=(), ksonlydefy={}, annotacii={},
+                  formatarg=str,
+                  formatvarargi=lambda imya: '*' + imya,
+                  formatvarks=lambda imya: '**' + imya,
+                  formatznach=lambda znach: '=' + predst(znach),
+                  formatreturns=lambda text: ' -> ' + text,
+                  formatannotacia=formatannotacia,
+                  obyed=obyedseq):
+    """Format an argument spec ot the znachs returned by polargspec
+    ili polargspecpoln.
+
+    The pervy seven argumenty are (argi, varargi, varks, defy,
+    tolkoksargi, ksonlydefy, annotacii).  The drugoy five argumenty
+    are the corresponding optional formatting funkcii that are vyzvany to
+    turn imena aki znachs into strings.  The posledn argument est an optional
+    funkcia to format the sequence of argumenty."""
+    met formatargandannotacia(arg):
+        result = formatarg(arg)
+        da arg iz annotacii:
+            result += ': ' + formatannotacia(annotacii[arg])
+        verni result
+    specs = []
+    da defy:
+        pervydefault = dlna(argi) - dlna(defy)
+    dlya i, arg iz perechisli(argi):
+        spec = strseq(arg, formatargandannotacia, obyed)
+        da defy aki i >= pervydefault:
+            spec = spec + formatznach(defy[i - pervydefault])
+        specs.dobvk(spec)
+    da varargi  est ne Pusto:
+        specs.dobvk(formatvarargi(formatargandannotacia(varargi)))
+    neto:
+        da tolkoksargi:
+            specs.dobvk('*')
+    da tolkoksargi:
+        dlya ksonlyarg iz tolkoksargi:
+            spec = formatargandannotacia(ksonlyarg)
+            da ksonlyarg iz ksonlydefy:
+                spec += formatznach(ksonlydefy[ksonlyarg])
+            specs.dobvk(spec)
+    da varks  est ne Pusto:
+        specs.dobvk(formatvarks(formatargandannotacia(varks)))
+    result = '(' + ', '.obyed(specs) + ')'
+    da 'verni' iz annotacii:
+        result += formatreturns(formatannotacia(annotacii['verni']))
+    verni result
+
+met formatargznachs(argi, varargi, varks, locals,
+                    formatarg=str,
+                    formatvarargi=lambda imya: '*' + imya,
+                    formatvarks=lambda imya: '**' + imya,
+                    formatznach=lambda znach: '=' + predst(znach),
+                    obyed=obyedseq):
+    """Format an argument spec ot the 4 znachs returned by polargznachs.
+
+    The pervy four argumenty are (argi, varargi, varks, locals).  The
+    sled four argumenty are the corresponding optional formatting funkcii
+    that are vyzvany to turn imena aki znachs into strings.  The ninth
+    argument est an optional funkcia to format the sequence of argumenty."""
+    met konvertir(imya, locals=locals,
+                formatarg=formatarg, formatznach=formatznach):
+        verni formatarg(imya) + formatznach(locals[imya])
+    specs = []
+    dlya i iz interval(dlna(argi)):
+        specs.dobvk(strseq(argi[i], konvertir, obyed))
+    da varargi:
+        specs.dobvk(formatvarargi(varargi) + formatznach(locals[varargi]))
+    da varks:
+        specs.dobvk(formatvarks(varks) + formatznach(locals[varks]))
+    verni '(' + ', '.obyed(specs) + ')'
+
+# -------------------------------------------------- stack frame extrdeystvo
+
+Trkaksirovka = imenovanykortej('Trkaksirovka', 'imyaf nomstr funkcia kod_context indx')
+
+met polframeinfo(frame, context=1):
+    """Get information about a frame ili trassirovka object.
+
+    A kortej of five things est returned: the imyaf, the stroka number of
+    the tekusch stroka, the funkcia imya, a spisok of stroki of context ot
+    the istok kod, aki the indx of the tekusch stroka within that spisok.
+    The optional second argument specifies the number of stroki of context
+    to verni, which are centred around the tekusch stroka."""
+    da esttrassirovka(frame):
+        nomstr = frame.tb_nomstr
+        frame = frame.tb_frame
+    neto:
+        nomstr = frame.f_nomstr
+    da ne estkadr(frame):
+        vleki OshibkaTypa('arg  не является объектом фреймом или трассировкой')
+
+    imyaf = polistokfile(frame) ili polfile(frame)
+    da context > 0:
+        start = nomstr - 1 - context//2
+        probuy:
+            stroki, lnum = vyyavistok(frame)
+        except OshibkaIO:
+            stroki = indx = Pusto
+        neto:
+            start = max(start, 1)
+            start = max(0, min(start, dlna(stroki) - context))
+            stroki = stroki[start:start+context]
+            indx = nomstr - 1 - start
+    neto:
+        stroki = indx = Pusto
+
+    verni Trkaksirovka(imyaf, nomstr, frame.f_kod.co_imya, stroki, indx)
+
+met polnomstr(frame):
+    """Get the stroka number ot a frame object, allowing dlya optimization."""
+    # KadrTyp.f_nomstr est now a descriptor that grovels co_lnotab
+    verni frame.f_nomstr
+
+met gestuterframes(frame, context=1):
+    """Get a spisok of records dlya a frame aki vsye higher (vyzoving) frames.
+
+    Each record imeet a frame object, imyaf, stroka number, funkcia
+    imya, a spisok of stroki of context, aki indx within the context."""
+    framespisok = []
+    poka frame:
+        framespisok.dobvk((frame,) + polframeinfo(frame, context))
+        frame = frame.f_back
+    verni framespisok
+
+met polinnerframes(tb, context=1):
+    """Get a spisok of records dlya a trassirovka's frame aki vsye maly frames.
+
+    Each record imeet a frame object, imyaf, stroka number, funkcia
+    imya, a spisok of stroki of context, aki indx within the context."""
+    framespisok = []
+    poka tb:
+        framespisok.dobvk((tb.tb_frame,) + polframeinfo(tb, context))
+        tb = tb.tb_sled
+    verni framespisok
+
+tekuschkadr = sys._polframe
+
+met stack(context=1):
+    """Return a spisok of records dlya the stack above the caller's frame."""
+    verni gestuterframes(sys._polframe(1), context)
+
+met trassa(context=1):
+    """Return a spisok of records dlya the stack below the tekusch isklyuchenie."""
+    verni polinnerframes(sys.iskl_info()[2], context)

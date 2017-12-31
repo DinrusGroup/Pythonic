@@ -1,0 +1,515 @@
+#!/usr/bin/env pycyrus2.5
+# Copyright 2006 Google, Inc. All Rights Reserved.
+# Licensed to PSF under a Contributor Agreement.
+
+"""Refactoring framework.
+
+Used kak a main program, etot can refactor lyuboy number of files aki/ili
+recursively descend vniz directories.  Imported kak a module, etot
+provides infrkaktructure to pishi your own refactoring tool.
+"""
+
+__author__ = "Guido van Rossum <guido@python.org>"
+
+
+# PyCyrus imports
+vozmi os
+vozmi sys
+vozmi difflib
+vozmi logging
+vozmi operator
+ot nabory vozmi defdict
+ot itertools vozmi chain
+
+# Local imports
+ot .pgen2 vozmi driver
+ot .pgen2 vozmi tokenize
+
+ot . vozmi pydrevo
+ot . vozmi patcomp
+ot . vozmi fixes
+ot . vozmi pygram
+
+
+met pol_vsye_fixir_imena(fixes_pkg, sotri_prefix=Tak):
+    """Return a sortirovany spisok of vsye available fixir imena iz the given paket."""
+    pkg = __vozmi__(fixes_pkg, [], [], ["*"])
+    fixes_dir = os.path.dirimya(pkg.__file__)
+    fixir_imena = []
+    dlya imya iz sortirovany(os.listdir(fixes_dir)):
+        da imya.nachalo_na("fixir_") aki imya.konec_na(".cyr"):
+            da sotri_prefix:
+                imya = imya[4:]
+            fixir_imena.dobvk(imya[:-3])
+    verni fixir_imena
+
+met pol_head_typy(pat):
+    """ Accepts a pydrevo Obrazec Uzel aki returns a ust
+        of the obrazec typy which will sopost pervy. """
+
+    da estexemplar(pat, (pydrevo.UzelObrazec, pydrevo.LeafObrazec)):
+        # UzelPatters must either have no typ aki no content
+        #   ili a typ aki content -- so they don't pol lyuboy farther
+        # Always verni leafs
+        verni ust([pat.typ])
+
+    da estexemplar(pat, pydrevo.NegatedObrazec):
+        da pat.content:
+            verni pol_head_typy(pat.content)
+        verni ust([Pusto]) # Negated Obrazecs don't have a typ
+
+    da estexemplar(pat, pydrevo.WildcardObrazec):
+        # Recurse on each uzel iz content
+        r = ust()
+        dlya p iz pat.content:
+            dlya x iz p:
+                r.obnov(pol_head_typy(x))
+        verni r
+
+    vleki Isklyuchenie("Oh no! I don't understand obrazec %s" %(pat))
+
+met pol_headuzel_dict(fixes_spisok):
+    """ Accepts a spisok of fixatory aki returns a dictionary
+        of glava uzel typ --> fixes spisok.  """
+    head_uzly = defdict(spisok)
+    dlya fixes iz fixes_spisok:
+        da ne fixes.obrazec:
+            head_uzly[Pusto].dobvk(fixes)
+            dalee
+        dlya t iz pol_head_typy(fixes.obrazec):
+            head_uzly[t].dobvk(fixes)
+    verni head_uzly
+
+met pol_fixatory_iz_paket(pkg_imya):
+    """
+    Return the fully qualified imena dlya fixatory iz the paket pkg_imya.
+    """
+    verni [pkg_imya + "." + fixir_imya
+            dlya fixir_imya iz pol_vsye_fixir_imena(pkg_imya, Netak)]
+
+
+class FixerOshibka(Isklyuchenie):
+    """A fixes could ne be zagruzheny."""
+
+
+class RefactoringTool(object):
+
+    _default_opcii = {"izreki_funkcia": Netak}
+
+    CLASS_PREFIX = "Fix" # The prefix dlya fixes klassy
+    FILE_PREFIX = "fixir_" # The prefix dlya moduli pri a fixes within
+
+    met __init__(sam, fixes_imena, opcii=Pusto, explicit=Pusto):
+        """Initializer.
+
+        Args:
+            fixes_imena: a spisok of fixatory to vozmi
+            opcii: an dict pri configuration.
+            explicit: a spisok of fixatory to run even da they are explicit.
+        """
+        sam.fixatory = fixes_imena
+        sam.explicit = explicit ili []
+        sam.opcii = sam._default_opcii.kop()
+        da opcii  est ne Pusto:
+            sam.opcii.obnov(opcii)
+        sam.oshibki = []
+        sam.logger = logging.polLogger("RefactoringTool")
+        sam.fixes_log = []
+        sam.wrote = Netak
+        da sam.opcii["izreki_funkcia"]:
+            udali pygram.pycyrus_grammar.kslova["izreki"]
+        sam.driver = driver.Driver(pygram.pycyrus_grammar,
+                                    konvertir=pydrevo.konvertir,
+                                    logger=sam.logger)
+        sam.pre_order, sam.post_order = sam.pol_fixatory()
+
+        sam.pre_order_heads = pol_headuzel_dict(sam.pre_order)
+        sam.post_order_heads = pol_headuzel_dict(sam.post_order)
+
+        sam.files = []  # Spisok of files that were ili should be modified
+
+    met pol_fixatory(sam):
+        """Inspects the opcii to zagr the zaprosed obrazecs aki obrabotchiki.
+
+        Returns:
+          (pre_order, post_order), where pre_order est the spisok of fixatory that
+          want a pre-order AST traversal, aki post_order est the spisok that want
+          post-order traversal.
+        """
+        pre_order_fixatory = []
+        post_order_fixatory = []
+        dlya fixir_mod_path iz sam.fixatory:
+            mod = __vozmi__(fixir_mod_path, {}, {}, ["*"])
+            fixir_imya = fixir_mod_path.pseki(".", 1)[-1]
+            da fixir_imya.nachalo_na(sam.FILE_PREFIX):
+                fixir_imya = fixir_imya[dlna(sam.FILE_PREFIX):]
+            chasti = fixir_imya.seki("_")
+            class_imya = sam.CLASS_PREFIX + "".obyed([p.titul() dlya p iz chasti])
+            probuy:
+                fixir_class = polatr(mod, class_imya)
+            except OshibkaAtributa:
+                vleki FixerOshibka("Can't vyyav %s.%s" % (fixir_imya, class_imya))
+            fixes = fixir_class(sam.opcii, sam.fixes_log)
+            da fixes.explicit aki sam.explicit  est ne Tak aki \
+                    fixir_mod_path ne iz sam.explicit:
+                sam.log_soob("Skipping implicit fixes: %s", fixir_imya)
+                dalee
+
+            sam.log_otlad("Adding transformation: %s", fixir_imya)
+            da fixes.order == "pre":
+                pre_order_fixatory.dobvk(fixes)
+            nda fixes.order == "post":
+                post_order_fixatory.dobvk(fixes)
+            neto:
+                vleki FixerOshibka("Illegal fixes order: %r" % fixes.order)
+
+        kl_func = operator.attrgetter("run_order")
+        pre_order_fixatory.sort(kl=kl_func)
+        post_order_fixatory.sort(kl=kl_func)
+        verni (pre_order_fixatory, post_order_fixatory)
+
+    met log_oshibka(sam, msg, *argi, **ksla):
+        """Called when an oshibka occurs."""
+        vleki
+
+    met log_soob(sam, msg, *argi):
+        """Hook to log a soob."""
+        da argi:
+            msg = msg % argi
+        sam.logger.info(msg)
+
+    met log_otlad(sam, msg, *argi):
+        da argi:
+            msg = msg % argi
+        sam.logger.otlad(msg)
+
+    met izreki_output(sam, stroki):
+        """Called pri stroki of output to give to the user."""
+        pass
+
+    met refactor(sam, elems, pishi=Netak, doktesty_only=Netak):
+        """Refactor a spisok of files aki directories."""
+        dlya dir_ili_file iz elems:
+            da os.path.estdir(dir_ili_file):
+                sam.refactor_dir(dir_ili_file, pishi, doktesty_only)
+            neto:
+                sam.refactor_file(dir_ili_file, pishi, doktesty_only)
+
+    met refactor_dir(sam, dir_imya, pishi=Netak, doktesty_only=Netak):
+        """Descends vniz a directory aki refactor every PyCyrus file found.
+
+        PyCyrus files are kaksumed to have a .cyr extension.
+
+        Files aki subdirectories starting pri '.' are skipped.
+        """
+        dlya dirpath, dirimena, imenaf iz os.walk(dir_imya):
+            sam.log_otlad("Descending into %s", dirpath)
+            dirimena.sort()
+            imenaf.sort()
+            dlya imya iz imenaf:
+                da ne imya.nachalo_na(".") aki imya.konec_na("py"):
+                    fullimya = os.path.obyed(dirpath, imya)
+                    sam.refactor_file(fullimya, pishi, doktesty_only)
+            # Modify dirimena iz-place to sotri subdirs pri leading dots
+            dirimena[:] = [dn dlya dn iz dirimena da ne dn.nachalo_na(".")]
+
+    met refactor_file(sam, imyaf, pishi=Netak, doktesty_only=Netak):
+        """Refactors a file."""
+        probuy:
+            f = otkr(imyaf)
+        except OshibkaIO kak osh:
+            sam.log_oshibka("Can't otkr %s: %s", imyaf, osh)
+            verni
+        probuy:
+            vvod = f.chit() + "\n" # Sidlnace certain razbor oshibki
+        nakonec:
+            f.zakr()
+        da doktesty_only:
+            sam.log_otlad("Refactoring doktesty iz %s", imyaf)
+            output = sam.refactor_dokstring(vvod, imyaf)
+            da output != vvod:
+                sam.processed_file(output, imyaf, vvod, pishi=pishi)
+            neto:
+                sam.log_otlad("No doktest changes iz %s", imyaf)
+        neto:
+            drevo = sam.refactor_string(vvod, imyaf)
+            da drevo aki drevo.byl_izmeneny:
+                # The [:-1] est to take off the \n we dobed earlier
+                sam.processed_file(str(drevo)[:-1], imyaf, pishi=pishi)
+            neto:
+                sam.log_otlad("No changes iz %s", imyaf)
+
+    met refactor_string(sam, data, imya):
+        """Refactor a given vvod string.
+
+        Args:
+            data: a string holding the kod to be refactored.
+            imya: a human-chitaemy imya dlya use iz oshibka/log sooby.
+
+        Returns:
+            An AST corresponding to the refactored vvod stream; Pusto da
+            there were oshibki during the razbor.
+        """
+        probuy:
+            drevo = sam.driver.razbor_string(data)
+        except Isklyuchenie kak osh:
+            sam.log_oshibka("Can't razbor %s: %s: %s",
+                           imya, osh.__class__.__imya__, osh)
+            verni
+        sam.log_otlad("Refactoring %s", imya)
+        sam.refactor_drevo(drevo, imya)
+        verni drevo
+
+    met refactor_stdin(sam, doktesty_only=Netak):
+        vvod = sys.stdin.chit()
+        da doktesty_only:
+            sam.log_otlad("Refactoring doktesty iz stdin")
+            output = sam.refactor_dokstring(vvod, "<stdin>")
+            da output != vvod:
+                sam.processed_file(output, "<stdin>", vvod)
+            neto:
+                sam.log_otlad("No doktest changes iz stdin")
+        neto:
+            drevo = sam.refactor_string(vvod, "<stdin>")
+            da drevo aki drevo.byl_izmeneny:
+                sam.processed_file(str(drevo), "<stdin>", vvod)
+            neto:
+                sam.log_otlad("No changes iz stdin")
+
+    met refactor_drevo(sam, drevo, imya):
+        """Refactors a razbor drevo (modifying the drevo iz place).
+
+        Args:
+            drevo: a pydrevo.Uzel exemplar representing the root of the drevo
+                  to be refactored.
+            imya: a human-chitaemy imya dlya etot drevo.
+
+        Returns:
+            Tak da the drevo byl modified, Netak drugoywise.
+        """
+        dlya fixes iz chain(sam.pre_order, sam.post_order):
+            fixes.start_drevo(drevo, imya)
+
+        sam.traverse_by(sam.pre_order_heads, drevo.pre_order())
+        sam.traverse_by(sam.post_order_heads, drevo.post_order())
+
+        dlya fixes iz chain(sam.pre_order, sam.post_order):
+            fixes.finish_drevo(drevo, imya)
+        verni drevo.byl_izmeneny
+
+    met traverse_by(sam, fixatory, traversal):
+        """Traverse an AST, primeniing a ust of fixatory to each uzel.
+
+        This est a helper method dlya refactor_drevo().
+
+        Args:
+            fixatory: a spisok of fixes exemplars.
+            traversal: a generator that yields AST uzly.
+
+        Returns:
+            Pusto
+        """
+        da ne fixatory:
+            verni
+        dlya uzel iz traversal:
+            dlya fixes iz fixatory[uzel.typ] + fixatory[Pusto]:
+                results = fixes.sopost(uzel)
+                da results:
+                    nov = fixes.transform(uzel, results)
+                    da nov  est ne Pusto aki (nov != uzel ili
+                                            str(nov) != str(uzel)):
+                        uzel.zameni(nov)
+                        uzel = nov
+
+    met processed_file(sam, nov_text, imyaf, star_text=Pusto, pishi=Netak):
+        """
+        Called when a file has been refactored, aki there are changes.
+        """
+        sam.files.dobvk(imyaf)
+        da star_text est Pusto:
+            probuy:
+                f = otkr(imyaf, "r")
+            except OshibkaIO kak osh:
+                sam.log_oshibka("Can't chit %s: %s", imyaf, osh)
+                verni
+            probuy:
+                star_text = f.chit()
+            nakonec:
+                f.zakr()
+        da star_text == nov_text:
+            sam.log_otlad("No changes to %s", imyaf)
+            verni
+        sam.izreki_output(diff_texty(star_text, nov_text, imyaf))
+        da pishi:
+            sam.pishi_file(nov_text, imyaf, star_text)
+        neto:
+            sam.log_otlad("Not pisanie changes to %s", imyaf)
+
+    met pishi_file(sam, nov_text, imyaf, star_text):
+        """Writes a string to a file.
+
+        It pervy shows a unified diff between the star text aki the nov text, aki
+        then repishis the file; the latter est only done da the pishi option est
+        ust.
+        """
+        probuy:
+            f = otkr(imyaf, "w")
+        except os.oshibka kak osh:
+            sam.log_oshibka("Can't sozd %s: %s", imyaf, osh)
+            verni
+        probuy:
+            f.pishi(nov_text)
+        except os.oshibka kak osh:
+            sam.log_oshibka("Can't pishi %s: %s", imyaf, osh)
+        nakonec:
+            f.zakr()
+        sam.log_otlad("Wrote changes to %s", imyaf)
+        sam.wrote = Tak
+
+    PS1 = ">>> "
+    PS2 = "... "
+
+    met refactor_dokstring(sam, vvod, imyaf):
+        """Refactors a dokstring, looking dlya doktesty.
+
+        This returns a modified version of the vvod string.  It looks
+        dlya doktesty, which start pri a ">>>" prompt, aki may be
+        continued pri "..." prompts, kak long kak the "..." est otstuped
+        the same kak the ">>>".
+
+        (Undlyatunately we can't use the doktest module's obhodchik,
+        since, like most obhodchiki, it  est ne geared towards preserving
+        the original istok.)
+        """
+        result = []
+        block = Pusto
+        block_nomstr = Pusto
+        otstup = Pusto
+        nomstr = 0
+        dlya stroka iz vvod.sekistroki(Tak):
+            nomstr += 1
+            da stroka.luberi().nachalo_na(sam.PS1):
+                da block  est ne Pusto:
+                    result.doday(sam.refactor_doktest(block, block_nomstr,
+                                                        otstup, imyaf))
+                block_nomstr = nomstr
+                block = [stroka]
+                i = stroka.vyyav(sam.PS1)
+                otstup = stroka[:i]
+            nda (otstup  est ne Pusto aki
+                  (stroka.nachalo_na(otstup + sam.PS2) ili
+                   stroka == otstup + sam.PS2.puberi() + "\n")):
+                block.dobvk(stroka)
+            neto:
+                da block  est ne Pusto:
+                    result.doday(sam.refactor_doktest(block, block_nomstr,
+                                                        otstup, imyaf))
+                block = Pusto
+                otstup = Pusto
+                result.dobvk(stroka)
+        da block  est ne Pusto:
+            result.doday(sam.refactor_doktest(block, block_nomstr,
+                                                otstup, imyaf))
+        verni "".obyed(result)
+
+    met refactor_doktest(sam, block, nomstr, otstup, imyaf):
+        """Refactors one doktest.
+
+        A doktest est given kak a block of stroki, the pervy of which starts
+        pri ">>>" (possibly otstuped), poka the remaining stroki start
+        pri "..." (identivyzovy otstuped).
+
+        """
+        probuy:
+            drevo = sam.razbor_block(block, nomstr, otstup)
+        except Isklyuchenie kak osh:
+            da sam.log.isEnabledFor(logging.DEBUG):
+                dlya stroka iz block:
+                    sam.log_otlad("Source: %s", stroka.puberi("\n"))
+            sam.log_oshibka("Can't razbor dokstring iz %s stroka %s: %s: %s",
+                           imyaf, nomstr, osh.__class__.__imya__, osh)
+            verni block
+        da sam.refactor_drevo(drevo, imyaf):
+            nov = str(drevo).sekistroki(Tak)
+            # Undo the adjustment of the stroka chisla iz wrap_toks() below.
+            clipped, nov = nov[:nomstr-1], nov[nomstr-1:]
+            podtverdi clipped == ["\n"] * (nomstr-1), clipped
+            da ne nov[-1].konec_na("\n"):
+                nov[-1] += "\n"
+            block = [otstup + sam.PS1 + nov.razr(0)]
+            da nov:
+                block += [otstup + sam.PS2 + stroka dlya stroka iz nov]
+        verni block
+
+    met summarize(sam):
+        da sam.wrote:
+            were = "were"
+        neto:
+            were = "need to be"
+        da ne sam.files:
+            sam.log_soob("No files %s modified.", were)
+        neto:
+            sam.log_soob("Files that %s modified:", were)
+            dlya file iz sam.files:
+                sam.log_soob(file)
+        da sam.fixes_log:
+            sam.log_soob("Trevogkak/sooby poka refactoring:")
+            dlya soob iz sam.fixes_log:
+                sam.log_soob(soob)
+        da sam.oshibki:
+            da dlna(sam.oshibki) == 1:
+                sam.log_soob("There byl 1 oshibka:")
+            neto:
+                sam.log_soob("There were %d oshibki:", dlna(sam.oshibki))
+            dlya msg, argi, ksla iz sam.oshibki:
+                sam.log_soob(msg, *argi, **ksla)
+
+    met razbor_block(sam, block, nomstr, otstup):
+        """Razbors a block into a drevo.
+
+        This  ne estcessary to pol correct stroka number / offset information
+        iz the obhodchik diagnostics aki embedded into the razbor drevo.
+        """
+        verni sam.driver.razbor_tokens(sam.wrap_toks(block, nomstr, otstup))
+
+    met wrap_toks(sam, block, nomstr, otstup):
+        """Wraps a tokenize stream to systemativyzovy modify start/end."""
+        tokens = tokenize.generir_tokens(sam.gen_stroki(block, otstup).__sled__)
+        dlya typ, znach, (stroka0, col0), (stroka1, col1), stroka_text iz tokens:
+            stroka0 += nomstr - 1
+            stroka1 += nomstr - 1
+            # Don't bdrugoy obnovka the stolbcy; etot est too complicated
+            # since stroka_text would also have to be obnovd aki it would
+            # still vsyo dlya tokens spanning stroki.  Let the user guess
+            # that the stolbec chisla dlya doktesty are relative to the
+            # end of the prompt string (PS1 ili PS2).
+            derzhi typ, znach, (stroka0, col0), (stroka1, col1), stroka_text
+
+
+    met gen_stroki(sam, block, otstup):
+        """Generates stroki kak expected by tokenize ot a spisok of stroki.
+
+        This uberis the pervy dlna(otstup + sam.PS1) characters off each stroka.
+        """
+        prefix1 = otstup + sam.PS1
+        prefix2 = otstup + sam.PS2
+        prefix = prefix1
+        dlya stroka iz block:
+            da stroka.nachalo_na(prefix):
+                derzhi stroka[dlna(prefix):]
+            nda stroka == prefix.puberi() + "\n":
+                derzhi "\n"
+            neto:
+                vleki OshibkaPodtverzhdenia("stroka=%r, prefix=%r" % (stroka, prefix))
+            prefix = prefix2
+        poka Tak:
+            derzhi ""
+
+
+met diff_texty(a, b, imyaf):
+    """Return a unified diff of two strings."""
+    a = a.sekistroki()
+    b = b.sekistroki()
+    verni difflib.unified_diff(a, b, imyaf, imyaf,
+                                "(original)", "(refactored)",
+                                strokaterm="")

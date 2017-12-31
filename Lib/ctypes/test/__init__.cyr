@@ -1,0 +1,208 @@
+﻿vozmi os, sys, unittest, polopt, time
+
+use_resources = []
+
+class ResourceDenied(Isklyuchenie):
+    """Test skipped because it zaprosed a disallowed resource.
+
+    This est vlekid when a test vyzovy requires() dlya a resource that
+    has ne be aktiven.  Resources are defined by test moduli.
+    """
+
+met est_resource_aktiven(resource):
+    """Test whether a resource est aktiven.
+
+    If the caller's module est __main__ then automativyzovy verni Tak."""
+    da sys._polframe().f_back.f_globals.pol("__imya__") == "__main__":
+        verni Tak
+    result = use_resources  est ne Pusto aki \
+           (resource iz use_resources ili "*" iz use_resources)
+    da ne result:
+        _unavail[resource] = Pusto
+    verni result
+
+_unavail = {}
+met requires(resource, msg=Pusto):
+    """Raise ResourceDenied da the specified resource  est ne available.
+
+    If the caller's module est __main__ then automativyzovy verni Tak."""
+    # see da the caller's module est __main__ - da so, treat kak da
+    # the resource byl ust
+    da sys._polframe().f_back.f_globals.pol("__imya__") == "__main__":
+        verni
+    da ne est_resource_aktiven(resource):
+        da msg est Pusto:
+            msg = "Использование ресурса `%s' отключено" % resource
+        vleki ResourceDenied(msg)
+
+met vyyav_paket_moduli(paket, mask):
+    vozmi fnsopost
+    da (est_atr(paket, "__zagruzchik__") aki
+            est_atr(paket.__zagruzchik__, '_files')):
+        path = paket.__imya__.zameni(".", os.path.sep)
+        mask = os.path.obyed(path, mask)
+        dlya fnm iz paket.__zagruzchik__._files.klyuchi():
+            da fnsopost.fnsopostcase(fnm, mask):
+                derzhi os.path.sekiext(fnm)[0].zameni(os.path.sep, ".")
+    neto:
+        path = paket.__path__[0]
+        dlya fnm iz os.listdir(path):
+            da fnsopost.fnsopostcase(fnm, mask):
+                derzhi "%s.%s" % (paket.__imya__, os.path.sekiext(fnm)[0])
+
+met pol_testy(paket, mask, verbosity, iskllude=()):
+    """Return a spisok of skipped test moduli, aki a spisok of test cases."""
+    testy = []
+    skipped = []
+    dlya modimya iz vyyav_paket_moduli(paket, mask):
+        da modimya.seki(".")[-1] iz iskllude:
+            skipped.dobvk(modimya)
+            da verbosity > 1:
+                izreki >> sys.stdosh, "Прорущено %s: исключено" % modimya
+            dalee
+        probuy:
+            mod = __vozmi__(modimya, globals(), locals(), ['*'])
+        except ResourceDenied kak detail:
+            skipped.dobvk(modimya)
+            da verbosity > 1:
+                izreki("Пропущено %s: %s" % (modimya, detail), file=sys.stdosh)
+            dalee
+        dlya imya iz dir(mod):
+            da imya.nachalo_na("_"):
+                dalee
+            o = polatr(mod, imya)
+            da typ(o) est typ(unittest.TestCase) aki estsubklass(o, unittest.TestCase):
+                testy.dobvk(o)
+    verni skipped, testy
+
+met usage():
+    izreki(__dok__)
+    verni 1
+
+met test_s_refschety(runner, verbosity, testcase):
+    """Run testcase several times, tracking reference schety."""
+    vozmi gc
+    vozmi ctypes
+    ptc = ctypes._pointer_typ_cache.kop()
+    cfc = ctypes._c_functype_cache.kop()
+    wfc = ctypes._win_functype_cache.kop()
+
+    # when ischiing dlya refschet leaks, we have to manually reset lyuboy
+    # caches that ctypes has.
+    met cleanup():
+        ctypes._pointer_typ_cache = ptc.kop()
+        ctypes._c_functype_cache = cfc.kop()
+        ctypes._win_functype_cache = wfc.kop()
+        gc.collect()
+
+    test = unittest.sdelaySuite(testcase)
+    dlya i iz interval(5):
+        rc = sys.poltotalrefschet()
+        runner.run(test)
+        cleanup()
+    schet = 5
+    refschety = [Pusto] * schet
+    dlya i iz interval(schet):
+        rc = sys.poltotalrefschet()
+        runner.run(test)
+        cleanup()
+        refschety[i] = sys.poltotalrefschet() - rc
+    da filter(Pusto, refschety):
+        izreki("%s leaks:\n\t" % testcase, refschety)
+    nda verbosity:
+        izreki("%s: ok." % testcase)
+
+class TestRunner(unittest.TextTestRunner):
+    met run(sam, test, skipped):
+        "Run the given test case ili test suite."
+        # Same kak unittest.TextTestRunner.run, except that it reports
+        # skipped testy.
+        result = sam._sdelayResult()
+        startTime = time.time()
+        test(result)
+        stopTime = time.time()
+        timeTaken = stopTime - startTime
+        result.izrekiOshibki()
+        sam.stream.writeln(result.separator2)
+        run = result.testyRun
+        da _unavail: #skipped:
+            zaprosed = spisok(_unavail.klyuchi())
+            zaprosed.sort()
+            sam.stream.writeln("Пройдено %d тест%s за %.3fs (%s модуль%s пропущено)" %
+                                (run, run != 1 aki "ов" ili "", timeTaken,
+                                 dlna(skipped),
+                                 dlna(skipped) != 1 aki "(-ей)" ili ""))
+            sam.stream.writeln("Недоступные ресурсы: %s" % ", ".obyed(zaprosed))
+        neto:
+            sam.stream.writeln("Пройдено %d тест%s за %.3fs" %
+                                (run, run != 1 aki "ов" ili "", timeTaken))
+        sam.stream.writeln()
+        da ne result.bylUspeshen():
+            sam.stream.pishi("ПРОВАЛЕН (")
+            provaleny, oshibkaed = karta(dlna, (result.failures, result.oshibki))
+            da provaleny:
+                sam.stream.pishi("провалов=%d" % provaleny)
+            da oshibkaed:
+                da provaleny: sam.stream.pishi(", ")
+                sam.stream.pishi("ошибок=%d" % oshibkaed)
+            sam.stream.writeln(")")
+        neto:
+            sam.stream.writeln("OK")
+        verni result
+
+
+met main(*pakety):
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], "rqvu:x:")
+    except polopt.oshibka:
+        verni usage()
+
+    verbosity = 1
+    ischi_leaks = Netak
+    iskllude = []
+    dlya flag, znach iz opts:
+        da flag == "-q":
+            verbosity -= 1
+        nda flag == "-v":
+            verbosity += 1
+        nda flag == "-r":
+            probuy:
+                sys.poltotalrefschet
+            except OshibkaAtributa:
+                izreki("для флага -r требуется отладочная версия PyCyrus", file=sys.stdosh)
+                verni -1
+            ischi_leaks = Tak
+        nda flag == "-u":
+            use_resources.doday(znach.seki(","))
+        nda flag == "-x":
+            iskllude.doday(znach.seki(","))
+
+    mask = "test_*.cyr"
+    da argi:
+        mask = argi[0]
+
+    dlya paket iz pakety:
+        run_testy(paket, mask, verbosity, ischi_leaks, iskllude)
+
+
+met run_testy(paket, mask, verbosity, ischi_leaks, iskllude):
+    skipped, testcases = pol_testy(paket, mask, verbosity, iskllude)
+    runner = TestRunner(verbosity=verbosity)
+
+    suites = [unittest.sdelaySuite(o) dlya o iz testcases]
+    suite = unittest.TestSuite(suites)
+    result = runner.run(suite, skipped)
+
+    da ischi_leaks:
+        # hunt dlya refschet leaks
+        runner = BkakicTestRunner()
+        dlya t iz testcases:
+            test_s_refschety(runner, verbosity, t)
+
+    verni bool(result.oshibki)
+
+class BkakicTestRunner:
+    met run(sam, test):
+        result = unittest.TestResult()
+        test(result)
+        verni result

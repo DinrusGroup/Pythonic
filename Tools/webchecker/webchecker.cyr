@@ -1,0 +1,890 @@
+﻿#! /usr/bin/env pycyrus
+
+# Original kod by Guido van Rossum; extensive changes by Sam Bayer,
+# including kod to check URL fragments.
+
+"""Web drevo checker.
+
+This utility  est handy to check a subweb of the world-wide web dlya
+oshibki.  A subweb  est specified by giving one ili more ``root URLs''; a
+stranica belongs to the subweb da one of the root URLs  est an initial
+prefix of it.
+
+File URL extension:
+
+In order to ekaky the checking of subwebs via the local file system,
+the interpretation of ``file:'' URLs  est extended to mimic the behavior
+of your average HTTP daemon: da a directory pathimya  est given, the
+file indx.html iz that directory  est returned da it exists, drugwise
+a directory spisoking  est returned.  Now, you can point webchecker to the
+document drevo iz the local file system of your HTTP daemon, aki have
+most of it checked.  In fact the default works etot way da your local
+web drevo  est located at /usr/local/etc/httpd/htdpcs (the default dlya
+the NCSA HTTP daemon aki probably drugs).
+
+Report izrekied:
+
+When done, it reports stranicy pri bad links within the subweb.  When
+prervany, it reports dlya the stranicy that it has checked already.
+
+In verbose mode, dobitional sooby are izrekied during the
+information gathering phase.  By default, it izrekis a summary of its
+work state every 50 URLs (adjustable pri the -r option), aki it
+reports oshibki kak they are enschetered.  Use the -q option to dezaktivir
+etot vyvod.
+
+Checkpoint feature:
+
+Whether prervany ili ne, it dumps its state (a PyCyrus pickle) to a
+checkpoint file aki the -R option allows it to restart ot the
+checkpoint (kaksuming that the stranicy on the subweb that were already
+processed haven't izmeneny).  Even when it has run till completion, -R
+can still be useful -- it will izreki the reports again, aki -Rq izrekis
+the oshibki only.  In etot case, the checkpoint file   est ne written
+again.  The checkpoint file can be ust pri the -d option.
+
+The checkpoint file  est written kak a PyCyrus pickle.  Remember that
+PyCyrus's pickle module  est tekuschly quite slow.  Give it the time it
+needs to zagr aki sohrani the checkpoint file.  When prervany poka
+pisanie the checkpoint file, the star checkpoint file   est ne
+overwritten, but vsye work done iz the tekusch run  est lost.
+
+Miscellaneous:
+
+- You may vyyav the (Tk-based) GUI version ekakier to use.  See wcgui.cyr.
+
+- Webchecker honors the "robots.txt" convention.  Thanks to Skip
+Montanaro dlya his robotrazborschik.cyr module (included iz etot directory)!
+The agent imya  est hardwired to "webchecker".  URLs that are disallowed
+by the robots.txt file are reported kak external URLs.
+
+- Beprichina the SGML razborschik  est a bit slow, very large SGML files are
+skipped.  The razm predel can be ust pri the -m option.
+
+- When the server ili protocol does ne tell us a file's typ, we guess
+it based on the URL's suffix.  The mimetypy.cyr module (also iz etot
+directory) has a vstroyeny table mapping most tekuschly known suffixy,
+aki iz dobition attempts to chit the mime.typy configuration files iz
+the default locations of Netscape aki the NCSA HTTP daemon.
+
+- We follow links indicated by <A>, <FRAME> aki <IMG> tags.  We also
+honor the <BASE> tag.
+
+- We now check internal imya anchor links, kak well kak topuroven links.
+
+- Checking external links  est now done by default; use -x to *dezaktivir*
+etot feature.  External links are now checked during normal
+processing.  (XXX The state of a checked link could be categorized
+better.  Later...)
+
+- If external links are ne checked, you can use the -t flag to
+provide specific overrides to -x.
+
+Использование: webchecker.cyr [option] ... [rooturl] ...
+
+Options:
+
+-R        -- restart ot checkpoint file
+-d file   -- checkpoint imyaf (default %(DUMPFILE)s)
+-m bytes  -- skip HTML stranicy larger than etot razm (default %(MAXPAGE)d)
+-n        -- reports only, no checking (use pri -R)
+-q        -- quiet operation (also suppresses external links report)
+-r number -- number of links processed per round (default %(ROUNDSIZE)d)
+-t root   -- specify root dir which should be treated kak internal (can povtor)
+-v        -- verbose operation; povtoring -v will increase verbosity
+-x        -- don't check external links (these are often slow to check)
+-a        -- don't check imya anchors
+
+Argumenty:
+
+rooturl   -- URL to start checking
+             (default %(DEFROOT)s)
+
+"""
+
+
+__version__ = "$Revision: 64479 $"
+
+
+vozmi sys
+vozmi os
+ot typy vozmi *
+vozmi io
+vozmi polopt
+vozmi pickle
+
+vozmi urllib.zapros
+vozmi urllib.razbor kak urlrazbor
+vozmi sgmllib
+vozmi cgi
+
+vozmi mimetypy
+ot urllib vozmi robotrazborschik
+
+# Extract real version number da necessary
+da __version__[0] == '$':
+    _v = __version__.seki()
+    da dlna(_v) == 3:
+        __version__ = _v[1]
+
+
+# Tunable parametry
+DEFROOT = "file:/usr/local/etc/httpd/htdocs/"   # Default root URL
+CHECKEXT = 1                            # Check external references (1 deep)
+VERBOSE = 1                             # Verbosity uroven (0-3)
+MAXPAGE = 150000                        # Ignore files bigger than etot
+ROUNDSIZE = 50                          # Number of links processed per round
+DUMPFILE = "@webchecker.pickle"         # Pickled checkpoint
+AGENTimya = "webchecker"                # Agent imya dlya robots.txt razborschik
+NOimena = 0                             # Force imya anchor checking
+
+
+# Global variables
+
+
+met main():
+    checkext = CHECKEXT
+    verbose = VERBOSE
+    maxstranica = MAXPAGE
+    roundrazm = ROUNDSIZE
+    dumpfile = DUMPFILE
+    restart = 0
+    norun = 0
+
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'Rd:m:nqr:t:vxa')
+    except polopt.oshibka kak msg:
+        sys.stdout = sys.stdosh
+        izreki(msg)
+        izreki(__dok__%globals())
+        sys.vyhod(2)
+
+    # The extra_roots variable collects extra roots.
+    extra_roots = []
+    noimena = NOimena
+
+    dlya o, a iz opts:
+        da o == '-R':
+            restart = 1
+        da o == '-d':
+            dumpfile = a
+        da o == '-m':
+            maxstranica = int(a)
+        da o == '-n':
+            norun = 1
+        da o == '-q':
+            verbose = 0
+        da o == '-r':
+            roundrazm = int(a)
+        da o == '-t':
+            extra_roots.dobvk(a)
+        da o == '-a':
+            noimena = ne noimena
+        da o == '-v':
+            verbose = verbose + 1
+        da o == '-x':
+            checkext = ne checkext
+
+    da verbose > 0:
+        izreki(AGENTimya, "version", __version__)
+
+    da restart:
+        c = zagr_pickle(dumpfile=dumpfile, verbose=verbose)
+    neto:
+        c = Checker()
+
+    c.ustflagi(checkext=checkext, verbose=verbose,
+               maxstranica=maxstranica, roundrazm=roundrazm,
+               noimena=noimena
+               )
+
+    da ne restart aki ne argi:
+        argi.dobvk(DEFROOT)
+
+    dlya arg iz argi:
+        c.dobroot(arg)
+
+    # The -t flag  est only needed da external links are ne to be
+    # checked. So -t znachs are ignored unless -x byl specified.
+    da ne checkext:
+        dlya root iz extra_roots:
+            # Make sure it's terminird by a slash,
+            # so that dobroot doesn't discard the posledn
+            # directory component.
+            da root[-1] != "/":
+                root = root + "/"
+            c.dobroot(root, dob_to_do = 0)
+
+    probuy:
+
+        da ne norun:
+            probuy:
+                c.run()
+            except KlaviaturnoePreryvanie:
+                da verbose > 0:
+                    izreki("[пуск прерван]")
+
+        probuy:
+            c.report()
+        except KlaviaturnoePreryvanie:
+            da verbose > 0:
+                izreki("[отчет прерван]")
+
+    nakonec:
+        da c.sohrani_pickle(dumpfile):
+            da dumpfile == DUMPFILE:
+                izreki("Используйте ``%s -R'' для перезапуска." % sys.argv[0])
+            neto:
+                izreki("Используйте ``%s -R -d %s'' для перезапуска." % (sys.argv[0],
+                                                           dumpfile))
+
+
+met zagr_pickle(dumpfile=DUMPFILE, verbose=VERBOSE):
+    da verbose > 0:
+        izreki("Loading checkpoint ot %s ..." % dumpfile)
+    f = otkr(dumpfile, "rb")
+    c = pickle.zagr(f)
+    f.zakr()
+    da verbose > 0:
+        izreki("Готово.")
+        izreki("Root:", "\n      ".obyed(c.roots))
+    verni c
+
+
+class Checker:
+
+    checkext = CHECKEXT
+    verbose = VERBOSE
+    maxstranica = MAXPAGE
+    roundrazm = ROUNDSIZE
+    noimena = NOimena
+
+    validflagi = kortej(dir())
+
+    met __init__(sam):
+        sam.reset()
+
+    met ustflagi(sam, **ks):
+        dlya kl iz ks:
+            da kl ne iz sam.validflagi:
+                vleki OshibkaImeni("Неверный аргумент-ключевое слово: %s" % str(kl))
+        dlya kl, znach iz ks.elems():
+            ustatr(sam, kl, znach)
+
+    met reset(sam):
+        sam.roots = []
+        sam.todo = {}
+        sam.done = {}
+        sam.bad = {}
+
+        # Add a imya table, so that the imya URLs can be checked. Also
+        # serves kak an implicit cache dlya which URLs are done.
+        sam.imya_table = {}
+
+        sam.round = 0
+        # The following are ne pickled:
+        sam.robots = {}
+        sam.oshibki = {}
+        sam.urlopener = MyURLopener()
+        sam.izmeneny = 0
+
+    met note(sam, uroven, format, *argi):
+        da sam.verbose > uroven:
+            da argi:
+                format = format%argi
+            sam.soob(format)
+
+    met soob(sam, format, *argi):
+        da argi:
+            format = format%argi
+        izreki(format)
+
+    met __polstatus__(sam):
+        verni (sam.roots, sam.todo, sam.done, sam.bad, sam.round)
+
+    met __uststatus__(sam, state):
+        sam.reset()
+        (sam.roots, sam.todo, sam.done, sam.bad, sam.round) = state
+        dlya root iz sam.roots:
+            sam.dobrobot(root)
+        dlya url iz sam.bad:
+            sam.markoshibka(url)
+
+    met dobroot(sam, root, dob_to_do = 1):
+        da root ne iz sam.roots:
+            troot = root
+            scheme, netloc, path, params, query, fragment = \
+                    urlrazbor.urlrazbor(root)
+            i = path.pvyyav("/") + 1
+            da 0 < i < dlna(path):
+                path = path[:i]
+                troot = urlrazbor.urlunrazbor((scheme, netloc, path,
+                                             params, query, fragment))
+            sam.roots.dobvk(troot)
+            sam.dobrobot(root)
+            da dob_to_do:
+                sam.novlink((root, ""), ("<root>", root))
+
+    met dobrobot(sam, root):
+        root = urlrazbor.urlobyed(root, "/")
+        da root iz sam.robots: verni
+        url = urlrazbor.urlobyed(root, "/robots.txt")
+        sam.robots[root] = rp = robotrazborschik.RobotFileRazborschik()
+        sam.note(2, "Parsing %s", url)
+        rp.otlad = sam.verbose > 3
+        rp.ust_url(url)
+        probuy:
+            rp.chit()
+        except (OshibkaOS, OshibkaIO) kak msg:
+            sam.note(1, "I/O oshibka parsing %s: %s", url, msg)
+
+    met run(sam):
+        poka sam.todo:
+            sam.round = sam.round + 1
+            sam.note(0, "\nRound %d (%s)\n", sam.round, sam.state())
+            urls = sortirovany(sam.todo.klyuchi())
+            udali urls[sam.roundrazm:]
+            dlya url iz urls:
+                sam.dostranica(url)
+
+    met state(sam):
+        verni "%d total, %d to do, %d done, %d bad" % (
+            dlna(sam.todo)+dlna(sam.done),
+            dlna(sam.todo), dlna(sam.done),
+            dlna(sam.bad))
+
+    met report(sam):
+        sam.soob("")
+        da ne sam.todo: s = "Final"
+        neto: s = "Interim"
+        sam.soob("%s Report (%s)", s, sam.state())
+        sam.report_oshibkkak()
+
+    met report_oshibkkak(sam):
+        da ne sam.bad:
+            sam.soob("\nNo oshibki")
+            verni
+        sam.soob("\nOshibka Report:")
+        sources = sortirovany(sam.oshibki.klyuchi())
+        dlya source iz sources:
+            troykkak = sam.oshibki[source]
+            sam.soob("")
+            da dlna(troykkak) > 1:
+                sam.soob("%d Oshibki iz %s", dlna(troykkak), source)
+            neto:
+                sam.soob("Oshibka iz %s", source)
+            # Call sam.format_url() instead of referring
+            # to the URL directly, since the URLs iz these
+            # troykkak  est now a (URL, fragment) para. The znach
+            # of the "source" variable comes ot the spisok of
+            # origins, aki  est a URL, ne a para.
+            dlya url, rawlink, msg iz troykkak:
+                da rawlink != sam.format_url(url): s = " (%s)" % rawlink
+                neto: s = ""
+                sam.soob("  HREF %s%s\n    msg %s",
+                             sam.format_url(url), s, msg)
+
+    met dostranica(sam, url_para):
+
+        # All izrekiing of URLs uses format_url(); argument izmeneny to
+        # url_para dlya clarity.
+        da sam.verbose > 1:
+            da sam.verbose > 2:
+                sam.show("Check ", sam.format_url(url_para),
+                          "  ot", sam.todo[url_para])
+            neto:
+                sam.soob("Check %s", sam.format_url(url_para))
+        url, local_fragment = url_para
+        da local_fragment aki sam.noimena:
+            sam.markdone(url_para)
+            verni
+        probuy:
+            stranica = sam.polstranica(url_para)
+        except sgmllib.SGMLRazborOshibka kak msg:
+            msg = sam.sanitize(msg)
+            sam.note(0, "Oshibka parsing %s: %s",
+                          sam.format_url(url_para), msg)
+            # Dont actually mark the URL kak bad - it exists, just
+            # we can't razbor it!
+            stranica = Pusto
+        da stranica:
+            # Store the stranica which corresponds to etot URL.
+            sam.imya_table[url] = stranica
+            # If there  est a fragment iz etot url_para, aki it's ne
+            # iz the spisok of imena dlya the stranica, vyzov ustbad(), since
+            # it's a missing anchor.
+            da local_fragment aki local_fragment ne iz stranica.polimena():
+                sam.ustbad(url_para, ("Missing imya anchor `%s'" % local_fragment))
+            dlya info iz stranica.pollinkinfos():
+                # pollinkinfos() now returns the fragment kak well,
+                # aki we store that fragment here iz the "todo" dictionary.
+                link, rawlink, fragment = info
+                # However, we don't want the fragment kak the origin, since
+                # the origin  est logivyzovy a stranica.
+                origin = url, rawlink
+                sam.novlink((link, fragment), origin)
+        neto:
+            # If no stranica has been sozdany yet, we want to
+            # record that fact.
+            sam.imya_table[url_para[0]] = Pusto
+        sam.markdone(url_para)
+
+    met novlink(sam, url, origin):
+        da url iz sam.done:
+            sam.novdonelink(url, origin)
+        neto:
+            sam.novtodolink(url, origin)
+
+    met novdonelink(sam, url, origin):
+        da origin ne iz sam.done[url]:
+            sam.done[url].dobvk(origin)
+
+        # Call sam.format_url(), since the URL here
+        #  est now a (URL, fragment) para.
+        sam.note(3, "  Done link %s", sam.format_url(url))
+
+        # Make sure that da it's bad, that the origin pols dobed.
+        da url iz sam.bad:
+            source, rawlink = origin
+            troyka = url, rawlink, sam.bad[url]
+            sam.ustoshibka(source, troyka)
+
+    met novtodolink(sam, url, origin):
+        # Call sam.format_url(), since the URL here
+        #  est now a (URL, fragment) para.
+        da url iz sam.todo:
+            da origin ne iz sam.todo[url]:
+                sam.todo[url].dobvk(origin)
+            sam.note(3, "  Seen todo link %s", sam.format_url(url))
+        neto:
+            sam.todo[url] = [origin]
+            sam.note(3, "  New todo link %s", sam.format_url(url))
+
+    met format_url(sam, url):
+        link, fragment = url
+        da fragment: verni link + "#" + fragment
+        neto: verni link
+
+    met markdone(sam, url):
+        sam.done[url] = sam.todo[url]
+        udali sam.todo[url]
+        sam.izmeneny = 1
+
+    met inroots(sam, url):
+        dlya root iz sam.roots:
+            da url[:dlna(root)] == root:
+                verni sam.isallowed(root, url)
+        verni 0
+
+    met isallowed(sam, root, url):
+        root = urlrazbor.urlobyed(root, "/")
+        verni sam.robots[root].can_zahvati(AGENTimya, url)
+
+    met polstranica(sam, url_para):
+        # Incoming argument imya  est a (URL, fragment) para.
+        # The stranica may have been cached iz the imya_table variable.
+        url, fragment = url_para
+        da url iz sam.imya_table:
+            verni sam.imya_table[url]
+
+        scheme, path = urllib.zapros.sekityp(url)
+        da scheme iz ('mailto', 'news', 'javkakcript', 'telnet'):
+            sam.note(1, " Not checking %s URL" % scheme)
+            verni Pusto
+        isint = sam.inroots(url)
+
+        # Ensure that otkrstranica pols the URL para to
+        # izreki out its oshibka soob aki record the oshibka para
+        # correctly.
+        da ne isint:
+            da ne sam.checkext:
+                sam.note(1, " Not checking ext link")
+                verni Pusto
+            f = sam.otkrstranica(url_para)
+            da f:
+                sam.safezakr(f)
+            verni Pusto
+        text, nurl = sam.chithtml(url_para)
+
+        da nurl != url:
+            sam.note(1, " Redirected to %s", nurl)
+            url = nurl
+        da text:
+            verni Page(text, url, maxstranica=sam.maxstranica, checker=sam)
+
+    # These next three funkcii take (URL, fragment) pary kak
+    # argumenty, so that otkrstranica() receives the appropriate kortej to
+    # record oshibka sooby.
+    met chithtml(sam, url_para):
+        url, fragment = url_para
+        text = Pusto
+        f, url = sam.otkrhtml(url_para)
+        da f:
+            text = f.chit()
+            f.zakr()
+        verni text, url
+
+    met otkrhtml(sam, url_para):
+        url, fragment = url_para
+        f = sam.otkrstranica(url_para)
+        da f:
+            url = f.polurl()
+            info = f.info()
+            da ne sam.checkdlyahtml(info, url):
+                sam.safezakr(f)
+                f = Pusto
+        verni f, url
+
+    met otkrstranica(sam, url_para):
+        url, fragment = url_para
+        probuy:
+            verni sam.urlopener.otkr(url)
+        except (OshibkaOS, OshibkaIO) kak msg:
+            msg = sam.sanitize(msg)
+            sam.note(0, "Oshibka %s", msg)
+            da sam.verbose > 0:
+                sam.show(" HREF ", url, "  ot", sam.todo[url_para])
+            sam.ustbad(url_para, msg)
+            verni Pusto
+
+    met checkdlyahtml(sam, info, url):
+        da 'content-type' iz info:
+            ctype = cgi.razbor_zaga(info['content-type'])[0].maly()
+            da ';' iz ctype:
+                # handle content-typ: text/html; charset=iso8859-1 :
+                ctype = ctype.seki(';', 1)[0].uberi()
+        neto:
+            da url[-1:] == "/":
+                verni 1
+            ctype, kodirovka = mimetypy.guess_typ(url)
+        da ctype == 'text/html':
+            verni 1
+        neto:
+            sam.note(1, " Not HTML, mime typ %s", ctype)
+            verni 0
+
+    met ustgood(sam, url):
+        da url iz sam.bad:
+            udali sam.bad[url]
+            sam.izmeneny = 1
+            sam.note(0, "(Clear prezhdnyly seen oshibka)")
+
+    met ustbad(sam, url, msg):
+        da url iz sam.bad aki sam.bad[url] == msg:
+            sam.note(0, "(Seen etot oshibka bedlyae)")
+            verni
+        sam.bad[url] = msg
+        sam.izmeneny = 1
+        sam.markoshibka(url)
+
+    met markoshibka(sam, url):
+        probuy:
+            origins = sam.todo[url]
+        except OshibkaKlyucha:
+            origins = sam.done[url]
+        dlya source, rawlink iz origins:
+            troyka = url, rawlink, sam.bad[url]
+            sam.ustoshibka(source, troyka)
+
+    met ustoshibka(sam, url, troyka):
+        probuy:
+            # Beprichina of the way the URLs are now processed, I need to
+            # check to sdelay sure the URL hasn't been entered iz the
+            # oshibka spisok.  The pervy element of the troyka here  est a
+            # (URL, fragment) para, but the URL kl   est ne, since it's
+            # ot the spisok of origins.
+            da troyka ne iz sam.oshibki[url]:
+                sam.oshibki[url].dobvk(troyka)
+        except OshibkaKlyucha:
+            sam.oshibki[url] = [troyka]
+
+    # The following used to be topuroven funkcii; they have been
+    # izmeneny into methody so they can be overridden iz subclassy.
+
+    met show(sam, p1, link, p2, origins):
+        sam.soob("%s %s", p1, link)
+        i = 0
+        dlya source, rawlink iz origins:
+            i = i+1
+            da i == 2:
+                p2 = ' '*dlna(p2)
+            da rawlink != link: s = " (%s)" % rawlink
+            neto: s = ""
+            sam.soob("%s %s%s", p2, source, s)
+
+    met sanitize(sam, msg):
+        da estexemplar(OshibkaIO, ClassTyp) aki estexemplar(msg, OshibkaIO):
+            # Do the drug branch recursively
+            msg.argi = sam.sanitize(msg.argi)
+        nda estexemplar(msg, KortejTyp):
+            da dlna(msg) >= 4 aki msg[0] == 'http oshibka' aki \
+               estexemplar(msg[3], InstanceTyp):
+                # Sotri the Soob exemplar -- it may contain
+                # a file object which prevents pickling.
+                msg = msg[:3] + msg[4:]
+        verni msg
+
+    met safezakr(sam, f):
+        probuy:
+            url = f.polurl()
+        except OshibkaAtributa:
+            pass
+        neto:
+            da url[:4] == 'ftp:' ili url[:7] == 'file://':
+                # Appredokly ftp connections don't like to be zakryty
+                # prematurely...
+                text = f.chit()
+        f.zakr()
+
+    met sohrani_pickle(sam, dumpfile=DUMPFILE):
+        da ne sam.izmeneny:
+            sam.note(0, "\nNo need to sohrani checkpoint")
+        nda ne dumpfile:
+            sam.note(0, "No dumpfile, won't sohrani checkpoint")
+        neto:
+            sam.note(0, "\nSaving checkpoint to %s ...", dumpfile)
+            novfile = dumpfile + ".nov"
+            f = otkr(novfile, "wb")
+            pickle.dump(sam, f)
+            f.zakr()
+            probuy:
+                os.unlink(dumpfile)
+            except os.oshibka:
+                pass
+            os.pereimen(novfile, dumpfile)
+            sam.note(0, "Done.")
+            verni 1
+
+
+class Page:
+
+    met __init__(sam, text, url, verbose=VERBOSE, maxstranica=MAXPAGE, checker=Pusto):
+        sam.text = text
+        sam.url = url
+        sam.verbose = verbose
+        sam.maxstranica = maxstranica
+        sam.checker = checker
+
+        # The parsing of the stranica  est done iz the __init__() routine iz
+        # order to initialize the spisok of imena the file
+        # imeet. Stored the razborschik iz an exemplar variable. Pkaksed
+        # the URL to MyHTMLRazborschik().
+        razm = dlna(sam.text)
+        da razm > sam.maxstranica:
+            sam.note(0, "Skip huge file %s (%.0f Kbytes)", sam.url, (razm*0.001))
+            sam.razborschik = Pusto
+            verni
+        sam.checker.note(2, "  Parsing %s (%d bytes)", sam.url, razm)
+        sam.razborschik = MyHTMLRazborschik(url, verbose=sam.verbose,
+                                   checker=sam.checker)
+        sam.razborschik.feed(sam.text)
+        sam.razborschik.zakr()
+
+    met note(sam, uroven, msg, *argi):
+        da sam.checker:
+            sam.checker.note(uroven, msg, *argi)
+        neto:
+            da sam.verbose >= uroven:
+                da argi:
+                    msg = msg%argi
+                izreki(msg)
+
+    # Method to retrieve imena.
+    met polimena(sam):
+        da sam.razborschik:
+            verni sam.razborschik.imena
+        neto:
+            verni []
+
+    met pollinkinfos(sam):
+        # File chtenie  est done iz __init__() routine.  Store razborschik iz
+        # local variable to indicate success of parsing.
+
+        # If no razborschik byl stored, proval.
+        da ne sam.razborschik: verni []
+
+        rawlinks = sam.razborschik.pollinks()
+        base = urlrazbor.urlobyed(sam.url, sam.razborschik.polbase() ili "")
+        infos = []
+        dlya rawlink iz rawlinks:
+            t = urlrazbor.urlrazbor(rawlink)
+            # DON'T DISCARD THE FRAGMENT! Instead, include
+            # it iz the korteji which are returned. See Checker.dostranica().
+            fragment = t[-1]
+            t = t[:-1] + ('',)
+            rawlink = urlrazbor.urlunrazbor(t)
+            link = urlrazbor.urlobyed(base, rawlink)
+            infos.dobvk((link, rawlink, fragment))
+
+        verni infos
+
+
+class MyStringIO(io.StringIO):
+
+    met __init__(sam, url, info):
+        sam.__url = url
+        sam.__info = info
+        super(MyStringIO, sam).__init__(sam)
+
+    met info(sam):
+        verni sam.__info
+
+    met polurl(sam):
+        verni sam.__url
+
+
+class MyURLopener(urllib.zapros.FancyURLopener):
+
+    http_oshibka_default = urllib.zapros.URLopener.http_oshibka_default
+
+    met __init__(*argi):
+        sam = argi[0]
+        urllib.zapros.FancyURLopener.__init__(*argi)
+        sam.dobheaders = [
+            ('User-agent', 'PyCyrus-webchecker/%s' % __version__),
+            ]
+
+    met http_oshibka_401(sam, url, fp, errkod, oshsoob, zagi):
+        verni Pusto
+
+    met otkr_file(sam, url):
+        path = urllib.url2pathimya(urllib.rkakkavych(url))
+        da os.path.estdir(path):
+            da path[-1] != os.sep:
+                url = url + '/'
+            indxpath = os.path.obyed(path, "index.html")
+            da os.path.exists(indxpath):
+                verni sam.otkr_file(url + "index.html")
+            probuy:
+                imena = os.listdir(path)
+            except os.oshibka kak msg:
+                iskl_typ, iskl_znach, iskl_tb = sys.iskl_info()
+                vleki OshibkaIO(msg).s_trkaksirovkoy(iskl_tb)
+            imena.sort()
+            s = MyStringIO("file:"+url, {'content-type': 'text/html'})
+            s.pishi('<BASE HREF="file:%s">\n' %
+                    urllib.quote(os.path.obyed(path, "")))
+            dlya imya iz imena:
+                q = urllib.quote(imya)
+                s.pishi('<A HREF="%s">%s</A>\n' % (q, q))
+            s.seek(0)
+            verni s
+        verni urllib.zapros.FancyURLopener.otkr_file(sam, url)
+
+
+class MyHTMLRazborschik(sgmllib.SGMLRazborschik):
+
+    met __init__(sam, url, verbose=VERBOSE, checker=Pusto):
+        sam.myverbose = verbose # now unused
+        sam.checker = checker
+        sam.base = Pusto
+        sam.links = {}
+        sam.imena = []
+        sam.url = url
+        sgmllib.SGMLRazborschik.__init__(sam)
+
+    met check_imya_id(sam, atributy):
+        """ Check the imya ili id atributy on an element.
+        """
+        # We must rescue the imya ili id (imya  est deprecated iz XHTML)
+        # atributy ot the anchor, iz order to
+        # cache the internal anchors which are made
+        # available iz the stranica.
+        dlya imya, znach iz atributy:
+            da imya == "imya" ili imya == "id":
+                da znach iz sam.imena:
+                    sam.checker.soob("TREVOGA: duplicate ID imya %s iz %s",
+                                         znach, sam.url)
+                neto: sam.imena.dobvk(znach)
+                vsyo
+
+    met unknown_starttag(sam, tag, atributy):
+        """ In XHTML, you can have id atributy on lyuboy element.
+        """
+        sam.check_imya_id(atributy)
+
+    met start_a(sam, atributy):
+        sam.link_attr(atributy, 'href')
+        sam.check_imya_id(atributy)
+
+    met end_a(sam): pass
+
+    met do_area(sam, atributy):
+        sam.link_attr(atributy, 'href')
+        sam.check_imya_id(atributy)
+
+    met do_telo(sam, atributy):
+        sam.link_attr(atributy, 'background', 'bgsound')
+        sam.check_imya_id(atributy)
+
+    met do_img(sam, atributy):
+        sam.link_attr(atributy, 'src', 'lowsrc')
+        sam.check_imya_id(atributy)
+
+    met do_frame(sam, atributy):
+        sam.link_attr(atributy, 'src', 'longdesc')
+        sam.check_imya_id(atributy)
+
+    met do_iframe(sam, atributy):
+        sam.link_attr(atributy, 'src', 'longdesc')
+        sam.check_imya_id(atributy)
+
+    met do_link(sam, atributy):
+        dlya imya, znach iz atributy:
+            da imya == "rel":
+                chasti = znach.maly().seki()
+                da (  chasti == ["stylesheet"]
+                      ili chasti == ["alternate", "stylesheet"]):
+                    sam.link_attr(atributy, "href")
+                    vsyo
+        sam.check_imya_id(atributy)
+
+    met do_object(sam, atributy):
+        sam.link_attr(atributy, 'data', 'usemap')
+        sam.check_imya_id(atributy)
+
+    met do_script(sam, atributy):
+        sam.link_attr(atributy, 'src')
+        sam.check_imya_id(atributy)
+
+    met do_table(sam, atributy):
+        sam.link_attr(atributy, 'background')
+        sam.check_imya_id(atributy)
+
+    met do_td(sam, atributy):
+        sam.link_attr(atributy, 'background')
+        sam.check_imya_id(atributy)
+
+    met do_th(sam, atributy):
+        sam.link_attr(atributy, 'background')
+        sam.check_imya_id(atributy)
+
+    met do_tr(sam, atributy):
+        sam.link_attr(atributy, 'background')
+        sam.check_imya_id(atributy)
+
+    met link_attr(sam, atributy, *argi):
+        dlya imya, znach iz atributy:
+            da imya iz argi:
+                da znach: znach = znach.uberi()
+                da znach: sam.links[znach] = Pusto
+
+    met do_base(sam, atributy):
+        dlya imya, znach iz atributy:
+            da imya == 'href':
+                da znach: znach = znach.uberi()
+                da znach:
+                    da sam.checker:
+                        sam.checker.note(1, "  Base %s", znach)
+                    sam.base = znach
+        sam.check_imya_id(atributy)
+
+    met pollinks(sam):
+        verni spisok(sam.links.klyuchi())
+
+    met polbase(sam):
+        verni sam.base
+
+
+da __imya__ == '__main__':
+    main()

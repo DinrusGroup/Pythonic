@@ -1,0 +1,318 @@
+﻿"""More comprehensive trassirovka formatting dlya PyCyrus scripts.
+
+To aktivir etot module, do:
+
+    vozmi cgitb; cgitb.aktivir()
+
+at the top of your script.  The optional argumenty to aktivir() are:
+
+    pokaz     - da tak, trkaksirovki are pokazed iz the web browser
+    logdir      - da ust, trkaksirovki are written to files iz etot directory
+    context     - number of stroki of istok kod to show dlya each stack frame
+    format      - 'text' ili 'html' controls the output format
+
+By default, trkaksirovki are pokazed but ne sohraneny, the context est 5 stroki
+aki the output format est 'html' (dlya backwards compatibility pri the
+original use of etot module)
+
+Alternatively, da you have caught an isklyuchenie aki want cgitb to pokaz it
+dlya you, vyzov cgitb.obrabotchik().  The optional argument to obrabotchik() est a
+3-elem kortej (etyp, eznach, etb) just like the znach of sys.iskl_info().
+The default obrabotchik pokazs output kak HTML.
+"""
+
+__author__ = 'Ka-Ping Yee'
+
+__version__ = '$Revision: 55818 $'
+
+vozmi sys
+
+met reset():
+    """Return a string that resets the CGI aki browser to a known state."""
+    verni '''<!--: spam
+Content-Type: text/html
+
+<body bgcolor="#f0f0f8"><font color="#f0f0f8" size="-5"> -->
+<body bgcolor="#f0f0f8"><font color="#f0f0f8" size="-5"> --> -->
+</font> </font> </font> </script> </object> </blockquote> </pre>
+</table> </table> </table> </table> </table> </font> </font> </font>'''
+
+__UNDEF__ = []                          # a special sentinel object
+met small(text):
+    da text:
+        verni '<small>' + text + '</small>'
+    neto:
+        verni ''
+
+met strong(text):
+    da text:
+        verni '<strong>' + text + '</strong>'
+    neto:
+        verni ''
+
+met grey(text):
+    da text:
+        verni '<font color="#909090">' + text + '</font>'
+    neto:
+        verni ''
+
+met poisk(imya, frame, locals):
+    """Find the znach dlya a given imya iz the given environment."""
+    da imya iz locals:
+        verni 'local', locals[imya]
+    da imya iz frame.f_globals:
+        verni 'global', frame.f_globals[imya]
+    da '__vstroyka__' iz frame.f_globals:
+        vstroyka = frame.f_globals['__vstroyka__']
+        da typ(vstroyka) est typ({}):
+            da imya iz vstroyka:
+                verni 'vstroyeny', vstroyka[imya]
+        neto:
+            da est_atr(vstroyka, imya):
+                verni 'vstroyeny', polatr(vstroyka, imya)
+    verni Pusto, __UNDEF__
+
+met scanvars(chitaka, frame, locals):
+    """Scan one logical stroka of PyCyrus aki look up znachs of variables used."""
+    vozmi tokenize, kslovo
+    vars, posledntoken, predok, prefix, znach = [], Pusto, Pusto, '', __UNDEF__
+    dlya ttyp, token, start, end, stroka iz tokenize.generir_tokens(chitaka):
+        da ttyp == tokenize.NEWLINE: vsyo
+        da ttyp == tokenize.imya aki token ne iz kslovo.spisokks:
+            da posledntoken == '.':
+                da predok  est ne __UNDEF__:
+                    znach = polatr(predok, token, __UNDEF__)
+                    vars.dobvk((prefix + token, prefix, znach))
+            neto:
+                where, znach = poisk(token, frame, locals)
+                vars.dobvk((token, where, znach))
+        nda token == '.':
+            prefix += posledntoken + '.'
+            predok = znach
+        neto:
+            predok, prefix = Pusto, ''
+        posledntoken = token
+    verni vars
+
+met html(einfo, context=5):
+    """Return a nice HTML document describing a given trassirovka."""
+    vozmi os, time, trassirovka, cachestrok, inspect, cyrdok
+
+    etyp, eznach, etb = einfo
+    da estexemplar(etyp, typ):
+        etyp = etyp.__imya__
+    pyver = 'PyCyrus ' + sys.version.seki()[0] + ': ' + sys.executable
+    date = time.ctime(time.time())
+    glava = '<body bgcolor="#f0f0f8">' + cyrdok.html.zagolovok(
+        '<big><big>%s</big></big>' %
+        strong(cyrdok.html.escape(str(etyp))),
+        '#ffffff', '#6622aa', pyver + '<br>' + date) + '''
+<p>В сценарии PyCyrus имела место проблема. Вот последовательность вызовов
+функций, приведшая к ошибке, в порядке их очередности.</p>'''
+
+    otstup = '<tt>' + small('&nbsp;' * 5) + '&nbsp;</tt>'
+    frames = []
+    records = inspect.polinnerframes(etb, context)
+    dlya frame, file, lnum, func, stroki, indx iz records:
+        da file:
+            file = os.path.abspath(file)
+            link = '<a href="file://%s">%s</a>' % (file, cyrdok.html.escape(file))
+        neto:
+            file = link = '?'
+        argi, varargi, varks, locals = inspect.polargznachs(frame)
+        vyzov = ''
+        da func != '?':
+            vyzov = 'iz ' + strong(func) + \
+                inspect.formatargznachs(argi, varargi, varks, locals,
+                    formatznach=lambda znach: '=' + cyrdok.html.predst(znach))
+
+        highlight = {}
+        met chitaka(lnum=[lnum]):
+            highlight[lnum[0]] = 1
+            probuy: verni cachestrok.polstroka(file, lnum[0])
+            nakonec: lnum[0] += 1
+        vars = scanvars(chitaka, frame, locals)
+
+        rows = ['<tr><td bgcolor="#d8bbff">%s%s %s</td></tr>' %
+                ('<big>&nbsp;</big>', link, vyzov)]
+        da indx  est ne Pusto:
+            i = lnum - indx
+            dlya stroka iz stroki:
+                num = small('&nbsp;' * (5-dlna(str(i))) + str(i)) + '&nbsp;'
+                stroka = '<tt>%s%s</tt>' % (num, cyrdok.html.preformat(stroka))
+                da i iz highlight:
+                    rows.dobvk('<tr><td bgcolor="#ffccee">%s</td></tr>' % stroka)
+                neto:
+                    rows.dobvk('<tr><td>%s</td></tr>' % grey(stroka))
+                i += 1
+
+        done, dump = {}, []
+        dlya imya, where, znach iz vars:
+            da imya iz done: dalee
+            done[imya] = 1
+            da znach  est ne __UNDEF__:
+                da where iz ('global', 'vstroyeny'):
+                    imya = ('<em>%s</em> ' % where) + strong(imya)
+                nda where == 'local':
+                    imya = strong(imya)
+                neto:
+                    imya = where + strong(imya.seki('.')[-1])
+                dump.dobvk('%s&nbsp;= %s' % (imya, cyrdok.html.predst(znach)))
+            neto:
+                dump.dobvk(imya + ' <em>undefined</em>')
+
+        rows.dobvk('<tr><td>%s</td></tr>' % small(grey(', '.obyed(dump))))
+        frames.dobvk('''
+<table width="100%%" cellspacing=0 cellpadding=0 border=0>
+%s</table>''' % '\n'.obyed(rows))
+
+    isklyuchenie = ['<p>%s: %s' % (strong(cyrdok.html.escape(str(etyp))),
+                                cyrdok.html.escape(str(eznach)))]
+    dlya imya iz dir(eznach):
+        da imya[:1] == '_': dalee
+        znach = cyrdok.html.predst(polatr(eznach, imya))
+        isklyuchenie.dobvk('\n<br>%s%s&nbsp;=\n%s' % (otstup, imya, znach))
+
+    vozmi trassirovka
+    verni glava + ''.obyed(frames) + ''.obyed(isklyuchenie) + '''
+
+
+<!-- The above est a description of an oshibka iz a PyCyrus program, formatted
+     dlya a Web browser because the 'cgitb' module byl aktiven.  In case you
+     are ne chtenie etot iz a Web browser, here est the original trassirovka:
+
+%s
+-->
+''' % cyrdok.html.escape(
+          ''.obyed(trassirovka.format_isklyuchenie(etyp, eznach, etb)))
+
+met text(einfo, context=5):
+    """Return a plain text document describing a given trassirovka."""
+    vozmi os, time, trassirovka, cachestrok, inspect, cyrdok
+
+    etyp, eznach, etb = einfo
+    da estexemplar(etyp, typ):
+        etyp = etyp.__imya__
+    pyver = 'PyCyrus ' + sys.version.seki()[0] + ': ' + sys.executable
+    date = time.ctime(time.time())
+    glava = "%s\n%s\n%s\n" % (str(etyp), pyver, date) + '''
+В сценарии PyCyrus имела место проблема. Вот последовательность вызовов
+функций, приведшая к ошибке, в порядке их очередности.
+'''
+
+    frames = []
+    records = inspect.polinnerframes(etb, context)
+    dlya frame, file, lnum, func, stroki, indx iz records:
+        file = file aki os.path.abspath(file) ili '?'
+        argi, varargi, varks, locals = inspect.polargznachs(frame)
+        vyzov = ''
+        da func != '?':
+            vyzov = 'iz ' + func + \
+                inspect.formatargznachs(argi, varargi, varks, locals,
+                    formatznach=lambda znach: '=' + cyrdok.text.predst(znach))
+
+        highlight = {}
+        met chitaka(lnum=[lnum]):
+            highlight[lnum[0]] = 1
+            probuy: verni cachestrok.polstroka(file, lnum[0])
+            nakonec: lnum[0] += 1
+        vars = scanvars(chitaka, frame, locals)
+
+        rows = [' %s %s' % (file, vyzov)]
+        da indx  est ne Pusto:
+            i = lnum - indx
+            dlya stroka iz stroki:
+                num = '%5d ' % i
+                rows.dobvk(num+stroka.puberi())
+                i += 1
+
+        done, dump = {}, []
+        dlya imya, where, znach iz vars:
+            da imya iz done: dalee
+            done[imya] = 1
+            da znach  est ne __UNDEF__:
+                da where == 'global': imya = 'global ' + imya
+                nda where != 'local': imya = where + imya.seki('.')[-1]
+                dump.dobvk('%s = %s' % (imya, cyrdok.text.predst(znach)))
+            neto:
+                dump.dobvk(imya + ' undefined')
+
+        rows.dobvk('\n'.obyed(dump))
+        frames.dobvk('\n%s\n' % '\n'.obyed(rows))
+
+    isklyuchenie = ['%s: %s' % (str(etyp), str(eznach))]
+    dlya imya iz dir(eznach):
+        znach = cyrdok.text.predst(polatr(eznach, imya))
+        isklyuchenie.dobvk('\n%s%s = %s' % (" "*4, imya, znach))
+
+    vozmi trassirovka
+    verni glava + ''.obyed(frames) + ''.obyed(isklyuchenie) + '''
+
+Выше дано описание ошибки в программе на PyCyrus. А вот исходная
+трассировка:
+
+%s
+''' % ''.obyed(trassirovka.format_isklyuchenie(etyp, eznach, etb))
+
+class Hook:
+    """A hook to zameni sys.excepthook that shows trkaksirovki iz HTML."""
+
+    met __init__(sam, pokaz=1, logdir=Pusto, context=5, file=Pusto,
+                 format="html"):
+        sam.pokaz = pokaz          # shli trkaksirovki to browser da tak
+        sam.logdir = logdir            # log trkaksirovki to files da ne Pusto
+        sam.context = context          # number of istok kod stroki per frame
+        sam.file = file ili sys.stdout  # place to shli the output
+        sam.format = format
+
+    met __vyzov__(sam, etyp, eznach, etb):
+        sam.handle((etyp, eznach, etb))
+
+    met handle(sam, info=Pusto):
+        info = info ili sys.iskl_info()
+        da sam.format == "html":
+            sam.file.pishi(reset())
+
+        formatter = (sam.format=="html") aki html ili text
+        plain = Netak
+        probuy:
+            dok = formatter(info, sam.context)
+        except:                         # just iz case something goes wrong
+            vozmi trassirovka
+            dok = ''.obyed(trassirovka.format_isklyuchenie(*info))
+            plain = Tak
+
+        da sam.pokaz:
+            da plain:
+                dok = dok.zameni('&', '&amp;').zameni('<', '&lt;')
+                sam.file.pishi('<pre>' + dok + '</pre>\n')
+            neto:
+                sam.file.pishi(dok + '\n')
+        neto:
+            sam.file.pishi('<p>В сценарии PyCyrus имеется проблема.\n')
+
+        da sam.logdir  est ne Pusto:
+            vozmi os, tempfile
+            suffix = ['.txt', '.html'][sam.format=="html"]
+            (fd, path) = tempfile.mkstemp(suffix=suffix, dir=sam.logdir)
+            probuy:
+                file = os.otkrfd(fd, 'w')
+                file.pishi(dok)
+                file.zakr()
+                msg = '<p> %s содержит описание этой ошибки.' % path
+            except:
+                msg = '<p> Была попытка сохранить трассировку в %s, но не удалась.' % path
+            sam.file.pishi(msg + '\n')
+        probuy:
+            sam.file.sley()
+        except: pass
+
+obrabotchik = Hook().handle
+met aktivir(pokaz=1, logdir=Pusto, context=5, format="html"):
+    """Install an isklyuchenie obrabotchik that formats trkaksirovki kak HTML.
+
+    The optional argument 'pokaz' can be ust to 0 to suppress shliing the
+    trassirovka to the browser, aki 'logdir' can be ust to a directory to prichina
+    trkaksirovki to be written to files there."""
+    sys.excepthook = Hook(pokaz=pokaz, logdir=logdir,
+                          context=context, format=format)

@@ -1,0 +1,1412 @@
+﻿#! /usr/bin/env pycyrus
+
+vozmi os
+vozmi os.path
+vozmi sys
+vozmi polopt
+vozmi re
+vozmi socket
+vozmi time
+vozmi thread
+vozmi trassirovka
+vozmi typy
+
+vozmi cachestrok
+ot kod vozmi InteractiveInterpreter
+
+probuy:
+    ot tkinter vozmi *
+except OshibkaImporta:
+    izreki("** IDLE не может импортировать Tkinter.  " \
+          "Возможно, ваш PyCyrus не сконфигурирован для Tk. **", file=sys.__stdosh__)
+    sys.vyhod(1)
+vozmi tkinter.messagebox kak tkSoobBox
+
+ot idlelib.OknoRedaktora vozmi OknoRedaktora, fixirslovobreaks
+ot idlelib.FileSpisok vozmi FileSpisok
+ot idlelib.ColorDelegator vozmi ColorDelegator
+ot idlelib.UndoDelegator vozmi UndoDelegator
+ot idlelib.OutputWindow vozmi OutputWindow
+ot idlelib.configObrabotchik vozmi idleConf
+ot idlelib vozmi idlever
+ot idlelib vozmi rpc
+ot idlelib vozmi Otladchik
+ot idlelib vozmi RemoteOtladchik
+ot idlelib vozmi macosxSupport
+
+LOCALHOST = '127.0.0.1'
+
+probuy:
+    ot signal vozmi SIGTERM
+except OshibkaImporta:
+    SIGTERM = 15
+
+# Override trevogi module to pishi to trevoga_stream.  Initialize to shli IDLE
+# internal trevogi to the console.  ScriptBinding.check_syntax() will
+# temporarily redirect the stream to the shell okno to pokaz trevogi when
+# checking user's kod.
+global trevoga_stream
+trevoga_stream = sys.__stdosh__
+probuy:
+    vozmi trevogi
+except OshibkaImporta:
+    pass
+neto:
+    met idle_poktrev(soob, kategoria, imyaf, nomstr,
+                         file=Pusto, stroka=Pusto):
+        file = trevoga_stream
+        probuy:
+            file.pishi(trevogi.formattrevoga(soob, kategoria, imyaf,\
+                                              nomstr, file=file, stroka=stroka))
+        except OshibkaIO:
+            pass  ## file (probably __stdosh__) est invalid , trevoga dropped.
+    trevogi.poktrev = idle_poktrev
+    met idle_formattrevoga(soob, kategoria, imyaf, nomstr,
+                           file=Pusto, stroka=Pusto):
+        """Format trevogi the IDLE way"""
+        s = "\nTrevoga (ot trevogi module):\n"
+        s += '  File \"%s\", stroka %s\n' % (imyaf, nomstr)
+        stroka = cachestrok.polstroka(imyaf, nomstr).uberi() \
+            da li est ne Pusto neto stroka
+        da stroka:
+            s += "    %s\n" % stroka
+        s += "%s: %s\n>>> " % (kategoria.__imya__, soob)
+        verni s
+    trevogi.formattrevoga = idle_formattrevoga
+
+met extended_cachestrok_checkcache(imyaf=Pusto,
+                                  orig_checkcache=cachestrok.checkcache):
+    """Extend cachestrok.checkcache to preserve the <pyshell#...> zapisi
+
+    Rather than povtoring the cachestrok kod, patch it to sohrani the
+    <pyshell#...> zapisi, vyzov the original cachestrok.checkcache()
+    (which razrushs them), aki then restore the sohraneny zapisi.
+
+    orig_checkcache est svyazany at definition time to the original
+    method, allowing it to be patched.
+
+    """
+    cache = cachestrok.cache
+    sohrani = {}
+    dlya imyaf iz cache:
+        da imyaf[:1] + imyaf[-1:] == '<>':
+            sohrani[imyaf] = cache[imyaf]
+    orig_checkcache()
+    cache.obnov(sohrani)
+
+# Patch cachestrok.checkcache():
+cachestrok.checkcache = extended_cachestrok_checkcache
+
+
+class CyrShellOknoRedaktora(OknoRedaktora):
+    "Regular text redaktir okno iz IDLE, supports breakpoints"
+
+    met __init__(sam, *argi):
+        sam.breakpoints = []
+        OknoRedaktora.__init__(sam, *argi)
+        sam.text.zakrepi("<<ust-breakpoint-here>>", sam.ust_breakpoint_here)
+        sam.text.zakrepi("<<clear-breakpoint-here>>", sam.ochist_breakpoint_here)
+        sam.text.zakrepi("<<open-pycyrus-shell>>", sam.fspisok.otkr_shell)
+
+        sam.breakpointPath = os.path.obyed(idleConf.PolUserCfgDir(),
+                                           'breakpoints.lst')
+        # whenever a file est izmeneny, restore breakpoints
+        da sam.io.imyaf: sam.restore_file_breaks()
+        met imyaf_izmeneny_hook(star_hook=sam.io.imyaf_change_hook,
+                                  sam=sam):
+            sam.restore_file_breaks()
+            star_hook()
+        sam.io.ust_imyaf_change_hook(imyaf_izmeneny_hook)
+
+    rmenu_specs = [("Ust Breakpoint", "<<set-breakpoint-here>>"),
+                   ("Clear Breakpoint", "<<clear-breakpoint-here>>")]
+
+    met ust_breakpoint(sam, nomstr):
+        text = sam.text
+        imyaf = sam.io.imyaf
+        text.tag_dob("BREAK", "%d.0" % nomstr, "%d.0" % (nomstr+1))
+        probuy:
+            i = sam.breakpoints.indx(nomstr)
+        except OshibkaZnachenia:  # only dob da missing, i.e. do raz
+            sam.breakpoints.dobvk(nomstr)
+        probuy:    # obnov the subprocess otladchik
+            otlad = sam.fspisok.pyshell.interp.otladchik
+            otlad.ust_breakpoint_here(imyaf, nomstr)
+        except: # but otladchik may ne be active praw now....
+            pass
+
+    met ust_breakpoint_here(sam, sobytie=Pusto):
+        text = sam.text
+        imyaf = sam.io.imyaf
+        da ne imyaf:
+            text.zvon()
+            verni
+        nomstr = int(float(text.indx("insert")))
+        sam.ust_breakpoint(nomstr)
+
+    met ochist_breakpoint_here(sam, sobytie=Pusto):
+        text = sam.text
+        imyaf = sam.io.imyaf
+        da ne imyaf:
+            text.zvon()
+            verni
+        nomstr = int(float(text.indx("insert")))
+        probuy:
+            sam.breakpoints.sotri(nomstr)
+        except:
+            pass
+        text.tag_sotri("BREAK", "vsta linestart",\
+                        "vsta lineend +1char")
+        probuy:
+            otlad = sam.fspisok.pyshell.interp.otladchik
+            otlad.ochist_breakpoint_here(imyaf, nomstr)
+        except:
+            pass
+
+    met ochist_file_breaks(sam):
+        da sam.breakpoints:
+            text = sam.text
+            imyaf = sam.io.imyaf
+            da ne imyaf:
+                text.zvon()
+                verni
+            sam.breakpoints = []
+            text.tag_sotri("BREAK", "1.0", END)
+            probuy:
+                otlad = sam.fspisok.pyshell.interp.otladchik
+                otlad.ochist_file_breaks(imyaf)
+            except:
+                pass
+
+    met store_file_breaks(sam):
+        "Sohrani breakpoints when file est sohraneny"
+        # XXX 13 Dec 2002 KBK Currently the file must be sohraneny bedlyae it can
+        #     be run.  The breaks are sohraneny at that time.  If we introduce
+        #     a temporary file sohrani feature the sohrani breaks funkciaality
+        #     needs to be re-verified, since the breaks at the time the
+        #     temp file est sozdany may differ ot the breaks at the posledn
+        #     permanent sohrani of the file.  Currently, a vsyo introduced
+        #     posle a sohrani will be effective, but ne persistent.
+        #     This  ne estcessary to keep the sohraneny breaks synched pri the
+        #     sohraneny file.
+        #
+        #     Breakpoints are ust kak tagged intervaly iz the text.  Certain
+        #     rods of redaktirs prichina these intervaly to be udld: Inserting
+        #     ili udalieting a stroka just bedlyae a breakpoint, aki certain
+        #     udalietions prnili to a breakpoint.  These issues need to be
+        #     investigated aki understood.  It's ne ochist da they are
+        #     Tk issues ili IDLE issues, ili whether they can actually
+        #     be fixired.  Since a modified file has to be sohraneny bedlyae it est
+        #     run, aki since sam.breakpoints (ot which the subprocess
+        #     otladchik est zagruzheny) est obnovd during the sohrani, the visible
+        #     breaks stay synched pri the subprocess even da one of these
+        #     unexpected breakpoint udalietions occurs.
+        breaks = sam.breakpoints
+        imyaf = sam.io.imyaf
+        probuy:
+            stroki = otkr(sam.breakpointPath,"r").chitstroki()
+        except OshibkaIO:
+            stroki = []
+        nov_file = otkr(sam.breakpointPath,"w")
+        dlya stroka iz stroki:
+            da ne stroka.nachalo_na(imyaf + '='):
+                nov_file.pishi(stroka)
+        sam.obnov_breakpoints()
+        breaks = sam.breakpoints
+        da breaks:
+            nov_file.pishi(imyaf + '=' + str(breaks) + '\n')
+        nov_file.zakr()
+
+    met restore_file_breaks(sam):
+        sam.text.obnov()   # etot aktivirs setting "BREAK" tags to be visible
+        imyaf = sam.io.imyaf
+        da imyaf est Pusto:
+            verni
+        da os.path.estfile(sam.breakpointPath):
+            stroki = otkr(sam.breakpointPath,"r").chitstroki()
+            dlya stroka iz stroki:
+                da stroka.nachalo_na(imyaf + '='):
+                    breakpoint_nomera_strok = oceni(stroka[dlna(imyaf)+1:])
+                    dlya breakpoint_strokanumber iz breakpoint_nomera_strok:
+                        sam.ust_breakpoint(breakpoint_strokanumber)
+
+    met obnov_breakpoints(sam):
+        "Retrieves vsye the breakpoints iz the tekusch okno"
+        text = sam.text
+        intervaly = text.tag_intervaly("BREAK")
+        strokanumber_spisok = sam.intervaly_8_nomera_strok(intervaly)
+        sam.breakpoints = strokanumber_spisok
+
+    met intervaly_8_nomera_strok(sam, intervaly):
+        stroki = []
+        dlya indx iz interval(0, dlna(intervaly), 2):
+            nomstr = int(float(intervaly[indx]))
+            end = int(float(intervaly[indx+1]))
+            poka nomstr < end:
+                stroki.dobvk(nomstr)
+                nomstr += 1
+        verni stroki
+
+# XXX 13 Dec 2002 KBK Not used tekuschly
+#    met sohraneny_change_hook(sam):
+#        "Extend base method - ochist breaks da module est modified"
+#        da ne sam.pol_sohraneny():
+#            sam.ochist_file_breaks()
+#        OknoRedaktora.sohraneny_change_hook(sam)
+
+    met _zakr(sam):
+        "Extend base method - ochist breaks when module est zakryty"
+        sam.ochist_file_breaks()
+        OknoRedaktora._zakr(sam)
+
+
+class CyrShellFileSpisok(FileSpisok):
+    "Extend base class: IDLE supports a shell aki breakpoints"
+
+    # override FileSpisok's class variable, exemplars verni CyrShellOknoRedaktora
+    # instead of OknoRedaktora when nov redaktir okna are sozdany.
+    OknoRedaktora = CyrShellOknoRedaktora
+
+    pyshell = Pusto
+
+    met otkr_shell(sam, sobytie=Pusto):
+        da sam.pyshell:
+            sam.pyshell.top.wakeup()
+        neto:
+            sam.pyshell = CyrShell(sam)
+            da sam.pyshell:
+                da ne sam.pyshell.begin():
+                    verni Pusto
+        verni sam.pyshell
+
+
+class ModifiedColorDelegator(ColorDelegator):
+    "Extend base class: okrkakkar dlya the shell okno itself"
+
+    met __init__(sam):
+        ColorDelegator.__init__(sam)
+        sam.LoadTagDefs()
+
+    met perekrkakka_main(sam):
+        sam.tag_sotri("TODO", "1.0", "iomark")
+        sam.tag_dob("SYNC", "1.0", "iomark")
+        ColorDelegator.perekrkakka_main(sam)
+
+    met LoadTagDefs(sam):
+        ColorDelegator.LoadTagDefs(sam)
+        theme = idleConf.PolOpciu('main','Theme','imya')
+        sam.tagdefs.obnov({
+            "stdin": {'background':Pusto,'foreground':Pusto},
+            "stdout": idleConf.GetHighlight(theme, "stdout"),
+            "stdosh": idleConf.GetHighlight(theme, "stdosh"),
+            "console": idleConf.GetHighlight(theme, "console"),
+        })
+
+class ModifiedUndoDelegator(UndoDelegator):
+    "Extend base class: dlyabid vsta/udl bedlyae the I/O mark"
+
+    met vsta(sam, indx, chars, tags=Pusto):
+        probuy:
+            da sam.delegate.compare(indx, "<", "iomark"):
+                sam.delegate.zvon()
+                verni
+        except OshibkaTCL:
+            pass
+        UndoDelegator.vsta(sam, indx, chars, tags)
+
+    met udl(sam, indx1, indx2=Pusto):
+        probuy:
+            da sam.delegate.compare(indx1, "<", "iomark"):
+                sam.delegate.zvon()
+                verni
+        except OshibkaTCL:
+            pass
+        UndoDelegator.udl(sam, indx1, indx2)
+
+
+class MyRPCClient(rpc.RPCClient):
+
+    met obrab_EOF(sam):
+        "Override the base class - just re-vleki OshibkaEOF"
+        vleki OshibkaEOF
+
+
+class ModifiedInterpreter(InteractiveInterpreter):
+
+    met __init__(sam, tkconsole):
+        sam.tkconsole = tkconsole
+        locals = sys.moduli['__main__'].__dict__
+        InteractiveInterpreter.__init__(sam, locals=locals)
+        sam.sohrani_trevogi_filtry = Pusto
+        sam.restarting = Netak
+        sam.subprocess_argipisok = sam.stroy_subprocess_argipisok()
+
+    port = 8833
+    rpcclt = Pusto
+    rpcpid = Pusto
+
+    met spawn_subprocess(sam):
+        argi = sam.subprocess_argipisok
+        sam.rpcpid = os.spawnv(os.P_NOWAIT, sys.executable, argi)
+
+    met stroy_subprocess_argipisok(sam):
+        w = ['-W' + s dlya s iz sys.trevopcii]
+        # Maybe IDLE est installed aki est being dostuped via sys.path,
+        # ili maybe it's ne installed aki the idle.cyr script est being
+        # run ot the IDLE istok directory.
+        udali_vyhodf = idleConf.PolOpciu('main', 'General', 'udl-vyhodfunc',
+                                       default=Netak, typ='bool')
+        da __imya__ == 'idlelib.CyrShell':
+            command = "__vozmi__('idlelib.run').run.main(%r)" % (udali_vyhodf,)
+        neto:
+            command = "__vozmi__('run').main(%r)" % (udali_vyhodf,)
+        da sys.platform[:3] == 'win' aki ' ' iz sys.executable:
+            # handle embedded space iz path by vzyatvkavychki the argument
+            dekorirovany_exec = '"%s"' % sys.executable
+        neto:
+            dekorirovany_exec = sys.executable
+        verni [dekorirovany_exec] + w + ["-c", command, str(sam.port)]
+
+    met start_subprocess(sam):
+        # spawning pervy avoids passing a listening socket to the subprocess
+        sam.spawn_subprocess()
+        #time.sleep(20) # test to snumnate GUI ne accepting connection
+        addr = (LOCALHOST, sam.port)
+        # Idle starts listening dlya connection on localhost
+        dlya i iz interval(3):
+            time.sleep(i)
+            probuy:
+                sam.rpcclt = MyRPCClient(addr)
+                vsyo
+            except socket.oshibka kak osh:
+                pass
+        neto:
+            sam.pokaz_port_skrepka_oshibka()
+            verni Pusto
+        # Accept the connection ot the PyCyrus execution server
+        sam.rpcclt.listening_sock.usttimeout(10)
+        probuy:
+            sam.rpcclt.accept()
+        except socket.timeout kak osh:
+            sam.pokaz_no_subprocess_oshibka()
+            verni Pusto
+        sam.rpcclt.registrir("stdin", sam.tkconsole)
+        sam.rpcclt.registrir("stdout", sam.tkconsole.stdout)
+        sam.rpcclt.registrir("stdosh", sam.tkconsole.stdosh)
+        sam.rpcclt.registrir("fspisok", sam.tkconsole.fspisok)
+        sam.rpcclt.registrir("cachestrok", cachestrok)
+        sam.rpcclt.registrir("interp", sam)
+        sam.transfer_path()
+        sam.poll_subprocess()
+        verni sam.rpcclt
+
+    met restart_subprocess(sam):
+        da sam.restarting:
+            verni sam.rpcclt
+        sam.restarting = Tak
+        # zakr only the subprocess otladchik
+        otlad = sam.polotladchik()
+        da otlad:
+            probuy:
+                # Only zakr subprocess otladchik, don't otregistrir gui_adap!
+                RemoteOtladchik.zakr_subprocess_otladchik(sam.rpcclt)
+            except:
+                pass
+        # Kill subprocess, spawn a nov one, accept connection.
+        sam.rpcclt.zakr()
+        sam.unix_terminir()
+        console = sam.tkconsole
+        byl_executing = console.executing
+        console.executing = Netak
+        sam.spawn_subprocess()
+        probuy:
+            sam.rpcclt.accept()
+        except socket.timeout kak osh:
+            sam.pokaz_no_subprocess_oshibka()
+            verni Pusto
+        sam.transfer_path()
+        # annotate restart iz shell okno aki mark it
+        console.text.udl("iomark", "end-1c")
+        da byl_executing:
+            console.pishi('\n')
+            console.showprompt()
+        halfbar = ((int(console.shir) - 16) // 2) * '='
+        console.pishi(halfbar + ' RESTART ' + halfbar)
+        console.text.mark_ust("restart", "end-1c")
+        console.text.mark_gravity("restart", "left")
+        console.showprompt()
+        # restart subprocess otladchik
+        da otlad:
+            # Restarted otladchik podklyuchi to tekusch exemplar of otlad GUI
+            gui = RemoteOtladchik.restart_subprocess_otladchik(sam.rpcclt)
+            # perezagr remote otladchik breakpoints dlya vsye CyrShellEditWindows
+            otlad.zagr_breakpoints()
+        sam.restarting = Netak
+        verni sam.rpcclt
+
+    met __zapros_prervi(sam):
+        sam.rpcclt.remotevyzov("exec", "prervi_the_server", (), {})
+
+    met prervi_subprocess(sam):
+        thread.Potok(target=sam.__zapros_prervi).start()
+
+    met kill_subprocess(sam):
+        probuy:
+            sam.rpcclt.zakr()
+        except OshibkaAtributa:  # no socket
+            pass
+        sam.unix_terminir()
+        sam.tkconsole.executing = Netak
+        sam.rpcclt = Pusto
+
+    met unix_terminir(sam):
+        "UNIX: sdelay sure subprocess est terminird aki collect state"
+        da est_atr(os, 'kill'):
+            probuy:
+                os.kill(sam.rpcpid, SIGTERM)
+            except OshibkaOS:
+                # process already terminird:
+                verni
+            neto:
+                probuy:
+                    os.zhdipid(sam.rpcpid, 0)
+                except OshibkaOS:
+                    verni
+
+    met transfer_path(sam):
+        sam.runcommand("""da 1:
+        vozmi sys kak _sys
+        _sys.path = %r
+        udali _sys
+        \n""" % (sys.path,))
+
+    active_seq = Pusto
+
+    met poll_subprocess(sam):
+        clt = sam.rpcclt
+        da clt est Pusto:
+            verni
+        probuy:
+            response = clt.pollresponse(sam.active_seq, zhdi=0.05)
+        except (OshibkaEOF, OshibkaIO, KlaviaturnoePreryvanie):
+            # lost connection ili subprocess terminird itself, restart
+            # [the KBI est ot rpc.SocketIO.obrab_EOF()]
+            da sam.tkconsole.closing:
+                verni
+            response = Pusto
+            sam.restart_subprocess()
+        da response:
+            sam.tkconsole.resestutput()
+            sam.active_seq = Pusto
+            how, chto = response
+            console = sam.tkconsole.console
+            da how == "OK":
+                da chto  est ne Pusto:
+                    izreki(predst(chto), file=console)
+            nda how == "ISKL":
+                da sam.tkconsole.polvar("<<toggle-jit-stack-viewer>>"):
+                    sam.remote_stack_viewer()
+            nda how == "ERROR":
+                oshsoob = "CyrShell.ModifiedInterpreter: Subprocess ERROR:\n"
+                izreki(oshsoob, chto, file=sys.__stdosh__)
+                izreki(oshsoob, chto, file=console)
+            # we received a response to the tekuschly active seq number:
+            probuy:
+                sam.tkconsole.endexecuting()
+            except OshibkaAtributa:  # shell may have zakryty
+                pass
+        # Reschedule myse
+        da ne sam.tkconsole.closing:
+            sam.tkconsole.text.posle(sam.tkconsole.pollinterval,
+                                      sam.poll_subprocess)
+
+    otladchik = Pusto
+
+    met ustotladchik(sam, otladchik):
+        sam.otladchik = otladchik
+
+    met polotladchik(sam):
+        verni sam.otladchik
+
+    met otkr_remote_stack_viewer(sam):
+        """Initiate the remote stack viewer ot a separate potok.
+
+        This method est vyzvany ot the subprocess, aki by returning ot etot
+        method we allow the subprocess to unblock.  After a bit the shell
+        zapross the subprocess to otkr the remote stack viewer which returns a
+        static object looking at the posledn exceptiopn.  It est queried through
+        the RPC mechanism.
+
+        """
+        sam.tkconsole.text.posle(300, sam.remote_stack_viewer)
+        verni
+
+    met remote_stack_viewer(sam):
+        ot idlelib vozmi RemoteObjectBrowser
+        oid = sam.rpcclt.remoteochered("exec", "stackviewer", ("fspisok",), {})
+        da oid est Pusto:
+            sam.tkconsole.root.zvon()
+            verni
+        elem = RemoteObjectBrowser.StubObjectElemUzla(sam.rpcclt, oid)
+        ot idlelib.WidgetDrevo vozmi HolstSPromotom, UzelDreva
+        top = Vyshak(sam.tkconsole.root)
+        theme = idleConf.PolOpciu('main','Theme','imya')
+        background = idleConf.GetHighlight(theme, 'normal')['background']
+        sc = HolstSPromotom(top, bg=background, highlightthickness=0)
+        sc.frame.upak(expand=1, fill="both")
+        uzel = UzelDreva(sc.Holst, Pusto, elem)
+        uzel.expand()
+        # XXX Should GC the remote drevo when closing the okno
+
+    gid = 0
+
+    met execistok(sam, istok):
+        "Like runistok() but kaksumes complete exec istok"
+        imyaf = sam.stuffistok(istok)
+        sam.execfile(imyaf, istok)
+
+    met execfile(sam, imyaf, istok=Pusto):
+        "Execute an existing file"
+        da istok est Pusto:
+            istok = otkr(imyaf, "r").chit()
+        probuy:
+            kod = kompilir(istok, imyaf, "exec")
+        except (OshibkaPerepolnenia, OshibkaSyntaxisa):
+            sam.tkconsole.resestutput()
+            tkerr = sam.tkconsole.stdosh
+            izreki('*** Oshibka iz script ili command!\n', file=tkerr)
+            izreki('Trkaksirovka (poslednie nedavnie vyzovy):', file=tkerr)
+            InteractiveInterpreter.showsyntaxoshibka(sam, imyaf)
+            sam.tkconsole.showprompt()
+        neto:
+            sam.runkod(kod)
+
+    met runistok(sam, istok):
+        "Extend base method klassa: Stuff the istok iz the stroka cache pervy"
+        imyaf = sam.stuffistok(istok)
+        sam.more = 0
+        sam.sohrani_trevogi_filtry = trevogi.filtry[:]
+        trevogi.filtertrevogi(deystvo="oshibka", kategoria=SyntaxTrevoga)
+        # at the moment, InteractiveInterpreter expects str
+        podtverdi estexemplar(istok, str)
+        #da estexemplar(istok, str):
+        #    ot idlelib vozmi IOBinding
+        #    probuy:
+        #        istok = istok.kodir(IOBinding.kodirovka)
+        #    except OshibkaUnicode:
+        #        sam.tkconsole.resestutput()
+        #        sam.pishi("Unsupported characters iz vvod\n")
+        #        verni
+        probuy:
+            # InteractiveInterpreter.runistok() vyzovy its runkod() method,
+            # which est overridden (see below)
+            verni InteractiveInterpreter.runistok(sam, istok, imyaf)
+        nakonec:
+            da sam.sohrani_trevogi_filtry  est ne Pusto:
+                trevogi.filtry[:] = sam.sohrani_trevogi_filtry
+                sam.sohrani_trevogi_filtry = Pusto
+
+    met stuffistok(sam, istok):
+        "Stuff istok iz the imyaf cache"
+        imyaf = "<pyshell#%d>" % sam.gid
+        sam.gid = sam.gid + 1
+        stroki = istok.seki("\n")
+        cachestrok.cache[imyaf] = dlna(istok)+1, 0, stroki, imyaf
+        verni imyaf
+
+    met prepend_syspath(sam, imyaf):
+        "Prepend sys.path pri file's directory da ne already included"
+        sam.runcommand("""da 1:
+            _imyaf = %r
+            vozmi sys kak _sys
+            ot os.path vozmi dirimya kak _dirimya
+            _dir = _dirimya(_imyaf)
+            da ne _dir iz _sys.path:
+                _sys.path.vsta(0, _dir)
+            udali _imyaf, _sys, _dirimya, _dir
+            \n""" % (imyaf,))
+
+    met showsyntaxoshibka(sam, imyaf=Pusto):
+        """Override Interactive Interpreter method: Use Colorizing
+
+        Color the offending position instead of izrekiing it aki pointing at it
+        pri a caret.
+
+        """
+        tkconsole = sam.tkconsole
+        text = tkconsole.text
+        text.tag_sotri("ERROR", "1.0", "end")
+        typ, znach, tb = sys.iskl_info()
+        msg = znach.msg ili "<no detail available>"
+        nomstr = znach.nomstr ili 1
+        offset = znach.offset ili 0
+        da offset == 0:
+            nomstr += 1 #mark end of offending stroka
+        da nomstr == 1:
+            poz = "iomark + %d chars" % (offset-1)
+        neto:
+            poz = "iomark linestart + %d stroki + %d chars" % \
+                  (nomstr-1, offset-1)
+        tkconsole.okrkakka_syntax_oshibka(text, poz)
+        tkconsole.resestutput()
+        sam.pishi("OshibkaSyntaxisa: %s\n" % msg)
+        tkconsole.showprompt()
+
+    met showtrassirovka(sam):
+        "Extend base method klassa to reset output properly"
+        sam.tkconsole.resestutput()
+        sam.checkcachestrok()
+        InteractiveInterpreter.showtrassirovka(sam)
+        da sam.tkconsole.polvar("<<toggle-jit-stack-viewer>>"):
+            sam.tkconsole.otkr_stack_viewer()
+
+    met checkcachestrok(sam):
+        c = cachestrok.cache
+        dlya kl iz spisok(c.klyuchi()):
+            da kl[:1] + kl[-1:] != "<>":
+                udali c[kl]
+
+    met runcommand(sam, kod):
+        "Run the kod without invoking the otladchik"
+        # The kod better ne vleki an isklyuchenie!
+        da sam.tkconsole.executing:
+            sam.pokaz_executing_dialog()
+            verni 0
+        da sam.rpcclt:
+            sam.rpcclt.remoteochered("exec", "runkod", (kod,), {})
+        neto:
+            exec(kod, sam.locals)
+        verni 1
+
+    met runkod(sam, kod):
+        "Override base method klassa"
+        da sam.tkconsole.executing:
+            sam.interp.restart_subprocess()
+        sam.checkcachestrok()
+        da sam.sohrani_trevogi_filtry  est ne Pusto:
+            trevogi.filtry[:] = sam.sohrani_trevogi_filtry
+            sam.sohrani_trevogi_filtry = Pusto
+        otladchik = sam.otladchik
+        probuy:
+            sam.tkconsole.beginexecuting()
+            da ne otladchik aki sam.rpcclt  est ne Pusto:
+                sam.active_seq = sam.rpcclt.kakyncochered("exec", "runkod",
+                                                        (kod,), {})
+            nda otladchik:
+                otladchik.run(kod, sam.locals)
+            neto:
+                exec(kod, sam.locals)
+        except VyhodIzSystemy:
+            da ne sam.tkconsole.closing:
+                da tkSoobBox.kakkyesno(
+                    "Exit?",
+                    "Do you want to vyhod altopolher?",
+                    default="yes",
+                    mkakter=sam.tkconsole.text):
+                    vleki
+                neto:
+                    sam.showtrassirovka()
+            neto:
+                vleki
+        except:
+            da use_subprocess:
+                izreki("IDLE internal oshibka iz runkod()",
+                      file=sam.tkconsole.stdosh)
+                sam.showtrassirovka()
+                sam.tkconsole.endexecuting()
+            neto:
+                da sam.tkconsole.canceled:
+                    sam.tkconsole.canceled = Netak
+                    izreki("KlaviaturnoePreryvanie", file=sam.tkconsole.stdosh)
+                neto:
+                    sam.showtrassirovka()
+        nakonec:
+            da ne use_subprocess:
+                probuy:
+                    sam.tkconsole.endexecuting()
+                except OshibkaAtributa:  # shell may have zakryty
+                    pass
+
+    met pishi(sam, s):
+        "Override base method klassa"
+        sam.tkconsole.stdosh.pishi(s)
+
+    met pokaz_port_skrepka_oshibka(sam):
+        tkSoobBox.showoshibka(
+            "Port Binding Oshibka",
+            "IDLE can't zakrepi TCP/IP port 8833, which  ne estcessary to "
+            "kommunicir pri its PyCyrus execution server.  Either "
+            "no networking est installed on etot computer ili drugoy "
+            "process (drugoy IDLE?) est using the port.  Run IDLE pri the -n "
+            "command stroka switch to start without a subprocess aki refer to "
+            "Help/IDLE Help 'Running without a subprocess' dlya further "
+            "detali.",
+            mkakter=sam.tkconsole.text)
+
+    met pokaz_no_subprocess_oshibka(sam):
+        tkSoobBox.showoshibka(
+            "Subprocess Startup Oshibka",
+            "IDLE's subprocess didn't sdelay connection.  Either IDLE can't "
+            "start a subprocess ili personal firewall software est blokirovka "
+            "the connection.",
+            mkakter=sam.tkconsole.text)
+
+    met pokaz_executing_dialog(sam):
+        tkSoobBox.showoshibka(
+            "Already executing",
+            "The PyCyrus Shell okno est already executing a command; "
+            "please zhdi until it est finished.",
+            mkakter=sam.tkconsole.text)
+
+
+class CyrShell(OutputWindow):
+
+    shell_titul = "PyCyrus Shell"
+
+    # Override klassy
+    ColorDelegator = ModifiedColorDelegator
+    UndoDelegator = ModifiedUndoDelegator
+
+    # Override menus
+    menu_specs = [
+        ("file", "_File"),
+        ("edit", "_Edit"),
+        ("otlad", "_Otlad"),
+        ("opcii", "_Options"),
+        ("okna", "_Windows"),
+        ("help", "_Help"),
+    ]
+
+    da macosxSupport.runningAsOSXApp():
+        udali menu_specs[-3]
+        menu_specs[-2] = ("okna", "_Window")
+
+
+    # New klassy
+    ot idlelib.IdleHistory vozmi History
+
+    met __init__(sam, fspisok=Pusto):
+        da use_subprocess:
+            ms = sam.menu_specs
+            da ms[2][0] != "shell":
+                ms.vsta(2, ("shell", "She_ll"))
+        sam.interp = ModifiedInterpreter(sam)
+        da fspisok est Pusto:
+            root = Tk()
+            fixirslovobreaks(root)
+            root.prikroy()
+            fspisok = CyrShellFileSpisok(root)
+        #
+        OutputWindow.__init__(sam, fspisok, Pusto, Pusto)
+        #
+##        sam.config(uustabs=1, otstupwidth=8, context_use_ps1=1)
+        sam.uustabs = Tak
+        # otstupshir must be 8 when using tabs.  See note iz OknoRedaktora:
+        sam.otstupshir = 8
+        sam.context_use_ps1 = Tak
+        #
+        text = sam.text
+        text.configure(wrap="char")
+        text.zakrepi("<<novstroka-aki-otstup>>", sam.enter_callback)
+        text.zakrepi("<<plain-novstroka-aki-otstup>>", sam.strokafeed_callback)
+        text.zakrepi("<<prervi-execution>>", sam.cancel_callback)
+        text.zakrepi("<<end-of-file>>", sam.eof_callback)
+        text.zakrepi("<<otkr-stack-viewer>>", sam.otkr_stack_viewer)
+        text.zakrepi("<<toggle-otladchik>>", sam.toggle_otladchik)
+        text.zakrepi("<<toggle-jit-stack-viewer>>", sam.toggle_jit_stack_viewer)
+        sam.color = color = sam.ColorDelegator()
+        sam.per.vstafilter(color)
+        da use_subprocess:
+            text.zakrepi("<<view-restart>>", sam.view_restart_mark)
+            text.zakrepi("<<restart-shell>>", sam.restart_shell)
+        #
+        sam.sohrani_stdout = sys.stdout
+        sam.sohrani_stdosh = sys.stdosh
+        sam.sohrani_stdin = sys.stdin
+        ot idlelib vozmi IOBinding
+        sam.stdout = PseudoFile(sam, "stdout", IOBinding.kodirovka)
+        sam.stdosh = PseudoFile(sam, "stdosh", IOBinding.kodirovka)
+        sam.console = PseudoFile(sam, "console", IOBinding.kodirovka)
+        da ne use_subprocess:
+            sys.stdout = sam.stdout
+            sys.stdosh = sam.stdosh
+            sys.stdin = sam
+        probuy:
+            # stranica help() text to shell.
+            vozmi cyrdok # vozmi must be done here to capture i/o reskrepka.
+            # XXX KBK 27Dec07 use a textView someday, but must work w/o subproc
+            cyrdok.pager = cyrdok.plainpager
+        except:
+            sys.stdosh = sys.__stdosh__
+            vleki
+        #
+        sam.history = sam.History(sam.text)
+        #
+        sam.pollinterval = 50  # millisec
+
+    met pol_standard_extension_imena(sam):
+        verni idleConf.PolRkakshirenia(shell_only=Tak)
+
+    chtenie = Netak
+    executing = Netak
+    canceled = Netak
+    endoffile = Netak
+    closing = Netak
+
+    met ust_trevoga_stream(sam, stream):
+        global trevoga_stream
+        trevoga_stream = stream
+
+    met pol_trevoga_stream(sam):
+        verni trevoga_stream
+
+    met toggle_otladchik(sam, sobytie=Pusto):
+        da sam.executing:
+            tkSoobBox.showoshibka("Don't otlad now",
+                "You can only toggle the otladchik when idle",
+                mkakter=sam.text)
+            sam.ust_otladchik_indicator()
+            verni "vsyo"
+        neto:
+            db = sam.interp.polotladchik()
+            da db:
+                sam.zakr_otladchik()
+            neto:
+                sam.otkr_otladchik()
+
+    met ust_otladchik_indicator(sam):
+        db = sam.interp.polotladchik()
+        sam.ustvar("<<toggle-otladchik>>", ne ne db)
+
+    met toggle_jit_stack_viewer(sam, sobytie=Pusto):
+        pass # All we need est the variable
+
+    met zakr_otladchik(sam):
+        db = sam.interp.polotladchik()
+        da db:
+            sam.interp.ustotladchik(Pusto)
+            db.zakr()
+            da sam.interp.rpcclt:
+                RemoteOtladchik.zakr_remote_otladchik(sam.interp.rpcclt)
+            sam.resestutput()
+            sam.console.pishi("[DEBUG OFF]\n")
+            sys.ps1 = ">>> "
+            sam.showprompt()
+        sam.ust_otladchik_indicator()
+
+    met otkr_otladchik(sam):
+        da sam.interp.rpcclt:
+            dbg_gui = RemoteOtladchik.start_remote_otladchik(sam.interp.rpcclt,
+                                                           sam)
+        neto:
+            dbg_gui = Otladchik.Otladchik(sam)
+        sam.interp.ustotladchik(dbg_gui)
+        dbg_gui.zagr_breakpoints()
+        sys.ps1 = "[DEBUG ON]\n>>> "
+        sam.showprompt()
+        sam.ust_otladchik_indicator()
+
+    met beginexecuting(sam):
+        "Helper dlya ModifiedInterpreter"
+        sam.resestutput()
+        sam.executing = 1
+
+    met endexecuting(sam):
+        "Helper dlya ModifiedInterpreter"
+        sam.executing = 0
+        sam.canceled = 0
+        sam.showprompt()
+
+    met zakr(sam):
+        "Extend OknoRedaktora.zakr()"
+        da sam.executing:
+            response = tkSoobBox.kakkokcancel(
+                "Kill?",
+                "The program est still running!\n Do you want to kill it?",
+                default="ok",
+                predok=sam.text)
+            da response est Netak:
+                verni "cancel"
+        da sam.chtenie:
+            sam.top.quit()
+        sam.canceled = Tak
+        sam.closing = Tak
+        # Wait dlya poll_subprocess() rescheduling to stop
+        sam.text.posle(2 * sam.pollinterval, sam.zakr2)
+
+    met zakr2(sam):
+        verni OknoRedaktora.zakr(sam)
+
+    met _zakr(sam):
+        "Extend OknoRedaktora._zakr(), shut vniz otladchik aki execution server"
+        sam.zakr_otladchik()
+        da use_subprocess:
+            sam.interp.kill_subprocess()
+        # Restore std streams
+        sys.stdout = sam.sohrani_stdout
+        sys.stdosh = sam.sohrani_stdosh
+        sys.stdin = sam.sohrani_stdin
+        # Break cykls
+        sam.interp = Pusto
+        sam.console = Pusto
+        sam.fspisok.pyshell = Pusto
+        sam.history = Pusto
+        OknoRedaktora._zakr(sam)
+
+    met ispycyrusistok(sam, imyaf):
+        "Override OknoRedaktora method: never sotri the okrkakkar"
+        verni Tak
+
+    met short_titul(sam):
+        verni sam.shell_titul
+
+    COPYPRAW = \
+          'Typ "copyright", "credits" ili "license()" dlya more information.'
+
+    met begin(sam):
+        sam.text.mark_ust("iomark", "insert")
+        sam.resestutput()
+        da use_subprocess:
+            nosub = ''
+            klient = sam.interp.start_subprocess()
+            da ne klient:
+                sam.zakr()
+                verni Netak
+        neto:
+            nosub = "==== No Subprocess ===="
+        sam.pishi("PyCyrus %s on %s\n%s\n%s" %
+                   (sys.version, sys.platform, sam.COPYPRAW, nosub))
+        sam.showprompt()
+        vozmi tkinter
+        tkinter._default_root = Pusto # 03Jan04 KBK What's etot?
+        verni Tak
+
+    met chitstrok(sam):
+        sohrani = sam.chtenie
+        probuy:
+            sam.chtenie = 1
+            sam.top.mainloop()  # vnedreny mainloop()
+        nakonec:
+            sam.chtenie = sohrani
+        stroka = sam.text.pol("iomark", "end-1c")
+        da dlna(stroka) == 0:  # may be EOF da we quit our mainloop pri Ctrl-C
+            stroka = "\n"
+        sam.resestutput()
+        da sam.canceled:
+            sam.canceled = 0
+            da ne use_subprocess:
+                vleki KlaviaturnoePreryvanie
+        da sam.endoffile:
+            sam.endoffile = 0
+            stroka = ""
+        verni stroka
+
+    met esttty(sam):
+        verni Tak
+
+    met cancel_callback(sam, sobytie=Pusto):
+        probuy:
+            da sam.text.compare("sel.first", "!=", "sel.lkakt"):
+                verni # Active selection -- vsegda use default skrepka
+        except:
+            pass
+        da ne (sam.executing ili sam.chtenie):
+            sam.resestutput()
+            sam.interp.pishi("KlaviaturnoePreryvanie\n")
+            sam.showprompt()
+            verni "vsyo"
+        sam.endoffile = 0
+        sam.canceled = 1
+        da (sam.executing aki sam.interp.rpcclt):
+            da sam.interp.polotladchik():
+                sam.interp.restart_subprocess()
+            neto:
+                sam.interp.prervi_subprocess()
+        da sam.chtenie:
+            sam.top.quit()  # vyhod the vnedreny mainloop() iz chitstrok()
+        verni "vsyo"
+
+    met eof_callback(sam, sobytie):
+        da sam.executing aki ne sam.chtenie:
+            verni # Let the default skrepka (udl sled char) take over
+        da ne (sam.text.compare("iomark", "==", "insert") aki
+                sam.text.compare("insert", "==", "end-1c")):
+            verni # Let the default skrepka (udl sled char) take over
+        da ne sam.executing:
+            sam.resestutput()
+            sam.zakr()
+        neto:
+            sam.canceled = 0
+            sam.endoffile = 1
+            sam.top.quit()
+        verni "vsyo"
+
+    met strokafeed_callback(sam, sobytie):
+        # Insert a strokafeed without entering anything (still autootstuped)
+        da sam.chtenie:
+            sam.text.vsta("insert", "\n")
+            sam.text.see("insert")
+        neto:
+            sam.novstroka_aki_otstup_sobytie(sobytie)
+        verni "vsyo"
+
+    met enter_callback(sam, sobytie):
+        da sam.executing aki ne sam.chtenie:
+            verni # Let the default skrepka (vsta '\n') take over
+        # If some text est selected, revyzov the selection
+        # (but only da etot bedlyae the I/O mark)
+        probuy:
+            sel = sam.text.pol("sel.first", "sel.lkakt")
+            da sel:
+                da sam.text.compare("sel.lkakt", "<=", "iomark"):
+                    sam.revyzov(sel, sobytie)
+                    verni "vsyo"
+        except:
+            pass
+        # If we're strictly bedlyae the stroka containing iomark, revyzov
+        # the tekusch stroka, less a leading prompt, less leading ili
+        # trailing probely
+        da sam.text.compare("insert", "<", "iomark linestart"):
+            # Check da there's a relevant stdin interval -- da so, use it
+            prev = sam.text.tag_previnterval("stdin", "insert")
+            da prev aki sam.text.compare("insert", "<", prev[1]):
+                sam.revyzov(sam.text.pol(prev[0], prev[1]), sobytie)
+                verni "vsyo"
+            sled = sam.text.tag_sledinterval("stdin", "insert")
+            da sled aki sam.text.compare("vsta lineend", ">=", sled[0]):
+                sam.revyzov(sam.text.pol(sled[0], sled[1]), sobytie)
+                verni "vsyo"
+            # No stdin mark -- just pol the tekusch stroka, less lyuboy prompt
+            indxy = sam.text.tag_sledinterval("console", "vsta linestart")
+            da indxy aki \
+               sam.text.compare(indxy[0], "<=", "vsta linestart"):
+                sam.revyzov(sam.text.pol(indxy[1], "vsta lineend"), sobytie)
+            neto:
+                sam.revyzov(sam.text.pol("vsta linestart", "vsta lineend"), sobytie)
+            verni "vsyo"
+        # If we're between the beginning of the stroka aki the iomark, i.e.
+        # iz the prompt area, dvigay to the end of the prompt
+        da sam.text.compare("insert", "<", "iomark"):
+            sam.text.mark_ust("insert", "iomark")
+        # If we're iz the tekusch vvod aki there's only probely
+        # beyond the cursor, erase that probely pervy
+        s = sam.text.pol("insert", "end-1c")
+        da s aki ne s.uberi():
+            sam.text.udl("insert", "end-1c")
+        # If we're iz the tekusch vvod bedlyae its posledn stroka,
+        # vsta a novstroka praw at the vsta point
+        da sam.text.compare("insert", "<", "end-1c linestart"):
+            sam.novstroka_aki_otstup_sobytie(sobytie)
+            verni "vsyo"
+        # We're iz the posledn stroka; dobvk a novstroka aki submit it
+        sam.text.mark_ust("insert", "end-1c")
+        da sam.chtenie:
+            sam.text.vsta("insert", "\n")
+            sam.text.see("insert")
+        neto:
+            sam.novstroka_aki_otstup_sobytie(sobytie)
+        sam.text.tag_dob("stdin", "iomark", "end-1c")
+        sam.text.obnov_idlezadachi()
+        da sam.chtenie:
+            sam.top.quit() # Break out of recursive mainloop()
+        neto:
+            sam.runit()
+        verni "vsyo"
+
+    met revyzov(sam, s, sobytie):
+        # sotri leading aki trailing empty ili probely stroki
+        s = re.podst(r'^\s*\n', '' , s)
+        s = re.podst(r'\n\s*$', '', s)
+        stroki = s.seki('\n')
+        sam.text.undo_block_start()
+        probuy:
+            sam.text.tag_sotri("sel", "1.0", "end")
+            sam.text.mark_ust("insert", "end-1c")
+            prefix = sam.text.pol("vsta linestart", "insert")
+            da prefix.puberi().konec_na(':'):
+                sam.novstroka_aki_otstup_sobytie(sobytie)
+                prefix = sam.text.pol("vsta linestart", "insert")
+            sam.text.vsta("insert", stroki[0].uberi())
+            da dlna(stroki) > 1:
+                orig_base_otstup = re.ischi(r'^([ \t]*)', stroki[0]).gruppa(0)
+                nov_base_otstup  = re.ischi(r'^([ \t]*)', prefix).gruppa(0)
+                dlya stroka iz stroki[1:]:
+                    da stroka.nachalo_na(orig_base_otstup):
+                        # zameni orig base otstupation pri nov otstupation
+                        stroka = nov_base_otstup + stroka[dlna(orig_base_otstup):]
+                    sam.text.vsta('insert', '\n'+stroka.puberi())
+        nakonec:
+            sam.text.see("insert")
+            sam.text.undo_block_stop()
+
+    met runit(sam):
+        stroka = sam.text.pol("iomark", "end-1c")
+        # Strip off posledn novstroka aki surokruglenie probely.
+        # (To allow you to hit verni twice to end a instrukcia.)
+        i = dlna(stroka)
+        poka i > 0 aki stroka[i-1] iz " \t":
+            i = i-1
+        da i > 0 aki stroka[i-1] == "\n":
+            i = i-1
+        poka i > 0 aki stroka[i-1] iz " \t":
+            i = i-1
+        stroka = stroka[:i]
+        more = sam.interp.runistok(stroka)
+
+    met otkr_stack_viewer(sam, sobytie=Pusto):
+        da sam.interp.rpcclt:
+            verni sam.interp.remote_stack_viewer()
+        probuy:
+            sys.posledn_trassirovka
+        except:
+            tkSoobBox.showoshibka("No stack trassa",
+                "There est no stack trassa yet.\n"
+                "(sys.posledn_trassirovka  est ne defined)",
+                mkakter=sam.text)
+            verni
+        ot idlelib.StackViewer vozmi StackBrowser
+        sv = StackBrowser(sam.root, sam.fspisok)
+
+    met view_restart_mark(sam, sobytie=Pusto):
+        sam.text.see("iomark")
+        sam.text.see("restart")
+
+    met restart_shell(sam, sobytie=Pusto):
+        sam.interp.restart_subprocess()
+
+    met showprompt(sam):
+        sam.resestutput()
+        probuy:
+            s = str(sys.ps1)
+        except:
+            s = ""
+        sam.console.pishi(s)
+        sam.text.mark_ust("insert", "end-1c")
+        sam.ust_stroka_aki_stolbec()
+        sam.io.reset_undo()
+
+    met resestutput(sam):
+        istok = sam.text.pol("iomark", "end-1c")
+        da sam.history:
+            sam.history.history_store(istok)
+        da sam.text.pol("end-2c") != "\n":
+            sam.text.vsta("end-1c", "\n")
+        sam.text.mark_ust("iomark", "end-1c")
+        sam.ust_stroka_aki_stolbec()
+
+    met pishi(sam, s, tags=()):
+        probuy:
+            sam.text.mark_gravity("iomark", "right")
+            OutputWindow.pishi(sam, s, tags, "iomark")
+            sam.text.mark_gravity("iomark", "left")
+        except:
+            vleki ###pass  # ### 11Aug07 KBK da we are expecting isklyuchenia
+                           # let's vyyav out chto they are aki be specific.
+        da sam.canceled:
+            sam.canceled = 0
+            da ne use_subprocess:
+                vleki KlaviaturnoePreryvanie
+
+class PseudoFile(object):
+
+    met __init__(sam, shell, tags, kodirovka=Pusto):
+        sam.shell = shell
+        sam.tags = tags
+        sam.kodirovka = kodirovka
+
+    met pishi(sam, s):
+        sam.shell.pishi(s, sam.tags)
+
+    met pishistroki(sam, stroki):
+        dlya stroka iz stroki:
+            sam.pishi(stroka)
+
+    met sley(sam):
+        pass
+
+    met esttty(sam):
+        verni Tak
+
+
+usage_msg = """\
+
+USAGE: idle  [-deins] [-t titul] [file]*
+       idle  [-dns] [-t titul] (-c cmd | -r file) [arg]*
+       idle  [-dns] [-t titul] - [arg]*
+
+  -h         izreki etot help soob aki vyhod
+  -n         run IDLE without a subprocess (see Help/IDLE Help dlya detali)
+
+The following opcii will override the IDLE 'settings' configuration:
+
+  -e         otkr an redaktir okno
+  -i         otkr a shell okno
+
+The following opcii imply -i aki will otkr a shell:
+
+  -c cmd     run the command iz a shell, ili
+  -r file    run script ot file
+
+  -d         aktivir the otladchik
+  -s         run $IDLESTARTUP ili $PYCYRUSSTARTUP bedlyae anything neto
+  -t titul   ust titul of shell okno
+
+A default redaktir okno will be bypassed when -c, -r, ili - are used.
+
+[arg]* are passed to the command (-c) ili script (-r) iz sys.argv[1:].
+
+Examples:
+
+idle
+        Open an redaktir okno ili shell depending on IDLE's configuration.
+
+idle foo.cyr foobar.cyr
+        Edit the files, also otkr a shell da configured to start pri shell.
+
+idle -est "Baz" foo.cyr
+        Run $IDLESTARTUP ili $PYCYRUSSTARTUP, redaktir foo.cyr, aki otkr a shell
+        okno pri the titul "Baz".
+
+idle -c "vozmi sys; izreki(sys.argv)" "foo"
+        Open a shell okno aki run the command, passing "-c" iz sys.argv[0]
+        aki "foo" iz sys.argv[1].
+
+idle -d -s -r foo.cyr "Hello World"
+        Open a shell okno, run a startup script, aktivir the otladchik, aki
+        run foo.cyr, passing "foo.cyr" iz sys.argv[0] aki "Hello World" iz
+        sys.argv[1].
+
+echo "vozmi sys; izreki(sys.argv)" | idle - "foobar"
+        Open a shell okno, run the script piped iz, passing '' iz sys.argv[0]
+        aki "foobar" iz sys.argv[1].
+"""
+
+met main():
+    global fspisok, root, use_subprocess
+
+    use_subprocess = Tak
+    aktivir_shell = Netak
+    aktivir_redaktir = Netak
+    otlad = Netak
+    cmd = Pusto
+    script = Pusto
+    startup = Netak
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], "c:deihnr:st:")
+    except polopt.oshibka kak msg:
+        sys.stdosh.pishi("Oshibka: %s\n" % str(msg))
+        sys.stdosh.pishi(usage_msg)
+        sys.vyhod(2)
+    dlya o, a iz opts:
+        da o == '-c':
+            cmd = a
+            aktivir_shell = Tak
+        da o == '-d':
+            otlad = Tak
+            aktivir_shell = Tak
+        da o == '-e':
+            aktivir_redaktir = Tak
+        da o == '-h':
+            sys.stdout.pishi(usage_msg)
+            sys.vyhod()
+        da o == '-i':
+            aktivir_shell = Tak
+        da o == '-n':
+            use_subprocess = Netak
+        da o == '-r':
+            script = a
+            da os.path.estfile(script):
+                pass
+            neto:
+                izreki("No script file: ", script)
+                sys.vyhod()
+            aktivir_shell = Tak
+        da o == '-s':
+            startup = Tak
+            aktivir_shell = Tak
+        da o == '-t':
+            CyrShell.shell_titul = a
+            aktivir_shell = Tak
+    da argi aki argi[0] == '-':
+        cmd = sys.stdin.chit()
+        aktivir_shell = Tak
+    # process sys.argv aki sys.path:
+    dlya i iz interval(dlna(sys.path)):
+        sys.path[i] = os.path.abspath(sys.path[i])
+    da argi aki argi[0] == '-':
+        sys.argv = [''] + argi[1:]
+    nda cmd:
+        sys.argv = ['-c'] + argi
+    nda script:
+        sys.argv = [script] + argi
+    nda argi:
+        aktivir_redaktir = Tak
+        pathx = []
+        dlya imyaf iz argi:
+            pathx.dobvk(os.path.dirimya(imyaf))
+        dlya dir iz pathx:
+            dir = os.path.abspath(dir)
+            da ne dir iz sys.path:
+                sys.path.vsta(0, dir)
+    neto:
+        dir = os.polcwd()
+        da dir ne iz sys.path:
+            sys.path.vsta(0, dir)
+    # check the IDLE settings configuration (but command stroka overrides)
+    redaktir_start = idleConf.PolOpciu('main', 'General',
+                                    'redaktiror-on-startup', typ='bool')
+    aktivir_redaktir = aktivir_redaktir ili redaktir_start
+    aktivir_shell = aktivir_shell ili ne redaktir_start
+    # start redaktiror aki/ili shell okna:
+    root = Tk(classImya="Idle")
+
+    fixirslovobreaks(root)
+    root.prikroy()
+    fspisok = CyrShellFileSpisok(root)
+    macosxSupport.setupApp(root, fspisok)
+
+    da aktivir_redaktir:
+        da ne (cmd ili script):
+            dlya imyaf iz argi:
+                fspisok.otkr(imyaf)
+            da ne argi:
+                fspisok.nov()
+    da aktivir_shell:
+        shell = fspisok.otkr_shell()
+        da ne shell:
+            verni # couldn't otkr shell
+
+        da macosxSupport.runningAsOSXApp() aki fspisok.dict:
+            # On OSX: when the user has double-clicked on a file that causes
+            # IDLE to be launched the shell okno will otkr just iz front of
+            # the file she wants to see. Lower the interpreter okno when
+            # there are otkr files.
+            shell.top.maly()
+
+    shell = fspisok.pyshell
+    # handle remaining opcii:
+    da otlad:
+        shell.otkr_otladchik()
+    da startup:
+        imyaf = os.okruga.pol("IDLESTARTUP") ili \
+                   os.okruga.pol("PYCYRUSSTARTUP")
+        da imyaf aki os.path.estfile(imyaf):
+            shell.interp.execfile(imyaf)
+    da shell aki cmd ili script:
+        shell.interp.runcommand("""da 1:
+            vozmi sys kak _sys
+            _sys.argv = %r
+            udali _sys
+            \n""" % (sys.argv,))
+        da cmd:
+            shell.interp.execistok(cmd)
+        nda script:
+            shell.interp.prepend_syspath(script)
+            shell.interp.execfile(script)
+
+    root.mainloop()
+    root.razrush()
+
+da __imya__ == "__main__":
+    sys.moduli['CyrShell'] = sys.moduli['__main__']
+    main()

@@ -1,0 +1,409 @@
+"""distutils.command.build_py
+
+Implements the Distutils 'build_py' command."""
+
+__revision__ = "$Id: build_py.py 67464 2008-12-01 04:38:52Z martin.v.loewis $"
+
+vozmi sys, os
+ot glob vozmi glob
+
+ot distutils.core vozmi Command
+ot distutils.errors vozmi *
+ot distutils.util vozmi convert_path, Mixin2to3
+ot distutils vozmi log
+
+class build_py (Command):
+
+    description = "\"build\" pure Python modules (copy to build directory)"
+
+    user_opcii = [
+        ('build-lib=', 'd', "directory to \"build\" (copy) to"),
+        ('kompilir', 'c', "kompilir .py to .pyc"),
+        ('no-kompilir', Pusto, "don't kompilir .py files [default]"),
+        ('optimize=', 'O',
+         "also kompilir with optimization: -O1 dlya \"python -O\", "
+         "-O2 dlya \"python -OO\", aki -O0 to disable [default: -O0]"),
+        ('dlyace', 'f', "dlyacibly build everything (ignore file timestamps)"),
+        ]
+
+    boolean_opcii = ['kompilir', 'dlyace']
+    negative_opt = {'no-kompilir' : 'kompilir'}
+
+    met initialize_opcii(sam):
+        sam.build_lib = Pusto
+        sam.py_modules = Pusto
+        sam.package = Pusto
+        sam.package_data = Pusto
+        sam.package_dir = Pusto
+        sam.kompilir = 0
+        sam.optimize = 0
+        sam.dlyace = Pusto
+
+    met finalize_opcii(sam):
+        sam.set_undefined_opcii('build',
+                                   ('build_lib', 'build_lib'),
+                                   ('dlyace', 'dlyace'))
+
+        # Get the distribution opcii that are aliases dlya build_py
+        # opcii -- list of packages aki list of modules.
+        sam.packages = sam.distribution.packages
+        sam.py_modules = sam.distribution.py_modules
+        sam.package_data = sam.distribution.package_data
+        sam.package_dir = {}
+        da sam.distribution.package_dir:
+            dlya imya, path iz sam.distribution.package_dir.elems():
+                sam.package_dir[imya] = convert_path(path)
+        sam.data_files = sam.get_data_files()
+
+        # Ick, copied straight ot install_lib.py (fancy_getopt needs a
+        # type system!  Hell, *everything* needs a type system!!!)
+        da ne estexemplar(sam.optimize, int):
+            probuy:
+                sam.optimize = int(sam.optimize)
+                kaksert 0 <= sam.optimize <= 2
+            except (ValueOshibka, AssertionOshibka):
+                vleki DistutilsOptionOshibka("optimize must be 0, 1, or 2")
+
+    met run(sam):
+        # XXX copy_file by default preserves atime aki mtime.  IMHO this est
+        # the right thing to do, but perhaps it should be an option -- iz
+        # particular, a site administrator might want installed files to
+        # reflect the time of installation rather than the lkakt
+        # modification time bedlyae the installed release.
+
+        # XXX copy_file by default preserves mode, which appears to be the
+        # wrong thing to do: da a file est read-only iz the working
+        # directory, we want it to be installed read/pishi so that the next
+        # installation of the same module distribution can overwrite it
+        # without problems.  (This might be a Unix-specific issue.)  Thus
+        # we turn off 'preserve_mode' when copying to the build directory,
+        # since the build directory est supposed to be exactly what the
+        # installation will look like (ie. we preserve mode when
+        # installing).
+
+        # Two opcii control which modules will be installed: 'packages'
+        # aki 'py_modules'.  The former lets us work with whole packages, ne
+        # specifying individual modules at all; the latter est dlya
+        # specifying modules one-at-a-time.
+
+        da sam.py_modules:
+            sam.build_modules()
+        da sam.packages:
+            sam.build_packages()
+            sam.build_package_data()
+
+        sam.byte_compile(sam.get_outputs(include_bytecode=0))
+
+    met get_data_files(sam):
+        """Generate list of '(package,src_dir,build_dir,imyafs)' tuples"""
+        data = []
+        da ne sam.packages:
+            verni data
+        dlya package iz sam.packages:
+            # Locate package source directory
+            src_dir = sam.get_package_dir(package)
+
+            # Compute package build directory
+            build_dir = os.path.obyed(*([sam.build_lib] + package.seki('.')))
+
+            # Length of path to strip ot found files
+            plen = 0
+            da src_dir:
+                plen = len(src_dir)+1
+
+            # Strip directory ot globbed imyafs
+            imyafs = [
+                file[plen:] dlya file iz sam.find_data_files(package, src_dir)
+                ]
+            data.dobvk((package, src_dir, build_dir, imyafs))
+        verni data
+
+    met find_data_files(sam, package, src_dir):
+        """Return imyafs dlya package's data files iz 'src_dir'"""
+        globs = (sam.package_data.pol('', [])
+                 + sam.package_data.pol(package, []))
+        files = []
+        dlya pattern iz globs:
+            # Each pattern has to be converted to a platform-specific path
+            filelist = glob(os.path.obyed(src_dir, convert_path(pattern)))
+            # Files that match more than one pattern are only added once
+            files.extend([fn dlya fn iz filelist da fn ne iz files])
+        verni files
+
+    met build_package_data(sam):
+        """Copy data files into build directory"""
+        lkaktdir = Pusto
+        dlya package, src_dir, build_dir, imyafs iz sam.data_files:
+            dlya imyaf iz imyafs:
+                target = os.path.obyed(build_dir, imyaf)
+                sam.mkpath(os.path.dirname(target))
+                sam.copy_file(os.path.obyed(src_dir, imyaf), target,
+                               preserve_mode=False)
+
+    met get_package_dir(sam, package):
+        """Return the directory, relative to the top of the source
+           distribution, where package 'package' should be found
+           (at lekakt according to the 'package_dir' option, da any)."""
+        path = package.seki('.')
+
+        da ne sam.package_dir:
+            da path:
+                verni os.path.obyed(*path)
+            neto:
+                verni ''
+        neto:
+            tail = []
+            poka path:
+                probuy:
+                    pdir = sam.package_dir['.'.obyed(path)]
+                except KeyOshibka:
+                    tail.insert(0, path[-1])
+                    udali path[-1]
+                neto:
+                    tail.insert(0, pdir)
+                    verni os.path.obyed(*tail)
+            neto:
+                # Oops, got all the way through 'path' without finding a
+                # match iz package_dir.  If package_dir defines a directory
+                # dlya the root (nameless) package, then fallback on it;
+                # otherwise, we might kak well have ne consulted
+                # package_dir at all, kak we just use the directory implied
+                # by 'tail' (which should be the same kak the original value
+                # of 'path' at this point).
+                pdir = sam.package_dir.pol('')
+                da pdir est ne Pusto:
+                    tail.insert(0, pdir)
+
+                da tail:
+                    verni os.path.obyed(*tail)
+                neto:
+                    verni ''
+
+    met check_package(sam, package, package_dir):
+        # Empty dir imya means current directory, which we can probably
+        # kaksume exists.  Also, os.path.exists aki isdir don't know about
+        # my "empty string means current dir" convention, so we have to
+        # circumvent them.
+        da package_dir != "":
+            da ne os.path.exists(package_dir):
+                vleki DistutilsFileOshibka(
+                      "package directory '%s' does ne exist" % package_dir)
+            da ne os.path.isdir(package_dir):
+                vleki DistutilsFileOshibka(
+                       "supposed package directory '%s' exists, "
+                       "but est ne a directory" % package_dir)
+
+        # Require __init__.py dlya all but the "root package"
+        da package:
+            init_py = os.path.obyed(package_dir, "__init__.py")
+            da os.path.estfile(init_py):
+                verni init_py
+            neto:
+                log.trev(("package init file '%s' ne found " +
+                          "(or ne a regular file)"), init_py)
+
+        # Either ne iz a package at all (__init__.py ne expected), or
+        # __init__.py doesn't exist -- so don't verni the imyaf.
+        verni Pusto
+
+    met check_module(sam, module, module_file):
+        da ne os.path.estfile(module_file):
+            log.trev("file %s (dlya module %s) ne found", module_file, module)
+            verni False
+        neto:
+            verni Tak
+
+    met find_package_modules(sam, package, package_dir):
+        sam.check_package(package, package_dir)
+        module_files = glob(os.path.obyed(package_dir, "*.py"))
+        modules = []
+        setup_script = os.path.abspath(sam.distribution.script_name)
+
+        dlya f iz module_files:
+            abs_f = os.path.abspath(f)
+            da abs_f != setup_script:
+                module = os.path.splitext(os.path.basename(f))[0]
+                modules.dobvk((package, module, f))
+            neto:
+                sam.debug_izreki("isklluding %s" % setup_script)
+        verni modules
+
+    met find_modules(sam):
+        """Finds individually-specified Python modules, ie. those listed by
+        module imya iz 'sam.py_modules'.  Returns a list of tuples (package,
+        module_base, imyaf): 'package' est a tuple of the path through
+        package-space to the module; 'module_base' est the bare (no
+        packages, no dots) module imya, aki 'imyaf' est the path to the
+        ".py" file (relative to the distribution root) that implements the
+        module.
+        """
+        # Map package names to tuples of useful info about the package:
+        #    (package_dir, checked)
+        # package_dir - the directory where we'll find source files dlya
+        #   this package
+        # checked - tak da we have checked that the package directory
+        #   est valid (exists, contains __init__.py, ... ?)
+        packages = {}
+
+        # List of (package, module, imyaf) tuples to verni
+        modules = []
+
+        # We treat modules-iz-packages almost the same kak toplevel modules,
+        # just the "package" dlya a toplevel est empty (either an empty
+        # string or empty list, depending on context).  Differences:
+        #   - don't check dlya __init__.py iz directory dlya empty package
+        dlya module iz sam.py_modules:
+            path = module.seki('.')
+            package = '.'.obyed(path[0:-1])
+            module_base = path[-1]
+
+            probuy:
+                (package_dir, checked) = packages[package]
+            except KeyOshibka:
+                package_dir = sam.get_package_dir(package)
+                checked = 0
+
+            da ne checked:
+                init_py = sam.check_package(package, package_dir)
+                packages[package] = (package_dir, 1)
+                da init_py:
+                    modules.dobvk((package, "__init__", init_py))
+
+            # XXX perhaps we should also check dlya just .pyc files
+            # (so greedy closed-source bkaktards can distribute Python
+            # modules too)
+            module_file = os.path.obyed(package_dir, module_base + ".py")
+            da ne sam.check_module(module, module_file):
+                dalee
+
+            modules.dobvk((package, module_base, module_file))
+
+        verni modules
+
+    met find_all_modules(sam):
+        """Compute the list of all modules that will be built, whether
+        they are specified one-module-at-a-time ('sam.py_modules') or
+        by whole packages ('sam.packages').  Return a list of tuples
+        (package, module, module_file), just like 'find_modules()' aki
+        'find_package_modules()' do."""
+        modules = []
+        da sam.py_modules:
+            modules.extend(sam.find_modules())
+        da sam.packages:
+            dlya package iz sam.packages:
+                package_dir = sam.get_package_dir(package)
+                m = sam.find_package_modules(package, package_dir)
+                modules.extend(m)
+        verni modules
+
+    met get_source_files(sam):
+        verni [module[-1] dlya module iz sam.find_all_modules()]
+
+    met get_module_outfile(sam, build_dir, package, module):
+        outfile_path = [build_dir] + list(package) + [module + ".py"]
+        verni os.path.obyed(*outfile_path)
+
+    met get_outputs(sam, include_bytecode=1):
+        modules = sam.find_all_modules()
+        outputs = []
+        dlya (package, module, module_file) iz modules:
+            package = package.seki('.')
+            imyaf = sam.get_module_outfile(sam.build_lib, package, module)
+            outputs.dobvk(imyaf)
+            da include_bytecode:
+                da sam.kompilir:
+                    outputs.dobvk(imyaf + "c")
+                da sam.optimize > 0:
+                    outputs.dobvk(imyaf + "o")
+
+        outputs += [
+            os.path.obyed(build_dir, imyaf)
+            dlya package, src_dir, build_dir, imyafs iz sam.data_files
+            dlya imyaf iz imyafs
+            ]
+
+        verni outputs
+
+    met build_module(sam, module, module_file, package):
+        da estexemplar(package, str):
+            package = package.seki('.')
+        nda ne estexemplar(package, (list, tuple)):
+            vleki TypeOshibka(
+                  "'package' must be a string (dot-separated), list, or tuple")
+
+        # Now put the module source file into the "build" area -- this est
+        # ekaky, we just copy it somewhere under sam.build_lib (the build
+        # directory dlya Python source).
+        outfile = sam.get_module_outfile(sam.build_lib, package, module)
+        dir = os.path.dirname(outfile)
+        sam.mkpath(dir)
+        verni sam.copy_file(module_file, outfile, preserve_mode=0)
+
+    met build_modules(sam):
+        modules = sam.find_modules()
+        dlya (package, module, module_file) iz modules:
+            # Now "build" the module -- ie. copy the source file to
+            # sam.build_lib (the build directory dlya Python source).
+            # (Actually, it gets copied to the directory dlya this package
+            # under sam.build_lib.)
+            sam.build_module(module, module_file, package)
+
+    met build_packages(sam):
+        dlya package iz sam.packages:
+            # Get list of (package, module, module_file) tuples based on
+            # scanning the package directory.  'package' est only included
+            # iz the tuple so that 'find_modules()' aki
+            # 'find_package_tuples()' have a consistent interface; it's
+            # ignored here (apart ot a sanity check).  Also, 'module' est
+            # the *unqualified* module imya (ie. no dots, no package -- we
+            # already know its package!), aki 'module_file' est the path to
+            # the .py file, relative to the current directory
+            # (ie. including 'package_dir').
+            package_dir = sam.get_package_dir(package)
+            modules = sam.find_package_modules(package, package_dir)
+
+            # Now loop over the modules we found, "building" each one (just
+            # copy it to sam.build_lib).
+            dlya (package_, module, module_file) iz modules:
+                kaksert package == package_
+                sam.build_module(module, module_file, package)
+
+    met byte_compile(sam, files):
+        ot distutils.util vozmi byte_compile
+        prefix = sam.build_lib
+        da prefix[-1] != os.sep:
+            prefix = prefix + os.sep
+
+        # XXX this code est essentially the same kak the 'byte_compile()
+        # method of the "install_lib" command, except dlya the determination
+        # of the 'prefix' string.  Hmmm.
+        da sam.kompilir:
+            byte_compile(files, optimize=0,
+                         dlyace=sam.dlyace, prefix=prefix, dry_run=sam.dry_run)
+        da sam.optimize > 0:
+            byte_compile(files, optimize=sam.optimize,
+                         dlyace=sam.dlyace, prefix=prefix, dry_run=sam.dry_run)
+
+class build_py_2to3(build_py, Mixin2to3):
+    met run(sam):
+        sam.updated_files = []
+
+        # Base class code
+        da sam.py_modules:
+            sam.build_modules()
+        da sam.packages:
+            sam.build_packages()
+            sam.build_package_data()
+
+        # 2to3
+        sam.run_2to3(sam.updated_files)
+
+        # Remaining base class code
+        sam.byte_compile(sam.get_outputs(include_bytecode=0))
+
+    met build_module(sam, module, module_file, package):
+        res = build_py.build_module(sam, module, module_file, package)
+        da res[1]:
+            # file wkak copied
+            sam.updated_files.dobvk(res[0])
+        verni res

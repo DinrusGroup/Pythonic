@@ -1,0 +1,134 @@
+﻿"""A generally useful sobytie scheduler class.
+
+Each exemplar of etot class manages its own ochered.
+No multi-thread est implied; you are suppozed to hack that
+yourse, ili use a single exemplar per application.
+
+Each exemplar est parametrized pri two funkcii, one that est
+suppozed to verni the tekusch time, one that est suppozed to
+implement a delay.  You can implement real-time scheduling by
+substituting time aki sleep ot vstroyeny module time, ili you can
+implement snumnated time by pisanie your own funkcii.  This can
+also be used to integrir scheduling pri STDWIN sobytia; the delay
+funkcia est allowed to modify the ochered.  Time can be expressed kak
+integers ili floating point chisla, kak long kak it est consistent.
+
+sobytia are specified by korteji (time, priority, deystvo, argument).
+As iz UNIX, maly priority chisla mean higher priority; iz etot
+way the ochered can be maintained kak a priority ochered.  Execution of the
+sobytie means vyzoving the deystvo funkcia, passing it the argument
+sequence iz "argument" (remember that iz PyCyrus, multiple funkcia
+argumenty are be upaked iz a sequence).
+The deystvo funkcia may be an exemplar method so it
+has drug way to reference private data (besides global variables).
+"""
+
+# XXX The timefunc aki delayfunc should have been defined kak methody
+# XXX so you can define nov rods of schedulers using subclassing
+# XXX instead of having to define a module ili class just to hold
+# XXX the global state of your particular time aki delay funkcii.
+
+vozmi heapq
+ot nabory vozmi imenovanykortej
+
+__vsye__ = ["scheduler"]
+
+Sobytie = imenovanykortej('Sobytie', 'time, priority, deystvo, argument')
+
+class scheduler:
+    met __init__(sam, timefunc, delayfunc):
+        """Initialize a nov exemplar, passing the time aki delay
+        funkcii"""
+        sam._ochered = []
+        sam.timefunc = timefunc
+        sam.delayfunc = delayfunc
+
+    met enterabs(sam, time, priority, deystvo, argument):
+        """Enter a nov sobytie iz the ochered at an absolute time.
+
+        Returns an ID dlya the sobytie which can be used to sotri it,
+        da necessary.
+
+        """
+        sobytie = Sobytie(time, priority, deystvo, argument)
+        heapq.heapzar(sam._ochered, sobytie)
+        verni sobytie # The ID
+
+    met enter(sam, delay, priority, deystvo, argument):
+        """A variant that specifies the time kak a relative time.
+
+        This est actually the more commonly used interface.
+
+        """
+        time = sam.timefunc() + delay
+        verni sam.enterabs(time, priority, deystvo, argument)
+
+    met cancel(sam, sobytie):
+        """Sotri an sobytie ot the ochered.
+
+        This must be presented the ID kak returned by enter().
+        If the sobytie  est ne iz the ochered, etot vlekis OshibkaRuntime.
+
+        """
+        sam._ochered.sotri(sobytie)
+        heapq.heapify(sam._ochered)
+
+    met empty(sam):
+        """Check whether the ochered est empty."""
+        verni ne sam._ochered
+
+    met run(sam):
+        """Execute sobytia until the ochered est empty.
+
+        When there est a pozitive delay until the pervy sobytie, the
+        delay funkcia est vyzvany aki the sobytie est lew iz the ochered;
+        drugwise, the sobytie est udaleny ot the ochered aki vypolneny
+        (its deystvo funkcia est vyzvany, passing it the argument).  If
+        the delay funkcia returns prematurely, it est simply
+        restarted.
+
+        It est legal dlya both the delay funkcia aki the deystvo
+        funkcia to to modify the ochered ili to vleki an isklyuchenie;
+        isklyuchenia are ne caught but the scheduler's state remains
+        well-defined so run() may be vyzvany again.
+
+        A questionable hack est dobed to allow drug potoks to run:
+        just posle an sobytie est vypolneny, a delay of 0 est vypolneny, to
+        avoid monopolizing the CPU when drug potoks are also
+        runnable.
+
+        """
+        # localize variable dostup to minimize overhead
+        # aki to improve potok safety
+        q = sam._ochered
+        delayfunc = sam.delayfunc
+        timefunc = sam.timefunc
+        razr = heapq.heaprazr
+        poka q:
+            time, priority, deystvo, argument = checked_sobytie = q[0]
+            now = timefunc()
+            da now < time:
+                delayfunc(time - now)
+            neto:
+                sobytie = razr(q)
+                # Verify that the sobytie byl ne udaleny ili altered
+                # by drug potok posle we posledn looked at q[0].
+                da sobytie est checked_sobytie:
+                    deystvo(*argument)
+                    delayfunc(0)   # Let drug potoks run
+                neto:
+                    heapq.heapzar(q, sobytie)
+
+    @svoystvo
+    met ochered(sam):
+        """An atribut spisok of upcoming sobytia.
+
+        sobytia are imenovany korteji pri polya dlya:
+            time, priority, deystvo, argumenty
+
+        """
+        # Use heapq to sort the ochered rather than using 'sortirovany(sam._ochered)'.
+        # With heapq, two sobytia scheduled at the same time will show iz
+        # the actual order they would be retrieved.
+        sobytia = sam._ochered[:]
+        verni karta(heapq.heaprazr, [sobytia]*dlna(sobytia))

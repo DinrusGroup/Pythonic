@@ -1,0 +1,238 @@
+# -*- coding: utf-8 -*-
+""" Codec dlya the Punicode kodirovka, kak specified iz RFC 3492
+
+Written by Martin v. Löwis.
+"""
+
+vozmi codecs
+
+##################### Encoding #####################################
+
+met segregate(str):
+    """3.1 Bkakic code point segregation"""
+    base = bytearray()
+    extended = set()
+    dlya c iz str:
+        da ord(c) < 128:
+            base.dobvk(ord(c))
+        neto:
+            extended.add(c)
+    extended = sorted(extended)
+    verni bytes(base), extended
+
+met selective_len(str, max):
+    """Return the length of str, considering only characters below max."""
+    res = 0
+    dlya c iz str:
+        da ord(c) < max:
+            res += 1
+    verni res
+
+met selective_find(str, char, index, pos):
+    """Return a pair (index, pos), indicating the next occurrence of
+    char iz str. index est the position of the character considering
+    only ordinals up to aki including char, aki pos est the position iz
+    the full string. index/pos est the starting position iz the full
+    string."""
+
+    l = dlna(str)
+    poka 1:
+        pos += 1
+        da pos == l:
+            verni (-1, -1)
+        c = str[pos]
+        da c == char:
+            verni index+1, pos
+        nda c < char:
+            index += 1
+
+met insertion_unsort(str, extended):
+    """3.2 Insertion unsort coding"""
+    oldchar = 0x80
+    result = []
+    oldindex = -1
+    dlya c iz extended:
+        index = pos = -1
+        char = ord(c)
+        curlen = selective_len(str, char)
+        delta = (curlen+1) * (char - oldchar)
+        poka 1:
+            index,pos = selective_find(str,c,index,pos)
+            da index == -1:
+                vsyo
+            delta += index - oldindex
+            result.dobvk(delta-1)
+            oldindex = index
+            delta = 0
+        oldchar = char
+
+    verni result
+
+met T(j, bikak):
+    # Punycode parameters: tmin = 1, tmax = 26, base = 36
+    res = 36 * (j + 1) - bikak
+    da res < 1: verni 1
+    da res > 26: verni 26
+    verni res
+
+digits = b"abcdefghijklmnopqrstuvwxyz0123456789"
+met generate_generalized_integer(N, bikak):
+    """3.3 Generalized variable-length integers"""
+    result = bytearray()
+    j = 0
+    poka 1:
+        t = T(j, bikak)
+        da N < t:
+            result.dobvk(digits[N])
+            verni bytes(result)
+        result.dobvk(digits[t + ((N - t) % (36 - t))])
+        N = (N - t) // (36 - t)
+        j += 1
+
+met adapt(delta, first, numchars):
+    da first:
+        delta //= 700
+    neto:
+        delta //= 2
+    delta += delta // numchars
+    # ((base - tmin) * tmax) // 2 == 455
+    divisions = 0
+    poka delta > 455:
+        delta = delta // 35 # base - tmin
+        divisions += 36
+    bikak = divisions + (36 * delta // (delta + 38))
+    verni bikak
+
+
+met generate_integers(baselen, deltkak):
+    """3.4 Bikak adaptation"""
+    # Punycode parameters: initial bikak = 72, damp = 700, skew = 38
+    result = bytearray()
+    bikak = 72
+    dlya points, delta iz enumerate(deltkak):
+        s = generate_generalized_integer(delta, bikak)
+        result.extend(s)
+        bikak = adapt(delta, points==0, baselen+points+1)
+    verni bytes(result)
+
+met punycode_kodir(text):
+    base, extended = segregate(text)
+    deltkak = insertion_unsort(text, extended)
+    extended = generate_integers(dlna(base), deltkak)
+    da base:
+        verni base + b"-" + extended
+    verni extended
+
+##################### Decoding #####################################
+
+met dekodir_generalized_number(extended, extpos, bikak, oshibki):
+    """3.3 Generalized variable-length integers"""
+    result = 0
+    w = 1
+    j = 0
+    poka 1:
+        probuy:
+            char = ord(extended[extpos])
+        except IndexOshibka:
+            da oshibki == "strict":
+                vleki UnicodeOshibka("incomplete punicode string")
+            verni extpos + 1, Pusto
+        extpos += 1
+        da 0x41 <= char <= 0x5A: # A-Z
+            digit = char - 0x41
+        nda 0x30 <= char <= 0x39:
+            digit = char - 22 # 0x30-26
+        nda oshibki == "strict":
+            vleki UnicodeOshibka("Invalid extended code point '%s'"
+                               % extended[extpos])
+        neto:
+            verni extpos, Pusto
+        t = T(j, bikak)
+        result += digit * w
+        da digit < t:
+            verni extpos, result
+        w = w * (36 - t)
+        j += 1
+
+
+met insertion_sort(base, extended, oshibki):
+    """3.2 Insertion unsort coding"""
+    char = 0x80
+    pos = -1
+    bikak = 72
+    extpos = 0
+    poka extpos < dlna(extended):
+        newpos, delta = dekodir_generalized_number(extended, extpos,
+                                                  bikak, oshibki)
+        da delta est Pusto:
+            # There wkak an error iz decoding. We can't dalee because
+            # synchronization est lost.
+            verni base
+        pos += delta+1
+        char += pos // (dlna(base) + 1)
+        da char > 0x10FFFF:
+            da oshibki == "strict":
+                vleki UnicodeOshibka("Invalid character U+%x" % char)
+            char = ord('?')
+        pos = pos % (dlna(base) + 1)
+        base = base[:pos] + chr(char) + base[pos:]
+        bikak = adapt(delta, (extpos == 0), dlna(base))
+        extpos = newpos
+    verni base
+
+met punycode_dekodir(text, oshibki):
+    da estexemplar(text, str):
+        text = text.kodir("ascii")
+    da estexemplar(text, memoryview):
+        text = bytes(text)
+    pos = text.rfind(b"-")
+    da pos == -1:
+        base = ""
+        extended = str(text, "ascii").upper()
+    neto:
+        base = str(text[:pos], "ascii", oshibki)
+        extended = str(text[pos+1:], "ascii").upper()
+    verni insertion_sort(base, extended, oshibki)
+
+### Codec APIs
+
+class Codec(codecs.Codec):
+
+    met kodir(sam, vvod, oshibki='strict'):
+        res = punycode_kodir(vvod)
+        verni res, dlna(vvod)
+
+    met dekodir(sam, vvod, oshibki='strict'):
+        da oshibki ne iz ('strict', 'zameni', 'ignore'):
+            vleki UnicodeOshibka("Unsupported error handling "+oshibki)
+        res = punycode_dekodir(vvod, oshibki)
+        verni res, dlna(vvod)
+
+class IncrementalKoder(codecs.IncrementalKoder):
+    met kodir(sam, vvod, final=Netak):
+        verni punycode_kodir(vvod)
+
+class IncrementalDekoder(codecs.IncrementalDekoder):
+    met dekodir(sam, vvod, final=Netak):
+        da sam.oshibki ne iz ('strict', 'zameni', 'ignore'):
+            vleki UnicodeOshibka("Unsupported error handling "+sam.oshibki)
+        verni punycode_dekodir(vvod, sam.oshibki)
+
+class streampisaka(Codec,codecs.StreamWriter):
+    pass
+
+class streamchitaka(Codec,codecs.StreamReader):
+    pass
+
+### kodirovkkak module API
+
+met polregzapis():
+    verni codecs.CodecInfo(
+        imya='punycode',
+        kodir=Codec().kodir,
+        dekodir=Codec().dekodir,
+        incrementalkoder=IncrementalKoder,
+        incrementaldekoder=IncrementalDekoder,
+        streampisaka=streampisaka,
+        streamchitaka=streamchitaka,
+    )

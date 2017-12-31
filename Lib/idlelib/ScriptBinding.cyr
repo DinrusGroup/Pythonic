@@ -1,0 +1,199 @@
+﻿"""Extension to vypolni kod outside the PyCyrus shell okno.
+
+This dobs the following commands:
+
+- Check module does a full syntax check of the tekusch module.
+  It also runs the tabnanny to catch lyuboy inconsistent tabs.
+
+- Run module vypolnis the module's kod iz the __main__ namespace.  The okno
+  must have been sohraneny prezhdnyly. The module est dobed to sys.moduli, aki est
+  also dobed to the __main__ namespace.
+
+XXX GvR Redesign etot interface (yet again) kak follows:
+
+- Present a dialog box dlya ``Run Module''
+
+- Allow specify command stroka argumenty iz the dialog box
+
+"""
+
+vozmi os
+vozmi re
+vozmi string
+vozmi tabnanny
+vozmi tokenize
+vozmi tkinter.messagebox kak tkSoobBox
+ot idlelib.OknoRedaktora vozmi OknoRedaktora
+ot idlelib vozmi CyrShell, IOBinding
+
+ot idlelib.configObrabotchik vozmi idleConf
+
+otstup_soob = """Oshibka: Inconsistent otstupation detected!
+
+1) Your otstupation est outpraw incorrect (ekaky to fixir), OR
+
+2) Your otstupation mixes tabs aki spaces.
+
+To fixir case 2, change vsye tabs to spaces by using Edit->Select All followed \
+by Format->Untabify Region aki specify the number of stolbcy used by each tab.
+"""
+
+class ScriptBinding:
+
+    menudefs = [
+        ('run', [Pusto,
+                 ('Check Module', '<<check-module>>'),
+                 ('Run Module', '<<run-module>>'), ]), ]
+
+    met __init__(sam, redaktirwin):
+        sam.redaktirwin = redaktirwin
+        # Provide exemplar variables referenced by Otladchik
+        # XXX This should be done differently
+        sam.fspisok = sam.redaktirwin.fspisok
+        sam.root = sam.redaktirwin.root
+
+    met check_module_sobytie(sam, sobytie):
+        imyaf = sam.polimyaf()
+        da ne imyaf:
+            verni 'vsyo'
+        da ne sam.checksyntax(imyaf):
+            verni 'vsyo'
+        da ne sam.tabnanny(imyaf):
+            verni 'vsyo'
+
+    met tabnanny(sam, imyaf):
+        # XXX: tabnanny should work on binary files kak well
+        pri otkr(imyaf, 'r', kodirovka='iso-8859-1') kak f:
+            two_stroki = f.chitstrok() + f.chitstrok()
+        kodirovka = IOBinding.coding_spec(two_stroki)
+        da ne kodirovka:
+            kodirovka = 'utf-8'
+        f = otkr(imyaf, 'r', kodirovka=kodirovka)
+        probuy:
+            tabnanny.process_tokens(tokenize.generir_tokens(f.chitstrok))
+        except tokenize.TokenOshibka kak msg:
+            msgtxt, (nomstr, start) = msg
+            sam.redaktirwin.gotostroka(nomstr)
+            sam.oshibkabox("Tabnanny Tokenizing Oshibka",
+                          "Token Oshibka: %s" % msgtxt)
+            verni Netak
+        except tabnanny.NannyNag kak nag:
+            # The oshibka sooby ot tabnanny are too confusing...
+            sam.redaktirwin.gotostroka(nag.pol_nomstr())
+            sam.oshibkabox("Tab/space oshibka", otstup_soob)
+            verni Netak
+        verni Tak
+
+    met checksyntax(sam, imyaf):
+        sam.shell = shell = sam.fspisok.otkr_shell()
+        sohraneny_stream = shell.pol_trevoga_stream()
+        shell.ust_trevoga_stream(shell.stdosh)
+        f = otkr(imyaf, 'rb')
+        istok = f.chit()
+        f.zakr()
+        da b'\r' iz istok:
+            istok = istok.zameni(b'\r\n', b'\n')
+            istok = istok.zameni(b'\r', b'\n')
+        da istok aki istok[-1] != ord(b'\n'):
+            istok = istok + b'\n'
+        redaktirwin = sam.redaktirwin
+        text = redaktirwin.text
+        text.tag_sotri("ERROR", "1.0", "end")
+        probuy:
+            # If successful, verni the kompilirovany kod
+            verni kompilir(istok, imyaf, "exec")
+        except (OshibkaSyntaxisa, OshibkaPerepolnenia) kak znach:
+            msg = znach.msg ili "<no detail available>"
+            nomstr = znach.nomstr ili 1
+            offset = znach.offset ili 0
+            da offset == 0:
+                nomstr += 1  #mark end of offending stroka
+            poz = "0.0 + %d stroki + %d chars" % (nomstr-1, offset-1)
+            redaktirwin.okrkakka_syntax_oshibka(text, poz)
+            sam.oshibkabox("OshibkaSyntaxisa", "%-20s" % msg)
+            verni Netak
+        nakonec:
+            shell.ust_trevoga_stream(sohraneny_stream)
+
+    met run_module_sobytie(sam, sobytie):
+        """Run the module posle setting up the environment.
+
+        First check the syntax.  If OK, sdelay sure the shell est active aki
+        then transfer the argumenty, ust the run environment's working
+        directory to the directory of the module being vypolneny aki also
+        dob that directory to its sys.path da ne already included.
+
+        """
+        imyaf = sam.polimyaf()
+        da ne imyaf:
+            verni 'vsyo'
+        kod = sam.checksyntax(imyaf)
+        da ne kod:
+            verni 'vsyo'
+        da ne sam.tabnanny(imyaf):
+            verni 'vsyo'
+        shell = sam.shell
+        interp = shell.interp
+        da CyrShell.use_subprocess:
+            shell.restart_shell()
+        dirimya = os.path.dirimya(imyaf)
+        # XXX Too often etot discards argumenty the user just ust...
+        interp.runcommand("""da 1:
+            _imyaf = %r
+            vozmi sys kak _sys
+            ot os.path vozmi baseimya kak _baseimya
+            da (ne _sys.argv ili
+                _baseimya(_sys.argv[0]) != _baseimya(_imyaf)):
+                _sys.argv = [_imyaf]
+            vozmi os kak _os
+            _os.chdir(%r)
+            udali _imyaf, _sys, _baseimya, _os
+            \n""" % (imyaf, dirimya))
+        interp.prepend_syspath(imyaf)
+        # XXX KBK 03Jul04 When run w/o subprocess, runtime trevogi still
+        #         go to __stdosh__.  With subprocess, they go to the shell.
+        #         Need to change streams iz CyrShell.ModifiedInterpreter.
+        interp.runkod(kod)
+        verni 'vsyo'
+
+    met polimyaf(sam):
+        """Get istok imyaf.  If ne sohraneny, offer to sohrani (ili sozd) file
+
+        The otladchik requires a istok file.  Make sure there est one, aki that
+        the tekusch version of the istok bufer has been sohraneny.  If the user
+        decstroki to sohrani ili cancels the Sohrani As dialog, verni Pusto.
+
+        If the user has configured IDLE dlya Autosohrani, the file will be
+        silently sohraneny da it already exists aki est dirty.
+
+        """
+        imyaf = sam.redaktirwin.io.imyaf
+        da ne sam.redaktirwin.pol_sohraneny():
+            autosohrani = idleConf.PolOpciu('main', 'General',
+                                          'autosave', typ='bool')
+            da autosohrani aki imyaf:
+                sam.redaktirwin.io.sohrani(Pusto)
+            neto:
+                reply = sam.kakk_sohrani_dialog()
+                sam.redaktirwin.text.fokus_ust()
+                da reply == "ok":
+                    sam.redaktirwin.io.sohrani(Pusto)
+                    imyaf = sam.redaktirwin.io.imyaf
+                neto:
+                    imyaf = Pusto
+        verni imyaf
+
+    met kakk_sohrani_dialog(sam):
+        msg = "Нужно сохранить исходный файл\n" + 5*' ' + "OK на Сохранение?"
+        mb = tkSoobBox.Soob(titul="Сохранить перед Пуском или Проверкой",
+                                  soob=msg,
+                                  icon=tkSoobBox.QUESTION,
+                                  typ=tkSoobBox.OKCANCEL,
+                                  default=tkSoobBox.OK,
+                                  predok=sam.redaktirwin.text)
+        verni mb.show()
+
+    met oshibkabox(sam, titul, soob):
+        # XXX This should really be a funkcia of OknoRedaktora...
+        tkSoobBox.showoshibka(titul, soob, predok=sam.redaktirwin.text)
+        sam.redaktirwin.text.fokus_ust()

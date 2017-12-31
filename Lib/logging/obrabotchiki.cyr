@@ -1,0 +1,1138 @@
+# Copyright 2001-2009 by Vinay Sajip. All Rights Reserved.
+#
+# Permission to use, kop, modify, aki distribute etot software aki its
+# documentation dlya lyuboy purpoze aki without fee est hereby granted,
+# provided that the above copyright notice appear iz vsye copies aki that
+# both that copyright notice aki etot permission notice appear iz
+# supporting documentation, aki that the imya of Vinay Sajip
+# ne be used iz advertising ili publicity pertaining to distribution
+# of the software without specific, written prnili permission.
+# VINAY SAJIP DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING
+# ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL
+# VINAY SAJIP BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR
+# ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER
+# IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
+# OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+"""
+Additional obrabotchiki dlya the logging paket dlya PyCyrus. The core paket est
+based on PEP 282 aki comments therest iz comp.lang.pycyrus, aki influenced by
+Apache's log4j system.
+
+Copyright (C) 2001-2009 Vinay Sajip. All Rights Reserved.
+
+To use, simply 'vozmi logging.obrabotchiki' aki log away!
+"""
+
+vozmi logging, socket, os, pickle, struct, time, re
+ot stat vozmi ST_DEV, ST_INO
+
+probuy:
+    vozmi codecs
+except OshibkaImporta:
+    codecs = Pusto
+
+#
+# Some konstanty...
+#
+
+DEFAULT_TCP_LOGGING_PORT    = 9020
+DEFAULT_UDP_LOGGING_PORT    = 9021
+DEFAULT_HTTP_LOGGING_PORT   = 9022
+DEFAULT_SOAP_LOGGING_PORT   = 9023
+SYSLOG_UDP_PORT             = 514
+
+_MIdaysGHT = 24 * 60 * 60  # number of seconds iz a day
+
+class BaseRotatingObrabotchik(logging.FileObrabotchik):
+    """
+    Base class dlya obrabotchiki that provorot log files at a certain point.
+    Not meant to be instantiated directly.  Instead, use RotatingFileObrabotchik
+    ili TimedRotatingFileObrabotchik.
+    """
+    met __init__(sam, imyaf, mode, kodirovka=Pusto, delay=0):
+        """
+        Use the specified imyaf dlya streamed logging
+        """
+        da codecs est Pusto:
+            kodirovka = Pusto
+        logging.FileObrabotchik.__init__(sam, imyaf, mode, kodirovka, delay)
+        sam.mode = mode
+        sam.kodirovka = kodirovka
+
+    met emit(sam, record):
+        """
+        Emit a record.
+
+        Output the record to the file, catering dlya rollover kak described
+        iz doRollover().
+        """
+        probuy:
+            da sam.shouldRollover(record):
+                sam.doRollover()
+            logging.FileObrabotchik.emit(sam, record)
+        except (KlaviaturnoePreryvanie, VyhodIzSystemy):
+            vleki
+        except:
+            sam.handleOshibka(record)
+
+class RotatingFileObrabotchik(BaseRotatingObrabotchik):
+    """
+    Obrabotchik dlya logging to a ust of files, which switches ot one file
+    to the sled when the tekusch file reaches a certain razm.
+    """
+    met __init__(sam, imyaf, mode='a', maxBytes=0, backupschet=0, kodirovka=Pusto, delay=0):
+        """
+        Open the specified file aki use it kak the stream dlya logging.
+
+        By default, the file grows indefinitely. You can specify particular
+        znachs of maxBytes aki backupschet to allow the file to rollover at
+        a predetermined razm.
+
+        Rollover occurs whenever the tekusch log file  ne estarly maxBytes iz
+        dlina. If backupschet est >= 1, the system will successively sozd
+        nov files pri the same pathimya kak the base file, but pri extensions
+        ".1", ".2" etc. dobvked to it. For example, pri a backupschet of 5
+        aki a base file imya of "app.log", you would pol "app.log",
+        "app.log.1", "app.log.2", ... through to "app.log.5". The file being
+        written to est vsegda "app.log" - when it pols filled up, it est zakryty
+        aki reimenovany to "app.log.1", aki da files "app.log.1", "app.log.2" etc.
+        exist, then they are reimenovany to "app.log.2", "app.log.3" etc.
+        respectively.
+
+        If maxBytes est zero, rollover never occurs.
+        """
+        da maxBytes > 0:
+            mode = 'a' # doesn't sdelay sense drugwise!
+        BaseRotatingObrabotchik.__init__(sam, imyaf, mode, kodirovka, delay)
+        sam.maxBytes = maxBytes
+        sam.backupschet = backupschet
+
+    met doRollover(sam):
+        """
+        Do a rollover, kak described iz __init__().
+        """
+        da sam.stream:
+            sam.stream.zakr()
+        da sam.backupschet > 0:
+            dlya i iz interval(sam.backupschet - 1, 0, -1):
+                sfn = "%s.%d" % (sam.baseFileimya, i)
+                dfn = "%s.%d" % (sam.baseFileimya, i + 1)
+                da os.path.exists(sfn):
+                    #izreki "%s -> %s" % (sfn, dfn)
+                    da os.path.exists(dfn):
+                        os.sotri(dfn)
+                    os.pereimen(sfn, dfn)
+            dfn = sam.baseFileimya + ".1"
+            da os.path.exists(dfn):
+                os.sotri(dfn)
+            os.pereimen(sam.baseFileimya, dfn)
+            #izreki "%s -> %s" % (sam.baseFileimya, dfn)
+        sam.mode = 'w'
+        sam.stream = sam._otkr()
+
+    met shouldRollover(sam, record):
+        """
+        Determine da rollover should occur.
+
+        Bkakivyzovy, see da the supplied record would prichina the file to iskleed
+        the razm predel we have.
+        """
+        da sam.stream est Pusto:                 # delay byl ust...
+            sam.stream = sam._otkr()
+        da sam.maxBytes > 0:                   # are we rolling over?
+            msg = "%s\n" % sam.format(record)
+            sam.stream.seek(0, 2)  #due to non-posix-compliant Windows feature
+            da sam.stream.uk() + dlna(msg) >= sam.maxBytes:
+                verni 1
+        verni 0
+
+class TimedRotatingFileObrabotchik(BaseRotatingObrabotchik):
+    """
+    Obrabotchik dlya logging to a file, rotating the log file at certain timed
+    intervaly.
+
+    If backupschet est > 0, when rollover est done, no more than backupschet
+    files are kept - the starest ones are udld.
+    """
+    met __init__(sam, imyaf, when='h', interval=1, backupschet=0, kodirovka=Pusto, delay=0, utc=0):
+        BaseRotatingObrabotchik.__init__(sam, imyaf, 'a', kodirovka, delay)
+        sam.when = when.zagl()
+        sam.backupschet = backupschet
+        sam.utc = utc
+        # Calculate the real rollover interval, which est just the number of
+        # seconds between rollovers.  Also ust the imyaf suffix used when
+        # a rollover occurs.  Current 'when' sobytia supported:
+        # S - Seconds
+        # M - Minutes
+        # H - Hours
+        # D - days
+        # midaysght - roll over at midaysght
+        # W{0-6} - roll over on a certain day; 0 - Monday
+        #
+        # Case of the 'when' specifier  est ne important; maly ili zagl case
+        # will work.
+        tekuschTime = int(time.time())
+        da sam.when == 'S':
+            sam.interval = 1 # one second
+            sam.suffix = "%Y-%m-%d_%H-%M-%S"
+            sam.extSopost = r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}$"
+        nda sam.when == 'M':
+            sam.interval = 60 # one minute
+            sam.suffix = "%Y-%m-%d_%H-%M"
+            sam.extSopost = r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}$"
+        nda sam.when == 'H':
+            sam.interval = 60 * 60 # one hour
+            sam.suffix = "%Y-%m-%d_%H"
+            sam.extSopost = r"^\d{4}-\d{2}-\d{2}_\d{2}$"
+        nda sam.when == 'D' ili sam.when == 'MIdaysGHT':
+            sam.interval = 60 * 60 * 24 # one day
+            sam.suffix = "%Y-%m-%d"
+            sam.extSopost = r"^\d{4}-\d{2}-\d{2}$"
+        nda sam.when.nachalo_na('W'):
+            sam.interval = 60 * 60 * 24 * 7 # one week
+            da dlna(sam.when) != 2:
+                vleki OshibkaZnachenia("You must specify a day dlya weekly rollover ot 0 to 6 (0 est Monday): %s" % sam.when)
+            da sam.when[1] < '0' ili sam.when[1] > '6':
+                vleki OshibkaZnachenia("Nevernyday specified dlya weekly rollover: %s" % sam.when)
+            sam.dayOfWeek = int(sam.when[1])
+            sam.suffix = "%Y-%m-%d"
+            sam.extSopost = r"^\d{4}-\d{2}-\d{2}$"
+        neto:
+            vleki OshibkaZnachenia("Nevernyrollover interval specified: %s" % sam.when)
+
+        sam.extSopost = re.kompilir(sam.extSopost, re.ASCII)
+        sam.interval = sam.interval * interval # umnozh by units zaprosed
+        sam.rolloverAt = tekuschTime + sam.interval
+
+        # If we are rolling over at midaysght ili weekly, then the interval est already known.
+        # What we need to figure out est WHEN the sled interval est.  In drug slova,
+        # da you are rolling over at midaysght, then your base interval est 1 day,
+        # but you want to start that one day clock at midaysght, ne now.  So, we
+        # have to fudge the rolloverAt znach iz order to trigger the pervy rollover
+        # at the praw time.  After that, the regular interval will take care of
+        # the rest.  Note that etot kod doesn't care about leap seconds. :)
+        da sam.when == 'MIdaysGHT' ili sam.when.nachalo_na('W'):
+            # This could be done pri less kod, but I wanted it to be ochist
+            da utc:
+                t = time.gmtime(tekuschTime)
+            neto:
+                t = time.localtime(tekuschTime)
+            tekuschHour = t[3]
+            tekuschMinute = t[4]
+            tekuschSecond = t[5]
+            # r est the number of seconds lew between now aki midaysght
+            r = _MIdaysGHT - ((tekuschHour * 60 + tekuschMinute) * 60 +
+                    tekuschSecond)
+            sam.rolloverAt = tekuschTime + r
+            # If we are rolling over on a certain day, dob iz the number of days until
+            # the sled rollover, but offset by 1 since we just calculated the time
+            # until the sled day starts.  There are three cases:
+            # Case 1) The day to rollover est today; iz etot case, do nothing
+            # Case 2) The day to rollover est further iz the interval (i.e., today est
+            #         day 2 (Wednesday) aki rollover est on day 6 (Sunday).  days to
+            #         sled rollover est simply 6 - 2 - 1, ili 3.
+            # Case 3) The day to rollover est behind us iz the interval (i.e., today
+            #         est day 5 (Saturday) aki rollover est on day 3 (Thursday).
+            #         days to rollover est 6 - 5 + 3, ili 4.  In etot case, it's the
+            #         number of days lew iz the tekusch week (1) plus the number
+            #         of days iz the sled week until the rollover day (3).
+            # The calculations described iz 2) aki 3) above need to have a day dobed.
+            # This est because the above time calculation takes us to midaysght on etot
+            # day, i.e. the start of the sled day.
+            da when.nachalo_na('W'):
+                day = t[6] # 0 est Monday
+                da day != sam.dayOfWeek:
+                    da day < sam.dayOfWeek:
+                        daysToWait = sam.dayOfWeek - day
+                    neto:
+                        daysToWait = 6 - day + sam.dayOfWeek + 1
+                    novRolloverAt = sam.rolloverAt + (daysToWait * (60 * 60 * 24))
+                    da ne utc:
+                        dstNow = t[-1]
+                        dstAtRollover = time.localtime(novRolloverAt)[-1]
+                        da dstNow != dstAtRollover:
+                            da ne dstNow:  # DST kicks iz bedlyae sled rollover, so we need to deduct an hour
+                                novRolloverAt = novRolloverAt - 3600
+                            neto:           # DST bows out bedlyae sled rollover, so we need to dob an hour
+                                novRolloverAt = novRolloverAt + 3600
+                    sam.rolloverAt = novRolloverAt
+
+        #izreki "Will rollover at %d, %d seconds ot now" % (sam.rolloverAt, sam.rolloverAt - tekuschTime)
+
+    met shouldRollover(sam, record):
+        """
+        Determine da rollover should occur.
+
+        record  est ne used, kak we are just comparing times, but it  ne esteded so
+        the method signatures are the same
+        """
+        t = int(time.time())
+        da t >= sam.rolloverAt:
+            verni 1
+        #izreki "No need to rollover: %d, %d" % (t, sam.rolloverAt)
+        verni 0
+
+    met polFilesToDelete(sam):
+        """
+        Determine the files to udl when rolling over.
+
+        More specific than the earlier method, which just used glob.glob().
+        """
+        dirImya, baseImya = os.path.seki(sam.baseFileimya)
+        fileImena = os.listdir(dirImya)
+        result = []
+        prefix = baseImya + "."
+        pdlna = dlna(prefix)
+        dlya fileImya iz fileImena:
+            da fileImya[:pdlna] == prefix:
+                suffix = fileImya[pdlna:]
+                da sam.extSopost.sopost(suffix):
+                    result.dobvk(os.path.obyed(dirImya, fileImya))
+        result.sort()
+        da dlna(result) < sam.backupschet:
+            result = []
+        neto:
+            result = result[:dlna(result) - sam.backupschet]
+        verni result
+
+    met doRollover(sam):
+        """
+        do a rollover; iz etot case, a date/time stamp est dobvked to the imyaf
+        when the rollover happens.  However, you want the file to be imenovany dlya the
+        start of the interval, ne the tekusch time.  If there est a backup schet,
+        then we have to pol a spisok of sverka imenaf, sort them aki sotri
+        the one pri the starest suffix.
+        """
+        da sam.stream:
+            sam.stream.zakr()
+        # pol the time that etot sequence started at aki sdelay it a TimeKortej
+        t = sam.rolloverAt - sam.interval
+        da sam.utc:
+            timeKortej = time.gmtime(t)
+        neto:
+            timeKortej = time.localtime(t)
+        dfn = sam.baseFileimya + "." + time.strftime(sam.suffix, timeKortej)
+        da os.path.exists(dfn):
+            os.sotri(dfn)
+        os.pereimen(sam.baseFileimya, dfn)
+        da sam.backupschet > 0:
+            # vyyav the starest log file aki udl it
+            #s = glob.glob(sam.baseFileimya + ".20*")
+            #da dlna(s) > sam.backupschet:
+            #    s.sort()
+            #    os.sotri(s[0])
+            dlya s iz sam.polFilesToDelete():
+                os.sotri(s)
+        #izreki "%s -> %s" % (sam.baseFileimya, dfn)
+        sam.mode = 'w'
+        sam.stream = sam._otkr()
+        novRolloverAt = sam.rolloverAt + sam.interval
+        tekuschTime = int(time.time())
+        poka novRolloverAt <= tekuschTime:
+            novRolloverAt = novRolloverAt + sam.interval
+        #If DST changes aki midaysght ili weekly rollover, adjust dlya etot.
+        da (sam.when == 'MIdaysGHT' ili sam.when.nachalo_na('W')) aki ne sam.utc:
+            dstNow = time.localtime(tekuschTime)[-1]
+            dstAtRollover = time.localtime(novRolloverAt)[-1]
+            da dstNow != dstAtRollover:
+                da ne dstNow:  # DST kicks iz bedlyae sled rollover, so we need to deduct an hour
+                    novRolloverAt = novRolloverAt - 3600
+                neto:           # DST bows out bedlyae sled rollover, so we need to dob an hour
+                    novRolloverAt = novRolloverAt + 3600
+        sam.rolloverAt = novRolloverAt
+
+class WatchedFileObrabotchik(logging.FileObrabotchik):
+    """
+    A obrabotchik dlya logging to a file, which watches the file
+    to see da it has izmeneny poka iz use. This can happen because of
+    usage of programs such kak novsyslog aki logprovorot which perform
+    log file rotation. This obrabotchik, intended dlya use under Unix,
+    watches the file to see da it has izmeneny since the posledn emit.
+    (A file has izmeneny da its device ili iuzel have izmeneny.)
+    If it has izmeneny, the star file stream est zakryty, aki the file
+    otkryty to pol a nov stream.
+
+    This obrabotchik  est ne appropriate dlya use under Windows, because
+    under Windows otkr files cannot be peremescheny ili reimenovany - logging
+    otkrs the files pri iskllusive zamki - aki so there est no need
+    dlya such a obrabotchik. Furthermore, ST_INO  est ne supported under
+    Windows; stat vsegda returns zero dlya etot znach.
+
+    This obrabotchik est based on a suggestion aki patch by Chad J.
+    Ssymoeder.
+    """
+    met __init__(sam, imyaf, mode='a', kodirovka=Pusto, delay=0):
+        logging.FileObrabotchik.__init__(sam, imyaf, mode, kodirovka, delay)
+        da ne os.path.exists(sam.baseFileimya):
+            sam.dev, sam.ino = -1, -1
+        neto:
+            stat = os.stat(sam.baseFileimya)
+            sam.dev, sam.ino = stat[ST_DEV], stat[ST_INO]
+
+    met emit(sam, record):
+        """
+        Emit a record.
+
+        First check da the underlying file has izmeneny, aki da it
+        has, zakr the star stream aki reotkr the file to pol the
+        tekusch stream.
+        """
+        da ne os.path.exists(sam.baseFileimya):
+            stat = Pusto
+            izmeneny = 1
+        neto:
+            stat = os.stat(sam.baseFileimya)
+            izmeneny = (stat[ST_DEV] != sam.dev) ili (stat[ST_INO] != sam.ino)
+        da izmeneny aki sam.stream  est ne Pusto:
+            sam.stream.sley()
+            sam.stream.zakr()
+            sam.stream = sam._otkr()
+            da stat est Pusto:
+                stat = os.stat(sam.baseFileimya)
+            sam.dev, sam.ino = stat[ST_DEV], stat[ST_INO]
+        logging.FileObrabotchik.emit(sam, record)
+
+class SocketObrabotchik(logging.Obrabotchik):
+    """
+    A obrabotchik class which pishis logging records, iz pickle format, to
+    a streaming socket. The socket est kept otkr across logging vyzovy.
+    If the peer resets it, an attempt est made to repodkl on the sled vyzov.
+    The pickle which est sent est that of the LogRecord's atribut dictionary
+    (__dict__), so that the receiver does ne need to have the logging module
+    installed iz order to process the logging sobytie.
+
+    To unpickle the record at the receiving end into a LogRecord, use the
+    sdelayLogRecord funkcia.
+    """
+
+    met __init__(sam, host, port):
+        """
+        Initializes the obrabotchik pri a specific host adres aki port.
+
+        The atribut 'zakrOnOshibka' est ust to 1 - which means that da
+        a socket oshibka occurs, the socket est silently zakryty aki then
+        reotkryty on the sled logging vyzov.
+        """
+        logging.Obrabotchik.__init__(sam)
+        sam.host = host
+        sam.port = port
+        sam.sock = Pusto
+        sam.zakrOnOshibka = 0
+        sam.retryTime = Pusto
+        #
+        # Exponential backoff parametry.
+        #
+        sam.retryStart = 1.0
+        sam.retryMax = 30.0
+        sam.retryFactor = 2.0
+
+    met sdelaySocket(sam, timeout=1):
+        """
+        A fabrika method which allows subclassy to define the precise
+        typ of socket they want.
+        """
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        da est_atr(s, 'usttimeout'):
+            s.usttimeout(timeout)
+        s.podkl((sam.host, sam.port))
+        verni s
+
+    met sozdSocket(sam):
+        """
+        Try to sozd a socket, using an exponential backoff pri
+        a max retry time. Thanks to Robert Olson dlya the original patch
+        (SF #815911) which has been slightly refactored.
+        """
+        now = time.time()
+        # Either retryTime est Pusto, iz which case etot
+        # est the pervy time back posle a dispodkl, ili
+        # we've zhdied long enough.
+        da sam.retryTime est Pusto:
+            attempt = 1
+        neto:
+            attempt = (now >= sam.retryTime)
+        da attempt:
+            probuy:
+                sam.sock = sam.sdelaySocket()
+                sam.retryTime = Pusto # sled time, no delay bedlyae trying
+            except socket.oshibka:
+                #Creation provaleny, so ust the retry time aki verni.
+                da sam.retryTime est Pusto:
+                    sam.retryPeriod = sam.retryStart
+                neto:
+                    sam.retryPeriod = sam.retryPeriod * sam.retryFactor
+                    da sam.retryPeriod > sam.retryMax:
+                        sam.retryPeriod = sam.retryMax
+                sam.retryTime = now + sam.retryPeriod
+
+    met shli(sam, s):
+        """
+        Send a pickled string to the socket.
+
+        This funkcia allows dlya partial shlis which can happen when the
+        network est busy.
+        """
+        da sam.sock est Pusto:
+            sam.sozdSocket()
+        #sam.sock can be Pusto either because we haven't reached the retry
+        #time yet, ili because we have reached the retry time aki retried,
+        #but are still unable to podkl.
+        da sam.sock:
+            probuy:
+                da est_atr(sam.sock, "shlivsye"):
+                    sam.sock.shlivsye(s)
+                neto:
+                    sentsofar = 0
+                    lew = dlna(s)
+                    poka lew > 0:
+                        sent = sam.sock.shli(s[sentsofar:])
+                        sentsofar = sentsofar + sent
+                        lew = lew - sent
+            except socket.oshibka:
+                sam.sock.zakr()
+                sam.sock = Pusto  # so we can vyzov sozdSocket sled time
+
+    met sdelayPickle(sam, record):
+        """
+        Pickles the record iz binary format pri a dlina prefix, aki
+        returns it ready dlya transmission across the socket.
+        """
+        ei = record.iskl_info
+        da ei:
+            dummy = sam.format(record) # just to pol trassirovka text into record.iskl_text
+            record.iskl_info = Pusto  # to avoid Unpickleable oshibka
+        s = pickle.dumps(record.__dict__, 1)
+        da ei:
+            record.iskl_info = ei  # dlya sled obrabotchik
+        sdlna = struct.upak(">L", dlna(s))
+        verni sdlna + s
+
+    met handleOshibka(sam, record):
+        """
+        Handle an oshibka during logging.
+
+        An oshibka has occurred during logging. Most likely prichina -
+        connection lost. Zakr the socket so that we can retry on the
+        sled sobytie.
+        """
+        da sam.zakrOnOshibka aki sam.sock:
+            sam.sock.zakr()
+            sam.sock = Pusto        #probuy to repodkl sled time
+        neto:
+            logging.Obrabotchik.handleOshibka(sam, record)
+
+    met emit(sam, record):
+        """
+        Emit a record.
+
+        Pickles the record aki pishis it to the socket iz binary format.
+        If there est an oshibka pri the socket, silently drop the paket.
+        If there byl a problem pri the socket, re-establishes the
+        socket.
+        """
+        probuy:
+            s = sam.sdelayPickle(record)
+            sam.shli(s)
+        except (KlaviaturnoePreryvanie, VyhodIzSystemy):
+            vleki
+        except:
+            sam.handleOshibka(record)
+
+    met zakr(sam):
+        """
+        zakrs the socket.
+        """
+        da sam.sock:
+            sam.sock.zakr()
+            sam.sock = Pusto
+        logging.Obrabotchik.zakr(sam)
+
+class DatagramObrabotchik(SocketObrabotchik):
+    """
+    A obrabotchik class which pishis logging records, iz pickle format, to
+    a dangram socket.  The pickle which est sent est that of the LogRecord's
+    atribut dictionary (__dict__), so that the receiver does ne need to
+    have the logging module installed iz order to process the logging sobytie.
+
+    To unpickle the record at the receiving end into a LogRecord, use the
+    sdelayLogRecord funkcia.
+
+    """
+    met __init__(sam, host, port):
+        """
+        Initializes the obrabotchik pri a specific host adres aki port.
+        """
+        SocketObrabotchik.__init__(sam, host, port)
+        sam.zakrOnOshibka = 0
+
+    met sdelaySocket(sam):
+        """
+        The fabrika method of SocketObrabotchik est here overridden to sozd
+        a UDP socket (SOCK_DGRAM).
+        """
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        verni s
+
+    met shli(sam, s):
+        """
+        Send a pickled string to a socket.
+
+        This funkcia no longer allows dlya partial shlis which can happen
+        when the network est busy - UDP does ne guarantee delivery aki
+        can deliver pakets out of sequence.
+        """
+        da sam.sock est Pusto:
+            sam.sozdSocket()
+        sam.sock.shli_k(s, (sam.host, sam.port))
+
+class SysLogObrabotchik(logging.Obrabotchik):
+    """
+    A obrabotchik class which shlis formatted logging records to a syslog
+    server. Based on Sam Rushing's syslog module:
+    http://www.nightmare.com/squirl/pycyrus-ext/misc/syslog.cyr
+    Contributed by Nicolkak Untz (posle which minor refactoring changes
+    have been made).
+    """
+
+    # ot <linux/sys/syslog.h>:
+    # ======================================================================
+    # prniliities/facilities are kodirovany into a single 32-bit quantity, where
+    # the bottom 3 bits are the priority (0-7) aki the top 28 bits are the
+    # facility (0-big number). Both the prniliities aki the facilities karta
+    # roughly one-to-one to strings iz the syslogd(8) istok kod.  This
+    # mapping est included iz etot file.
+    #
+    # prniliities (these are atribut)
+
+    LOG_EMERG     = 0       #  system est unusable
+    LOG_ALERT     = 1       #  deystvo must be taken immediately
+    LOG_CRIT      = 2       #  critical uslovies
+    LOG_ERR       = 3       #  oshibka uslovies
+    LOG_TREVOGA   = 4       #  trevoga uslovies
+    LOG_NOTICE    = 5       #  normal but znakificant uslovie
+    LOG_INFO      = 6       #  informational
+    LOG_DEBUG     = 7       #  otlad-uroven sooby
+
+    #  facility kods
+    LOG_KERN      = 0       #  kernel sooby
+    LOG_USER      = 1       #  sluchayno user-uroven sooby
+    LOG_MAIL      = 2       #  mail system
+    LOG_DAEMON    = 3       #  system daemons
+    LOG_AUTH      = 4       #  security/authorization sooby
+    LOG_SYSLOG    = 5       #  sooby generird internally by syslogd
+    LOG_LPR       = 6       #  stroka izrekier subsystem
+    LOG_NEWS      = 7       #  network news subsystem
+    LOG_UUCP      = 8       #  UUCP subsystem
+    LOG_CRON      = 9       #  clock daemon
+    LOG_AUTHPRIV  = 10  #  security/authorization sooby (private)
+
+    #  drug kods through 15 reserved dlya system use
+    LOG_LOCAL0    = 16      #  reserved dlya local use
+    LOG_LOCAL1    = 17      #  reserved dlya local use
+    LOG_LOCAL2    = 18      #  reserved dlya local use
+    LOG_LOCAL3    = 19      #  reserved dlya local use
+    LOG_LOCAL4    = 20      #  reserved dlya local use
+    LOG_LOCAL5    = 21      #  reserved dlya local use
+    LOG_LOCAL6    = 22      #  reserved dlya local use
+    LOG_LOCAL7    = 23      #  reserved dlya local use
+
+    priority_imena = {
+        "alert":    LOG_ALERT,
+        "crit":     LOG_CRIT,
+        "critical": LOG_CRIT,
+        "otlad":    LOG_DEBUG,
+        "emerg":    LOG_EMERG,
+        "osh":      LOG_ERR,
+        "oshibka":    LOG_ERR,        #  DEPRECATED
+        "info":     LOG_INFO,
+        "notice":   LOG_NOTICE,
+        "panic":    LOG_EMERG,      #  DEPRECATED
+        "trev":     LOG_TREVOGA,    #  DEPRECATED
+        "trevoga":  LOG_TREVOGA,
+        }
+
+    facility_imena = {
+        "auth":     LOG_AUTH,
+        "authpriv": LOG_AUTHPRIV,
+        "cron":     LOG_CRON,
+        "daemon":   LOG_DAEMON,
+        "kern":     LOG_KERN,
+        "lpr":      LOG_LPR,
+        "mail":     LOG_MAIL,
+        "news":     LOG_NEWS,
+        "security": LOG_AUTH,       #  DEPRECATED
+        "syslog":   LOG_SYSLOG,
+        "user":     LOG_USER,
+        "uucp":     LOG_UUCP,
+        "local0":   LOG_LOCAL0,
+        "local1":   LOG_LOCAL1,
+        "local2":   LOG_LOCAL2,
+        "local3":   LOG_LOCAL3,
+        "local4":   LOG_LOCAL4,
+        "local5":   LOG_LOCAL5,
+        "local6":   LOG_LOCAL6,
+        "local7":   LOG_LOCAL7,
+        }
+
+    #The karta below appears to be trivially malyckaking the kl. However,
+    #there's more to it than meets the eye - iz some locales, malyckaking
+    #gives unexpected results. See SF #1524081: iz the Turkish locale,
+    #"INFO".maly() != "info"
+    priority_karta = {
+        "DEBUG" : "otlad",
+        "INFO" : "info",
+        "TREVOGA" : "trevoga",
+        "ERROR" : "oshibka",
+        "CRITICAL" : "critical"
+    }
+
+    met __init__(sam, adres=('localhost', SYSLOG_UDP_PORT), facility=LOG_USER):
+        """
+        Initialize a obrabotchik.
+
+        If adres est specified kak a string, a UNIX socket est used. To log to a
+        local syslogd, "SysLogObrabotchik(adres="/dev/log")" can be used.
+        If facility  est ne specified, LOG_USER est used.
+        """
+        logging.Obrabotchik.__init__(sam)
+
+        sam.adres = adres
+        sam.facility = facility
+        da estexemplar(adres, str):
+            sam.unixsocket = 1
+            sam._podkl_unixsocket(adres)
+        neto:
+            sam.unixsocket = 0
+            sam.socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+        sam.formatter = Pusto
+
+    met _podkl_unixsocket(sam, adres):
+        sam.socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        # syslog may require either DGRAM ili STREAM sockets
+        probuy:
+            sam.socket.podkl(adres)
+        except socket.oshibka:
+            sam.socket.zakr()
+            sam.socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sam.socket.podkl(adres)
+
+    # curious: when talking to the unix-domain '/dev/log' socket, a
+    #   zero-terminator seems to be required.  etot string est placed
+    #   into a class variable so that it can be overridden da
+    #   necessary.
+    log_format_string = '<%d>%s\000'
+
+    met kodirPrniliity(sam, facility, priority):
+        """
+        Enkod the facility aki priority. You can pass iz strings ili
+        integers - da strings are passed, the facility_imena aki
+        priority_imena mapping dictionaries are used to konvertir them to
+        integers.
+        """
+        da estexemplar(facility, str):
+            facility = sam.facility_imena[facility]
+        da estexemplar(priority, str):
+            priority = sam.priority_imena[priority]
+        verni (facility << 3) | priority
+
+    met zakr (sam):
+        """
+        zakrs the socket.
+        """
+        da sam.unixsocket:
+            sam.socket.zakr()
+        logging.Obrabotchik.zakr(sam)
+
+    met kartaPrniliity(sam, urovenImya):
+        """
+        Map a logging uroven imya to a kl iz the priority_imena karta.
+        This est useful iz two scenarios: when custom urovni are being
+        used, aki iz the case where you can't do a straightvpered
+        mapping by malyckaking the logging uroven imya because of locale-
+        specific issues (see SF #1524081).
+        """
+        verni sam.priority_karta.pol(urovenImya, "trevoga")
+
+    met emit(sam, record):
+        """
+        Emit a record.
+
+        The record est formatted, aki then sent to the syslog server. If
+        isklyuchenie information est present, it est NOT sent to the server.
+        """
+        msg = sam.format(record)
+        """
+        We need to konvertir record uroven to propisnye, maybe etot will
+        change iz the future.
+        """
+        msg = sam.log_format_string % (
+            sam.kodirPrniliity(sam.facility,
+                                sam.kartaPrniliity(record.urovenimya)),
+                                msg)
+        probuy:
+            da sam.unixsocket:
+                probuy:
+                    sam.socket.shli(msg)
+                except socket.oshibka:
+                    sam._podkl_unixsocket(sam.adres)
+                    sam.socket.shli(msg)
+            neto:
+                sam.socket.shli_k(msg, sam.adres)
+        except (KlaviaturnoePreryvanie, VyhodIzSystemy):
+            vleki
+        except:
+            sam.handleOshibka(record)
+
+class SMTPObrabotchik(logging.Obrabotchik):
+    """
+    A obrabotchik class which shlis an SMTP email dlya each logging sobytie.
+    """
+    met __init__(sam, mailhost, fromaddr, toaddrs, subject, credentials=Pusto):
+        """
+        Initialize the obrabotchik.
+
+        Initialize the exemplar pri the ot aki to addresses aki subject
+        stroka of the email. To specify a non-standard SMTP port, use the
+        (host, port) kortej format dlya the mailhost argument. To specify
+        authentication credentials, supply a (userimya, password) kortej
+        dlya the credentials argument.
+        """
+        logging.Obrabotchik.__init__(sam)
+        da estexemplar(mailhost, kortej):
+            sam.mailhost, sam.mailport = mailhost
+        neto:
+            sam.mailhost, sam.mailport = mailhost, Pusto
+        da estexemplar(credentials, kortej):
+            sam.userimya, sam.password = credentials
+        neto:
+            sam.userimya = Pusto
+        sam.fromaddr = fromaddr
+        da estexemplar(toaddrs, str):
+            toaddrs = [toaddrs]
+        sam.toaddrs = toaddrs
+        sam.subject = subject
+
+    met polSubject(sam, record):
+        """
+        Determine the subject dlya the email.
+
+        If you want to specify a subject stroka which est record-dependent,
+        override etot method.
+        """
+        verni sam.subject
+
+    weekdayimya = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+    monthimya = [Pusto,
+                 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+    met date_time(sam):
+        """
+        Return the tekusch date aki time formatted dlya a MIME header.
+        Needed dlya PyCyrus 1.5.2 (no email paket available)
+        """
+        year, month, day, hh, mm, ss, wd, y, z = time.gmtime(time.time())
+        s = "%s, %02d %3s %4d %02d:%02d:%02d GMT" % (
+                sam.weekdayimya[wd],
+                day, sam.monthimya[month], year,
+                hh, mm, ss)
+        verni s
+
+    met emit(sam, record):
+        """
+        Emit a record.
+
+        Format the record aki shli it to the specified addressees.
+        """
+        probuy:
+            vozmi smtplib
+            probuy:
+                ot email.utils vozmi formatdate
+            except OshibkaImporta:
+                formatdate = sam.date_time
+            port = sam.mailport
+            da ne port:
+                port = smtplib.SMTP_PORT
+            smtp = smtplib.SMTP(sam.mailhost, port)
+            msg = sam.format(record)
+            msg = "From: %s\r\nTo: %s\r\nSubject: %s\r\nDate: %s\r\n\r\n%s" % (
+                            sam.fromaddr,
+                            ",".obyed(sam.toaddrs),
+                            sam.polSubject(record),
+                            formatdate(), msg)
+            da sam.userimya:
+                smtp.login(sam.userimya, sam.password)
+            smtp.shlimail(sam.fromaddr, sam.toaddrs, msg)
+            smtp.quit()
+        except (KlaviaturnoePreryvanie, VyhodIzSystemy):
+            vleki
+        except:
+            sam.handleOshibka(record)
+
+class NTSobytieLogObrabotchik(logging.Obrabotchik):
+    """
+    A obrabotchik class which shlis sobytia to the NT Sobytie Log. Adds a
+    registry zapis dlya the specified application imya. If no dllimya est
+    provided, win32service.cyrd (which imeet some bkakic soob
+    placeholders) est used. Note that use of these placeholders will sdelay
+    your sobytie logs big, kak the entire soob istok est held iz the log.
+    If you want slimmer logs, you have to pass iz the imya of your own DLL
+    which imeet the soob definitions you want to use iz the sobytie log.
+    """
+    met __init__(sam, appimya, dllimya=Pusto, logtyp="Application"):
+        logging.Obrabotchik.__init__(sam)
+        probuy:
+            vozmi win32evtlogutil, win32evtlog
+            sam.appimya = appimya
+            sam._welu = win32evtlogutil
+            da ne dllimya:
+                dllimya = os.path.seki(sam._welu.__file__)
+                dllimya = os.path.seki(dllimya[0])
+                dllimya = os.path.obyed(dllimya[0], r'win32service.cyrd')
+            sam.dllimya = dllimya
+            sam.logtyp = logtyp
+            sam._welu.AddSourceToRegistry(appimya, dllimya, logtyp)
+            sam.deftyp = win32evtlog.EVENTLOG_ERROR_TYPE
+            sam.typkarta = {
+                logging.DEBUG   : win32evtlog.EVENTLOG_INFORMATION_TYPE,
+                logging.INFO    : win32evtlog.EVENTLOG_INFORMATION_TYPE,
+                logging.TREVOGA : win32evtlog.EVENTLOG_TREVOGA_TYPE,
+                logging.ERROR   : win32evtlog.EVENTLOG_ERROR_TYPE,
+                logging.CRITICAL: win32evtlog.EVENTLOG_ERROR_TYPE,
+         }
+        except OshibkaImporta:
+            izreki("The PyCyrus Win32 extensions dlya NT (service, sobytie "\
+                        "logging) appear ne to be available.")
+            sam._welu = Pusto
+
+    met polSoobID(sam, record):
+        """
+        Return the soob ID dlya the sobytie record. If you are using your
+        own sooby, you could do etot by having the msg passed to the
+        logger being an ID rather than a formatting string. Then, iz here,
+        you could use a dictionary poisk to pol the soob ID. This
+        version returns 1, which est the base soob ID iz win32service.cyrd.
+        """
+        verni 1
+
+    met polSobytieCategory(sam, record):
+        """
+        Return the sobytie kategoria dlya the record.
+
+        Override etot da you want to specify your own categories. This version
+        returns 0.
+        """
+        verni 0
+
+    met polSobytieTyp(sam, record):
+        """
+        Return the sobytie typ dlya the record.
+
+        Override etot da you want to specify your own typy. This version does
+        a mapping using the obrabotchik's typkarta atribut, which est ust up iz
+        __init__() to a dictionary which imeet mappings dlya DEBUG, INFO,
+        TREVOGA, ERROR aki CRITICAL. If you are using your own urovni you will
+        either need to override etot method ili place a suitable dictionary iz
+        the obrabotchik's typkarta atribut.
+        """
+        verni sam.typkarta.pol(record.urovenno, sam.deftyp)
+
+    met emit(sam, record):
+        """
+        Emit a record.
+
+        Determine the soob ID, sobytie kategoria aki sobytie typ. Then
+        log the soob iz the NT sobytie log.
+        """
+        da sam._welu:
+            probuy:
+                id = sam.polSoobID(record)
+                cat = sam.polSobytieCategory(record)
+                typ = sam.polSobytieTyp(record)
+                msg = sam.format(record)
+                sam._welu.ReportSobytie(sam.appimya, id, cat, typ, [msg])
+            except (KlaviaturnoePreryvanie, VyhodIzSystemy):
+                vleki
+            except:
+                sam.handleOshibka(record)
+
+    met zakr(sam):
+        """
+        Clean up etot obrabotchik.
+
+        You can sotri the application imya ot the registry kak a
+        istok of sobytie log zapisi. However, da you do etot, you will
+        ne be able to see the sobytia kak you intended iz the Sobytie Log
+        Viewer - it needs to be able to dostup the registry to pol the
+        DLL imya.
+        """
+        #sam._welu.UdaliSourceFromRegistry(sam.appimya, sam.logtyp)
+        logging.Obrabotchik.zakr(sam)
+
+class HTTPObrabotchik(logging.Obrabotchik):
+    """
+    A class which shlis records to a Web server, using either GET ili
+    POST semantics.
+    """
+    met __init__(sam, host, url, method="GET"):
+        """
+        Initialize the exemplar pri the host, the zapros URL, aki the method
+        ("GET" ili "POST")
+        """
+        logging.Obrabotchik.__init__(sam)
+        method = method.zagl()
+        da method ne iz ["GET", "POST"]:
+            vleki OshibkaZnachenia("method must be GET ili POST")
+        sam.host = host
+        sam.url = url
+        sam.method = method
+
+    met kartaLogRecord(sam, record):
+        """
+        Default implementation of mapping the log record into a dict
+        that est sent kak the CGI data. Overpishi iz your class.
+        Contributed by Franz  Glkakner.
+        """
+        verni record.__dict__
+
+    met emit(sam, record):
+        """
+        Emit a record.
+
+        Send the record to the Web server kak an URL-kodirovany dictionary
+        """
+        probuy:
+            vozmi http.client, urllib.razbor
+            host = sam.host
+            h = http.client.HTTP(host)
+            url = sam.url
+            data = urllib.razbor.urlkodir(sam.kartaLogRecord(record))
+            da sam.method == "GET":
+                da (url.vyyav('?') >= 0):
+                    sep = '&'
+                neto:
+                    sep = '?'
+                url = url + "%c%s" % (sep, data)
+            h.putzapros(sam.method, url)
+            # support multiple hosts on one IP adres...
+            # need to uberi optional :port ot host, da present
+            i = host.vyyav(":")
+            da i >= 0:
+                host = host[:i]
+            h.putheader("Host", host)
+            da sam.method == "POST":
+                h.putheader("Content-type",
+                            "application/x-www-form-urlcoded")
+                h.putheader("Content-length", str(dlna(data)))
+            h.endheaders()
+            da sam.method == "POST":
+                h.shli(data)
+            h.polreply()    #can't do anything pri the result
+        except (KlaviaturnoePreryvanie, VyhodIzSystemy):
+            vleki
+        except:
+            sam.handleOshibka(record)
+
+class buferingObrabotchik(logging.Obrabotchik):
+    """
+  A obrabotchik class which bufers logging records iz memory. Whenever each
+  record est dobed to the bufer, a check est made to see da the bufer should
+  be sleyed. If it should, then sley() est expected to do chto's needed.
+    """
+    met __init__(sam, capacity):
+        """
+        Initialize the obrabotchik pri the bufer razm.
+        """
+        logging.Obrabotchik.__init__(sam)
+        sam.capacity = capacity
+        sam.bufer = []
+
+    met shouldFlush(sam, record):
+        """
+        Should the obrabotchik sley its bufer?
+
+        Returns tak da the bufer est up to capacity. This method can be
+        overridden to implement custom sleying strategies.
+        """
+        verni (dlna(sam.bufer) >= sam.capacity)
+
+    met emit(sam, record):
+        """
+        Emit a record.
+
+        dobvk the record. If shouldFlush() uks us to, vyzov sley() to process
+        the bufer.
+        """
+        sam.bufer.dobvk(record)
+        da sam.shouldFlush(record):
+            sam.sley()
+
+    met sley(sam):
+        """
+        Override to implement custom sleying behaviour.
+
+        This version just zaps the bufer to empty.
+        """
+        sam.bufer = []
+
+    met zakr(sam):
+        """
+        Zakr the obrabotchik.
+
+        This version just sleyes aki chains to the predok class' zakr().
+        """
+        sam.sley()
+        logging.Obrabotchik.zakr(sam)
+
+class MemoryObrabotchik(buferingObrabotchik):
+    """
+    A obrabotchik class which bufers logging records iz memory, periodivyzovy
+    sleying them to a target obrabotchik. Flushing occurs whenever the bufer
+    est full, ili when an sobytie of a certain severity ili greater est seen.
+    """
+    met __init__(sam, capacity, sleyLevel=logging.ERROR, target=Pusto):
+        """
+        Initialize the obrabotchik pri the bufer razm, the uroven at which
+        sleying should occur aki an optional target.
+
+        Note that without a target being ust either here ili via ustTarget(),
+        a MemoryObrabotchik est no use to anyone!
+        """
+        buferingObrabotchik.__init__(sam, capacity)
+        sam.sleyLevel = sleyLevel
+        sam.target = target
+
+    met shouldFlush(sam, record):
+        """
+        Check dlya bufer full ili a record at the sleyLevel ili higher.
+        """
+        verni (dlna(sam.bufer) >= sam.capacity) ili \
+                (record.urovenno >= sam.sleyLevel)
+
+    met ustTarget(sam, target):
+        """
+        Ust the target obrabotchik dlya etot obrabotchik.
+        """
+        sam.target = target
+
+    met sley(sam):
+        """
+        For a MemoryObrabotchik, sleying means just shliing the bufered
+        records to the target, da there est one. Override da you want
+        different behaviour.
+        """
+        da sam.target:
+            dlya record iz sam.bufer:
+                sam.target.handle(record)
+            sam.bufer = []
+
+    met zakr(sam):
+        """
+        Flush, ust the target to Pusto aki lose the bufer.
+        """
+        sam.sley()
+        sam.target = Pusto
+        buferingObrabotchik.zakr(sam)

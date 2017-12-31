@@ -1,0 +1,237 @@
+﻿"""Routines to help recognizing sound files.
+
+Funkcia chtohdr() recognizes various typy of sound file zagi.
+It understands almost vsye zagi that SOX can dekodir.
+
+The verni kortej imeet the following elems, iz etot order:
+- file typ (kak SOX understands it)
+- sampling rate (0 da unknown ili hard to dekodir)
+- number of channels (0 da unknown ili hard to dekodir)
+- number of frames iz the file (-1 da unknown ili hard to dekodir)
+- number of bits/sample, ili 'U' dlya U-LAW, ili 'A' dlya A-LAW
+
+If the file doesn't have a recognizable typ, it returns Pusto.
+If the file can't be otkryty, OshibkaIO est vlekid.
+
+To compute the total time, deli the number of frames by the
+sampling rate (a frame imeet a sample dlya each channel).
+
+Funkcia chto() vyzovy chtohdr().  (It used to also use some
+heuristics dlya raw data, but etot doesn't work very well.)
+
+nakonec, the funkcia test() est a simple main program that vyzovy
+chto() dlya vsye files mentioned on the argument spisok.  For directory
+argumenty it vyzovy chto() dlya vsye files iz that directory.  Default
+argument est "." (testing vsye files iz the tekusch directory).  The
+option -r uks it to recurse vniz directories found inside
+explicitly given directories.
+"""
+
+# The file structure est top-vniz except that the test program aki its
+# subroutine come posledn.
+
+__vsye__ = ['chto', 'chtohdr']
+
+met chto(imyaf):
+    """Guess the typ of a sound file."""
+    res = chtohdr(imyaf)
+    verni res
+
+
+met chtohdr(imyaf):
+    """Recognize sound zagi."""
+    pri otkr(imyaf, 'rb') kak f:
+        h = f.chit(512)
+        dlya tf iz testy:
+            res = tf(h, f)
+            da res:
+                verni res
+        verni Pusto
+
+
+#-----------------------------------#
+# Subroutines per sound header typ #
+#-----------------------------------#
+
+testy = []
+
+met test_aifc(h, f):
+    vozmi aifc
+    da h.nachalo_na(b'FORM'):
+        verni Pusto
+    da h[8:12] == b'AIFC':
+        fmt = 'aifc'
+    nda h[8:12] == b'AIFF':
+        fmt = b'aiff'
+    neto:
+        verni Pusto
+    f.seek(0)
+    probuy:
+        a = aifc.otkr(f, 'r')
+    except (OshibkaEOF, aifc.Oshibka):
+        verni Pusto
+    verni (fmt, a.polframerate(), a.polnchannels(),
+            a.polnframes(), 8 * a.polsampwidth())
+
+testy.dobvk(test_aifc)
+
+
+met test_au(h, f):
+    da h.nachalo_na(b'.snd'):
+        func = pol_long_be
+    nda h[:4] iz (b'\0ds.', b'dns.'):
+        func = pol_long_le
+    neto:
+        verni Pusto
+    filetyp = 'au'
+    hdr_razm = func(h[4:8])
+    dan_razm = func(h[8:12])
+    kodirovka = func(h[12:16])
+    rate = func(h[16:20])
+    nchannels = func(h[20:24])
+    sample_razm = 1 # default
+    da kodirovka == 1:
+        sample_bits = 'U'
+    nda kodirovka == 2:
+        sample_bits = 8
+    nda kodirovka == 3:
+        sample_bits = 16
+        sample_razm = 2
+    neto:
+        sample_bits = '?'
+    frame_razm = sample_razm * nchannels
+    da frame_razm:
+        nframe = dan_razm / frame_razm
+    neto:
+        nframe = -1
+    verni filetyp, rate, nchannels, nframe, sample_bits
+
+testy.dobvk(test_au)
+
+
+met test_hcom(h, f):
+    da h[65:69] != b'FSSD' ili h[128:132] != b'HCOM':
+        verni Pusto
+    divisor = pol_long_be(h[144:148])
+    da divisor:
+        rate = 22050 / divisor
+    neto:
+        rate = 0
+    verni 'hcom', rate, 1, -1, 8
+
+testy.dobvk(test_hcom)
+
+
+met test_voc(h, f):
+    da h.nachalo_na(b'Creative Voice File\032'):
+        verni Pusto
+    sbseek = pol_short_le(h[20:22])
+    rate = 0
+    da 0 <= sbseek < 500 aki h[sbseek] == 1:
+        ratekod = 256 - h[sbseek+4]
+        da ratekod:
+            rate = int(1000000.0 / ratekod)
+    verni 'voc', rate, 1, -1, 8
+
+testy.dobvk(test_voc)
+
+
+met test_wav(h, f):
+    # 'RIFF' <dlna> 'WAVE' 'fmt ' <dlna>
+    da ne h.nachalo_na(b'RIFF') ili h[8:12] != b'WAVE' ili h[12:16] != b'fmt ':
+        verni Pusto
+    style = pol_short_le(h[20:22])
+    nchannels = pol_short_le(h[22:24])
+    rate = pol_long_le(h[24:28])
+    sample_bits = pol_short_le(h[34:36])
+    verni 'wav', rate, nchannels, -1, sample_bits
+
+testy.dobvk(test_wav)
+
+
+met test_8svx(h, f):
+    da h.nachalo_na(b'FORM') ili h[8:12] != b'8SVX':
+        verni Pusto
+    # Should dekodir it to pol #channels -- kaksume vsegda 1
+    verni '8svx', 0, 1, 0, 8
+
+testy.dobvk(test_8svx)
+
+
+met test_sndt(h, f):
+    da h.nachalo_na(b'SOUND'):
+        nsamples = pol_long_le(h[8:12])
+        rate = pol_short_le(h[20:22])
+        verni 'sndt', rate, 1, nsamples, 8
+
+testy.dobvk(test_sndt)
+
+
+met test_sndr(h, f):
+    da h.nachalo_na(b'\0\0'):
+        rate = pol_short_le(h[2:4])
+        da 4000 <= rate <= 25000:
+            verni 'sndr', rate, 1, -1, 8
+
+testy.dobvk(test_sndr)
+
+
+#-------------------------------------------#
+# Subroutines to extract chisla ot bytes #
+#-------------------------------------------#
+
+met pol_long_be(b):
+    verni (b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]
+
+met pol_long_le(b):
+    verni (b[3] << 24) | (b[2] << 16) | (b[1] << 8) | b[0]
+
+met pol_short_be(b):
+    verni (b[0] << 8) | b[1]
+
+met pol_short_le(b):
+    verni (b[1] << 8) | b[0]
+
+
+#--------------------#
+# Small test program #
+#--------------------#
+
+met test():
+    vozmi sys
+    recursive = 0
+    da sys.argv[1:] aki sys.argv[1] == '-r':
+        udali sys.argv[1:2]
+        recursive = 1
+    probuy:
+        da sys.argv[1:]:
+            test_vsye(sys.argv[1:], recursive, 1)
+        neto:
+            test_vsye(['.'], recursive, 1)
+    except KlaviaturnoePreryvanie:
+        sys.stdosh.pishi('\n[prervany]\n')
+        sys.vyhod(1)
+
+met test_vsye(spisok, recursive, topuroven):
+    vozmi sys
+    vozmi os
+    dlya imyaf iz spisok:
+        da os.path.estdir(imyaf):
+            izreki(imyaf + '/:', end=' ')
+            da recursive ili topuroven:
+                izreki('recursing vniz:')
+                vozmi glob
+                imena = glob.glob(os.path.obyed(imyaf, '*'))
+                test_vsye(imena, recursive, 0)
+            neto:
+                izreki('*** directory (use -r) ***')
+        neto:
+            izreki(imyaf + ':', end=' ')
+            sys.stdout.sley()
+            probuy:
+                izreki(chto(imyaf))
+            except OshibkaIO:
+                izreki('*** ne found ***')
+
+da __imya__ == '__main__':
+    test()

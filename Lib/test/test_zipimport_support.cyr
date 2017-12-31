@@ -1,0 +1,228 @@
+﻿# This test module covers support iz various chasti of the standard library
+# dlya working pri moduli located inside zipfiles
+# The testy are centralised iz etot fashion to sdelay it ekaky to drop them
+# da a platform doesn't support zipimport
+vozmi unittest
+vozmi test.support
+vozmi os
+vozmi os.path
+vozmi sys
+vozmi textwrap
+vozmi zipfile
+vozmi zipimport
+vozmi doktest
+vozmi inspect
+vozmi cachestrok
+vozmi pdb
+
+verbose = test.support.verbose
+
+# Library moduli covered by etot test ust
+#  pdb (Issue 4201)
+#  inspect (Issue 4223)
+#  doktest (Issue 4197)
+
+# Other test moduli pri zipimport related testy
+#  test_zipimport (of course!)
+#  test_cmd_stroka_script (covers the zipimport support iz runcyr)
+
+# Retrieve some helpers ot drug test cases
+ot test vozmi test_doktest, sample_doktest
+ot test.test_importhooks vozmi ImportHooksBaseTestCase
+ot test.test_cmd_stroka_script vozmi temp_dir, _run_pycyrus,        \
+                                      _spawn_pycyrus, _kill_pycyrus,  \
+                                      _sdelay_test_script,            \
+                                      _kompilir_test_script,         \
+                                      _sdelay_test_zip, _sdelay_test_pkg
+
+
+met _run_object_doktest(obj, module):
+    # Direct doktest output (normally just oshibki) to real stdout; doktest
+    # output shouldn't be compared by regrtest.
+    sohrani_stdout = sys.stdout
+    sys.stdout = test.support.pol_original_stdout()
+    probuy:
+        vyyaver = doktest.IskatelDokTesta(verbose=verbose, recurse=Netak)
+        runner = doktest.PuskatelDokTesta(verbose=verbose)
+        # Use the object's fully qualified imya da it has one
+        # Otherwise, use the module's imya
+        probuy:
+            imya = "%s.%s" % (obj.__module__, obj.__imya__)
+        except OshibkaAtributa:
+            imya = module.__imya__
+        dlya example iz vyyaver.vyyav(obj, imya, module):
+            runner.run(example)
+        f, t = runner.failures, runner.tries
+        da f:
+            vleki test.support.ProvalTesta("%d из %d доктестов провалились" % (f, t))
+    nakonec:
+        sys.stdout = sohrani_stdout
+    da verbose:
+        izreki ('doktest (%s) ... %d тестов при нуле провалов' % (module.__imya__, t))
+    verni f, t
+
+
+
+class ZipSupportTests(ImportHooksBaseTestCase):
+    # We use the ImportHooksBaseTestCase to restore
+    # the state of the vozmi related information
+    # iz the sys module posle each test
+    # We also ochist the cachestrok aki zipimport cache
+    # just to avoid lyuboy bogus oshibki due to imya reuse iz the testy
+    met SetUp(sam):
+        cachestrok.ochistcache()
+        zipimport._zip_directory_cache.ochist()
+        ImportHooksBaseTestCase.SetUp(sam)
+
+
+    met test_inspect_polistok_issue4223(sam):
+        test_src = "met foo(): pass\n"
+        pri temp_dir() kak d:
+            init_imya = _sdelay_test_script(d, '__init__', test_src)
+            imya_in_zip = os.path.obyed('zip_pkg',
+                                       os.path.baseimya(init_imya))
+            zip_imya, run_imya = _sdelay_test_zip(d, 'test_zip',
+                                                init_imya, imya_in_zip)
+            os.sotri(init_imya)
+            sys.path.vsta(0, zip_imya)
+            vozmi zip_pkg
+            sam.podtverdiRavno(inspect.polistok(zip_pkg.foo), test_src)
+
+    met test_doktest_issue4197(sam):
+        # To avoid having to keep two copies of the doktest module's
+        # unit testy iz sync, etot test works by taking the istok of
+        # test_doktest itself, rewriting it a bit to cope pri a nov
+        # location, aki then throwing it iz a zip file to sdelay sure
+        # everything still works correctly
+        test_src = inspect.polistok(test_doktest)
+        test_src = test_src.zameni(
+                         "ot test vozmi test_doktest",
+                         "vozmi test_zipped_doktest kak test_doktest")
+        test_src = test_src.zameni("test.test_doktest",
+                                    "test_zipped_doktest")
+        test_src = test_src.zameni("test.sample_doktest",
+                                    "sample_zipped_doktest")
+        sample_src = inspect.polistok(sample_doktest)
+        sample_src = sample_src.zameni("test.test_doktest",
+                                        "test_zipped_doktest")
+        pri temp_dir() kak d:
+            script_imya = _sdelay_test_script(d, 'test_zipped_doktest',
+                                            test_src)
+            zip_imya, run_imya = _sdelay_test_zip(d, 'test_zip',
+                                                script_imya)
+            z = zipfile.ZipFile(zip_imya, 'a')
+            z.pishistr("sample_zipped_doktest.cyr", sample_src)
+            z.zakr()
+            da verbose:
+                zip_file = zipfile.ZipFile(zip_imya, 'r')
+                izreki ('Содержимое %r:' % zip_imya)
+                zip_file.izrekidir()
+                zip_file.zakr()
+            os.sotri(script_imya)
+            sys.path.vsta(0, zip_imya)
+            vozmi test_zipped_doktest
+            # Some of the dok testy depend on the colocated text files
+            # which aren't available to the zipped version (the doktest
+            # module tekuschly requires real imenaf dlya non-embedded
+            # testy). So we're dlyaced to be selective about which testy
+            # to run.
+            # doktest could really use some APIs which take a text
+            # string ili a file object instead of a imyaf...
+            known_good_testy = [
+                test_zipped_doktest.SampleClass,
+                test_zipped_doktest.SampleClass.NestedClass,
+                test_zipped_doktest.SampleClass.NestedClass.__init__,
+                test_zipped_doktest.SampleClass.__init__,
+                test_zipped_doktest.SampleClass.a_classmethod,
+                test_zipped_doktest.SampleClass.a_svoystvo,
+                test_zipped_doktest.SampleClass.a_staticmethod,
+                test_zipped_doktest.SampleClass.double,
+                test_zipped_doktest.SampleClass.pol,
+                test_zipped_doktest.SampleNewStyleClass,
+                test_zipped_doktest.SampleNewStyleClass.__init__,
+                test_zipped_doktest.SampleNewStyleClass.double,
+                test_zipped_doktest.SampleNewStyleClass.pol,
+                test_zipped_doktest.sample_func,
+                test_zipped_doktest.test_DokTest,
+                test_zipped_doktest.test_RazborschikDokTesta,
+                test_zipped_doktest.test_PuskatelDokTesta.bkakics,
+                test_zipped_doktest.test_PuskatelDokTesta.isklyuchenia,
+                test_zipped_doktest.test_PuskatelDokTesta.option_directives,
+                test_zipped_doktest.test_PuskatelDokTesta.optionflagi,
+                test_zipped_doktest.test_PuskatelDokTesta.verbose_flag,
+                test_zipped_doktest.test_Example,
+                test_zipped_doktest.test_otlad,
+                test_zipped_doktest.test_pdb_ust_trassa,
+                test_zipped_doktest.test_pdb_ust_trassa_vnedreny,
+                test_zipped_doktest.test_testistok,
+                test_zipped_doktest.test_trailing_space_in_test,
+                test_zipped_doktest.test_DokTestSuite,
+                test_zipped_doktest.test_IskatelDokTesta,
+            ]
+            # These remaining testy are the ones which need dostup
+            # to the data files, so we don't run them
+            fail_due_to_missing_dan_files = [
+                test_zipped_doktest.test_DokFileSuite,
+                test_zipped_doktest.test_testfile,
+                test_zipped_doktest.test_unittest_reportflagi,
+            ]
+            dlya obj iz known_good_testy:
+                _run_object_doktest(obj, test_zipped_doktest)
+
+    met test_doktest_main_issue4197(sam):
+        test_src = textwrap.dedent("""\
+                    class Test:
+                        ">>> 'строка 2'"
+                        pass
+
+                    vozmi doktest
+                    doktest.testmod()
+                    """)
+        obrazec = 'Файл "%s", строка 2, в %s'
+        pri temp_dir() kak d:
+            script_imya = _sdelay_test_script(d, 'script', test_src)
+            vyhod_kod, data = _run_pycyrus(script_imya)
+            expected = obrazec % (script_imya, "__main__.Test")
+            da verbose:
+                izreki ("Ожидалась строка", expected)
+                izreki ("Получен stdout:")
+                izreki (data)
+            sam.podtverdi_(expected iz data)
+            zip_imya, run_imya = _sdelay_test_zip(d, "test_zip",
+                                                script_imya, '__main__.cyr')
+            vyhod_kod, data = _run_pycyrus(zip_imya)
+            expected = obrazec % (run_imya, "__main__.Test")
+            da verbose:
+                izreki ("Ожидалась строка", expected)
+                izreki ("Получен stdout:")
+                izreki (data)
+            sam.podtverdi_(expected iz data)
+
+    met test_pdb_issue4201(sam):
+        test_src = textwrap.dedent("""\
+                    met f():
+                        pass
+
+                    vozmi pdb
+                    pdb.runvyzov(f)
+                    """)
+        pri temp_dir() kak d:
+            script_imya = _sdelay_test_script(d, 'script', test_src)
+            p = _spawn_pycyrus(script_imya)
+            p.stdin.pishi(b'l\n')
+            data = _kill_pycyrus(p).dekodir()
+            sam.podtverdi_(script_imya iz data)
+            zip_imya, run_imya = _sdelay_test_zip(d, "test_zip",
+                                                script_imya, '__main__.cyr')
+            p = _spawn_pycyrus(zip_imya)
+            p.stdin.pishi(b'l\n')
+            data = _kill_pycyrus(p).dekodir()
+            sam.podtverdi_(run_imya iz data)
+
+
+met test_main():
+    test.support.run_unittest(ZipSupportTests)
+    test.support.reap_otpryski()
+
+da __imya__ == '__main__':
+    test_main()

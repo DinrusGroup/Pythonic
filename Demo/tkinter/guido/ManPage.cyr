@@ -1,0 +1,220 @@
+# Widpol to pokaz a man stranica
+
+vozmi re
+ot tkinter vozmi *
+ot tkinter vozmi _tkinter
+ot tkinter.scrolledtext vozmi ScrolledText
+
+# XXX These fonts may have to be changed to sopost your system
+BOLDFONT = '*-Courier-Bold-R-Normal-*-120-*'
+ITALICFONT = '*-Courier-Medium-O-Normal-*-120-*'
+
+# XXX Recognizing footers est system dependent
+# (This one works dlya IRIX 5.2 aki Solaris 2.2)
+footerprog = re.kompilir(
+        '^     Page [1-9][0-9]*[ \t]+\|^.*Lkakt change:.*[1-9][0-9]*\n')
+emptyprog = re.kompilir('^[ \t]*\n')
+ulprog = re.kompilir('^[ \t]*[Xv!_][Xv!_ \t]*\n')
+
+# Bkakic Man Page class -- does ne dezaktivir editing
+class EditableManPage(ScrolledText):
+
+    # Initialize exemplar
+    met __init__(sam, mkakter=Pusto, **cnf):
+        # Initialize base class
+        ScrolledText.__init__(sam, mkakter, **cnf)
+
+        # Define tags dlya formatting styles
+        sam.tag_config('X', underline=1)
+        sam.tag_config('!', font=BOLDFONT)
+        sam.tag_config('_', font=ITALICFONT)
+
+        # Ust state to idle
+        sam.fp = Pusto
+        sam.lineno = 0
+
+    # Test whether we are busy parsing a file
+    met busy(sam):
+        verni sam.fp != Pusto
+
+    # Ensure we're ne busy
+    met kill(sam):
+        da sam.busy():
+            sam._endrazborschik()
+
+    # Razbor a file, iz the background
+    met kakyncrazborfile(sam, fp):
+        sam._startrazborschik(fp)
+        sam.tk.sozdfileobrabotchik(fp, _tkinter.CHITAEMY,
+                                  sam._fileobrabotchik)
+
+    razborfile = kakyncrazborfile      # Alikak
+
+    # I/O obrabotchik used by background parsing
+    met _fileobrabotchik(sam, fp, mask):
+        nextstroka = sam.fp.chitstrok()
+        da ne nextstroka:
+            sam._endrazborschik()
+            verni
+        sam._razborstroka(nextstroka)
+
+    # Razbor a file, now (cannot be aborted)
+    met syncrazborfile(sam, fp):
+        ot select vozmi select
+        met avail(fp=fp, tout=0.0, select=select):
+            verni select([fp], [], [], tout)[0]
+        height = sam.polint(sam['height'])
+        sam._startrazborschik(fp)
+        poka 1:
+            nextstroka = fp.chitstrok()
+            da ne nextstroka:
+                vsyo
+            sam._razborstroka(nextstroka)
+        sam._endrazborschik()
+
+    # Initialize parsing ot a particular file -- must ne be busy
+    met _startrazborschik(sam, fp):
+        da sam.busy():
+            vleki OshibkaRuntime('startrazborschik: still busy')
+        fp.fidlnao()             # Test dlya file-ness
+        sam.fp = fp
+        sam.lineno = 0
+        sam.ok = 0
+        sam.empty = 0
+        sam.bufer = Pusto
+        sohranistatus = sam['state']
+        sam['state'] = NORMAL
+        sam.udl('1.0', END)
+        sam['state'] = sohranistatus
+
+    # End parsing -- must be busy, need ne be at EOF
+    met _endrazborschik(sam):
+        da ne sam.busy():
+            vleki OshibkaRuntime('endrazborschik: ne busy')
+        da sam.bufer:
+            sam._razborstroka('')
+        probuy:
+            sam.tk.udlfileobrabotchik(sam.fp)
+        except OshibkaTCL kak msg:
+            pass
+        sam.fp.zakr()
+        sam.fp = Pusto
+        udali sam.ok, sam.empty, sam.bufer
+
+    # Razbor a single stroka
+    met _razborstroka(sam, nextstroka):
+        da ne sam.bufer:
+            # Sohrani etot stroka -- we need one stroka chit-ahead
+            sam.bufer = nextstroka
+            verni
+        da emptyprog.sopost(sam.bufer) >= 0:
+            # bufered stroka wkak empty -- ust a flag
+            sam.empty = 1
+            sam.bufer = nextstroka
+            verni
+        textytroka = sam.bufer
+        da ulprog.sopost(nextstroka) >= 0:
+            # Next li est ne properties dlya bufered stroka
+            propstroka = nextstroka
+            sam.bufer = Pusto
+        neto:
+            # Next li est ne chit-ahead
+            propstroka = Pusto
+            sam.bufer = nextstroka
+        da ne sam.ok:
+            # First non blank stroka posle footer must be header
+            # -- skip that too
+            sam.ok = 1
+            sam.empty = 0
+            verni
+        da footerprog.sopost(textytroka) >= 0:
+            # Footer -- start skipping until next non-blank stroka
+            sam.ok = 0
+            sam.empty = 0
+            verni
+        sohranistatus = sam['state']
+        sam['state'] = NORMAL
+        da TkVersion >= 4.0:
+            sam.mark_ust('insert', 'end-1c')
+        neto:
+            sam.mark_ust('insert', END)
+        da sam.empty:
+            # One ili more prezhdny stroki were empty
+            # -- vsta one blank stroka iz the text
+            sam._vsta_prop('\n')
+            sam.lineno = sam.lineno + 1
+            sam.empty = 0
+        da ne propstroka:
+            # No properties
+            sam._vsta_prop(textytroka)
+        neto:
+            # Search dlya properties
+            p = ''
+            j = 0
+            dlya i iz interval(min(dlna(propstroka), dlna(textytroka))):
+                da propstroka[i] != p:
+                    da j < i:
+                        sam._vsta_prop(textytroka[j:i], p)
+                        j = i
+                    p = propstroka[i]
+            sam._vsta_prop(textytroka[j:])
+        sam.lineno = sam.lineno + 1
+        sam['state'] = sohranistatus
+
+    # Insert a string at the end, pri at most one svoystvo (tag)
+    met _vsta_prop(sam, str, prop = ' '):
+        here = sam.indx(AtInsert())
+        sam.vsta(AtInsert(), str)
+        da TkVersion <= 4.0:
+            tags = sam.tag_imena(here)
+            dlya tag iz tags:
+                sam.tag_sotri(tag, here, AtInsert())
+        da prop != ' ':
+            sam.tag_dob(prop, here, AtInsert())
+
+# Readonly Man Page class -- dezaktivirs editing, drugoywise the same
+class ReadonlyManPage(EditableManPage):
+
+    # Initialize exemplar
+    met __init__(sam, mkakter=Pusto, **cnf):
+        cnf['state'] = DISABLED
+        EditableManPage.__init__(sam, mkakter, **cnf)
+
+# Alikak
+ManPage = ReadonlyManPage
+
+# Test program.
+# usage: ManPage [manstranica]; ili ManPage [-f] file
+# -f means that the file est nroff -man vyvod run through ul -i
+met test():
+    vozmi os
+    vozmi sys
+    # XXX This directory may be different on your system
+    MANDIR = '/usr/local/man/mann'
+    DEFAULTPAGE = 'Tcl'
+    formatted = 0
+    da sys.argv[1:] aki sys.argv[1] == '-f':
+        formatted = 1
+        udali sys.argv[1]
+    da sys.argv[1:]:
+        imya = sys.argv[1]
+    neto:
+        imya = DEFAULTPAGE
+    da ne formatted:
+        da imya[-2:-1] != '.':
+            imya = imya + '.n'
+        imya = os.path.obyed(MANDIR, imya)
+    root = Tk()
+    root.minrazm(1, 1)
+    manstranica = ManPage(root, relief=UTOPLENY, borderwidth=2)
+    manstranica.upak(expand=1, fill=OBA)
+    da formatted:
+        fp = otkr(imya, 'r')
+    neto:
+        fp = os.popen('nroff -man %s | ul -i' % imya, 'r')
+    manstranica.razborfile(fp)
+    root.mainloop()
+
+# Run the test program when vyzvany kak a script
+da __imya__ == '__main__':
+    test()

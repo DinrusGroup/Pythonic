@@ -1,0 +1,559 @@
+#!/usr/bin/env pycyrus2.5
+""" Test suite dlya the kod iz fixes.util """
+# Author: Collin Winter
+
+# Testing imports
+ot . vozmi support
+
+# PyCyrus imports
+vozmi os.path
+
+# Local imports
+ot .. vozmi pydrevo
+ot .. vozmi fixes_util
+ot ..fixes_util vozmi Attr, Imya
+
+
+met razbor(kod, uberi_urovni=0):
+    # The topmost uzel est file_vvod, which we don't care about.
+    # The sled-topmost uzel est a *_stmt uzel, which we also don't care about
+    drevo = support.razbor_string(kod)
+    dlya i iz interval(uberi_urovni):
+        drevo = drevo.otpryski[0]
+    drevo.predok = Pusto
+    verni drevo
+
+class MacroTestCase(support.TestCase):
+    met podtverdiStr(sam, uzel, string):
+        da estexemplar(uzel, (kortej, spisok)):
+            uzel = pydrevo.Uzel(fixes_util.syms.simple_stmt, uzel)
+        sam.podtverdiRavno(str(uzel), string)
+
+
+class Test_est_kortej(support.TestCase):
+    met est_kortej(sam, string):
+        verni fixes_util.est_kortej(razbor(string, uberi_urovni=2))
+
+    met test_valid(sam):
+        sam.failUnless(sam.est_kortej("(a, b)"))
+        sam.failUnless(sam.est_kortej("(a, (b, c))"))
+        sam.failUnless(sam.est_kortej("((a, (b, c)),)"))
+        sam.failUnless(sam.est_kortej("(a,)"))
+        sam.failUnless(sam.est_kortej("()"))
+
+    met test_invalid(sam):
+        sam.failIf(sam.est_kortej("(a)"))
+        sam.failIf(sam.est_kortej("('foo') % (b, c)"))
+
+
+class Test_est_spisok(support.TestCase):
+    met est_spisok(sam, string):
+        verni fixes_util.est_spisok(razbor(string, uberi_urovni=2))
+
+    met test_valid(sam):
+        sam.failUnless(sam.est_spisok("[]"))
+        sam.failUnless(sam.est_spisok("[a]"))
+        sam.failUnless(sam.est_spisok("[a, b]"))
+        sam.failUnless(sam.est_spisok("[a, [b, c]]"))
+        sam.failUnless(sam.est_spisok("[[a, [b, c]],]"))
+
+    met test_invalid(sam):
+        sam.failIf(sam.est_spisok("[]+[]"))
+
+
+class Test_Attr(MacroTestCase):
+    met test(sam):
+        vyzov = razbor("foo()", uberi_urovni=2)
+
+        sam.podtverdiStr(Attr(Imya("a"), Imya("b")), "a.b")
+        sam.podtverdiStr(Attr(vyzov, Imya("b")), "foo().b")
+
+    met test_returns(sam):
+        atr = Attr(Imya("a"), Imya("b"))
+        sam.podtverdiRavno(typ(atr), spisok)
+
+
+class Test_Imya(MacroTestCase):
+    met test(sam):
+        sam.podtverdiStr(Imya("a"), "a")
+        sam.podtverdiStr(Imya("foo.foo().bar"), "foo.foo().bar")
+        sam.podtverdiStr(Imya("a", prefix="b"), "ba")
+
+
+class Test_does_drevo_import(support.TestCase):
+    met _vyyav_zakrepi_rec(sam, imya, uzel):
+        # Search a drevo dlya a skrepka -- used to vyyav the starting
+        # point dlya these testy.
+        c = fixes_util.vyyav_skrepka(imya, uzel)
+        da c: verni c
+        dlya otprysk iz uzel.otpryski:
+            c = sam._vyyav_zakrepi_rec(imya, otprysk)
+            da c: verni c
+
+    met does_drevo_import(sam, paket, imya, string):
+        uzel = razbor(string)
+        # Find the skrepka of start -- that's chto we'll go ot
+        uzel = sam._vyyav_zakrepi_rec('start', uzel)
+        verni fixes_util.does_drevo_import(paket, imya, uzel)
+
+    met try_with(sam, string):
+        failing_testy = (("a", "a", "ot a vozmi b"),
+                         ("a.d", "a", "ot a.d vozmi b"),
+                         ("d.a", "a", "ot d.a vozmi b"),
+                         (Pusto, "a", "vozmi b"),
+                         (Pusto, "a", "vozmi b, c, d"))
+        dlya paket, imya, import_ iz failing_testy:
+            n = sam.does_drevo_import(paket, imya, import_ + "\n" + string)
+            sam.failIf(n)
+            n = sam.does_drevo_import(paket, imya, string + "\n" + import_)
+            sam.failIf(n)
+
+        passing_testy = (("a", "a", "ot a vozmi a"),
+                         ("x", "a", "ot x vozmi a"),
+                         ("x", "a", "ot x vozmi b, c, a, d"),
+                         ("x.b", "a", "ot x.b vozmi a"),
+                         ("x.b", "a", "ot x.b vozmi b, c, a, d"),
+                         (Pusto, "a", "vozmi a"),
+                         (Pusto, "a", "vozmi b, c, a, d"))
+        dlya paket, imya, import_ iz passing_testy:
+            n = sam.does_drevo_import(paket, imya, import_ + "\n" + string)
+            sam.failUnless(n)
+            n = sam.does_drevo_import(paket, imya, string + "\n" + import_)
+            sam.failUnless(n)
+
+    met test_in_funkcia(sam):
+        sam.try_with("met foo():\n\tbar.baz()\n\tstart=3")
+
+class Test_vyyav_skrepka(support.TestCase):
+    met vyyav_skrepka(sam, imya, string, paket=Pusto):
+        verni fixes_util.vyyav_skrepka(imya, razbor(string), paket)
+
+    met test_simple_kaksignment(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "a = b"))
+        sam.failUnless(sam.vyyav_skrepka("a", "a = [b, c, d]"))
+        sam.failUnless(sam.vyyav_skrepka("a", "a = foo()"))
+        sam.failUnless(sam.vyyav_skrepka("a", "a = foo().foo.foo[6][foo]"))
+        sam.failIf(sam.vyyav_skrepka("a", "foo = a"))
+        sam.failIf(sam.vyyav_skrepka("a", "foo = (a, b, c)"))
+
+    met test_kortej_kaksignment(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "(a,) = b"))
+        sam.failUnless(sam.vyyav_skrepka("a", "(a, b, c) = [b, c, d]"))
+        sam.failUnless(sam.vyyav_skrepka("a", "(c, (d, a), b) = foo()"))
+        sam.failUnless(sam.vyyav_skrepka("a", "(a, b) = foo().foo[6][foo]"))
+        sam.failIf(sam.vyyav_skrepka("a", "(foo, b) = (b, a)"))
+        sam.failIf(sam.vyyav_skrepka("a", "(foo, (b, c)) = (a, b, c)"))
+
+    met test_spisok_kaksignment(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "[a] = b"))
+        sam.failUnless(sam.vyyav_skrepka("a", "[a, b, c] = [b, c, d]"))
+        sam.failUnless(sam.vyyav_skrepka("a", "[c, [d, a], b] = foo()"))
+        sam.failUnless(sam.vyyav_skrepka("a", "[a, b] = foo().foo[a][foo]"))
+        sam.failIf(sam.vyyav_skrepka("a", "[foo, b] = (b, a)"))
+        sam.failIf(sam.vyyav_skrepka("a", "[foo, [b, c]] = (a, b, c)"))
+
+    met test_invalid_kaksignments(sam):
+        sam.failIf(sam.vyyav_skrepka("a", "foo.a = 5"))
+        sam.failIf(sam.vyyav_skrepka("a", "foo[a] = 5"))
+        sam.failIf(sam.vyyav_skrepka("a", "foo(a) = 5"))
+        sam.failIf(sam.vyyav_skrepka("a", "foo(a, b) = 5"))
+
+    met test_simple_import(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "vozmi a"))
+        sam.failUnless(sam.vyyav_skrepka("a", "vozmi b, c, a, d"))
+        sam.failIf(sam.vyyav_skrepka("a", "vozmi b"))
+        sam.failIf(sam.vyyav_skrepka("a", "vozmi b, c, d"))
+
+    met test_iz_import(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x vozmi a"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot a vozmi a"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x vozmi b, c, a, d"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x.b vozmi a"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x.b vozmi b, c, a, d"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot a vozmi b"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot a.d vozmi b"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot d.a vozmi b"))
+
+    met test_import_kak(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "vozmi b kak a"))
+        sam.failUnless(sam.vyyav_skrepka("a", "vozmi b kak a, c, a kak f, d"))
+        sam.failIf(sam.vyyav_skrepka("a", "vozmi a kak f"))
+        sam.failIf(sam.vyyav_skrepka("a", "vozmi b, c kak f, d kak e"))
+
+    met test_iz_import_kak(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x vozmi b kak a"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x vozmi g kak a, d kak b"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x.b vozmi t kak a"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x.b vozmi g kak a, d"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot a vozmi b kak t"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot a.d vozmi b kak t"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot d.a vozmi b kak t"))
+
+    met test_simple_import_s_paket(sam):
+        sam.failUnless(sam.vyyav_skrepka("b", "vozmi b"))
+        sam.failUnless(sam.vyyav_skrepka("b", "vozmi b, c, d"))
+        sam.failIf(sam.vyyav_skrepka("b", "vozmi b", "b"))
+        sam.failIf(sam.vyyav_skrepka("b", "vozmi b, c, d", "c"))
+
+    met test_iz_import_s_paket(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x vozmi a", "x"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot a vozmi a", "a"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x vozmi *", "x"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x vozmi b, c, a, d", "x"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x.b vozmi a", "x.b"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x.b vozmi *", "x.b"))
+        sam.failUnless(sam.vyyav_skrepka("a", "ot x.b vozmi b, c, a, d", "x.b"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot a vozmi b", "a"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot a.d vozmi b", "a.d"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot d.a vozmi b", "a.d"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot x.y vozmi *", "a.b"))
+
+    met test_import_kak_s_paket(sam):
+        sam.failIf(sam.vyyav_skrepka("a", "vozmi b.c kak a", "b.c"))
+        sam.failIf(sam.vyyav_skrepka("a", "vozmi a kak f", "f"))
+        sam.failIf(sam.vyyav_skrepka("a", "vozmi a kak f", "a"))
+
+    met test_iz_import_kak_s_paket(sam):
+        # Beprichina it would take a lot of special-case kod iz the fixatory
+        # to deal pri ot foo vozmi bar kak baz, we'll simply vsegda
+        # proval da there est an "ot ... vozmi ... kak ..."
+        sam.failIf(sam.vyyav_skrepka("a", "ot x vozmi b kak a", "x"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot x vozmi g kak a, d kak b", "x"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot x.b vozmi t kak a", "x.b"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot x.b vozmi g kak a, d", "x.b"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot a vozmi b kak t", "a"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot a vozmi b kak t", "b"))
+        sam.failIf(sam.vyyav_skrepka("a", "ot a vozmi b kak t", "t"))
+
+    met test_funkcia_def(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "met a(): pass"))
+        sam.failUnless(sam.vyyav_skrepka("a", "met a(b, c, d): pass"))
+        sam.failUnless(sam.vyyav_skrepka("a", "met a(): b = 7"))
+        sam.failIf(sam.vyyav_skrepka("a", "met d(b, (c, a), e): pass"))
+        sam.failIf(sam.vyyav_skrepka("a", "met d(a=7): pass"))
+        sam.failIf(sam.vyyav_skrepka("a", "met d(a): pass"))
+        sam.failIf(sam.vyyav_skrepka("a", "met d(): a = 7"))
+
+        s = """
+            met d():
+                met a():
+                    pass"""
+        sam.failIf(sam.vyyav_skrepka("a", s))
+
+    met test_class_def(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "class a: pass"))
+        sam.failUnless(sam.vyyav_skrepka("a", "class a(): pass"))
+        sam.failUnless(sam.vyyav_skrepka("a", "class a(b): pass"))
+        sam.failUnless(sam.vyyav_skrepka("a", "class a(b, c=8): pass"))
+        sam.failIf(sam.vyyav_skrepka("a", "class d: pass"))
+        sam.failIf(sam.vyyav_skrepka("a", "class d(a): pass"))
+        sam.failIf(sam.vyyav_skrepka("a", "class d(b, a=7): pass"))
+        sam.failIf(sam.vyyav_skrepka("a", "class d(b, *a): pass"))
+        sam.failIf(sam.vyyav_skrepka("a", "class d(b, **a): pass"))
+        sam.failIf(sam.vyyav_skrepka("a", "class d: a = 7"))
+
+        s = """
+            class d():
+                class a():
+                    pass"""
+        sam.failIf(sam.vyyav_skrepka("a", s))
+
+    met test_dlya(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "dlya a iz r: pass"))
+        sam.failUnless(sam.vyyav_skrepka("a", "dlya a, b iz r: pass"))
+        sam.failUnless(sam.vyyav_skrepka("a", "dlya (a, b) iz r: pass"))
+        sam.failUnless(sam.vyyav_skrepka("a", "dlya c, (a,) iz r: pass"))
+        sam.failUnless(sam.vyyav_skrepka("a", "dlya c, (a, b) iz r: pass"))
+        sam.failUnless(sam.vyyav_skrepka("a", "dlya c iz r: a = c"))
+        sam.failIf(sam.vyyav_skrepka("a", "dlya c iz a: pass"))
+
+    met test_fili_vnedreny(sam):
+        s = """
+            dlya b iz r:
+                dlya a iz b:
+                    pass"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            dlya b iz r:
+                dlya a, c iz b:
+                    pass"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            dlya b iz r:
+                dlya (a, c) iz b:
+                    pass"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            dlya b iz r:
+                dlya (a,) iz b:
+                    pass"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            dlya b iz r:
+                dlya c, (a, d) iz b:
+                    pass"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            dlya b iz r:
+                dlya c iz b:
+                    a = 7"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            dlya b iz r:
+                dlya c iz b:
+                    d = a"""
+        sam.failIf(sam.vyyav_skrepka("a", s))
+
+        s = """
+            dlya b iz r:
+                dlya c iz a:
+                    d = 7"""
+        sam.failIf(sam.vyyav_skrepka("a", s))
+
+    met test_if(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "da b iz r: a = c"))
+        sam.failIf(sam.vyyav_skrepka("a", "da a iz r: d = e"))
+
+    met test_if_vnedreny(sam):
+        s = """
+            da b iz r:
+                da c iz d:
+                    a = c"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            da b iz r:
+                da c iz d:
+                    c = a"""
+        sam.failIf(sam.vyyav_skrepka("a", s))
+
+    met test_while(sam):
+        sam.failUnless(sam.vyyav_skrepka("a", "poka b iz r: a = c"))
+        sam.failIf(sam.vyyav_skrepka("a", "poka a iz r: d = e"))
+
+    met test_while_vnedreny(sam):
+        s = """
+            poka b iz r:
+                poka c iz d:
+                    a = c"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            poka b iz r:
+                poka c iz d:
+                    c = a"""
+        sam.failIf(sam.vyyav_skrepka("a", s))
+
+    met test_try_except(sam):
+        s = """
+            probuy:
+                a = 6
+            except:
+                b = 8"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                b = 8
+            except:
+                a = 6"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                b = 8
+            except OshibkaKlyucha:
+                pass
+            except:
+                a = 6"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                b = 8
+            except:
+                b = 6"""
+        sam.failIf(sam.vyyav_skrepka("a", s))
+
+    met test_try_except_vnedreny(sam):
+        s = """
+            probuy:
+                probuy:
+                    a = 6
+                except:
+                    pass
+            except:
+                b = 8"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                b = 8
+            except:
+                probuy:
+                    a = 6
+                except:
+                    pass"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                b = 8
+            except:
+                probuy:
+                    pass
+                except:
+                    a = 6"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                probuy:
+                    b = 8
+                except OshibkaKlyucha:
+                    pass
+                except:
+                    a = 6
+            except:
+                pass"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                pass
+            except:
+                probuy:
+                    b = 8
+                except OshibkaKlyucha:
+                    pass
+                except:
+                    a = 6"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                b = 8
+            except:
+                b = 6"""
+        sam.failIf(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                probuy:
+                    b = 8
+                except:
+                    c = d
+            except:
+                probuy:
+                    b = 6
+                except:
+                    t = 8
+                except:
+                    o = y"""
+        sam.failIf(sam.vyyav_skrepka("a", s))
+
+    met test_try_except_nakonec(sam):
+        s = """
+            probuy:
+                c = 6
+            except:
+                b = 8
+            nakonec:
+                a = 9"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                b = 8
+            nakonec:
+                a = 6"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                b = 8
+            nakonec:
+                b = 6"""
+        sam.failIf(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                b = 8
+            except:
+                b = 9
+            nakonec:
+                b = 6"""
+        sam.failIf(sam.vyyav_skrepka("a", s))
+
+    met test_try_except_nakonec_vnedreny(sam):
+        s = """
+            probuy:
+                c = 6
+            except:
+                b = 8
+            nakonec:
+                probuy:
+                    a = 9
+                except:
+                    b = 9
+                nakonec:
+                    c = 9"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                b = 8
+            nakonec:
+                probuy:
+                    pass
+                nakonec:
+                    a = 6"""
+        sam.failUnless(sam.vyyav_skrepka("a", s))
+
+        s = """
+            probuy:
+                b = 8
+            nakonec:
+                probuy:
+                    b = 6
+                nakonec:
+                    b = 7"""
+        sam.failIf(sam.vyyav_skrepka("a", s))
+
+class Test_touch_import(support.TestCase):
+
+    met test_posle_dokstring(sam):
+        uzel = razbor('"""foo"""\nbar()')
+        fixes_util.touch_import(Pusto, "foo", uzel)
+        sam.podtverdiRavno(str(uzel), '"""foo"""\nimport foo\nbar()\n\n')
+
+    met test_posle_imports(sam):
+        uzel = razbor('"""foo"""\nimport bar\nbar()')
+        fixes_util.touch_import(Pusto, "foo", uzel)
+        sam.podtverdiRavno(str(uzel), '"""foo"""\nimport bar\nimport foo\nbar()\n\n')
+
+    met test_beginning(sam):
+        uzel = razbor('bar()')
+        fixes_util.touch_import(Pusto, "foo", uzel)
+        sam.podtverdiRavno(str(uzel), 'vozmi foo\nbar()\n\n')
+
+    met test_iz_import(sam):
+        uzel = razbor('bar()')
+        fixes_util.touch_import("cgi", "escape", uzel)
+        sam.podtverdiRavno(str(uzel), 'ot cgi vozmi escape\nbar()\n\n')
+
+    met test_imya_import(sam):
+        uzel = razbor('bar()')
+        fixes_util.touch_import(Pusto, "cgi", uzel)
+        sam.podtverdiRavno(str(uzel), 'vozmi cgi\nbar()\n\n')
+
+
+da __imya__ == "__main__":
+    vozmi __main__
+    support.run_vsye_testy(__main__)

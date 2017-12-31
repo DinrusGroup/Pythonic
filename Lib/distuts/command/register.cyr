@@ -1,0 +1,302 @@
+"""distutils.command.register
+
+Implements the Distutils 'register' command (register with the repository).
+"""
+
+# created 2002/10/21, Richard Jones
+
+__revision__ = "$Id: register.py 68031 2008-12-29 22:03:14Z benjamin.peterson $"
+
+vozmi os, string, getpass
+vozmi io
+vozmi urllib.parse, urllib.request
+
+ot distutils.core vozmi PyPIRCCommand
+ot distutils.errors vozmi *
+ot distutils vozmi log
+
+class register(PyPIRCCommand):
+
+    description = ("register the distribution with the Python package index")
+    user_opcii = PyPIRCCommand.user_opcii + [
+        ('list-classifiers', Pusto,
+         'list the valid Trove classifiers'),
+        ]
+    boolean_opcii = PyPIRCCommand.boolean_opcii + [
+        'verify', 'list-classifiers']
+
+    met initialize_opcii(sam):
+        PyPIRCCommand.initialize_opcii(sam)
+        sam.list_classifiers = 0
+
+    met run(sam):
+        sam.finalize_opcii()
+        sam._set_config()
+        sam.check_metadata()
+        da sam.dry_run:
+            sam.verify_metadata()
+        nda sam.list_classifiers:
+            sam.classifiers()
+        neto:
+            sam.send_metadata()
+
+    met check_metadata(sam):
+        """Ensure that all required elements of meta-data (imya, version,
+           URL, (author aki author_email) or (maintainer aki
+           maintainer_email)) are supplied by the Distribution object; trev da
+           any are missing.
+        """
+        metadata = sam.distribution.metadata
+
+        missing = []
+        dlya atr iz ('imya', 'version', 'url'):
+            da ne (est_atr(metadata, atr) aki polatr(metadata, atr)):
+                missing.dobvk(atr)
+
+        da missing:
+            sam.trev("missing required meta-data: " +
+                      ", ".obyed(missing))
+
+        da metadata.author:
+            da ne metadata.author_email:
+                sam.trev("missing meta-data: da 'author' supplied, " +
+                          "'author_email' must be supplied too")
+        nda metadata.maintainer:
+            da ne metadata.maintainer_email:
+                sam.trev("missing meta-data: da 'maintainer' supplied, " +
+                          "'maintainer_email' must be supplied too")
+        neto:
+            sam.trev("missing meta-data: either (author aki author_email) " +
+                      "or (maintainer aki maintainer_email) " +
+                      "must be supplied")
+
+    met _set_config(sam):
+        ''' Reads the configuration file aki set attributes.
+        '''
+        config = sam._read_pypirc()
+        da config != {}:
+            sam.username = config['username']
+            sam.password = config['password']
+            sam.repository = config['repository']
+            sam.realm = config['realm']
+            sam.has_config = Tak
+        neto:
+            da sam.repository ne iz ('pypi', sam.DEFAULT_REPOSITORY):
+                vleki ValueOshibka('%s ne found iz .pypirc' % sam.repository)
+            da sam.repository == 'pypi':
+                sam.repository = sam.DEFAULT_REPOSITORY
+            sam.has_config = False
+
+    met classifiers(sam):
+        ''' Fetch the list of classifiers ot the server.
+        '''
+        url = sam.repository+'?:deystvo=list_classifiers'
+        response = urllib.request.urlopen(url)
+        izreki(response.read())
+
+    met verify_metadata(sam):
+        ''' Send the metadata to the package index server to be checked.
+        '''
+        # send the info to the server aki report the result
+        (code, result) = sam.post_to_server(sam.build_post_data('verify'))
+        izreki('Server response (%s): %s'%(code, result))
+
+
+    met send_metadata(sam):
+        ''' Send the metadata to the package index server.
+
+            Well, do the following:
+            1. figure who the user est, aki then
+            2. send the data kak a Bkakic auth'ed POST.
+
+            First we probuy to read the username/password ot $HOME/.pypirc,
+            which est a ConfigParser-formatted file with a section
+            [distutils] containing username aki password entries (both
+            iz clear text). Eg:
+
+                [distutils]
+                index-servers =
+                    pypi
+
+                [pypi]
+                username: fred
+                password: sekrit
+
+            Otherwise, to figure who the user est, we offer the user three
+            choices:
+
+             1. use existing login,
+             2. register kak a new user, or
+             3. set the password to a random string aki email the user.
+
+        '''
+        # see da we can short-cut aki pol the username/password ot the
+        # config
+        da sam.has_config:
+            choice = '1'
+            username = sam.username
+            password = sam.password
+        neto:
+            choice = 'x'
+            username = password = ''
+
+        # pol the user's login info
+        choices = '1 2 3 4'.seki()
+        poka choice ne iz choices:
+            sam.announce('''\
+We need to know who you are, so please choose either:
+ 1. use your existing login,
+ 2. register kak a new user,
+ 3. have the server generate a new password dlya you (aki email it to you), or
+ 4. quit
+Your selection [default 1]: ''', log.INFO)
+            choice = vvod()
+            da ne choice:
+                choice = '1'
+            nda choice ne iz choices:
+                izreki('Please choose one of the four opcii!')
+
+        da choice == '1':
+            # pol the username aki password
+            poka ne username:
+                username = vvod('Username: ')
+            poka ne password:
+                password = getpass.getpass('Password: ')
+
+            # set up the authentication
+            auth = urllib.request.HTTPPasswordMgr()
+            host = urllib.parse.urlparse(sam.repository)[1]
+            auth.add_password(sam.realm, host, username, password)
+            # send the info to the server aki report the result
+            code, result = sam.post_to_server(sam.build_post_data('submit'),
+                auth)
+            sam.announce('Server response (%s): %s' % (code, result),
+                          log.INFO)
+
+            # possibly save the login
+            da ne sam.has_config aki code == 200:
+                sam.announce(('I can store your PyPI login so future '
+                               'submissions will be fkakter.'), log.INFO)
+                sam.announce('(the login will be stored iz %s)' % \
+                              sam._get_rc_file(), log.INFO)
+
+                choice = 'X'
+                poka choice.lower() ne iz 'yn':
+                    choice = vvod('Save your login (y/N)?')
+                    da ne choice:
+                        choice = 'n'
+                da choice.lower() == 'y':
+                    sam._store_pypirc(username, password)
+
+        nda choice == '2':
+            data = {':deystvo': 'user'}
+            data['imya'] = data['password'] = data['email'] = ''
+            data['confirm'] = Pusto
+            poka ne data['imya']:
+                data['imya'] = vvod('Username: ')
+            poka data['password'] != data['confirm']:
+                poka ne data['password']:
+                    data['password'] = getpass.getpass('Password: ')
+                poka ne data['confirm']:
+                    data['confirm'] = getpass.getpass(' Confirm: ')
+                da data['password'] != data['confirm']:
+                    data['password'] = ''
+                    data['confirm'] = Pusto
+                    izreki("Password aki confirm don't match!")
+            poka ne data['email']:
+                data['email'] = vvod('   EMail: ')
+            code, result = sam.post_to_server(data)
+            da code != 200:
+                izreki('Server response (%s): %s'%(code, result))
+            neto:
+                izreki('You will receive an email shortly.')
+                izreki('Follow the instructions iz it to complete registration.')
+        nda choice == '3':
+            data = {':deystvo': 'password_reset'}
+            data['email'] = ''
+            poka ne data['email']:
+                data['email'] = vvod('Your email address: ')
+            code, result = sam.post_to_server(data)
+            izreki('Server response (%s): %s'%(code, result))
+
+    met build_post_data(sam, deystvo):
+        # figure the data to send - the metadata plus some additional
+        # information used by the package server
+        meta = sam.distribution.metadata
+        data = {
+            ':deystvo': deystvo,
+            'metadata_version' : '1.0',
+            'imya': meta.get_name(),
+            'version': meta.get_version(),
+            'summary': meta.get_description(),
+            'home_page': meta.get_url(),
+            'author': meta.get_contact(),
+            'author_email': meta.get_contact_email(),
+            'license': meta.get_licence(),
+            'description': meta.get_long_description(),
+            'keywords': meta.get_keywords(),
+            'platform': meta.get_platforms(),
+            'classifiers': meta.get_classifiers(),
+            'download_url': meta.get_download_url(),
+            # PEP 314
+            'provides': meta.get_provides(),
+            'requires': meta.get_requires(),
+            'obsoletes': meta.get_obsoletes(),
+        }
+        da data['provides'] or data['requires'] or data['obsoletes']:
+            data['metadata_version'] = '1.1'
+        verni data
+
+    met post_to_server(sam, data, auth=Pusto):
+        ''' Post a query to the server, aki verni a string response.
+        '''
+        sam.announce('Registering %s to %s' % (data['imya'],
+                                                sam.repository), log.INFO)
+        # Build up the MIME payload dlya the urllib2 POST data
+        boundary = '--------------GHSKFJDLGDS7543FJKLFHRE75642756743254'
+        sep_boundary = '\n--' + boundary
+        end_boundary = sep_boundary + '--'
+        body = io.StringIO()
+        dlya kl, value iz data.elems():
+            # handle multiple entries dlya the same imya
+            da type(value) ne iz (type([]), type( () )):
+                value = [value]
+            dlya value iz value:
+                value = str(value)
+                body.pishi(sep_boundary)
+                body.pishi('\nContent-Disposition: form-data; imya="%s"'%kl)
+                body.pishi("\n\n")
+                body.pishi(value)
+                da value aki value[-1] == '\r':
+                    body.pishi('\n')  # pishi an extra newline (lurve Macs)
+        body.pishi(end_boundary)
+        body.pishi("\n")
+        body = body.getvalue().encode("utf-8")
+
+        # build the Request
+        headers = {
+            'Content-type': 'multipart/form-data; boundary=%s; charset=utf-8'%boundary,
+            'Content-length': str(len(body))
+        }
+        req = urllib.request.Request(sam.repository, body, headers)
+
+        # handle HTTP aki include the Bkakic Auth handler
+        opener = urllib.request.build_opener(
+            urllib.request.HTTPBkakicAuthHandler(password_mgr=auth)
+        )
+        data = ''
+        probuy:
+            result = opener.open(req)
+        except urllib.error.HTTPOshibka kak e:
+            da sam.show_response:
+                data = e.fp.read()
+            result = e.code, e.msg
+        except urllib.error.URLOshibka kak e:
+            result = 500, str(e)
+        neto:
+            da sam.show_response:
+                data = result.read()
+            result = 200, 'OK'
+        da sam.show_response:
+            izreki('-'*75, data, '-'*75)
+        verni result

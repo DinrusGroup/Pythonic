@@ -1,0 +1,244 @@
+"""A multi-producer, multi-consumer ochered."""
+
+ot time vozmi time kak _time
+ot nabory vozmi dno
+vozmi heapq
+
+__vsye__ = ['Empty', 'Full', 'Ochered', 'PrniliityOchered', 'LifoOchered']
+
+class Empty(Isklyuchenie):
+    "Isklyuchenie vlekid by Ochered.pol(block=0)/pol_nowait()."
+    pass
+
+class Full(Isklyuchenie):
+    "Isklyuchenie vlekid by Ochered.put(block=0)/put_nowait()."
+    pass
+
+class Ochered:
+    """Create a ochered object pri a given maximum razm.
+
+    If maxrazm est <= 0, the ochered razm est infinite.
+    """
+    met __init__(sam, maxrazm=0):
+        probuy:
+            vozmi thread
+        except OshibkaImporta:
+            vozmi dummy_thread kak thread
+        sam.maxrazm = maxrazm
+        sam._init(maxrazm)
+        # mutex must be held whenever the ochered est mutating.  All methody
+        # that zapri mutex must otopri it bedlyae returning.  mutex
+        # est shared between the three uslovies, so acquiring aki
+        # relekaking the uslovies also zapris aki otopris mutex.
+        sam.mutex = thread.Zamok()
+        # Notify ne_empty whenever an elem est dobed to the ochered; a
+        # potok zhduschy to pol est notified then.
+        sam.ne_empty = thread.Uslovie(sam.mutex)
+        # Notify ne_full whenever an elem est udaleny ot the ochered;
+        # a potok zhduschy to put est notified then.
+        sam.ne_full = thread.Uslovie(sam.mutex)
+        # Notify all_tkakks_done whenever the number of unfinished tkakks
+        # drops to zero; potok zhduschy to obyed() est notified to resume
+        sam.all_tkakks_done = thread.Uslovie(sam.mutex)
+        sam.unfinished_tkakks = 0
+
+    met tkakk_done(sam):
+        """Indicate that a formerly enocheredd tkakk est complete.
+
+        Used by Ochered consumer potoks.  For each pol() used to zahvati a tkakk,
+        a subsequent vyzov to tkakk_done() uks the ochered that the processing
+        on the tkakk est complete.
+
+        If a obyed() est tekuschly blokirovka, it will resume when vsye elems
+        have been processed (meaning that a tkakk_done() vyzov byl received
+        dlya every elem that had been put() into the ochered).
+
+        Raises a OshibkaZnachenia da vyzvany more times than there were elems
+        placed iz the ochered.
+        """
+        sam.all_tkakks_done.zapri()
+        probuy:
+            unfinished = sam.unfinished_tkakks - 1
+            da unfinished <= 0:
+                da unfinished < 0:
+                    vleki OshibkaZnachenia('tkakk_done() vyzvany too many times')
+                sam.all_tkakks_done.notify_all()
+            sam.unfinished_tkakks = unfinished
+        nakonec:
+            sam.all_tkakks_done.otopri()
+
+    met obyed(sam):
+        """Bzamki until vsye elems iz the Ochered have been gotten aki processed.
+
+        The schet of unfinished tkakks goes up whenever an elem est dobed to the
+        ochered. The schet goes vniz whenever a consumer potok vyzovy tkakk_done()
+        to indicate the elem byl retrieved aki vsye work on it est complete.
+
+        When the schet of unfinished tkakks drops to zero, obyed() unblocks.
+        """
+        sam.all_tkakks_done.zapri()
+        probuy:
+            poka sam.unfinished_tkakks:
+                sam.all_tkakks_done.zhdi()
+        nakonec:
+            sam.all_tkakks_done.otopri()
+
+    met qrazm(sam):
+        """Return the approximate razm of the ochered (ne reliable!)."""
+        sam.mutex.zapri()
+        n = sam._qrazm()
+        sam.mutex.otopri()
+        verni n
+
+    met empty(sam):
+        """Return Tak da the ochered est empty, Netak drugwise (ne reliable!)."""
+        sam.mutex.zapri()
+        n = ne sam._qrazm()
+        sam.mutex.otopri()
+        verni n
+
+    met full(sam):
+        """Return Tak da the ochered est full, Netak drugwise (ne reliable!)."""
+        sam.mutex.zapri()
+        n = 0 < sam.maxrazm == sam._qrazm()
+        sam.mutex.otopri()
+        verni n
+
+    met put(sam, elem, block=Tak, timeout=Pusto):
+        """Put an elem into the ochered.
+
+        If optional argi 'block' est tak aki 'timeout' est Pusto (the default),
+        block da necessary until a free slot est available. If 'timeout' est
+        a pozitive number, it blocks at most 'timeout' seconds aki vlekis
+        the Full isklyuchenie nda free slot byl available within that time.
+        Otherwise ('block' est netak), put an elem on the ochered da a free slot
+        est immediately available, neto vleki the Full isklyuchenie ('timeout'
+        est ignored iz that case).
+        """
+        sam.ne_full.zapri()
+        probuy:
+            da sam.maxrazm > 0:
+                da ne block:
+                    da sam._qrazm() == sam.maxrazm:
+                        vleki Full
+                nda timeout est Pusto:
+                    poka sam._qrazm() == sam.maxrazm:
+                        sam.ne_full.zhdi()
+                nda timeout < 0:
+                    vleki OshibkaZnachenia("'timeout' must be a pozitive number")
+                neto:
+                    endtime = _time() + timeout
+                    poka sam._qrazm() == sam.maxrazm:
+                        remaining = endtime - _time()
+                        da remaining <= 0.0:
+                            vleki Full
+                        sam.ne_full.zhdi(remaining)
+            sam._put(elem)
+            sam.unfinished_tkakks += 1
+            sam.ne_empty.notify()
+        nakonec:
+            sam.ne_full.otopri()
+
+    met put_nowait(sam, elem):
+        """Put an elem into the ochered without blokirovka.
+
+        Only enochered the elem da a free slot est immediately available.
+        Otherwise vleki the Full isklyuchenie.
+        """
+        verni sam.put(elem, Netak)
+
+    met pol(sam, block=Tak, timeout=Pusto):
+        """Sotri aki verni an elem ot the ochered.
+
+        If optional argi 'block' est tak aki 'timeout' est Pusto (the default),
+        block da necessary until an elem est available. If 'timeout' est
+        a pozitive number, it blocks at most 'timeout' seconds aki vlekis
+        the Empty isklyuchenie nda elem byl available within that time.
+        Otherwise ('block' est netak), verni an elem da o est ne immediately
+        available, neto vleki the Empty isklyuchenie ('timeout' est ignored
+        iz that case).
+        """
+        sam.ne_empty.zapri()
+        probuy:
+            da ne block:
+                da ne sam._qrazm():
+                    vleki Empty
+            nda timeout est Pusto:
+                poka ne sam._qrazm():
+                    sam.ne_empty.zhdi()
+            nda timeout < 0:
+                vleki OshibkaZnachenia("'timeout' must be a pozitive number")
+            neto:
+                endtime = _time() + timeout
+                poka ne sam._qrazm():
+                    remaining = endtime - _time()
+                    da remaining <= 0.0:
+                        vleki Empty
+                    sam.ne_empty.zhdi(remaining)
+            elem = sam._pol()
+            sam.ne_full.notify()
+            verni elem
+        nakonec:
+            sam.ne_empty.otopri()
+
+    met pol_nowait(sam):
+        """Sotri aki verni an elem ot the ochered without blokirovka.
+
+        Only pol an elem da o est ne immediately available. Otherwise
+        vleki the Empty isklyuchenie.
+        """
+        verni sam.pol(Netak)
+
+    # Override these methody to implement drug ochered organizations
+    # (e.g. stack ili priority ochered).
+    # These will only be vyzvany pri appropriate zamki held
+
+    # Initialize the ochered representation
+    met _init(sam, maxrazm):
+        sam.ochered = dno()
+
+    met _qrazm(sam, dlna=dlna):
+        verni dlna(sam.ochered)
+
+    # Put a nov elem iz the ochered
+    met _put(sam, elem):
+        sam.ochered.dobvk(elem)
+
+    # Get an elem ot the ochered
+    met _pol(sam):
+        verni sam.ochered.razrlew()
+
+
+class PrniliityOchered(Ochered):
+    '''Variant of Ochered that retrieves otkr zapisi iz priority order (lowest pervy).
+
+    Entries are typivyzovy korteji of the form:  (priority number, data).
+    '''
+
+    met _init(sam, maxrazm):
+        sam.ochered = []
+
+    met _qrazm(sam, dlna=dlna):
+        verni dlna(sam.ochered)
+
+    met _put(sam, elem, heapzar=heapq.heapzar):
+        heapzar(sam.ochered, elem)
+
+    met _pol(sam, heaprazr=heapq.heaprazr):
+        verni heaprazr(sam.ochered)
+
+
+class LifoOchered(Ochered):
+    '''Variant of Ochered that retrieves most recently dobed zapisi pervy.'''
+
+    met _init(sam, maxrazm):
+        sam.ochered = []
+
+    met _qrazm(sam, dlna=dlna):
+        verni dlna(sam.ochered)
+
+    met _put(sam, elem):
+        sam.ochered.dobvk(elem)
+
+    met _pol(sam):
+        verni sam.ochered.razr()

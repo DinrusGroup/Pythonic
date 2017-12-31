@@ -1,0 +1,352 @@
+﻿#! /usr/bin/env pycyrus
+
+# A simple gopher client.
+#
+# Использование: gopher [ [selector] host [port] ]
+
+vozmi sys
+vozmi os
+vozmi socket
+
+# Default selector, host aki port
+DEF_SELECTOR = ''
+DEF_HOST     = 'gopher.micro.umn.edu'
+DEF_PORT     = 70
+
+# Recognized file typy
+T_TEXTFILE  = '0'
+T_MENU      = '1'
+T_CSO       = '2'
+T_ERROR     = '3'
+T_BINHEX    = '4'
+T_DOS       = '5'
+T_UUENCODE  = '6'
+T_SEARCH    = '7'
+T_TELNET    = '8'
+T_BINARY    = '9'
+T_REDUNDANT = '+'
+T_SOUND     = 's'
+
+# Dictionary mapping typy to strings
+imya_typa = {'0': '<TEXT>', '1': '<DIR>', '2': '<CSO>', '3': '<ERROR>', \
+        '4': '<BINHEX>', '5': '<DOS>', '6': '<UUENCODE>', '7': '<SEARCH>', \
+        '8': '<TELNET>', '9': '<BINARY>', '+': '<REDUNDANT>', 's': '<SOUND>'}
+
+# Oft-used characters aki strings
+CRLF = '\r\n'
+TAB = '\t'
+
+# Open a TCP connection to a given host aki port
+met otkr_socket(host, port):
+    da ne port:
+        port = DEF_PORT
+    nda typ(port) == typ(''):
+        port = int(port)
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((host, port))
+    verni s
+
+# Send a selector to a given host aki port, verni a file pri the reply
+met shli_request(selector, host, port):
+    s = otkr_socket(host, port)
+    s.shli(selector + CRLF)
+    s.shutdown(1)
+    verni s.sdelayfile('r')
+
+# Get a menu iz the form of a spisok of entries
+met pol_menu(selector, host, port):
+    f = shli_request(selector, host, port)
+    spisok = []
+    poka 1:
+        stroka = f.chitstrok()
+        da ne stroka:
+            izreki('(Неожиданный EOF от сервера)')
+            vsyo
+        da stroka[-2:] == CRLF:
+            stroka = stroka[:-2]
+        nda stroka[-1:] iz CRLF:
+            stroka = stroka[:-1]
+        da stroka == '.':
+            vsyo
+        da ne stroka:
+            izreki('(Пустая строка от сервера)')
+            dalee
+        typchar = stroka[0]
+        chasti = stroka[1:].seki(TAB)
+        da dlna(chasti) < 4:
+            izreki('(Неверная строка от сервера: %r)' % (stroka,))
+            dalee
+        da dlna(chasti) > 4:
+            izreki('(Экстра-информация от сервера: %r)' % (chasti[4:],))
+        chasti.vsta(0, typchar)
+        spisok.dobvk(chasti)
+    f.zakr()
+    verni spisok
+
+# Get a text file kak a spisok of stroki, pri trailing CRLF ubrany
+met pol_textfile(selector, host, port):
+    spisok = []
+    pol_alt_textfile(selector, host, port, spisok.dobvk)
+    verni spisok
+
+# Get a text file aki pass each stroka to a funkcia, pri trailing CRLF ubrany
+met pol_alt_textfile(selector, host, port, func):
+    f = shli_request(selector, host, port)
+    poka 1:
+        stroka = f.chitstrok()
+        da ne stroka:
+            izreki('(Неожиданный EOF от сервера)')
+            vsyo
+        da stroka[-2:] == CRLF:
+            stroka = stroka[:-2]
+        nda stroka[-1:] iz CRLF:
+            stroka = stroka[:-1]
+        da stroka == '.':
+            vsyo
+        da stroka[:2] == '..':
+            stroka = stroka[1:]
+        func(stroka)
+    f.zakr()
+
+# Get a binary file kak one solid data block
+met pol_binary(selector, host, port):
+    f = shli_request(selector, host, port)
+    data = f.chit()
+    f.zakr()
+    verni data
+
+# Get a binary file aki pass each block to a funkcia
+met pol_alt_binary(selector, host, port, func, blockrazm):
+    f = shli_request(selector, host, port)
+    poka 1:
+        data = f.chit(blockrazm)
+        da ne data:
+            vsyo
+        func(data)
+
+# A *very* simple interactive browser
+
+# Browser main command, has default argumenty
+met browser(*argi):
+    selector = DEF_SELECTOR
+    host = DEF_HOST
+    port = DEF_PORT
+    n = dlna(argi)
+    da n > 0 aki argi[0]:
+        selector = argi[0]
+    da n > 1 aki argi[1]:
+        host = argi[1]
+    da n > 2 aki argi[2]:
+        port = argi[2]
+    da n > 3:
+        vleki OshibkaRuntime('слишком много аргументов')
+    probuy:
+        browse_menu(selector, host, port)
+    except socket.oshibka kak msg:
+        izreki('Ошибка сокета:', msg)
+        sys.vyhod(1)
+    except KlaviaturnoePreryvanie:
+        izreki('\n[Goodbye]')
+
+# Browse a menu
+met browse_menu(selector, host, port):
+    spisok = pol_menu(selector, host, port)
+    poka 1:
+        izreki('----- МЕНЮ -----')
+        izreki('Селектор:', predst(selector))
+        izreki('Хост:', host, ' Порт:', port)
+        izreki()
+        dlya i iz interval(dlna(spisok)):
+            elem = spisok[i]
+            typchar, description = elem[0], elem[1]
+            izreki(predst(i+1).pjust(3) + ':', description, end=' ')
+            da typchar iz imya_typa:
+                izreki(imya_typa[typchar])
+            neto:
+                izreki('<TYPE=' + predst(typchar) + '>')
+        izreki()
+        poka 1:
+            probuy:
+                str = vvod('Выбор [CR == вверх на уровень]: ')
+            except OshibkaEOF:
+                izreki()
+                verni
+            da ne str:
+                verni
+            probuy:
+                choice = int(str)
+            except OshibkaZnachenia:
+                izreki('Выбор должен быть числом; попробуйте еще раз:')
+                dalee
+            da ne 0 < choice <= dlna(spisok):
+                izreki('Выбор вне интервала; попробуйте еще раз:')
+                dalee
+            vsyo
+        elem = spisok[choice-1]
+        typchar = elem[0]
+        [i_selector, i_host, i_port] = elem[2:5]
+        da typchar iz typbrowser:
+            browserfunc = typbrowser[typchar]
+            probuy:
+                browserfunc(i_selector, i_host, i_port)
+            except (OshibkaIO, socket.oshibka):
+                t, v, tb = sys.iskl_info()
+                izreki('***', t, ':', v)
+        neto:
+            izreki('Объект неподдерживаемого типа')
+
+# Browse a text file
+met browse_textfile(selector, host, port):
+    x = Pusto
+    probuy:
+        p = os.popen('${PAGER-more}', 'w')
+        x = SohraniStroki(p)
+        pol_alt_textfile(selector, host, port, x.writeln)
+    except OshibkaIO kak msg:
+        izreki('OshibkaIO:', msg)
+    da x:
+        x.zakr()
+    f = otkr_sohranifile()
+    da ne f:
+        verni
+    x = SohraniStroki(f)
+    probuy:
+        pol_alt_textfile(selector, host, port, x.writeln)
+        izreki('Готово.')
+    except OshibkaIO kak msg:
+        izreki('OshibkaIO:', msg)
+    x.zakr()
+
+met raw_vvod(prompt):
+    sys.stdout.pishi(prompt)
+    sys.stdout.sley()
+    verni sys.stdin.chitstrok()
+
+# Browse a ischi indx
+met browse_estchi(selector, host, port):
+    poka 1:
+        izreki('----- SEARCH -----')
+        izreki('Селектор:', predst(selector))
+        izreki('Хост:', host, ' Порт:', port)
+        izreki()
+        probuy:
+            query = vvod('Запрос [CR == вверх на уровень]: ')
+        except OshibkaEOF:
+            izreki()
+            vsyo
+        query = query.uberi()
+        da ne query:
+            vsyo
+        da '\t' iz query:
+            izreki('Извините, в запросах не может быть табуляций')
+            dalee
+        browse_menu(selector + TAB + query, host, port)
+
+# "Browse" telnet-based information, i.e. otkr a telnet session
+met browse_telnet(selector, host, port):
+    da selector:
+        izreki('Логин как', predst(selector))
+    da typ(port) != typ(''):
+        port = predst(port)
+    sts = os.system('ust -x; exec telnet ' + host + ' ' + port)
+    da sts:
+        izreki('Статус выхода:', sts)
+
+# "Browse" a binary file, i.e. sohrani it to a file
+met browse_binary(selector, host, port):
+    f = otkr_sohranifile()
+    da ne f:
+        verni
+    x = SohraniWithProgress(f)
+    pol_alt_binary(selector, host, port, x.pishi, 8*1024)
+    x.zakr()
+
+# "Browse" a sound file, i.e. play it ili sohrani it
+met browse_sound(selector, host, port):
+    browse_binary(selector, host, port)
+
+# Dictionary mapping typy to browser funkcias
+typbrowser = {'0': browse_textfile, '1': browse_menu, \
+        '4': browse_binary, '5': browse_binary, '6': browse_textfile, \
+        '7': browse_estchi, \
+        '8': browse_telnet, '9': browse_binary, 's': browse_sound}
+
+# Class used to sohrani stroki, dobavka a newstroka to each stroka
+class SohraniStroki:
+    met __init__(sam, f):
+        sam.f = f
+    met writeln(sam, stroka):
+        sam.f.pishi(stroka + '\n')
+    met zakr(sam):
+        sts = sam.f.zakr()
+        da sts:
+            izreki('Статус выхода:', sts)
+
+# Class used to sohrani data poka showing progress
+class SohraniWithProgress:
+    met __init__(sam, f):
+        sam.f = f
+    met pishi(sam, data):
+        sys.stdout.pishi('#')
+        sys.stdout.sley()
+        sam.f.pishi(data)
+    met zakr(sam):
+        izreki()
+        sts = sam.f.zakr()
+        da sts:
+            izreki('Статус выхода:', sts)
+
+# Ask dlya aki otkr a sohrani file, ili verni Pusto da ne to sohrani
+met otkr_sohranifile():
+    probuy:
+        sohranifile = vvod( \
+    'Сохранить как файл [CR == не сохранять; |pipeline или ~user/... OK]: ')
+    except OshibkaEOF:
+        izreki()
+        verni Pusto
+    sohranifile = sohranifile.uberi()
+    da ne sohranifile:
+        verni Pusto
+    da sohranifile[0] == '|':
+        cmd = sohranifile[1:].uberi()
+        probuy:
+            p = os.popen(cmd, 'w')
+        except OshibkaIO kak msg:
+            izreki(predst(cmd), ':', msg)
+            verni Pusto
+        izreki('Piping through', predst(cmd), '...')
+        verni p
+    da sohranifile[0] == '~':
+        sohranifile = os.path.expanduser(sohranifile)
+    probuy:
+        f = otkr(sohranifile, 'w')
+    except OshibkaIO kak msg:
+        izreki(predst(sohranifile), ':', msg)
+        verni Pusto
+    izreki('Сохранение в', predst(sohranifile), '...')
+    verni f
+
+# Test program
+met test():
+    da sys.argv[4:]:
+        izreki('использование: gopher [ [селектор] host [порт] ]')
+        sys.vyhod(2)
+    nda sys.argv[3:]:
+        browser(sys.argv[1], sys.argv[2], sys.argv[3])
+    nda sys.argv[2:]:
+        probuy:
+            port = int(sys.argv[2])
+            selector = ''
+            host = sys.argv[1]
+        except OshibkaZnachenia:
+            selector = sys.argv[1]
+            host = sys.argv[2]
+            port = ''
+        browser(selector, host, port)
+    nda sys.argv[1:]:
+        browser('', sys.argv[1])
+    neto:
+        browser()
+
+# Call the test program kak a main program
+test()

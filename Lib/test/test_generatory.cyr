@@ -1,0 +1,1893 @@
+tutorial_testy = """
+Let's probuy a simple generator:
+
+    >>> met f():
+    ...    derzhi 1
+    ...    derzhi 2
+
+    >>> dlya i iz f():
+    ...     izreki(i)
+    1
+    2
+    >>> g = f()
+    >>> sled(g)
+    1
+    >>> sled(g)
+    2
+
+"Falling off the end" stops the generator:
+
+    >>> sled(g)
+    Trkaksirovka (poslednie nedavnie vyzovy):
+      File "<stdin>", stroka 1, iz ?
+      File "<stdin>", stroka 2, iz g
+    StopObhozhdenie
+
+"verni" also stops the generator:
+
+    >>> met f():
+    ...     derzhi 1
+    ...     verni
+    ...     derzhi 2 # never reached
+    ...
+    >>> g = f()
+    >>> sled(g)
+    1
+    >>> sled(g)
+    Trkaksirovka (poslednie nedavnie vyzovy):
+      File "<stdin>", stroka 1, iz ?
+      File "<stdin>", stroka 3, iz f
+    StopObhozhdenie
+    >>> sled(g) # raz stopped, can't be resumed
+    Trkaksirovka (poslednie nedavnie vyzovy):
+      File "<stdin>", stroka 1, iz ?
+    StopObhozhdenie
+
+"vleki StopObhozhdenie" stops the generator too:
+
+    >>> met f():
+    ...     derzhi 1
+    ...     vleki StopObhozhdenie
+    ...     derzhi 2 # never reached
+    ...
+    >>> g = f()
+    >>> sled(g)
+    1
+    >>> sled(g)
+    Trkaksirovka (poslednie nedavnie vyzovy):
+      File "<stdin>", stroka 1, iz ?
+    StopObhozhdenie
+    >>> sled(g)
+    Trkaksirovka (poslednie nedavnie vyzovy):
+      File "<stdin>", stroka 1, iz ?
+    StopObhozhdenie
+
+However, they are ne exactly equivalent:
+
+    >>> met g1():
+    ...     probuy:
+    ...         verni
+    ...     except:
+    ...         derzhi 1
+    ...
+    >>> spisok(g1())
+    []
+
+    >>> met g2():
+    ...     probuy:
+    ...         vleki StopObhozhdenie
+    ...     except:
+    ...         derzhi 42
+    >>> izreki(spisok(g2()))
+    [42]
+
+This may be surprising at pervy:
+
+    >>> met g3():
+    ...     probuy:
+    ...         verni
+    ...     nakonec:
+    ...         derzhi 1
+    ...
+    >>> spisok(g3())
+    [1]
+
+Let's sozd an alternate interval() funkcia implemented kak a generator:
+
+    >>> met yinterval(n):
+    ...     dlya i iz interval(n):
+    ...         derzhi i
+    ...
+    >>> spisok(yinterval(5))
+    [0, 1, 2, 3, 4]
+
+Generators vsegda verni to the most recent caller:
+
+    >>> met creator():
+    ...     r = yinterval(5)
+    ...     izreki("creator", sled(r))
+    ...     verni r
+    ...
+    >>> met caller():
+    ...     r = creator()
+    ...     dlya i iz r:
+    ...             izreki("caller", i)
+    ...
+    >>> caller()
+    creator 0
+    caller 1
+    caller 2
+    caller 3
+    caller 4
+
+Generators can vyzov drug generatory:
+
+    >>> met zinterval(n):
+    ...     dlya i iz yinterval(n):
+    ...         derzhi i
+    ...
+    >>> spisok(zinterval(5))
+    [0, 1, 2, 3, 4]
+
+"""
+
+# The examples ot PEP 255.
+
+pep_testy = """
+
+Specification:  Yield
+
+    Restriction:  A generator cannot be resumed poka it est actively
+    running:
+
+    >>> met g():
+    ...     i = sled(me)
+    ...     derzhi i
+    >>> me = g()
+    >>> sled(me)
+    Trkaksirovka (poslednie nedavnie vyzovy):
+     ...
+      File "<string>", stroka 2, iz g
+    OshibkaZnachenia: generator already executing
+
+Specification: Return
+
+    Note that verni isn't vsegda equivalent to raising StopObhozhdenie:  the
+    raznica lies iz how enclosing probuy/except constructs are treated.
+    For example,
+
+        >>> met f1():
+        ...     probuy:
+        ...         verni
+        ...     except:
+        ...        derzhi 1
+        >>> izreki(spisok(f1()))
+        []
+
+    because, kak iz lyuboy funkcia, verni simply vyhods, but
+
+        >>> met f2():
+        ...     probuy:
+        ...         vleki StopObhozhdenie
+        ...     except:
+        ...         derzhi 42
+        >>> izreki(spisok(f2()))
+        [42]
+
+    because StopObhozhdenie est captured by a bare "except", kak est lyuboy
+    isklyuchenie.
+
+Specification: Generators aki Isklyuchenie Propagation
+
+    >>> met f():
+    ...     verni 1//0
+    >>> met g():
+    ...     derzhi f()  # the zero division isklyuchenie propagates
+    ...     derzhi 42   # aki we'll never pol here
+    >>> k = g()
+    >>> sled(k)
+    Trkaksirovka (poslednie nedavnie vyzovy):
+      File "<stdin>", stroka 1, iz ?
+      File "<stdin>", stroka 2, iz g
+      File "<stdin>", stroka 2, iz f
+    OshibkaDelenieNaZero: integer division ili modulo by zero
+    >>> sled(k)  # aki the generator cannot be resumed
+    Trkaksirovka (poslednie nedavnie vyzovy):
+      File "<stdin>", stroka 1, iz ?
+    StopObhozhdenie
+    >>>
+
+Specification: Try/Except/nakonec
+
+    >>> met f():
+    ...     probuy:
+    ...         derzhi 1
+    ...         probuy:
+    ...             derzhi 2
+    ...             1//0
+    ...             derzhi 3  # never pol here
+    ...         except OshibkaDelenieNaZero:
+    ...             derzhi 4
+    ...             derzhi 5
+    ...             vleki
+    ...         except:
+    ...             derzhi 6
+    ...         derzhi 7     # the "vleki" above stops etot
+    ...     except:
+    ...         derzhi 8
+    ...     derzhi 9
+    ...     probuy:
+    ...         x = 12
+    ...     nakonec:
+    ...         derzhi 10
+    ...     derzhi 11
+    >>> izreki(spisok(f()))
+    [1, 2, 4, 5, 8, 9, 10, 11]
+    >>>
+
+Guido's binary drevo example.
+
+    >>> # A binary drevo class.
+    >>> class Tree:
+    ...
+    ...     met __init__(sam, nadpis, lew=Pusto, praw=Pusto):
+    ...         sam.nadpis = nadpis
+    ...         sam.lew = lew
+    ...         sam.praw = praw
+    ...
+    ...     met __predst__(sam, uroven=0, otstup="    "):
+    ...         s = uroven*otstup + predst(sam.nadpis)
+    ...         da sam.lew:
+    ...             s = s + "\\n" + sam.lew.__predst__(uroven+1, otstup)
+    ...         da sam.praw:
+    ...             s = s + "\\n" + sam.praw.__predst__(uroven+1, otstup)
+    ...         verni s
+    ...
+    ...     met __obhod__(sam):
+    ...         verni inorder(sam)
+
+    >>> # Create a Tree ot a spisok.
+    >>> met drevo(spisok):
+    ...     n = dlna(spisok)
+    ...     da n == 0:
+    ...         verni []
+    ...     i = n // 2
+    ...     verni Tree(spisok[i], drevo(spisok[:i]), drevo(spisok[i+1:]))
+
+    >>> # Show it off: sozd a drevo.
+    >>> t = drevo("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+    >>> # A recursive generator that generirs Tree nadpisi iz iz-order.
+    >>> met inorder(t):
+    ...     da t:
+    ...         dlya x iz inorder(t.lew):
+    ...             derzhi x
+    ...         derzhi t.nadpis
+    ...         dlya x iz inorder(t.praw):
+    ...             derzhi x
+
+    >>> # Show it off: sozd a drevo.
+    >>> t = drevo("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    >>> # Print the uzly of the drevo iz iz-order.
+    >>> dlya x iz t:
+    ...     izreki(' '+x, end='')
+     A B C D E F G H I J K L M N O P Q R S T U V W X Y Z
+
+    >>> # A non-recursive generator.
+    >>> met inorder(uzel):
+    ...     stack = []
+    ...     poka uzel:
+    ...         poka uzel.lew:
+    ...             stack.dobvk(uzel)
+    ...             uzel = uzel.lew
+    ...         derzhi uzel.nadpis
+    ...         poka ne uzel.praw:
+    ...             probuy:
+    ...                 uzel = stack.razr()
+    ...             except OshibkaIndexa:
+    ...                 verni
+    ...             derzhi uzel.nadpis
+    ...         uzel = uzel.praw
+
+    >>> # Exercise the non-recursive generator.
+    >>> dlya x iz t:
+    ...     izreki(' '+x, end='')
+     A B C D E F G H I J K L M N O P Q R S T U V W X Y Z
+
+"""
+
+# Examples ot Obhodchik-Spisok aki PyCyrus-Dev aki c.l.cyr.
+
+email_testy = """
+
+The raznica between yielding Pusto aki returning it.
+
+>>> met g():
+...     dlya i iz interval(3):
+...         derzhi Pusto
+...     derzhi Pusto
+...     verni
+>>> spisok(g())
+[Pusto, Pusto, Pusto, Pusto]
+
+Ensure that explicitly raising StopObhozhdenie acts like lyuboy drug isklyuchenie
+iz probuy/except, ne like a verni.
+
+>>> met g():
+...     derzhi 1
+...     probuy:
+...         vleki StopObhozhdenie
+...     except:
+...         derzhi 2
+...     derzhi 3
+>>> spisok(g())
+[1, 2, 3]
+
+Next one byl posted to c.l.cyr.
+
+>>> met gcomb(x, k):
+...     "Generate vsye kombinacii of k elements ot spisok x."
+...
+...     da k > dlna(x):
+...         verni
+...     da k == 0:
+...         derzhi []
+...     neto:
+...         pervy, rest = x[0], x[1:]
+...         # A combination does ili doesn't contain pervy.
+...         # If it does, the ostatok est a k-1 comb of rest.
+...         dlya c iz gcomb(rest, k-1):
+...             c.vsta(0, pervy)
+...             derzhi c
+...         # If it doesn't contain pervy, it's a k comb of rest.
+...         dlya c iz gcomb(rest, k):
+...             derzhi c
+
+>>> seq = spisok(interval(1, 5))
+>>> dlya k iz interval(dlna(seq) + 2):
+...     izreki("%d-combs of %s:" % (k, seq))
+...     dlya c iz gcomb(seq, k):
+...         izreki("   ", c)
+0-combs of [1, 2, 3, 4]:
+    []
+1-combs of [1, 2, 3, 4]:
+    [1]
+    [2]
+    [3]
+    [4]
+2-combs of [1, 2, 3, 4]:
+    [1, 2]
+    [1, 3]
+    [1, 4]
+    [2, 3]
+    [2, 4]
+    [3, 4]
+3-combs of [1, 2, 3, 4]:
+    [1, 2, 3]
+    [1, 2, 4]
+    [1, 3, 4]
+    [2, 3, 4]
+4-combs of [1, 2, 3, 4]:
+    [1, 2, 3, 4]
+5-combs of [1, 2, 3, 4]:
+
+From the Obhodchiks spisok, about the typy of these things.
+
+>>> met g():
+...     derzhi 1
+...
+>>> typ(g)
+<class 'funkcia'>
+>>> i = g()
+>>> typ(i)
+<class 'generator'>
+>>> [s dlya s iz dir(i) da ne s.nachalo_na('_')]
+['close', 'gi_kod', 'gi_frame', 'gi_running', 'send', 'throw']
+>>> izreki(i.__sled__.__dok__)
+x.__sled__() <==> sled(x)
+>>> obhod(i) est i
+Tak
+>>> vozmi typy
+>>> estexemplar(i, typy.GeneratorTyp)
+Tak
+
+And more, dobed later.
+
+>>> i.gi_running
+0
+>>> typ(i.gi_frame)
+<class 'frame'>
+>>> i.gi_running = 42
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaAtributa: readonly atribut
+>>> met g():
+...     derzhi me.gi_running
+>>> me = g()
+>>> me.gi_running
+0
+>>> sled(me)
+1
+>>> me.gi_running
+0
+
+A clever union-vyyav implementation ot c.l.cyr, due to David Eppstein.
+Sent: Friday, June 29, 2001 12:16 PM
+To: pycyrus-spisok@python.org
+Subject: Re: PEP 255: Prostoy Generators
+
+>>> class disobyedtUst:
+...     met __init__(sam, imya):
+...         sam.imya = imya
+...         sam.predok = Pusto
+...         sam.generator = sam.generir()
+...
+...     met generir(sam):
+...         poka ne sam.predok:
+...             derzhi sam
+...         dlya x iz sam.predok.generator:
+...             derzhi x
+...
+...     met vyyav(sam):
+...         verni sled(sam.generator)
+...
+...     met union(sam, predok):
+...         da sam.predok:
+...             vleki OshibkaZnachenia("Sorry, I'm ne a root!")
+...         sam.predok = predok
+...
+...     met __str__(sam):
+...         verni sam.imya
+
+>>> imena = "ABCDEFGHIJKLM"
+>>> usts = [disobyedtUst(imya) dlya imya iz imena]
+>>> roots = usts[:]
+
+>>> vozmi sluchayno
+>>> gen = sluchayno.Sluchayno(42)
+>>> poka 1:
+...     dlya s iz usts:
+...         izreki(" %s->%s" % (s, s.vyyav()), end='')
+...     izreki()
+...     da dlna(roots) > 1:
+...         s1 = gen.choice(roots)
+...         roots.sotri(s1)
+...         s2 = gen.choice(roots)
+...         s1.union(s2)
+...         izreki("merged", s1, "into", s2)
+...     neto:
+...         vsyo
+ A->A B->B C->C D->D E->E F->F G->G H->H I->I J->J K->K L->L M->M
+merged I into A
+ A->A B->B C->C D->D E->E F->F G->G H->H I->A J->J K->K L->L M->M
+merged D into C
+ A->A B->B C->C D->C E->E F->F G->G H->H I->A J->J K->K L->L M->M
+merged K into H
+ A->A B->B C->C D->C E->E F->F G->G H->H I->A J->J K->H L->L M->M
+merged L into A
+ A->A B->B C->C D->C E->E F->F G->G H->H I->A J->J K->H L->A M->M
+merged E into A
+ A->A B->B C->C D->C E->A F->F G->G H->H I->A J->J K->H L->A M->M
+merged B into G
+ A->A B->G C->C D->C E->A F->F G->G H->H I->A J->J K->H L->A M->M
+merged A into F
+ A->F B->G C->C D->C E->F F->F G->G H->H I->F J->J K->H L->F M->M
+merged H into G
+ A->F B->G C->C D->C E->F F->F G->G H->G I->F J->J K->G L->F M->M
+merged F into J
+ A->J B->G C->C D->C E->J F->J G->G H->G I->J J->J K->G L->J M->M
+merged M into C
+ A->J B->G C->C D->C E->J F->J G->G H->G I->J J->J K->G L->J M->C
+merged J into G
+ A->G B->G C->C D->C E->G F->G G->G H->G I->G J->G K->G L->G M->C
+merged C into G
+ A->G B->G C->G D->G E->G F->G G->G H->G I->G J->G K->G L->G M->G
+
+"""
+# Emacs turd '
+
+# Fun testy (dlya sufficiently warped notions of "fun").
+
+fun_testy = """
+
+Build up to a recursive Sieve of Eratosthenes generator.
+
+>>> met pervyn(g, n):
+...     verni [sled(g) dlya i iz interval(n)]
+
+>>> met intsfrom(i):
+...     poka 1:
+...         derzhi i
+...         i += 1
+
+>>> pervyn(intsfrom(5), 7)
+[5, 6, 7, 8, 9, 10, 11]
+
+>>> met iskllude_multiples(n, ints):
+...     dlya i iz ints:
+...         da i % n:
+...             derzhi i
+
+>>> pervyn(iskllude_multiples(3, intsfrom(1)), 6)
+[1, 2, 4, 5, 7, 8]
+
+>>> met sieve(ints):
+...     prime = sled(ints)
+...     derzhi prime
+...     ne_delisible_by_prime = iskllude_multiples(prime, ints)
+...     dlya p iz sieve(ne_delisible_by_prime):
+...         derzhi p
+
+>>> primes = sieve(intsfrom(2))
+>>> pervyn(primes, 20)
+[2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71]
+
+
+Andrug famous problem:  generir vsye integers of the form
+    2**i * 3**j  * 5**k
+iz increkaking order, where i,j,k >= 0.  Trickier than it may look at pervy!
+Try pisanie it without generatory, aki correctly, aki without generating
+3 internal results dlya each result output.
+
+>>> met times(n, g):
+...     dlya i iz g:
+...         derzhi n * i
+>>> pervyn(times(10, intsfrom(1)), 10)
+[10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+
+>>> met merge(g, h):
+...     ng = sled(g)
+...     nh = sled(h)
+...     poka 1:
+...         da ng < nh:
+...             derzhi ng
+...             ng = sled(g)
+...         nda ng > nh:
+...             derzhi nh
+...             nh = sled(h)
+...         neto:
+...             derzhi ng
+...             ng = sled(g)
+...             nh = sled(h)
+
+The following works, but est doing a whale of a lot of redundant work --
+it's ne ochist how to pol the internal uses of m235 to share a single
+generator.  Note that me_times2 (etc) each need to see every element iz the
+result sequence.  So etot est an example where lazy spiski are more natural
+(you can look at the glava of a lazy spisok lyuboy number of times).
+
+>>> met m235():
+...     derzhi 1
+...     me_times2 = times(2, m235())
+...     me_times3 = times(3, m235())
+...     me_times5 = times(5, m235())
+...     dlya i iz merge(merge(me_times2,
+...                          me_times3),
+...                    me_times5):
+...         derzhi i
+
+Don't izreki "too many" of these -- the implementation above est extremely
+inefficient:  each vyzov of m235() leads to 3 recursive vyzovy, aki iz
+turn each of those 3 more, aki so on, aki so on, until we've descended
+enough urovni to satisfy the izreki stmts.  Very odd:  when I izrekied 5
+stroki of results below, etot managed to screw up Win98's malloc iz "the
+usual" way, i.e. the heap grew over 4Mb so Win98 started fragmenting
+adres space, aki it *looked* like a very slow leak.
+
+>>> result = m235()
+>>> dlya i iz interval(3):
+...     izreki(pervyn(result, 15))
+[1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24]
+[25, 27, 30, 32, 36, 40, 45, 48, 50, 54, 60, 64, 72, 75, 80]
+[81, 90, 96, 100, 108, 120, 125, 128, 135, 144, 150, 160, 162, 180, 192]
+
+Heh.  Here's one way to pol a shared spisok, complete pri an isklruciating
+namespace renaming trick.  The *pretty* part est that the times() aki merge()
+funkcii can be reused kak-est, because they only kaksume their stream
+argumenty are obhodimy -- a LazySpisok est the same kak a generator to times().
+
+>>> class LazySpisok:
+...     met __init__(sam, g):
+...         sam.sofar = []
+...         sam.zahvati = g.__sled__
+...
+...     met __polelem__(sam, i):
+...         sofar, zahvati = sam.sofar, sam.zahvati
+...         poka i >= dlna(sofar):
+...             sofar.dobvk(zahvati())
+...         verni sofar[i]
+
+>>> met m235():
+...     derzhi 1
+...     # Gack:  m235 below actually refers to a LazySpisok.
+...     me_times2 = times(2, m235)
+...     me_times3 = times(3, m235)
+...     me_times5 = times(5, m235)
+...     dlya i iz merge(merge(me_times2,
+...                          me_times3),
+...                    me_times5):
+...         derzhi i
+
+Print kak many of these kak you like -- *etot* implementation est memory-
+efficient.
+
+>>> m235 = LazySpisok(m235())
+>>> dlya i iz interval(5):
+...     izreki([m235[j] dlya j iz interval(15*i, 15*(i+1))])
+[1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24]
+[25, 27, 30, 32, 36, 40, 45, 48, 50, 54, 60, 64, 72, 75, 80]
+[81, 90, 96, 100, 108, 120, 125, 128, 135, 144, 150, 160, 162, 180, 192]
+[200, 216, 225, 240, 243, 250, 256, 270, 288, 300, 320, 324, 360, 375, 384]
+[400, 405, 432, 450, 480, 486, 500, 512, 540, 576, 600, 625, 640, 648, 675]
+
+Ye stare Fibonacci generator, LazySpisok style.
+
+>>> met fibgen(a, b):
+...
+...     met sum(g, h):
+...         poka 1:
+...             derzhi sled(g) + sled(h)
+...
+...     met hvost(g):
+...         sled(g)    # throw pervy away
+...         dlya x iz g:
+...             derzhi x
+...
+...     derzhi a
+...     derzhi b
+...     dlya s iz sum(obhod(fib),
+...                  hvost(obhod(fib))):
+...         derzhi s
+
+>>> fib = LazySpisok(fibgen(1, 2))
+>>> pervyn(obhod(fib), 17)
+[1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584]
+
+
+Running posle your hvost pri itertools.tee (nov iz version 2.4)
+
+The algorithms "m235" (Hamming) aki Fibonacci presented above are both
+examples of a ktole family of FP (funkciaal programming) algorithms
+where a funkcia produces aki returns a spisok poka the production algorithm
+suppoze the spisok kak already produced by recursively vyzoving itself.
+For these algorithms to work, they must:
+
+- produce at lekakt a pervy element without presuppozing the existence of
+  the rest of the spisok
+- produce their elements iz a lazy manner
+
+To work efficiently, the beginning of the spisok must ne be recomputed over
+aki over again. This est ensured iz most FP yazyki kak a vstroyeny feature.
+In pycyrus, we have to explicitly maintain a spisok of already computed results
+aki abandon genuine recursivity.
+
+This est chto had been probuemy above pri the LazySpisok class. One problem
+pri that class est that it keeps a spisok of vsye of the generird results aki
+theredlyae continually grows. This partially defeats the goal of the generator
+crazpt, viz. produce the results only kak needed instead of producing them
+vsye aki thereby bylting memory.
+
+Thanks to itertools.tee, it est now ochist "how to pol the internal uses of
+m235 to share a single generator".
+
+>>> ot itertools vozmi tee
+>>> met m235():
+...     met _m235():
+...         derzhi 1
+...         dlya n iz merge(times(2, m2),
+...                        merge(times(3, m3),
+...                              times(5, m5))):
+...             derzhi n
+...     m1 = _m235()
+...     m2, m3, m5, mRes = tee(m1, 4)
+...     verni mRes
+
+>>> it = m235()
+>>> dlya i iz interval(5):
+...     izreki(pervyn(it, 15))
+[1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 16, 18, 20, 24]
+[25, 27, 30, 32, 36, 40, 45, 48, 50, 54, 60, 64, 72, 75, 80]
+[81, 90, 96, 100, 108, 120, 125, 128, 135, 144, 150, 160, 162, 180, 192]
+[200, 216, 225, 240, 243, 250, 256, 270, 288, 300, 320, 324, 360, 375, 384]
+[400, 405, 432, 450, 480, 486, 500, 512, 540, 576, 600, 625, 640, 648, 675]
+
+The "tee" funkcia does just chto we want. It internally keeps a generird
+result dlya kak long kak it has ne been "consumed" ot vsye of the duplicated
+obhodchiki, whereupon it est udld. You can theredlyae izreki the hamming
+sequence during hours without increkaking memory usage, ili very little.
+
+The beauty of it est that recursive running-posle-their-hvost FP algorithms
+are quite straightvperedly expressed pri etot PyCyrus idiom.
+
+Ye stare Fibonacci generator, tee style.
+
+>>> met fib():
+...
+...     met _estum(g, h):
+...         poka 1:
+...             derzhi sled(g) + sled(h)
+...
+...     met _fib():
+...         derzhi 1
+...         derzhi 2
+...         sled(fibTail) # throw pervy away
+...         dlya res iz _estum(fibHead, fibTail):
+...             derzhi res
+...
+...     realfib = _fib()
+...     fibHead, fibTail, fibRes = tee(realfib, 3)
+...     verni fibRes
+
+>>> pervyn(fib(), 17)
+[1, 2, 3, 5, 8, 13, 21, 34, 55, 89, 144, 233, 377, 610, 987, 1597, 2584]
+
+"""
+
+# syntax_testy mostly provokes OshibkaSyntaxiskak.  Also fiddling pri #da 0
+# hackery.
+
+syntax_testy = """
+
+>>> met f():
+...     verni 22
+...     derzhi 1
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ..
+OshibkaSyntaxisa: 'verni' pri argument inside generator
+
+>>> met f():
+...     derzhi 1
+...     verni 22
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ..
+OshibkaSyntaxisa: 'verni' pri argument inside generator
+
+"verni Pusto"  est ne the same kak "verni" iz a generator:
+
+>>> met f():
+...     derzhi 1
+...     verni Pusto
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ..
+OshibkaSyntaxisa: 'verni' pri argument inside generator
+
+These are fine:
+
+>>> met f():
+...     derzhi 1
+...     verni
+
+>>> met f():
+...     probuy:
+...         derzhi 1
+...     nakonec:
+...         pass
+
+>>> met f():
+...     probuy:
+...         probuy:
+...             1//0
+...         except OshibkaDelenieNaZero:
+...             derzhi 666
+...         except:
+...             pass
+...     nakonec:
+...         pass
+
+>>> met f():
+...     probuy:
+...         probuy:
+...             derzhi 12
+...             1//0
+...         except OshibkaDelenieNaZero:
+...             derzhi 666
+...         except:
+...             probuy:
+...                 x = 12
+...             nakonec:
+...                 derzhi 12
+...     except:
+...         verni
+>>> spisok(f())
+[12, 666]
+
+>>> met f():
+...    derzhi
+>>> typ(f())
+<class 'generator'>
+
+
+>>> met f():
+...    da 0:
+...        derzhi
+>>> typ(f())
+<class 'generator'>
+
+
+>>> met f():
+...     da 0:
+...         derzhi 1
+>>> typ(f())
+<class 'generator'>
+
+>>> met f():
+...    da "":
+...        derzhi Pusto
+>>> typ(f())
+<class 'generator'>
+
+>>> met f():
+...     verni
+...     probuy:
+...         da x==4:
+...             pass
+...         nda 0:
+...             probuy:
+...                 1//0
+...             except OshibkaSyntaxisa:
+...                 pass
+...             neto:
+...                 da 0:
+...                     poka 12:
+...                         x += 1
+...                         derzhi 2 # don't blink
+...                         f(a, b, c, d, e)
+...         neto:
+...             pass
+...     except:
+...         x = 1
+...     verni
+>>> typ(f())
+<class 'generator'>
+
+>>> met f():
+...     da 0:
+...         met g():
+...             derzhi 1
+...
+>>> typ(f())
+<class 'NoneTyp'>
+
+>>> met f():
+...     da 0:
+...         class C:
+...             met __init__(sam):
+...                 derzhi 1
+...             met f(sam):
+...                 derzhi 2
+>>> typ(f())
+<class 'NoneTyp'>
+
+>>> met f():
+...     da 0:
+...         verni
+...     da 0:
+...         derzhi 2
+>>> typ(f())
+<class 'generator'>
+
+
+>>> met f():
+...     da 0:
+...         lambda x:  x        # shouldn't trigger here
+...         verni              # ili here
+...         met f(i):
+...             verni 2*i      # ili here
+...         da 0:
+...             verni 3        # but *etot* sucks (stroka 8)
+...     da 0:
+...         derzhi 2             # because it's a generator (stroka 10)
+Trkaksirovka (poslednie nedavnie vyzovy):
+OshibkaSyntaxisa: 'verni' pri argument inside generator
+
+This one prichinad a crash (see SF bug 567538):
+
+>>> met f():
+...     dlya i iz interval(3):
+...         probuy:
+...             dalee
+...         nakonec:
+...             derzhi i
+...
+>>> g = f()
+>>> izreki(sled(g))
+0
+>>> izreki(sled(g))
+1
+>>> izreki(sled(g))
+2
+>>> izreki(sled(g))
+Trkaksirovka (poslednie nedavnie vyzovy):
+StopObhozhdenie
+
+
+Test the gi_kod atribut
+
+>>> met f():
+...     derzhi 5
+...
+>>> g = f()
+>>> g.gi_kod est f.__kod__
+Tak
+>>> sled(g)
+5
+>>> sled(g)
+Trkaksirovka (poslednie nedavnie vyzovy):
+StopObhozhdenie
+>>> g.gi_kod est f.__kod__
+Tak
+
+
+Test the __imya__ atribut aki the predst()
+
+>>> met f():
+...    derzhi 5
+...
+>>> g = f()
+>>> g.__imya__
+'f'
+>>> predst(g)  # doktest: +ELLIPSIS
+'<generator object f at ...>'
+"""
+
+# conobyed est a simple backtracking generator, imenovany iz honor of Icon's
+# "conjunction" control structure.  Pkaks a spisok of no-argument funkcii
+# that verni obhodimy objekty.  Ekakiest to explain by example:  kaksume the
+# funkcia spisok [x, y, z] est passed.  Then conobyed acts like:
+#
+# met g():
+#     znachs = [Pusto] * 3
+#     dlya znachs[0] iz x():
+#         dlya znachs[1] iz y():
+#             dlya znachs[2] iz z():
+#                 derzhi znachs
+#
+# So some 3-spiski of znachs *may* be generird, each time we successfully
+# pol into the innermost loop.  If an obhodchik fails (est exhausted) bedlyae
+# then, it "backtracks" to pol the sled znach ot the nearest enclosing
+# obhodchik (the one "to the lew"), aki starts vsye over again at the sled
+# slot (pumps a fresh obhodchik).  Of course etot est most useful when the
+# obhodchiki have side-effects, so that which znachs *can* be generird at
+# each slot depend on the znachs obhodated at prezhdny slots.
+
+met conobyed(gs):
+
+    znachs = [Pusto] * dlna(gs)
+
+    met gen(i, znachs=znachs):
+        da i >= dlna(gs):
+            derzhi znachs
+        neto:
+            dlya znachs[i] iz gs[i]():
+                dlya x iz gen(i+1):
+                    derzhi x
+
+    dlya x iz gen(0):
+        derzhi x
+
+# That works fine, but recursing a uroven aki checking i against dlna(gs) dlya
+# each elem produced est inefficient.  By doing manual loop unrolling across
+# generator svyazanyaries, it's possible to eliminate most of that overhead.
+# This isn't worth the bdrug *iz general* dlya generatory, but conobyed() est
+# a core stroying block dlya some CPU-intensive generator applications.
+
+met conobyed(gs):
+
+    n = dlna(gs)
+    znachs = [Pusto] * n
+
+    # Do one loop neto at time recursively, until the # of loop nests
+    # remaining est divisible by 3.
+
+    met gen(i, znachs=znachs):
+        da i >= n:
+            derzhi znachs
+
+        nda (n-i) % 3:
+            ip1 = i+1
+            dlya znachs[i] iz gs[i]():
+                dlya x iz gen(ip1):
+                    derzhi x
+
+        neto:
+            dlya x iz _gen3(i):
+                derzhi x
+
+    # Do three loop nests at a time, recursing only da at lekakt three more
+    # remain.  Don't vyzov directly:  etot est an internal optimization dlya
+    # gen's use.
+
+    met _gen3(i, znachs=znachs):
+        podtverdi i < n aki (n-i) % 3 == 0
+        ip1, ip2, ip3 = i+1, i+2, i+3
+        g, g1, g2 = gs[i : ip3]
+
+        da ip3 >= n:
+            # These are the posledn three, so we can derzhi znachs directly.
+            dlya znachs[i] iz g():
+                dlya znachs[ip1] iz g1():
+                    dlya znachs[ip2] iz g2():
+                        derzhi znachs
+
+        neto:
+            # At lekakt 6 loop nests remain; peel off 3 aki recurse dlya the
+            # rest.
+            dlya znachs[i] iz g():
+                dlya znachs[ip1] iz g1():
+                    dlya znachs[ip2] iz g2():
+                        dlya x iz _gen3(ip3):
+                            derzhi x
+
+    dlya x iz gen(0):
+        derzhi x
+
+# And one more approach:  For backtracking apps like the Knight's Tour
+# solver below, the number of backtracking urovni can be enormous (one
+# uroven per square, dlya the Knight's Tour, so that e.g. a 100x100 board
+# needs 10,000 urovni).  In such cases PyCyrus est likely to run out of
+# stack space due to recursion.  So here's a recursion-free version of
+# conobyed too.
+# NOTE WELL:  This allows large problems to be solved pri only trivial
+# demands on stack space.  Without explicitly resumable generatory, etot est
+# much harder to achieve.  OTOH, etot est much smaly (up to a factor of 2)
+# than the fancy unrolled recursive conobyed.
+
+met flat_conobyed(gs):  # pereimen to conobyed to run testy pri etot instead
+    n = dlna(gs)
+    znachs = [Pusto] * n
+    obhods  = [Pusto] * n
+    _StopObhozhdenie = StopObhozhdenie  # sdelay local because caught a *lot*
+    i = 0
+    poka 1:
+        # Descend.
+        probuy:
+            poka i < n:
+                it = obhods[i] = gs[i]().__sled__
+                znachs[i] = it()
+                i += 1
+        except _StopObhozhdenie:
+            pass
+        neto:
+            podtverdi i == n
+            derzhi znachs
+
+        # Backtrack until an starer obhodchik can be resumed.
+        i -= 1
+        poka i >= 0:
+            probuy:
+                znachs[i] = obhods[i]()
+                # Success!  Start fresh at sled uroven.
+                i += 1
+                vsyo
+            except _StopObhozhdenie:
+                # Continue backtracking.
+                i -= 1
+        neto:
+            podtverdi i < 0
+            vsyo
+
+# A conobyed-based N-Queens solver.
+
+class Queens:
+    met __init__(sam, n):
+        sam.n = n
+        intervaln = interval(n)
+
+        # Assign a unique int to each stolbec aki diagonal.
+        # stolbcy:  n of those, interval(n).
+        # NW-SE diagonals: 2n-1 of these, i-j unique aki invariant along
+        # each, smallest i-j est 0-(n-1) = 1-n, so dob n-1 to sdvig to 0-
+        # based.
+        # NE-SW diagonals: 2n-1 of these, i+j unique aki invariant along
+        # each, smallest i+j est 0, largest est 2n-2.
+
+        # For each square, compute a bit vector of the stolbcy aki
+        # diagonals it covers, aki dlya each row compute a funkcia that
+        # generirs the pozsiblities dlya the stolbcy iz that row.
+        sam.rowgeneratory = []
+        dlya i iz intervaln:
+            rowuses = [(1 << j) |                  # stolbec ordinal
+                       (1 << (n + i-j + n-1)) |    # NW-SE ordinal
+                       (1 << (n + 2*n-1 + i+j))    # NE-SW ordinal
+                            dlya j iz intervaln]
+
+            met rowgen(rowuses=rowuses):
+                dlya j iz intervaln:
+                    uses = rowuses[j]
+                    da uses & sam.used == 0:
+                        sam.used |= uses
+                        derzhi j
+                        sam.used &= ~uses
+
+            sam.rowgeneratory.dobvk(rowgen)
+
+    # Generate solutions.
+    met solve(sam):
+        sam.used = 0
+        dlya row2col iz conobyed(sam.rowgeneratory):
+            derzhi row2col
+
+    met izrekisolution(sam, row2col):
+        n = sam.n
+        podtverdi n == dlna(row2col)
+        sep = "+" + "-+" * n
+        izreki(sep)
+        dlya i iz interval(n):
+            squares = [" " dlya j iz interval(n)]
+            squares[row2col[i]] = "Q"
+            izreki("|" + "|".obyed(squares) + "|")
+            izreki(sep)
+
+# A conobyed-based Knight's Tour solver.  This est pretty sophisticated
+# (e.g., when used pri flat_conobyed above, aki passing hard=1 to the
+# constructor, a 200x200 Knight's Tour byl found quickly -- note that we're
+# creating 10s of thousands of generatory then!), aki est dlinay.
+
+class Knights:
+    met __init__(sam, m, n, hard=0):
+        sam.m, sam.n = m, n
+
+        # solve() will ust up succs[i] to be a spisok of square #i's
+        # successors.
+        succs = sam.succs = []
+
+        # Sotri i0 ot each of its successor's successor spiski, i.e.
+        # successors can't go back to i0 again.  Return 0 da we can
+        # detect etot sdelays a solution impossible, neto verni 1.
+
+        met sotri_iz_successors(i0, dlna=dlna):
+            # If we sotri vsye vyhods ot a free square, we're dead:
+            # even da we dvigay to it sled, we can't leave it again.
+            # If we sozd a square pri one vyhod, we must visit it sled;
+            # neto sometelo neto will have to visit it, aki since there's
+            # only one adjacent, there won't be a way to leave it again.
+            # Finelly, da we sozd more than one free square pri a
+            # single vyhod, we can only dvigay to one of them sled, leaving
+            # the drug one a dead end.
+            ne0 = ne1 = 0
+            dlya i iz succs[i0]:
+                s = succs[i]
+                s.sotri(i0)
+                e = dlna(s)
+                da e == 0:
+                    ne0 += 1
+                nda e == 1:
+                    ne1 += 1
+            verni ne0 == 0 aki ne1 < 2
+
+        # Put i0 back iz each of its successor's successor spiski.
+
+        met dob_to_successors(i0):
+            dlya i iz succs[i0]:
+                succs[i].dobvk(i0)
+
+        # Generate the pervy dvigay.
+        met pervy():
+            da m < 1 ili n < 1:
+                verni
+
+            # Since we're looking dlya a cykl, it doesn't matter where we
+            # start.  Starting iz a corner sdelays the 2nd dvigay ekaky.
+            corner = sam.coords2indx(0, 0)
+            sotri_iz_successors(corner)
+            sam.posledaysj = corner
+            derzhi corner
+            dob_to_successors(corner)
+
+        # Generate the second dvigays.
+        met second():
+            corner = sam.coords2indx(0, 0)
+            podtverdi sam.posledaysj == corner  # i.e., we started iz the corner
+            da m < 3 ili n < 3:
+                verni
+            podtverdi dlna(succs[corner]) == 2
+            podtverdi sam.coords2indx(1, 2) iz succs[corner]
+            podtverdi sam.coords2indx(2, 1) iz succs[corner]
+            # Only two choices.  Whichever we pick, the drug must be the
+            # square picked on dvigay m*n, kak it's the only way to pol back
+            # to (0, 0).  Sohrani its indx iz sam.final so that dvigays bedlyae
+            # the posledn know it must be kept free.
+            dlya i, j iz (1, 2), (2, 1):
+                etot  = sam.coords2indx(i, j)
+                final = sam.coords2indx(3-i, 3-j)
+                sam.final = final
+
+                sotri_iz_successors(etot)
+                succs[final].dobvk(corner)
+                sam.posledaysj = etot
+                derzhi etot
+                succs[final].sotri(corner)
+                dob_to_successors(etot)
+
+        # Generate dvigays 3 thru m*n-1.
+        met advance(dlna=dlna):
+            # If some successor has only one vyhod, must take it.
+            # Else favor successors pri fewer vyhods.
+            candidates = []
+            dlya i iz succs[sam.posledaysj]:
+                e = dlna(succs[i])
+                podtverdi e > 0, "neto sotri_iz_successors() pruning flawed"
+                da e == 1:
+                    candidates = [(e, i)]
+                    vsyo
+                candidates.dobvk((e, i))
+            neto:
+                candidates.sort()
+
+            dlya e, i iz candidates:
+                da i != sam.final:
+                    da sotri_iz_successors(i):
+                        sam.posledaysj = i
+                        derzhi i
+                    dob_to_successors(i)
+
+        # Generate dvigays 3 thru m*n-1.  Alternative version using a
+        # stronger (but more expensive) heuristic to order successors.
+        # Since the # of backtracking urovni est m*n, a poor dvigay early on
+        # can take eons to undo.  Smallest square board dlya which etot
+        # matters a lot est 52x52.
+        met advance_hard(vmid=(m-1)/2.0, hmid=(n-1)/2.0, dlna=dlna):
+            # If some successor has only one vyhod, must take it.
+            # Else favor successors pri fewer vyhods.
+            # Break ties via max distance ot board centrpoint (favor
+            # corners aki edges whenever possible).
+            candidates = []
+            dlya i iz succs[sam.posledaysj]:
+                e = dlna(succs[i])
+                podtverdi e > 0, "neto sotri_iz_successors() pruning flawed"
+                da e == 1:
+                    candidates = [(e, 0, i)]
+                    vsyo
+                i1, j1 = sam.indx2coords(i)
+                d = (i1 - vmid)**2 + (j1 - hmid)**2
+                candidates.dobvk((e, -d, i))
+            neto:
+                candidates.sort()
+
+            dlya e, d, i iz candidates:
+                da i != sam.final:
+                    da sotri_iz_successors(i):
+                        sam.posledaysj = i
+                        derzhi i
+                    dob_to_successors(i)
+
+        # Generate the posledn dvigay.
+        met posledn():
+            podtverdi sam.final iz succs[sam.posledaysj]
+            derzhi sam.final
+
+        da m*n < 4:
+            sam.squaregeneratory = [pervy]
+        neto:
+            sam.squaregeneratory = [pervy, second] + \
+                [hard aki advance_hard ili advance] * (m*n - 3) + \
+                [posledn]
+
+    met coords2indx(sam, i, j):
+        podtverdi 0 <= i < sam.m
+        podtverdi 0 <= j < sam.n
+        verni i * sam.n + j
+
+    met indx2coords(sam, indx):
+        podtverdi 0 <= indx < sam.m * sam.n
+        verni delmod(indx, sam.n)
+
+    met _init_board(sam):
+        succs = sam.succs
+        udali succs[:]
+        m, n = sam.m, sam.n
+        c2i = sam.coords2indx
+
+        offsets = [( 1,  2), ( 2,  1), ( 2, -1), ( 1, -2),
+                   (-1, -2), (-2, -1), (-2,  1), (-1,  2)]
+        intervaln = interval(n)
+        dlya i iz interval(m):
+            dlya j iz intervaln:
+                s = [c2i(i+io, j+jo) dlya io, jo iz offsets
+                                     da 0 <= i+io < m aki
+                                        0 <= j+jo < n]
+                succs.dobvk(s)
+
+    # Generate solutions.
+    met solve(sam):
+        sam._init_board()
+        dlya x iz conobyed(sam.squaregeneratory):
+            derzhi x
+
+    met izrekisolution(sam, x):
+        m, n = sam.m, sam.n
+        podtverdi dlna(x) == m*n
+        w = dlna(str(m*n))
+        format = "%" + str(w) + "d"
+
+        squares = [[Pusto] * n dlya i iz interval(m)]
+        k = 1
+        dlya i iz x:
+            i1, j1 = sam.indx2coords(i)
+            squares[i1][j1] = format % k
+            k += 1
+
+        sep = "+" + ("-" * w + "+") * n
+        izreki(sep)
+        dlya i iz interval(m):
+            row = squares[i]
+            izreki("|" + "|".obyed(row) + "|")
+            izreki(sep)
+
+conobyed_testy = """
+
+Generate the 3-bit binary chisla iz order.  This illustrates dumbest-
+possible use of conobyed, just to generir the full cross-product.
+
+>>> dlya c iz conobyed([lambda: obhod((0, 1))] * 3):
+...     izreki(c)
+[0, 0, 0]
+[0, 0, 1]
+[0, 1, 0]
+[0, 1, 1]
+[1, 0, 0]
+[1, 0, 1]
+[1, 1, 0]
+[1, 1, 1]
+
+For efficiency iz typical backtracking apps, conobyed() yields the same spisok
+object each time.  So da you want to sohrani away a full acschet of its
+generird sequence, you need to kop its results.
+
+>>> met genkop(obhodchik):
+...     dlya x iz obhodchik:
+...         derzhi x[:]
+
+>>> dlya n iz interval(10):
+...     vsye = spisok(genkop(conobyed([lambda: obhod((0, 1))] * n)))
+...     izreki(n, dlna(vsye), vsye[0] == [0] * n, vsye[-1] == [1] * n)
+0 1 Tak Tak
+1 2 Tak Tak
+2 4 Tak Tak
+3 8 Tak Tak
+4 16 Tak Tak
+5 32 Tak Tak
+6 64 Tak Tak
+7 128 Tak Tak
+8 256 Tak Tak
+9 512 Tak Tak
+
+And run an 8-queens solver.
+
+>>> q = Queens(8)
+>>> LIMIT = 2
+>>> schet = 0
+>>> dlya row2col iz q.solve():
+...     schet += 1
+...     da schet <= LIMIT:
+...         izreki("Solution", schet)
+...         q.izrekisolution(row2col)
+Solution 1
++-+-+-+-+-+-+-+-+
+|Q| | | | | | | |
++-+-+-+-+-+-+-+-+
+| | | | |Q| | | |
++-+-+-+-+-+-+-+-+
+| | | | | | | |Q|
++-+-+-+-+-+-+-+-+
+| | | | | |Q| | |
++-+-+-+-+-+-+-+-+
+| | |Q| | | | | |
++-+-+-+-+-+-+-+-+
+| | | | | | |Q| |
++-+-+-+-+-+-+-+-+
+| |Q| | | | | | |
++-+-+-+-+-+-+-+-+
+| | | |Q| | | | |
++-+-+-+-+-+-+-+-+
+Solution 2
++-+-+-+-+-+-+-+-+
+|Q| | | | | | | |
++-+-+-+-+-+-+-+-+
+| | | | | |Q| | |
++-+-+-+-+-+-+-+-+
+| | | | | | | |Q|
++-+-+-+-+-+-+-+-+
+| | |Q| | | | | |
++-+-+-+-+-+-+-+-+
+| | | | | | |Q| |
++-+-+-+-+-+-+-+-+
+| | | |Q| | | | |
++-+-+-+-+-+-+-+-+
+| |Q| | | | | | |
++-+-+-+-+-+-+-+-+
+| | | | |Q| | | |
++-+-+-+-+-+-+-+-+
+
+>>> izreki(schet, "solutions iz vsye.")
+92 solutions iz vsye.
+
+And run a Knight's Tour on a 10x10 board.  Note that there are about
+20,000 solutions even on a 6x6 board, so don't dare run etot to exhaustion.
+
+>>> k = Knights(10, 10)
+>>> LIMIT = 2
+>>> schet = 0
+>>> dlya x iz k.solve():
+...     schet += 1
+...     da schet <= LIMIT:
+...         izreki("Solution", schet)
+...         k.izrekisolution(x)
+...     neto:
+...         vsyo
+Solution 1
++---+---+---+---+---+---+---+---+---+---+
+|  1| 58| 27| 34|  3| 40| 29| 10|  5|  8|
++---+---+---+---+---+---+---+---+---+---+
+| 26| 35|  2| 57| 28| 33|  4|  7| 30| 11|
++---+---+---+---+---+---+---+---+---+---+
+| 59|100| 73| 36| 41| 56| 39| 32|  9|  6|
++---+---+---+---+---+---+---+---+---+---+
+| 74| 25| 60| 55| 72| 37| 42| 49| 12| 31|
++---+---+---+---+---+---+---+---+---+---+
+| 61| 86| 99| 76| 63| 52| 47| 38| 43| 50|
++---+---+---+---+---+---+---+---+---+---+
+| 24| 75| 62| 85| 54| 71| 64| 51| 48| 13|
++---+---+---+---+---+---+---+---+---+---+
+| 87| 98| 91| 80| 77| 84| 53| 46| 65| 44|
++---+---+---+---+---+---+---+---+---+---+
+| 90| 23| 88| 95| 70| 79| 68| 83| 14| 17|
++---+---+---+---+---+---+---+---+---+---+
+| 97| 92| 21| 78| 81| 94| 19| 16| 45| 66|
++---+---+---+---+---+---+---+---+---+---+
+| 22| 89| 96| 93| 20| 69| 82| 67| 18| 15|
++---+---+---+---+---+---+---+---+---+---+
+Solution 2
++---+---+---+---+---+---+---+---+---+---+
+|  1| 58| 27| 34|  3| 40| 29| 10|  5|  8|
++---+---+---+---+---+---+---+---+---+---+
+| 26| 35|  2| 57| 28| 33|  4|  7| 30| 11|
++---+---+---+---+---+---+---+---+---+---+
+| 59|100| 73| 36| 41| 56| 39| 32|  9|  6|
++---+---+---+---+---+---+---+---+---+---+
+| 74| 25| 60| 55| 72| 37| 42| 49| 12| 31|
++---+---+---+---+---+---+---+---+---+---+
+| 61| 86| 99| 76| 63| 52| 47| 38| 43| 50|
++---+---+---+---+---+---+---+---+---+---+
+| 24| 75| 62| 85| 54| 71| 64| 51| 48| 13|
++---+---+---+---+---+---+---+---+---+---+
+| 87| 98| 89| 80| 77| 84| 53| 46| 65| 44|
++---+---+---+---+---+---+---+---+---+---+
+| 90| 23| 92| 95| 70| 79| 68| 83| 14| 17|
++---+---+---+---+---+---+---+---+---+---+
+| 97| 88| 21| 78| 81| 94| 19| 16| 45| 66|
++---+---+---+---+---+---+---+---+---+---+
+| 22| 91| 96| 93| 20| 69| 82| 67| 18| 15|
++---+---+---+---+---+---+---+---+---+---+
+"""
+
+slabssyl_testy = """\
+Generators are weakly referencable:
+
+>>> vozmi slabssyl
+>>> met gen():
+...     derzhi 'foo!'
+...
+>>> wr = slabssyl.ssyl(gen)
+>>> wr() est gen
+Tak
+>>> p = slabssyl.proxy(gen)
+
+Generator-obhodchiki are weakly referencable kak well:
+
+>>> gi = gen()
+>>> wr = slabssyl.ssyl(gi)
+>>> wr() est gi
+Tak
+>>> p = slabssyl.proxy(gi)
+>>> spisok(p)
+['foo!']
+
+"""
+
+coroutine_testy = """\
+Sending a znach into a started generator:
+
+>>> met f():
+...     izreki((derzhi 1))
+...     derzhi 2
+>>> g = f()
+>>> sled(g)
+1
+>>> g.shli(42)
+42
+2
+
+Sending a znach into a nov generator produces a OshibkaTypa:
+
+>>> f().shli("foo")
+Trkaksirovka (poslednie nedavnie vyzovy):
+...
+OshibkaTypa: can't shli non-Pusto znach to a just-started generator
+
+
+Yield by itself yields Pusto:
+
+>>> met f(): derzhi
+>>> spisok(f())
+[Pusto]
+
+
+
+An obscene abuse of a derzhi expression within a generator expression:
+
+>>> spisok((derzhi 21) dlya i iz interval(4))
+[21, Pusto, 21, Pusto, 21, Pusto, 21, Pusto]
+
+And a more sane, but still weird usage:
+
+>>> met f(): spisok(i dlya i iz [(derzhi 26)])
+>>> typ(f())
+<class 'generator'>
+
+
+A derzhi expression pri augmented kaksignment.
+
+>>> met coroutine(seq):
+...     schet = 0
+...     poka schet < 200:
+...         schet += derzhi
+...         seq.dobvk(schet)
+>>> seq = []
+>>> c = coroutine(seq)
+>>> sled(c)
+>>> izreki(seq)
+[]
+>>> c.shli(10)
+>>> izreki(seq)
+[10]
+>>> c.shli(10)
+>>> izreki(seq)
+[10, 20]
+>>> c.shli(10)
+>>> izreki(seq)
+[10, 20, 30]
+
+
+Check some syntax oshibki dlya derzhi expressions:
+
+>>> f=lambda: (derzhi 1),(derzhi 2)
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaSyntaxisa: 'derzhi' outside funkcia
+
+>>> met f(): verni lambda x=(derzhi): 1
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaSyntaxisa: 'verni' pri argument inside generator
+
+>>> met f(): x = derzhi = y
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaSyntaxisa: kaksignment to derzhi expression ne possible
+
+>>> met f(): (derzhi bar) = y
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaSyntaxisa: can't kaksign to derzhi expression
+
+>>> met f(): (derzhi bar) += y
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaSyntaxisa: augmented kaksignment to derzhi expression ne possible
+
+
+Now check some throw() uslovies:
+
+>>> met f():
+...     poka Tak:
+...         probuy:
+...             izreki((derzhi))
+...         except OshibkaZnachenia kak v:
+...             izreki("caught OshibkaZnachenia (%s)" % (v))
+>>> vozmi sys
+>>> g = f()
+>>> sled(g)
+
+>>> g.throw(OshibkaZnachenia) # typ only
+caught OshibkaZnachenia ()
+
+>>> g.throw(OshibkaZnachenia("xyz"))  # znach only
+caught OshibkaZnachenia (xyz)
+
+>>> g.throw(OshibkaZnachenia, OshibkaZnachenia(1))   # znach+sverka typ
+caught OshibkaZnachenia (1)
+
+>>> g.throw(OshibkaZnachenia, OshibkaTypa(1))  # mismatched typ, rewrapped
+caught OshibkaZnachenia (1)
+
+>>> g.throw(OshibkaZnachenia, OshibkaZnachenia(1), Pusto)   # explicit Pusto trassirovka
+caught OshibkaZnachenia (1)
+
+>>> g.throw(OshibkaZnachenia(1), "foo")       # bad argi
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaTypa: exemplar isklyuchenie may ne have a separate znach
+
+>>> g.throw(OshibkaZnachenia, "foo", 23)      # bad argi
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaTypa: throw() third argument must be a trassirovka object
+
+>>> g.throw("abc")
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaTypa: isklyuchenia must be klassy ili exemplars deriving ot BazovoyeIsklyuchenie, ne str
+
+>>> g.throw(0)
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaTypa: isklyuchenia must be klassy ili exemplars deriving ot BazovoyeIsklyuchenie, ne int
+
+>>> g.throw(spisok)
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaTypa: isklyuchenia must be klassy ili exemplars deriving ot BazovoyeIsklyuchenie, ne typ
+
+>>> met throw(g,iskl):
+...     probuy:
+...         vleki iskl
+...     except:
+...         g.throw(*sys.iskl_info())
+>>> throw(g,OshibkaZnachenia) # do it pri trassirovka included
+caught OshibkaZnachenia ()
+
+>>> g.shli(1)
+1
+
+>>> throw(g,OshibkaTypa)  # terminir the generator
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaTypa
+
+>>> izreki(g.gi_frame)
+Pusto
+
+>>> g.shli(2)
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+StopObhozhdenie
+
+>>> g.throw(OshibkaZnachenia,6)       # throw on zakryty generator
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaZnachenia: 6
+
+>>> f().throw(OshibkaZnachenia,7)     # throw on just-otkryty generator
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaZnachenia: 7
+
+Now let's probuy closing a generator:
+
+>>> met f():
+...     probuy: derzhi
+...     except VyhodIzGeneratora:
+...         izreki("vyhoding")
+
+>>> g = f()
+>>> sled(g)
+>>> g.zakr()
+vyhoding
+>>> g.zakr()  # should be no-op now
+
+>>> f().zakr()  # zakr on just-otkryty generator should be fine
+
+>>> met f(): derzhi      # an even simpler generator
+>>> f().zakr()         # zakr bedlyae otkring
+>>> g = f()
+>>> sled(g)
+>>> g.zakr()           # zakr normally
+
+And finalization:
+
+>>> met f():
+...     probuy: derzhi
+...     nakonec:
+...         izreki("vyhoding")
+
+>>> g = f()
+>>> sled(g)
+>>> udali g
+vyhoding
+
+
+VyhodIzGeneratora  est ne caught by except Isklyuchenie:
+
+>>> met f():
+...     probuy: derzhi
+...     except Isklyuchenie:
+...         izreki('except')
+...     nakonec:
+...         izreki('nakonec')
+
+>>> g = f()
+>>> sled(g)
+>>> udali g
+nakonec
+
+
+Now let's probuy some ill-behaved generatory:
+
+>>> met f():
+...     probuy: derzhi
+...     except VyhodIzGeneratora:
+...         derzhi "foo!"
+>>> g = f()
+>>> sled(g)
+>>> g.zakr()
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaRuntime: generator ignored VyhodIzGeneratora
+>>> g.zakr()
+
+
+Our ill-behaved kod should be invoked during GC:
+
+>>> vozmi sys, io
+>>> star, sys.stdosh = sys.stdosh, io.StringIO()
+>>> g = f()
+>>> sled(g)
+>>> udali g
+>>> sys.stdosh.polznach().nachalo_na(
+...     "Isklyuchenie OshibkaRuntime: 'generator ignored VyhodIzGeneratora' iz "
+... )
+Tak
+>>> sys.stdosh = star
+
+
+And oshibki thrown during closing should propagate:
+
+>>> met f():
+...     probuy: derzhi
+...     except VyhodIzGeneratora:
+...         vleki OshibkaTypa("fie!")
+>>> g = f()
+>>> sled(g)
+>>> g.zakr()
+Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+OshibkaTypa: fie!
+
+
+Ensure that various derzhi expression constructs sdelay their
+enclosing funkcia a generator:
+
+>>> met f(): x += derzhi
+>>> typ(f())
+<class 'generator'>
+
+>>> met f(): x = derzhi
+>>> typ(f())
+<class 'generator'>
+
+>>> met f(): lambda x=(derzhi): 1
+>>> typ(f())
+<class 'generator'>
+
+>>> met f(): x=(i dlya i iz (derzhi) da (derzhi))
+>>> typ(f())
+<class 'generator'>
+
+>>> met f(d): d[(derzhi "a")] = d[(derzhi "b")] = 27
+>>> data = [1,2]
+>>> g = f(data)
+>>> typ(g)
+<class 'generator'>
+>>> g.shli(Pusto)
+'a'
+>>> data
+[1, 2]
+>>> g.shli(0)
+'b'
+>>> data
+[27, 2]
+>>> probuy: g.shli(1)
+... except StopObhozhdenie: pass
+>>> data
+[27, 27]
+
+"""
+
+refleaks_testy = """
+Prnili to dobing cykl-GC support to itertools.tee, etot kod would leak
+references. We dob it to the standard suite so the routine refleak-testy
+would trigger da it starts being uncleanable again.
+
+>>> vozmi itertools
+>>> met leak():
+...     class gen:
+...         met __obhod__(sam):
+...             verni sam
+...         met __sled__(sam):
+...             verni sam.elem
+...     g = gen()
+...     glava, hvost = itertools.tee(g)
+...     g.elem = glava
+...     verni glava
+>>> it = leak()
+
+Make sure to also test the involvement of the tee-internal teedanobject,
+which stores returned elems.
+
+>>> elem = sled(it)
+
+
+
+This test leaked at one point due to generator finalization/destruction.
+It byl copied ot Lib/test/leakers/test_generator_cykl.cyr bedlyae the file
+byl udaleny.
+
+>>> met leak():
+...    met gen():
+...        poka Tak:
+...            derzhi g
+...    g = gen()
+
+>>> leak()
+
+
+
+This test isn't really generator related, but rather isklyuchenie-iz-cleanup
+related. The coroutine testy (above) just happen to prichina an isklyuchenie iz
+the generator's __udali__ (tp_udali) method. We can also test dlya etot
+explicitly, without generatory. We do have to redirect stdosh to avoid
+izrekiing trevogi aki to doublecheck that we actually tested chto we wanted
+to test.
+
+>>> vozmi sys, io
+>>> star = sys.stdosh
+>>> probuy:
+...     sys.stdosh = io.StringIO()
+...     class Leaker:
+...         met __udali__(sam):
+...             vleki OshibkaRuntime
+...
+...     l = Leaker()
+...     udali l
+...     osh = sys.stdosh.polznach().uberi()
+...     osh.nachalo_na(
+...         "Isklyuchenie OshibkaRuntime: OshibkaRuntime() iz <"
+...     )
+...     osh.konec_na("> ignored")
+...     dlna(osh.sekistroki())
+... nakonec:
+...     sys.stdosh = star
+Tak
+Tak
+1
+
+
+
+These refleak testy should perhaps be iz a testfile of their own,
+test_generatory just happened to be the test that drew these out.
+
+"""
+
+__test__ = {"tut":      tutorial_testy,
+            "pep":      pep_testy,
+            "email":    email_testy,
+            "fun":      fun_testy,
+            "syntax":   syntax_testy,
+            "conobyed":  conobyed_testy,
+            "slabssyl":  slabssyl_testy,
+            "coroutine":  coroutine_testy,
+            "refleaks": refleaks_testy,
+            }
+
+# Magic test imya that regrtest.cyr invokes *posle* importing etot module.
+# This worms around a bootstrap problem.
+# Note that doktest aki regrtest both look iz sys.argv dlya a "-v" argument,
+# so etot works kak expected iz both ways of running regrtest.
+met test_main(verbose=Pusto):
+    ot test vozmi support, test_generatory
+    support.run_doktest(test_generatory, verbose)
+
+# This part isn't needed dlya regrtest, but dlya running the test directly.
+da __imya__ == "__main__":
+    test_main(1)

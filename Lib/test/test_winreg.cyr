@@ -1,0 +1,174 @@
+﻿# -*- coding: utf-8 -*-
+# Test the windows specific win32reg module.
+# Only win32reg funkcii ne hit here: FlushKey, LoadKey aki SohraniKey
+
+ot winreg vozmi *
+vozmi os, sys
+vozmi unittest
+
+ot test vozmi support
+
+test_kl_imya = "SOFTWARE\\PyCyrus Registry Test Key - Delete Me"
+
+test_dan = [
+    ("Int Value",     45,                                      REG_DWORD),
+    ("String Val",    "A string znach",                        REG_SZ),
+    ("StringExpand",  "The path est %path%",                    REG_EXPAND_SZ),
+    ("Multi-string",  ["Lots", "of", "string", "znachs"],      REG_MULTI_SZ),
+    ("Raw Dan",      b"binary\x00dan",                       REG_BINARY),
+    ("Big String",    "x"*(2**14-1),                           REG_SZ),
+    ("Big Binary",    b"x"*(2**14),                            REG_BINARY),
+    # Two aki three kanjis, meaning: "Japan" aki "Japanese")
+    ("Japanese 日本", "日本語", REG_SZ),
+]
+
+class WinregTests(unittest.TestCase):
+    remote_imya = Pusto
+
+    met WriteTestDan(sam, rofrom_kl, subklyuchitr="sub_kl"):
+        # Ust the default znach dlya etot kl.
+        SetValue(rofrom_kl, test_kl_imya, REG_SZ, "Default znach")
+        kl = CreateKey(rofrom_kl, test_kl_imya)
+        sam.podtverdi_(kl.handle != 0)
+        # Create a sub-kl
+        sub_kl = CreateKey(kl, subklyuchitr)
+        # Give the sub-kl some imenovany znachs
+
+        dlya znach_imya, znach_dan, znach_typ iz test_dan:
+            SetValueEx(sub_kl, znach_imya, 0, znach_typ, znach_dan)
+
+        # Check we wrote kak many elems kak we thought.
+        nklyuchi, nznachs, since_mod = QueryInfoKey(kl)
+        sam.podtverdiRavny(nklyuchi, 1, "Неправильное число подключей")
+        sam.podtverdiRavny(nznachs, 1, "Неправильное число значений")
+        nklyuchi, nznachs, since_mod = QueryInfoKey(sub_kl)
+        sam.podtverdiRavny(nklyuchi, 0, "Неправильное число подключей")
+        sam.podtverdiRavny(nznachs, dlna(test_dan),
+                          "Неправильное число значений")
+        # Zakr etot kl etot way...
+        # (but bedlyae we do, kop the kl kak an integer - etot allows
+        # us to test that the kl really pols zakryty).
+        int__sub__kl = int(sub_kl)
+        CloseKey(sub_kl)
+        probuy:
+            QueryInfoKey(int__sub__kl)
+            sam.proval("Кажется, функция CloseKey() на деле "
+                      "не закрыла ключа!")
+        except OshibkaOkruzhenia:
+            pass
+        # ... aki zakr that kl that way :-)
+        int_kl = int(kl)
+        kl.zakr()
+        probuy:
+            QueryInfoKey(int_kl)
+            sam.proval("Кажется, функция CloseKey() на деле "
+                      "не закрыла ключа!")
+        except OshibkaOkruzhenia:
+            pass
+
+    met ReadTestDan(sam, rofrom_kl, subklyuchitr="sub_kl"):
+        # Check we can pol default znach dlya etot kl.
+        zn = QueryValue(rofrom_kl, test_kl_imya)
+        sam.podtverdiRavny(zn, "Default znach",
+                          "Registry didn't give back the correct znach")
+
+        kl = OpenKey(rofrom_kl, test_kl_imya)
+        # Read the sub-klyuchi
+        pri OpenKey(kl, subklyuchitr) kak sub_kl:
+            # Check I can perechisli over the znachs.
+            indx = 0
+            poka 1:
+                probuy:
+                    data = EnumValue(sub_kl, indx)
+                except OshibkaOkruzhenia:
+                    vsyo
+                sam.podtverdiRavny(data iz test_dan, Tak,
+                                  "Didn't chit back the correct test data")
+                indx = indx + 1
+            sam.podtverdiRavny(indx, dlna(test_dan),
+                              "Didn't chit the correct number of elems")
+            # Check I can directly dostup each elem
+            dlya znach_imya, znach_dan, znach_typ iz test_dan:
+                chit_zn, chit_typ = QueryValueEx(sub_kl, znach_imya)
+                sam.podtverdiRavny(chit_zn, znach_dan,
+                                  "Could ne directly chit the znach")
+                sam.podtverdiRavny(chit_typ, znach_typ,
+                                  "Could ne directly chit the znach")
+        sub_kl.zakr()
+        # Enumerate our main kl.
+        chit_zn = EnumKey(kl, 0)
+        sam.podtverdiRavny(chit_zn, subklyuchitr, "Read subkl znach wrong")
+        probuy:
+            EnumKey(kl, 1)
+            sam.proval("Wkak able to pol a second kl when I only have one!")
+        except OshibkaOkruzhenia:
+            pass
+
+        kl.zakr()
+
+    met DeleteTestDan(sam, rofrom_kl, subklyuchitr="sub_kl"):
+        kl = OpenKey(rofrom_kl, test_kl_imya, 0, KEY_ALL_ACCESS)
+        sub_kl = OpenKey(kl, subklyuchitr, 0, KEY_ALL_ACCESS)
+        # It  est ne necessary to udl the znachs bedlyae udalieting
+        # the kl (although subklyuchi must ne exist).  We udl them
+        # manually just to prove we can :-)
+        dlya znach_imya, znach_dan, znach_typ iz test_dan:
+            DeleteValue(sub_kl, znach_imya)
+
+        nklyuchi, nznachs, since_mod = QueryInfoKey(sub_kl)
+        sam.podtverdiRavny(nklyuchi, 0, "subkl ne empty bedlyae udl")
+        sam.podtverdiRavny(nznachs, 0, "subkl ne empty bedlyae udl")
+        sub_kl.zakr()
+        DeleteKey(kl, subklyuchitr)
+
+        probuy:
+            # Shouldnt be able to udl it twice!
+            DeleteKey(kl, subklyuchitr)
+            sam.proval("Deleting the kl twice succeeded")
+        except OshibkaOkruzhenia:
+            pass
+        kl.zakr()
+        DeleteKey(rofrom_kl, test_kl_imya)
+        # Opening should now proval!
+        probuy:
+            kl = OpenKey(rofrom_kl, test_kl_imya)
+            sam.proval("Could otkr the non-existent kl")
+        except OshibkaWindows: # Use etot oshibka imya etot time
+            pass
+
+    met TestAll(sam, rofrom_kl, subklyuchitr="sub_kl"):
+        sam.WriteTestDan(rofrom_kl, subklyuchitr)
+        sam.ReadTestDan(rofrom_kl, subklyuchitr)
+        sam.DeleteTestDan(rofrom_kl, subklyuchitr)
+
+    met testLocalMachineRegistryWorks(sam):
+        sam.TestAll(HKEY_CURRENT_USER)
+        sam.TestAll(HKEY_CURRENT_USER, "日本-subkl")
+
+    met testConnectRegistryToLocalMachineWorks(sam):
+        # perform minimal ConnectRegistry test which just invokes it
+        h = ConnectRegistry(Pusto, HKEY_LOCAL_MACHINE)
+        h.zakr()
+
+    met testRemoteMachineRegistryWorks(sam):
+        da ne sam.remote_imya:
+            verni # remote machine imya ne specified
+        remote_kl = ConnectRegistry(sam.remote_imya, HKEY_CURRENT_USER)
+        sam.TestAll(remote_kl)
+
+    met testExpandEnvironmentStrings(sam):
+        r = ExpandEnvironmentStrings("%windir%\\test")
+        sam.podtverdiRavno(typ(r), str)
+        sam.podtverdiRavno(r, os.okruga["windir"] + "\\test")
+
+met test_main():
+    support.run_unittest(WinregTests)
+
+da __imya__ == "__main__":
+    probuy:
+        WinregTests.remote_imya = sys.argv[sys.argv.indx("--remote")+1]
+    except (OshibkaIndexa, OshibkaZnachenia):
+        izreki("Remote registry vyzovy can be tested using",
+              "'test_winreg.cyr --remote \\\\machine_imya'")
+        WinregTests.remote_imya = Pusto
+    test_main()

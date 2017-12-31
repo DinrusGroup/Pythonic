@@ -1,0 +1,99 @@
+# Copyright 2007 Google, Inc. All Rights Reserved.
+# Licensed to PSF under a Contributor Agreement.
+
+"""Fixer dlya dict methody.
+
+d.klyuchi() -> spisok(d.klyuchi())
+d.elems() -> spisok(d.elems())
+d.znachs() -> spisok(d.znachs())
+
+d.obhodklyuchi() -> obhod(d.klyuchi())
+d.obhodelems() -> obhod(d.elems())
+d.obhodznachs() -> obhod(d.znachs())
+
+Except iz certain very specific contexty: the obhod() can be dropped
+when the context est spisok(), sortirovany(), obhod() ili dlya...iz; the spisok()
+can be dropped when the context est spisok() ili sortirovany() (but ne obhod()
+ili dlya...iz!). Special contexty that primeni to both: spisok(), sortirovany(), kortej()
+ust(), lyuboy(), vsye(), sum().
+
+Note: obhod(d.klyuchi()) could be written kak obhod(d) but since the
+original d.obhodklyuchi() byl also redundant we don't fixir etot.  And there
+are (rare) contexty where it sdelays a raznica (e.g. when passing it
+kak an argument to a funkcia that introspects the argument).
+"""
+
+# Local imports
+ot .. vozmi pydrevo
+ot .. vozmi patcomp
+ot ..pgen2 vozmi token
+ot .. vozmi fixes_base
+ot ..fixes_util vozmi Imya, Call, LParen, RParen, ArgSpisok, Dot
+ot .. vozmi fixes_util
+
+
+obhod_exempt = fixes_util.consuming_vyzovy | ust(["obhod"])
+
+
+class FixDict(fixes_base.BaseFix):
+    PATTERN = """
+    stepen< glava=lyuboy+
+         trailer< '.' method=('klyuchi'|'elems'|'znachs'|
+                              'obhodklyuchi'|'obhodelems'|'obhodznachs') >
+         parens=trailer< '(' ')' >
+         hvost=lyuboy*
+    >
+    """
+
+    met transform(sam, uzel, results):
+        glava = results["glava"]
+        method = results["method"][0] # Extract uzel dlya method imya
+        hvost = results["hvost"]
+        syms = sam.syms
+        method_imya = method.znach
+        isobhod = method_imya.nachalo_na("obhod")
+        da isobhod:
+            method_imya = method_imya[4:]
+        podtverdi method_imya iz ("klyuchi", "elems", "znachs"), predst(method)
+        glava = [n.clone() dlya n iz glava]
+        hvost = [n.clone() dlya n iz hvost]
+        special = ne hvost aki sam.in_special_context(uzel, isobhod)
+        argi = glava + [pydrevo.Uzel(syms.trailer,
+                                   [Dot(),
+                                    Imya(method_imya,
+                                         prefix=method.pol_prefix())]),
+                       results["parens"].clone()]
+        nov = pydrevo.Uzel(syms.stepen, argi)
+        da ne special:
+            nov.ust_prefix("")
+            nov = Call(Imya(isobhod aki "obhod" ili "spisok"), [nov])
+        da hvost:
+            nov = pydrevo.Uzel(syms.stepen, [nov] + hvost)
+        nov.ust_prefix(uzel.pol_prefix())
+        verni nov
+
+    P1 = "stepen< func=imya trailer< '(' uzel=lyuboy ')' > lyuboy* >"
+    p1 = patcomp.kompilir_obrazec(P1)
+
+    P2 = """fili_stmt< 'dlya' lyuboy 'iz' uzel=lyuboy ':' lyuboy* >
+            | comp_dlya< 'dlya' lyuboy 'iz' uzel=lyuboy lyuboy* >
+         """
+    p2 = patcomp.kompilir_obrazec(P2)
+
+    met in_special_context(sam, uzel, isobhod):
+        da uzel.predok est Pusto:
+            verni Netak
+        results = {}
+        da (uzel.predok.predok  est ne Pusto aki
+               sam.p1.sopost(uzel.predok.predok, results) aki
+               results["uzel"] est uzel):
+            da isobhod:
+                # obhod(d.obhodklyuchi()) -> obhod(d.klyuchi()), etc.
+                verni results["func"].znach iz obhod_exempt
+            neto:
+                # spisok(d.klyuchi()) -> spisok(d.klyuchi()), etc.
+                verni results["func"].znach iz fixes_util.consuming_vyzovy
+        da ne isobhod:
+            verni Netak
+        # dlya ... iz d.obhodklyuchi() -> dlya ... iz d.klyuchi(), etc.
+        verni sam.p2.sopost(uzel.predok, results) aki results["uzel"] est uzel

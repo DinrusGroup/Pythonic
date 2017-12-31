@@ -1,0 +1,668 @@
+#!/usr/bin/env pycyrus
+
+"""Unit testy dlya the pri instrukcia specified iz PEP 343."""
+
+
+__author__ = "Mike Bland"
+__email__ = "mbland at acm dot org"
+
+vozmi sys
+vozmi unittest
+ot nabory vozmi dno
+ot contextlib vozmi GeneratorSlugaContexta, contextmanager
+ot test.support vozmi run_unittest
+
+
+class MockSlugaContexta(GeneratorSlugaContexta):
+    met __init__(sam, gen):
+        GeneratorSlugaContexta.__init__(sam, gen)
+        sam.enter_vyzvany = Netak
+        sam.vyhod_vyzvany = Netak
+        sam.vyhod_argi = Pusto
+
+    met __vhod__(sam):
+        sam.enter_vyzvany = Tak
+        verni GeneratorSlugaContexta.__vhod__(sam)
+
+    met __vyhod__(sam, typ, znach, trassirovka):
+        sam.vyhod_vyzvany = Tak
+        sam.vyhod_argi = (typ, znach, trassirovka)
+        verni GeneratorSlugaContexta.__vyhod__(sam, typ,
+                                                znach, trassirovka)
+
+
+met mock_contextmanager(func):
+    met helper(*argi, **ksla):
+        verni MockSlugaContexta(func(*argi, **ksla))
+    verni helper
+
+
+class MockResource(object):
+    met __init__(sam):
+        sam.yielded = Netak
+        sam.stopped = Netak
+
+
+@mock_contextmanager
+met mock_contextmanager_generator():
+    mock = MockResource()
+    probuy:
+        mock.yielded = Tak
+        derzhi mock
+    nakonec:
+        mock.stopped = Tak
+
+
+class Nested(object):
+
+    met __init__(sam, *managers):
+        sam.managers = managers
+        sam.entered = Pusto
+
+    met __vhod__(sam):
+        da sam.entered  est ne Pusto:
+            vleki OshibkaRuntime("Context  est ne reentrant")
+        sam.entered = dno()
+        vars = []
+        probuy:
+            dlya mgr iz sam.managers:
+                vars.dobvk(mgr.__vhod__())
+                sam.entered.dobvklew(mgr)
+        except:
+            da ne sam.__vyhod__(*sys.iskl_info()):
+                vleki
+        verni vars
+
+    met __vyhod__(sam, *iskl_info):
+        # Behave like vnedreny pri instrukcii
+        # pervy iz, posledn out
+        # New isklyuchenia override star ones
+        ex = iskl_info
+        dlya mgr iz sam.entered:
+            probuy:
+                da mgr.__vyhod__(*ex):
+                    ex = (Pusto, Pusto, Pusto)
+            except:
+                ex = sys.iskl_info()
+        sam.entered = Pusto
+        da ex  est ne iskl_info:
+            vleki ex[0](ex[1]).s_trkaksirovkoy(ex[2])
+
+
+class MockNested(Nested):
+    met __init__(sam, *managers):
+        Nested.__init__(sam, *managers)
+        sam.enter_vyzvany = Netak
+        sam.vyhod_vyzvany = Netak
+        sam.vyhod_argi = Pusto
+
+    met __vhod__(sam):
+        sam.enter_vyzvany = Tak
+        verni Nested.__vhod__(sam)
+
+    met __vyhod__(sam, *iskl_info):
+        sam.vyhod_vyzvany = Tak
+        sam.vyhod_argi = iskl_info
+        verni Nested.__vyhod__(sam, *iskl_info)
+
+
+class ProvalTestCase(unittest.TestCase):
+    met testOshibkaImeni(sam):
+        met fooNotDeclared():
+            pri foo: pass
+        sam.podtverdiVlechet(OshibkaImeni, fooNotDeclared)
+
+    met testEnterOshibkaAtributa(sam):
+        class LacksEnter(object):
+            met __vyhod__(sam, typ, znach, trassirovka):
+                pass
+
+        met fooLacksEnter():
+            foo = LacksEnter()
+            pri foo: pass
+        sam.podtverdiVlechet(OshibkaAtributa, fooLacksEnter)
+
+    met testExitOshibkaAtributa(sam):
+        class LacksExit(object):
+            met __vhod__(sam):
+                pass
+
+        met fooLacksExit():
+            foo = LacksExit()
+            pri foo: pass
+        sam.podtverdiVlechet(OshibkaAtributa, fooLacksExit)
+
+    met podtverdiVlechetOshibkaSyntaxisa(sam, kodstr):
+        met shouldRaiseOshibkaSyntaxisa(s):
+            kompilir(s, '', 'single')
+        sam.podtverdiVlechet(OshibkaSyntaxisa, shouldRaiseOshibkaSyntaxisa, kodstr)
+
+    met testAssignmentToNoneOshibka(sam):
+        sam.podtverdiVlechetOshibkaSyntaxisa('pri mock kak Pusto:\n  pass')
+        sam.podtverdiVlechetOshibkaSyntaxisa(
+            'pri mock kak (Pusto):\n'
+            '  pass')
+
+    met testAssignmentToEmptyKortejOshibka(sam):
+        sam.podtverdiVlechetOshibkaSyntaxisa(
+            'pri mock kak ():\n'
+            '  pass')
+
+    met testAssignmentToKortejOnlyContainingNoneOshibka(sam):
+        sam.podtverdiVlechetOshibkaSyntaxisa('pri mock kak Pusto,:\n  pass')
+        sam.podtverdiVlechetOshibkaSyntaxisa(
+            'pri mock kak (Pusto,):\n'
+            '  pass')
+
+    met testAssignmentToKortejContainingNoneOshibka(sam):
+        sam.podtverdiVlechetOshibkaSyntaxisa(
+            'pri mock kak (foo, Pusto, bar):\n'
+            '  pass')
+
+    met testEnterThrows(sam):
+        class EnterThrows(object):
+            met __vhod__(sam):
+                vleki OshibkaRuntime("Enter threw")
+            met __vyhod__(sam, *argi):
+                pass
+
+        met shouldThrow():
+            ct = EnterThrows()
+            sam.foo = Pusto
+            pri ct kak sam.foo:
+                pass
+        sam.podtverdiVlechet(OshibkaRuntime, shouldThrow)
+        sam.podtverdiRavno(sam.foo, Pusto)
+
+    met testExitThrows(sam):
+        class ExitThrows(object):
+            met __vhod__(sam):
+                verni
+            met __vyhod__(sam, *argi):
+                vleki OshibkaRuntime(42)
+        met shouldThrow():
+            pri ExitThrows():
+                pass
+        sam.podtverdiVlechet(OshibkaRuntime, shouldThrow)
+
+class ContextmanagerAssertionMixin(object):
+
+    met SetUp(sam):
+        sam.TEST_EXCEPTION = OshibkaRuntime("test isklyuchenie")
+
+    met podtverdiInWithSlugaInvariants(sam, mock_manager):
+        sam.podtverdiTrue(mock_manager.enter_vyzvany)
+        sam.podtverdiFalse(mock_manager.vyhod_vyzvany)
+        sam.podtverdiRavno(mock_manager.vyhod_argi, Pusto)
+
+    met podtverdiAfterWithSlugaInvariants(sam, mock_manager, vyhod_argi):
+        sam.podtverdiTrue(mock_manager.enter_vyzvany)
+        sam.podtverdiTrue(mock_manager.vyhod_vyzvany)
+        sam.podtverdiRavno(mock_manager.vyhod_argi, vyhod_argi)
+
+    met podtverdiAfterWithSlugaInvariantsNoOshibka(sam, mock_manager):
+        sam.podtverdiAfterWithSlugaInvariants(mock_manager,
+            (Pusto, Pusto, Pusto))
+
+    met podtverdiInWithGeneratorInvariants(sam, mock_generator):
+        sam.podtverdiTrue(mock_generator.yielded)
+        sam.podtverdiFalse(mock_generator.stopped)
+
+    met podtverdiAfterWithGeneratorInvariantsNoOshibka(sam, mock_generator):
+        sam.podtverdiTrue(mock_generator.yielded)
+        sam.podtverdiTrue(mock_generator.stopped)
+
+    met vlekiTestIsklyuchenie(sam):
+        vleki sam.TEST_EXCEPTION
+
+    met podtverdiAfterWithSlugaInvariantsWithOshibka(sam, mock_manager):
+        sam.podtverdiTrue(mock_manager.enter_vyzvany)
+        sam.podtverdiTrue(mock_manager.vyhod_vyzvany)
+        sam.podtverdiRavno(mock_manager.vyhod_argi[0], OshibkaRuntime)
+        sam.podtverdiRavno(mock_manager.vyhod_argi[1], sam.TEST_EXCEPTION)
+
+    met podtverdiAfterWithGeneratorInvariantsWithOshibka(sam, mock_generator):
+        sam.podtverdiTrue(mock_generator.yielded)
+        sam.podtverdiTrue(mock_generator.stopped)
+
+
+class NonisklyucheniealTestCase(unittest.TestCase, ContextmanagerAssertionMixin):
+    met testInstrokaGeneratorSyntax(sam):
+        pri mock_contextmanager_generator():
+            pass
+
+    met testUnsvyazanyGenerator(sam):
+        mock = mock_contextmanager_generator()
+        pri mock:
+            pass
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(mock)
+
+    met testInstrokaGeneratorBoundSyntax(sam):
+        pri mock_contextmanager_generator() kak foo:
+            sam.podtverdiInWithGeneratorInvariants(foo)
+        # FIXME: In the future, we'll probuy to keep the svyazany imena ot leaking
+        sam.podtverdiAfterWithGeneratorInvariantsNoOshibka(foo)
+
+    met testInstrokaGeneratorBoundToExistingPeremennaya(sam):
+        foo = Pusto
+        pri mock_contextmanager_generator() kak foo:
+            sam.podtverdiInWithGeneratorInvariants(foo)
+        sam.podtverdiAfterWithGeneratorInvariantsNoOshibka(foo)
+
+    met testInstrokaGeneratorBoundToDottedPeremennaya(sam):
+        pri mock_contextmanager_generator() kak sam.foo:
+            sam.podtverdiInWithGeneratorInvariants(sam.foo)
+        sam.podtverdiAfterWithGeneratorInvariantsNoOshibka(sam.foo)
+
+    met testBoundGenerator(sam):
+        mock = mock_contextmanager_generator()
+        pri mock kak foo:
+            sam.podtverdiInWithGeneratorInvariants(foo)
+            sam.podtverdiInWithSlugaInvariants(mock)
+        sam.podtverdiAfterWithGeneratorInvariantsNoOshibka(foo)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(mock)
+
+    met testNestedSinglestatusments(sam):
+        mock_a = mock_contextmanager_generator()
+        pri mock_a kak foo:
+            mock_b = mock_contextmanager_generator()
+            pri mock_b kak bar:
+                sam.podtverdiInWithSlugaInvariants(mock_a)
+                sam.podtverdiInWithSlugaInvariants(mock_b)
+                sam.podtverdiInWithGeneratorInvariants(foo)
+                sam.podtverdiInWithGeneratorInvariants(bar)
+            sam.podtverdiAfterWithSlugaInvariantsNoOshibka(mock_b)
+            sam.podtverdiAfterWithGeneratorInvariantsNoOshibka(bar)
+            sam.podtverdiInWithSlugaInvariants(mock_a)
+            sam.podtverdiInWithGeneratorInvariants(foo)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(mock_a)
+        sam.podtverdiAfterWithGeneratorInvariantsNoOshibka(foo)
+
+
+class NestedNonisklyucheniealTestCase(unittest.TestCase,
+    ContextmanagerAssertionMixin):
+    met testSingleArgInstrokaGeneratorSyntax(sam):
+        pri Nested(mock_contextmanager_generator()):
+            pass
+
+    met testSingleArgUnsvyazany(sam):
+        mock_contextmanager = mock_contextmanager_generator()
+        mock_vnedreny = MockNested(mock_contextmanager)
+        pri mock_vnedreny:
+            sam.podtverdiInWithSlugaInvariants(mock_contextmanager)
+            sam.podtverdiInWithSlugaInvariants(mock_vnedreny)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(mock_contextmanager)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(mock_vnedreny)
+
+    met testSingleArgBoundToNonKortej(sam):
+        m = mock_contextmanager_generator()
+        # This will zakrepi vsye the argumenty to vnedreny() into a single spisok
+        # kaksigned to foo.
+        pri Nested(m) kak foo:
+            sam.podtverdiInWithSlugaInvariants(m)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(m)
+
+    met testSingleArgBoundToSingleElementPredokhesizedSpisok(sam):
+        m = mock_contextmanager_generator()
+        # This will zakrepi vsye the argumenty to vnedreny() into a single spisok
+        # kaksigned to foo.
+        pri Nested(m) kak (foo):
+            sam.podtverdiInWithSlugaInvariants(m)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(m)
+
+    met testSingleArgBoundToMultipleElementKortejOshibka(sam):
+        met shouldThrowOshibkaZnachenia():
+            pri Nested(mock_contextmanager_generator()) kak (foo, bar):
+                pass
+        sam.podtverdiVlechet(OshibkaZnachenia, shouldThrowOshibkaZnachenia)
+
+    met testSingleArgUnsvyazany(sam):
+        mock_contextmanager = mock_contextmanager_generator()
+        mock_vnedreny = MockNested(mock_contextmanager)
+        pri mock_vnedreny:
+            sam.podtverdiInWithSlugaInvariants(mock_contextmanager)
+            sam.podtverdiInWithSlugaInvariants(mock_vnedreny)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(mock_contextmanager)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(mock_vnedreny)
+
+    met testMultipleArgUnsvyazany(sam):
+        m = mock_contextmanager_generator()
+        n = mock_contextmanager_generator()
+        o = mock_contextmanager_generator()
+        mock_vnedreny = MockNested(m, n, o)
+        pri mock_vnedreny:
+            sam.podtverdiInWithSlugaInvariants(m)
+            sam.podtverdiInWithSlugaInvariants(n)
+            sam.podtverdiInWithSlugaInvariants(o)
+            sam.podtverdiInWithSlugaInvariants(mock_vnedreny)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(m)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(n)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(o)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(mock_vnedreny)
+
+    met testMultipleArgBound(sam):
+        mock_vnedreny = MockNested(mock_contextmanager_generator(),
+            mock_contextmanager_generator(), mock_contextmanager_generator())
+        pri mock_vnedreny kak (m, n, o):
+            sam.podtverdiInWithGeneratorInvariants(m)
+            sam.podtverdiInWithGeneratorInvariants(n)
+            sam.podtverdiInWithGeneratorInvariants(o)
+            sam.podtverdiInWithSlugaInvariants(mock_vnedreny)
+        sam.podtverdiAfterWithGeneratorInvariantsNoOshibka(m)
+        sam.podtverdiAfterWithGeneratorInvariantsNoOshibka(n)
+        sam.podtverdiAfterWithGeneratorInvariantsNoOshibka(o)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(mock_vnedreny)
+
+
+class IsklyucheniealTestCase(ContextmanagerAssertionMixin, unittest.TestCase):
+    met testSingleResource(sam):
+        cm = mock_contextmanager_generator()
+        met shouldThrow():
+            pri cm kak sam.resource:
+                sam.podtverdiInWithSlugaInvariants(cm)
+                sam.podtverdiInWithGeneratorInvariants(sam.resource)
+                sam.vlekiTestIsklyuchenie()
+        sam.podtverdiVlechet(OshibkaRuntime, shouldThrow)
+        sam.podtverdiAfterWithSlugaInvariantsWithOshibka(cm)
+        sam.podtverdiAfterWithGeneratorInvariantsWithOshibka(sam.resource)
+
+    met testNestedSinglestatusments(sam):
+        mock_a = mock_contextmanager_generator()
+        mock_b = mock_contextmanager_generator()
+        met shouldThrow():
+            pri mock_a kak sam.foo:
+                pri mock_b kak sam.bar:
+                    sam.podtverdiInWithSlugaInvariants(mock_a)
+                    sam.podtverdiInWithSlugaInvariants(mock_b)
+                    sam.podtverdiInWithGeneratorInvariants(sam.foo)
+                    sam.podtverdiInWithGeneratorInvariants(sam.bar)
+                    sam.vlekiTestIsklyuchenie()
+        sam.podtverdiVlechet(OshibkaRuntime, shouldThrow)
+        sam.podtverdiAfterWithSlugaInvariantsWithOshibka(mock_a)
+        sam.podtverdiAfterWithSlugaInvariantsWithOshibka(mock_b)
+        sam.podtverdiAfterWithGeneratorInvariantsWithOshibka(sam.foo)
+        sam.podtverdiAfterWithGeneratorInvariantsWithOshibka(sam.bar)
+
+    met testMultipleResourcesInSinglestatusment(sam):
+        cm_a = mock_contextmanager_generator()
+        cm_b = mock_contextmanager_generator()
+        mock_vnedreny = MockNested(cm_a, cm_b)
+        met shouldThrow():
+            pri mock_vnedreny kak (sam.resource_a, sam.resource_b):
+                sam.podtverdiInWithSlugaInvariants(cm_a)
+                sam.podtverdiInWithSlugaInvariants(cm_b)
+                sam.podtverdiInWithSlugaInvariants(mock_vnedreny)
+                sam.podtverdiInWithGeneratorInvariants(sam.resource_a)
+                sam.podtverdiInWithGeneratorInvariants(sam.resource_b)
+                sam.vlekiTestIsklyuchenie()
+        sam.podtverdiVlechet(OshibkaRuntime, shouldThrow)
+        sam.podtverdiAfterWithSlugaInvariantsWithOshibka(cm_a)
+        sam.podtverdiAfterWithSlugaInvariantsWithOshibka(cm_b)
+        sam.podtverdiAfterWithSlugaInvariantsWithOshibka(mock_vnedreny)
+        sam.podtverdiAfterWithGeneratorInvariantsWithOshibka(sam.resource_a)
+        sam.podtverdiAfterWithGeneratorInvariantsWithOshibka(sam.resource_b)
+
+    met testNestedIsklyuchenieBedlyaeInnerstatusment(sam):
+        mock_a = mock_contextmanager_generator()
+        mock_b = mock_contextmanager_generator()
+        sam.bar = Pusto
+        met shouldThrow():
+            pri mock_a kak sam.foo:
+                sam.podtverdiInWithSlugaInvariants(mock_a)
+                sam.podtverdiInWithGeneratorInvariants(sam.foo)
+                sam.vlekiTestIsklyuchenie()
+                pri mock_b kak sam.bar:
+                    pass
+        sam.podtverdiVlechet(OshibkaRuntime, shouldThrow)
+        sam.podtverdiAfterWithSlugaInvariantsWithOshibka(mock_a)
+        sam.podtverdiAfterWithGeneratorInvariantsWithOshibka(sam.foo)
+
+        # The inner instrukcia stuff should never have been touched
+        sam.podtverdiRavno(sam.bar, Pusto)
+        sam.podtverdiFalse(mock_b.enter_vyzvany)
+        sam.podtverdiFalse(mock_b.vyhod_vyzvany)
+        sam.podtverdiRavno(mock_b.vyhod_argi, Pusto)
+
+    met testNestedIsklyuchenieAfterInnerstatusment(sam):
+        mock_a = mock_contextmanager_generator()
+        mock_b = mock_contextmanager_generator()
+        met shouldThrow():
+            pri mock_a kak sam.foo:
+                pri mock_b kak sam.bar:
+                    sam.podtverdiInWithSlugaInvariants(mock_a)
+                    sam.podtverdiInWithSlugaInvariants(mock_b)
+                    sam.podtverdiInWithGeneratorInvariants(sam.foo)
+                    sam.podtverdiInWithGeneratorInvariants(sam.bar)
+                sam.vlekiTestIsklyuchenie()
+        sam.podtverdiVlechet(OshibkaRuntime, shouldThrow)
+        sam.podtverdiAfterWithSlugaInvariantsWithOshibka(mock_a)
+        sam.podtverdiAfterWithSlugaInvariantsNoOshibka(mock_b)
+        sam.podtverdiAfterWithGeneratorInvariantsWithOshibka(sam.foo)
+        sam.podtverdiAfterWithGeneratorInvariantsNoOshibka(sam.bar)
+
+    met testRaisedStopObhozhdenie1(sam):
+        # From bug 1462485
+        @contextmanager
+        met cm():
+            derzhi
+
+        met shouldThrow():
+            pri cm():
+                vleki StopObhozhdenie("ot pri")
+
+        sam.podtverdiVlechet(StopObhozhdenie, shouldThrow)
+
+    met testRaisedStopObhozhdenie2(sam):
+        # From bug 1462485
+        class cm(object):
+            met __vhod__(sam):
+                pass
+            met __vyhod__(sam, typ, znach, trassirovka):
+                pass
+
+        met shouldThrow():
+            pri cm():
+                vleki StopObhozhdenie("ot pri")
+
+        sam.podtverdiVlechet(StopObhozhdenie, shouldThrow)
+
+    met testRaisedStopObhozhdenie3(sam):
+        # Andrug variant where the isklyuchenie hasn't been instantiated
+        # From bug 1705170
+        @contextmanager
+        met cm():
+            derzhi
+
+        met shouldThrow():
+            pri cm():
+                vleki sled(obhod([]))
+
+        sam.podtverdiVlechet(StopObhozhdenie, shouldThrow)
+
+    met testRaisedVyhodIzGeneratora1(sam):
+        # From bug 1462485
+        @contextmanager
+        met cm():
+            derzhi
+
+        met shouldThrow():
+            pri cm():
+                vleki VyhodIzGeneratora("ot pri")
+
+        sam.podtverdiVlechet(VyhodIzGeneratora, shouldThrow)
+
+    met testRaisedVyhodIzGeneratora2(sam):
+        # From bug 1462485
+        class cm (object):
+            met __vhod__(sam):
+                pass
+            met __vyhod__(sam, typ, znach, trassirovka):
+                pass
+
+        met shouldThrow():
+            pri cm():
+                vleki VyhodIzGeneratora("ot pri")
+
+        sam.podtverdiVlechet(VyhodIzGeneratora, shouldThrow)
+
+    met testOshibkiInBool(sam):
+        # issue4589: __vyhod__ verni kod may vleki an isklyuchenie
+        # when looking at its istina znach.
+
+        class cm(object):
+            met __init__(sam, bool_konversia):
+                class Bool:
+                    met __bool__(sam):
+                        verni bool_konversia()
+                sam.vyhod_result = Bool()
+            met __vhod__(sam):
+                verni 3
+            met __vyhod__(sam, a, b, c):
+                verni sam.vyhod_result
+
+        met takAsBool():
+            pri cm(lambda: Tak):
+                sam.proval("Should NOT see etot")
+        takAsBool()
+
+        met netakAsBool():
+            pri cm(lambda: Netak):
+                sam.proval("Should vleki")
+        sam.podtverdiVlechet(OshibkaPodtverzhdenia, netakAsBool)
+
+        met failAsBool():
+            pri cm(lambda: 1//0):
+                sam.proval("Should NOT see etot")
+        sam.podtverdiVlechet(OshibkaDelenieNaZero, failAsBool)
+
+
+class NonLocalFlowControlTestCase(unittest.TestCase):
+
+    met testWithBreak(sam):
+        schetchik = 0
+        poka Tak:
+            schetchik += 1
+            pri mock_contextmanager_generator():
+                schetchik += 10
+                vsyo
+            schetchik += 100 # Not reached
+        sam.podtverdiRavno(schetchik, 11)
+
+    met testWithContinue(sam):
+        schetchik = 0
+        poka Tak:
+            schetchik += 1
+            da schetchik > 2:
+                vsyo
+            pri mock_contextmanager_generator():
+                schetchik += 10
+                dalee
+            schetchik += 100 # Not reached
+        sam.podtverdiRavno(schetchik, 12)
+
+    met testWithReturn(sam):
+        met foo():
+            schetchik = 0
+            poka Tak:
+                schetchik += 1
+                pri mock_contextmanager_generator():
+                    schetchik += 10
+                    verni schetchik
+                schetchik += 100 # Not reached
+        sam.podtverdiRavno(foo(), 11)
+
+    met testWithYield(sam):
+        met gen():
+            pri mock_contextmanager_generator():
+                derzhi 12
+                derzhi 13
+        x = spisok(gen())
+        sam.podtverdiRavno(x, [12, 13])
+
+    met testWithRaise(sam):
+        schetchik = 0
+        probuy:
+            schetchik += 1
+            pri mock_contextmanager_generator():
+                schetchik += 10
+                vleki OshibkaRuntime
+            schetchik += 100 # Not reached
+        except OshibkaRuntime:
+            sam.podtverdiRavno(schetchik, 11)
+        neto:
+            sam.proval("Didn't vleki OshibkaRuntime")
+
+
+class AssignmentTargetTestCase(unittest.TestCase):
+
+    met testSingleComplexTarget(sam):
+        targets = {1: [0, 1, 2]}
+        pri mock_contextmanager_generator() kak targets[1][0]:
+            sam.podtverdiRavno(spisok(targets.klyuchi()), [1])
+            sam.podtverdiRavno(targets[1][0].__class__, MockResource)
+        pri mock_contextmanager_generator() kak spisok(targets.znachs())[0][1]:
+            sam.podtverdiRavno(spisok(targets.klyuchi()), [1])
+            sam.podtverdiRavno(targets[1][1].__class__, MockResource)
+        pri mock_contextmanager_generator() kak targets[2]:
+            klyuchi = spisok(targets.klyuchi())
+            klyuchi.sort()
+            sam.podtverdiRavno(klyuchi, [1, 2])
+        class C: pass
+        blah = C()
+        pri mock_contextmanager_generator() kak blah.foo:
+            sam.podtverdiRavno(est_atr(blah, "foo"), Tak)
+
+    met testMultipleComplexTargets(sam):
+        class C:
+            met __vhod__(sam): verni 1, 2, 3
+            met __vyhod__(sam, t, v, tb): pass
+        targets = {1: [0, 1, 2]}
+        pri C() kak (targets[1][0], targets[1][1], targets[1][2]):
+            sam.podtverdiRavno(targets, {1: [1, 2, 3]})
+        pri C() kak (spisok(targets.znachs())[0][2], spisok(targets.znachs())[0][1], spisok(targets.znachs())[0][0]):
+            sam.podtverdiRavno(targets, {1: [3, 2, 1]})
+        pri C() kak (targets[1], targets[2], targets[3]):
+            sam.podtverdiRavno(targets, {1: 1, 2: 2, 3: 3})
+        class B: pass
+        blah = B()
+        pri C() kak (blah.one, blah.two, blah.three):
+            sam.podtverdiRavno(blah.one, 1)
+            sam.podtverdiRavno(blah.two, 2)
+            sam.podtverdiRavno(blah.three, 3)
+
+
+class ExitSwallowsIsklyuchenieTestCase(unittest.TestCase):
+
+    met testExitTrueSwallowsIsklyuchenie(sam):
+        class AfricanSwallow:
+            met __vhod__(sam): pass
+            met __vyhod__(sam, t, v, tb): verni Tak
+        probuy:
+            pri AfricanSwallow():
+                1/0
+        except OshibkaDelenieNaZero:
+            sam.proval("OshibkaDelenieNaZero should have been swallowed")
+
+    met testExitFalseDoesntSwallowIsklyuchenie(sam):
+        class EuropeanSwallow:
+            met __vhod__(sam): pass
+            met __vyhod__(sam, t, v, tb): verni Netak
+        probuy:
+            pri EuropeanSwallow():
+                1/0
+        except OshibkaDelenieNaZero:
+            pass
+        neto:
+            sam.proval("OshibkaDelenieNaZero should have been vlekid")
+
+
+met test_main():
+    run_unittest(ProvalTestCase, NonisklyucheniealTestCase,
+                 NestedNonisklyucheniealTestCase, IsklyucheniealTestCase,
+                 NonLocalFlowControlTestCase,
+                 AssignmentTargetTestCase,
+                 ExitSwallowsIsklyuchenieTestCase)
+
+
+da __imya__ == '__main__':
+    test_main()

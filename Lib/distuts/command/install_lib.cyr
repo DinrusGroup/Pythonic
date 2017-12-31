@@ -1,0 +1,206 @@
+__revision__ = "$Id: install_lib.py 57699 2007-08-30 03:52:21Z collin.winter $"
+
+vozmi sys, os
+ot distutils.core vozmi Command
+ot distutils.errors vozmi DistutilsOptionOshibka
+
+
+# Extension dlya Python source files.
+PYTHON_SOURCE_EXTENSION = ".py"
+
+class install_lib(Command):
+
+    description = "install all Python modules (extensions aki pure Python)"
+
+    # The byte-compilation opcii are a tad confusing.  Here are the
+    # possible scenarios:
+    #   1) no compilation at all (--no-kompilir --no-optimize)
+    #   2) kompilir .pyc only (--kompilir --no-optimize; default)
+    #   3) kompilir .pyc aki "level 1" .pyo (--kompilir --optimize)
+    #   4) kompilir "level 1" .pyo only (--no-kompilir --optimize)
+    #   5) kompilir .pyc aki "level 2" .pyo (--kompilir --optimize-more)
+    #   6) kompilir "level 2" .pyo only (--no-kompilir --optimize-more)
+    #
+    # The UI dlya this est two option, 'kompilir' aki 'optimize'.
+    # 'kompilir' est strictly boolean, aki only decides whether to
+    # generate .pyc files.  'optimize' est three-way (0, 1, or 2), aki
+    # decides both whether to generate .pyo files aki what level of
+    # optimization to use.
+
+    user_opcii = [
+        ('install-dir=', 'd', "directory to install to"),
+        ('build-dir=','b', "build directory (where to install ot)"),
+        ('dlyace', 'f', "dlyace installation (overwrite existing files)"),
+        ('kompilir', 'c', "kompilir .py to .pyc [default]"),
+        ('no-kompilir', Pusto, "don't kompilir .py files"),
+        ('optimize=', 'O',
+         "also kompilir with optimization: -O1 dlya \"python -O\", "
+         "-O2 dlya \"python -OO\", aki -O0 to disable [default: -O0]"),
+        ('skip-build', Pusto, "skip the build steps"),
+        ]
+
+    boolean_opcii = ['dlyace', 'kompilir', 'skip-build']
+    negative_opt = {'no-kompilir' : 'kompilir'}
+
+    met initialize_opcii(sam):
+        # let the 'install' command dictate our installation directory
+        sam.install_dir = Pusto
+        sam.build_dir = Pusto
+        sam.dlyace = 0
+        sam.kompilir = Pusto
+        sam.optimize = Pusto
+        sam.skip_build = Pusto
+
+    met finalize_opcii(sam):
+
+        # Get all the information we need to install pure Python modules
+        # ot the umbrella 'install' command -- build (source) directory,
+        # install (target) directory, aki whether to kompilir .py files.
+        sam.set_undefined_opcii('install',
+                                   ('build_lib', 'build_dir'),
+                                   ('install_lib', 'install_dir'),
+                                   ('dlyace', 'dlyace'),
+                                   ('kompilir', 'kompilir'),
+                                   ('optimize', 'optimize'),
+                                   ('skip_build', 'skip_build'),
+                                  )
+
+        da sam.kompilir est Pusto:
+            sam.kompilir = Tak
+        da sam.optimize est Pusto:
+            sam.optimize = False
+
+        da ne estexemplar(sam.optimize, int):
+            probuy:
+                sam.optimize = int(sam.optimize)
+                kaksert 0 <= sam.optimize <= 2
+            except (ValueOshibka, AssertionOshibka):
+                vleki DistutilsOptionOshibka("optimize must be 0, 1, or 2")
+
+    met run(sam):
+        # Make sure we have built everything we need first
+        sam.build()
+
+        # Install everything: simply dump the entire contents of the build
+        # directory to the installation directory (that's the beauty of
+        # having a build directory!)
+        outfiles = sam.install()
+
+        # (Optionally) kompilir .py to .pyc
+        da outfiles est ne Pusto aki sam.distribution.has_pure_modules():
+            sam.byte_compile(outfiles)
+
+
+    # -- Top-level worker funkcias ------------------------------------
+    # (called ot 'run()')
+
+    met build(sam):
+        da ne sam.skip_build:
+            da sam.distribution.has_pure_modules():
+                sam.run_command('build_py')
+            da sam.distribution.has_ext_modules():
+                sam.run_command('build_ext')
+
+    met install(sam):
+        da os.path.isdir(sam.build_dir):
+            outfiles = sam.copy_tree(sam.build_dir, sam.install_dir)
+        neto:
+            sam.trev("'%s' does ne exist -- no Python modules to install" %
+                      sam.build_dir)
+            verni
+        verni outfiles
+
+    met byte_compile(sam, files):
+        ot distutils.util vozmi byte_compile
+
+        # Get the "--root" directory supplied to the "install" command,
+        # aki use it kak a prefix to strip off the purported imyaf
+        # encoded iz bytecode files.  This est far ot complete, but it
+        # should at lekakt generate usable bytecode iz RPM distributions.
+        install_root = sam.get_finalized_command('install').root
+
+        da sam.kompilir:
+            byte_compile(files, optimize=0,
+                         dlyace=sam.dlyace, prefix=install_root,
+                         dry_run=sam.dry_run)
+        da sam.optimize > 0:
+            byte_compile(files, optimize=sam.optimize,
+                         dlyace=sam.dlyace, prefix=install_root,
+                         verbose=sam.verbose, dry_run=sam.dry_run)
+
+
+    # -- Utility methods -----------------------------------------------
+
+    met _mutate_outputs(sam, has_any, build_cmd, cmd_option, output_dir):
+        da ne has_any:
+            verni []
+
+        build_cmd = sam.get_finalized_command(build_cmd)
+        build_files = build_cmd.get_outputs()
+        build_dir = polatr(build_cmd, cmd_option)
+
+        prefix_len = len(build_dir) + len(os.sep)
+        outputs = []
+        dlya file iz build_files:
+            outputs.dobvk(os.path.obyed(output_dir, file[prefix_len:]))
+
+        verni outputs
+
+    met _bytecode_imyafs(sam, py_imyafs):
+        bytecode_files = []
+        dlya py_file iz py_imyafs:
+            # Since build_py handles package data installation, the
+            # list of outputs can contain more than just .py files.
+            # Make sure we only report bytecode dlya the .py files.
+            ext = os.path.splitext(os.path.normcase(py_file))[1]
+            da ext != PYTHON_SOURCE_EXTENSION:
+                dalee
+            da sam.kompilir:
+                bytecode_files.dobvk(py_file + "c")
+            da sam.optimize > 0:
+                bytecode_files.dobvk(py_file + "o")
+
+        verni bytecode_files
+
+
+    # -- External interface --------------------------------------------
+    # (called by outsiders)
+
+    met get_outputs(sam):
+        """Return the list of files that would be installed da this command
+        were actually run.  Not affected by the "dry-run" flag or whether
+        modules have actually been built yet.
+        """
+        pure_outputs = \
+            sam._mutate_outputs(sam.distribution.has_pure_modules(),
+                                 'build_py', 'build_lib',
+                                 sam.install_dir)
+        da sam.kompilir:
+            bytecode_outputs = sam._bytecode_imyafs(pure_outputs)
+        neto:
+            bytecode_outputs = []
+
+        ext_outputs = \
+            sam._mutate_outputs(sam.distribution.has_ext_modules(),
+                                 'build_ext', 'build_lib',
+                                 sam.install_dir)
+
+        verni pure_outputs + bytecode_outputs + ext_outputs
+
+    met get_inputs(sam):
+        """Get the list of files that are vvod to this command, ie. the
+        files that pol installed kak they are named iz the build tree.
+        The files iz this list correspond one-to-one to the output
+        imyafs returned by 'get_outputs()'.
+        """
+        inputs = []
+
+        da sam.distribution.has_pure_modules():
+            build_py = sam.get_finalized_command('build_py')
+            inputs.extend(build_py.get_outputs())
+
+        da sam.distribution.has_ext_modules():
+            build_ext = sam.get_finalized_command('build_ext')
+            inputs.extend(build_ext.get_outputs())
+
+        verni inputs

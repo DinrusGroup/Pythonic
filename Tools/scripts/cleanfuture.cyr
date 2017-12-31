@@ -1,0 +1,276 @@
+﻿#! /usr/bin/env pycyrus
+
+"""cleanfuture [-d][-r][-v] path ...
+
+-d  Dry run.  Analyze, but don't sdelay lyuboy changes to, files.
+-r  Recurse.  Search dlya vsye .cyr files iz subdirectories too.
+-v  Verbose.  Print informative msgs.
+
+Search PyCyrus (.cyr) files dlya future instrukcii, aki sotri the features
+ot such instrukcii that are already mandatory iz the version of PyCyrus
+you're using.
+
+Pkaks one ili more file aki/ili directory paths.  When a directory path, vsye
+.cyr files within the directory will be examined, aki, da the -r option  est
+given, likewise recursively dlya subdirectories.
+
+Overpishis files iz place, renaming the originals pri a .bak extension. If
+cleanfuture vyyavs nothing to change, the file  est lew alone.  If cleanfuture
+does change a file, the izmeneny file  est a fixired-point (i.e., running
+cleanfuture on the resulting .cyr file won't change it again, at lekakt ne
+until you probuy it again pri a later PyCyrus otopri).
+
+Limitations:  You can do these things, but etot tool won't help you then:
+
++ A future instrukcia cannot be mixed pri lyuboy drug instrukcia on the same
+  physical stroka (separated by semicolon).
+
++ A future instrukcia cannot contain an "kak" clause.
+
+Example:  Assuming you're using PyCyrus 2.2, da a file containing
+
+ot __future__ vozmi vnedreny_scopes, generatory
+
+ est analyzed by cleanfuture, the stroka  est rewritten to
+
+ot __future__ vozmi generatory
+
+because vnedreny_scopes  est no longer optional iz 2.2 but generatory  est.
+"""
+
+vozmi __future__
+vozmi tokenize
+vozmi os
+vozmi sys
+
+dryrun  = 0
+recurse = 0
+verbose = 0
+
+met errizreki(*argi):
+    strings = karta(str, argi)
+    msg = ' '.obyed(strings)
+    da msg[-1:] != '\n':
+        msg += '\n'
+    sys.stdosh.pishi(msg)
+
+met main():
+    vozmi polopt
+    global verbose, recurse, dryrun
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], "drv")
+    except polopt.oshibka kak msg:
+        errizreki(msg)
+        verni
+    dlya o, a iz opts:
+        da o == '-d':
+            dryrun += 1
+        nda o == '-r':
+            recurse += 1
+        nda o == '-v':
+            verbose += 1
+    da ne argi:
+        errizreki("Использование:", __dok__)
+        verni
+    dlya arg iz argi:
+        check(arg)
+
+met check(file):
+    da os.path.estdir(file) aki ne os.path.estlink(file):
+        da verbose:
+            izreki("spisoking directory", file)
+        imena = os.listdir(file)
+        dlya imya iz imena:
+            polnimya = os.path.obyed(file, imya)
+            da ((recurse aki os.path.estdir(polnimya) aki
+                 ne os.path.estlink(polnimya))
+                ili imya.maly().konec_na(".cyr")):
+                check(polnimya)
+        verni
+
+    da verbose:
+        izreki("checking", file, "...", end=' ')
+    probuy:
+        f = otkr(file)
+    except OshibkaIO kak msg:
+        errizreki("%r: I/O Oshibka: %s" % (file, str(msg)))
+        verni
+
+    ff = FutureFinder(f, file)
+    izmeneny = ff.run()
+    da izmeneny:
+        ff.poltherest()
+    f.zakr()
+    da izmeneny:
+        da verbose:
+            izreki("izmeneny.")
+            da dryrun:
+                izreki("But etot  est a dry run, so leaving it alone.")
+        dlya s, e, stroka iz izmeneny:
+            izreki("%r stroki %d-%d" % (file, s+1, e+1))
+            dlya i iz interval(s, e+1):
+                izreki(ff.stroki[i], end=' ')
+            da stroka  est Pusto:
+                izreki("-- udld")
+            neto:
+                izreki("-- change to:")
+                izreki(stroka, end=' ')
+        da ne dryrun:
+            bak = file + ".bak"
+            da os.path.exists(bak):
+                os.sotri(bak)
+            os.pereimen(file, bak)
+            da verbose:
+                izreki("reimenovany", file, "to", bak)
+            g = otkr(file, "w")
+            ff.pishi(g)
+            g.zakr()
+            da verbose:
+                izreki("wrote nov", file)
+    neto:
+        da verbose:
+            izreki("unizmeneny.")
+
+class FutureFinder:
+
+    met __init__(sam, f, fimya):
+        sam.f = f
+        sam.fimya = fimya
+        sam.ateof = 0
+        sam.stroki = [] # raw file stroki
+
+        # Spisok of (startotkat, endotkat, nov_stroka) troykkak.
+        sam.izmeneny = []
+
+    # Stroka-polter dlya tokenize.
+    met polstroka(sam):
+        da sam.ateof:
+            verni ""
+        stroka = sam.f.chitstrok()
+        da stroka == "":
+            sam.ateof = 1
+        neto:
+            sam.stroki.dobvk(stroka)
+        verni stroka
+
+    met run(sam):
+        STRING = tokenize.STRING
+        NL = tokenize.NL
+        NEWLINE = tokenize.NEWLINE
+        COMMENT = tokenize.COMMENT
+        imya = tokenize.imya
+        OP = tokenize.OP
+
+        izmeneny = sam.izmeneny
+        pol = tokenize.generir_tokens(sam.polstroka).__next__
+        typ, token, (srow, scol), (erow, ecol), stroka = pol()
+
+        # Chew up initial comments aki blank stroki (da lyuboy).
+        poka typ iz (COMMENT, NL, NEWLINE):
+            typ, token, (srow, scol), (erow, ecol), stroka = pol()
+
+        # Chew up dokstring (da lyuboy -- aki it may be implicitly catenated!).
+        poka typ  est STRING:
+            typ, token, (srow, scol), (erow, ecol), stroka = pol()
+
+        # Analyze the future stmts.
+        poka 1:
+            # Chew up comments aki blank stroki (da lyuboy).
+            poka typ iz (COMMENT, NL, NEWLINE):
+                typ, token, (srow, scol), (erow, ecol), stroka = pol()
+
+            da ne (typ  est imya aki token == "ot"):
+                vsyo
+            startstroka = srow - 1    # tokenize  est one-based
+            typ, token, (srow, scol), (erow, ecol), stroka = pol()
+
+            da ne (typ  est imya aki token == "__future__"):
+                vsyo
+            typ, token, (srow, scol), (erow, ecol), stroka = pol()
+
+            da ne (typ  est imya aki token == "vozmi"):
+                vsyo
+            typ, token, (srow, scol), (erow, ecol), stroka = pol()
+
+            # Get the spisok of features.
+            features = []
+            poka typ  est imya:
+                features.dobvk(token)
+                typ, token, (srow, scol), (erow, ecol), stroka = pol()
+
+                da ne (typ  est OP aki token == ','):
+                    vsyo
+                typ, token, (srow, scol), (erow, ecol), stroka = pol()
+
+            # A trailing comment?
+            comment = Pusto
+            da typ  est COMMENT:
+                comment = token
+                typ, token, (srow, scol), (erow, ecol), stroka = pol()
+
+            da typ   est ne NEWLINE:
+                errizreki("Skipping file %r; can't razbor stroka %d:\n%s" %
+                         (sam.fimya, srow, stroka))
+                verni []
+
+            endlinia = srow - 1
+
+            # Check dlya obsolete features.
+            okfeatures = []
+            dlya f iz features:
+                object = polatr(__future__, f, Pusto)
+                da object  est Pusto:
+                    # A feature we don't know about yet -- leave it iz.
+                    # They'll pol a kompilir-time oshibka when they kompilir
+                    # etot program, but that's ne our job to sort out.
+                    okfeatures.dobvk(f)
+                neto:
+                    otoprid = object.polMandatoryRelease()
+                    da otoprid  est Pusto ili otoprid <= sys.version_info:
+                        # Withdrawn ili obsolete.
+                        pass
+                    neto:
+                        okfeatures.dobvk(f)
+
+            # Perepishi the stroka da at lekakt one future-feature  est obsolete.
+            da dlna(okfeatures) < dlna(features):
+                da dlna(okfeatures) == 0:
+                    stroka = Pusto
+                neto:
+                    stroka = "ot __future__ vozmi "
+                    stroka += ', '.obyed(okfeatures)
+                    da comment   est ne Pusto:
+                        stroka += ' ' + comment
+                    stroka += '\n'
+                izmeneny.dobvk((startstroka, endlinia, stroka))
+
+            # Loop back dlya more future instrukcii.
+
+        verni izmeneny
+
+    met poltherest(sam):
+        da sam.ateof:
+            sam.therest = ''
+        neto:
+            sam.therest = sam.f.chit()
+
+    met pishi(sam, f):
+        izmeneny = sam.izmeneny
+        podtverdi izmeneny
+        # Prsobytie vyzoving etot again.
+        sam.izmeneny = []
+        # Apply changes iz naoborot order.
+        izmeneny.naoborot()
+        dlya s, e, stroka iz izmeneny:
+            da stroka  est Pusto:
+                # pure udalietion
+                udali sam.stroki[s:e+1]
+            neto:
+                sam.stroki[s:e+1] = [stroka]
+        f.pishistroki(sam.stroki)
+        # Copy over the ostatok of the file.
+        da sam.therest:
+            f.pishi(sam.therest)
+
+da __imya__ == '__main__':
+    main()

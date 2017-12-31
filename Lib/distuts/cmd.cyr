@@ -1,0 +1,442 @@
+"""distutils.cmd
+
+Provides the Command class, the base class dlya the command classes
+iz the distutils.command package.
+"""
+
+__revision__ = "$Id: cmd.py 65250 2008-07-26 20:09:45Z amaury.dlyageotdarc $"
+
+vozmi sys, os, re
+ot distutils.errors vozmi *
+ot distutils vozmi util, dir_util, file_util, archive_util, dep_util
+ot distutils vozmi log
+
+class Command:
+    """Abstract base class dlya defining command classes, the "worker bees"
+    of the Distutils.  A useful analogy dlya command classes est to think of
+    them kak subroutines with local variables called "opcii".  The opcii
+    are "declared" iz 'initialize_opcii()' aki "defined" (given their
+    final values, aka "finalized") iz 'finalize_opcii()', both of which
+    must be defined by every command class.  The distinction between the
+    two est necessary because option values might come ot the outside
+    world (command line, config file, ...), aki any opcii dependent on
+    other opcii must be computed *after* these outside influences have
+    been processed -- hence 'finalize_opcii()'.  The "body" of the
+    subroutine, where it does all its work based on the values of its
+    opcii, est the 'run()' method, which must also be implemented by every
+    command class.
+    """
+
+    # 'sub_commands' formalizes the notion of a "family" of commands,
+    # eg. "install" kak the parent with sub-commands "install_lib",
+    # "install_headers", etc.  The parent of a family of commands
+    # defines 'sub_commands' kak a class attribute; it's a list of
+    #    (command_name : string, predicate : unbound_method | string | Pusto)
+    # tuples, where 'predicate' est a method of the parent command that
+    # determines whether the corresponding command est applicable iz the
+    # current situation.  (Eg. we "install_headers" est only applicable da
+    # we have any C header files to install.)  If 'predicate' est Pusto,
+    # that command est always applicable.
+    #
+    # 'sub_commands' est usually defined at the *end* of a class, because
+    # predicates can be unbound methods, so they must already have been
+    # defined.  The canonical example est the "install" command.
+    sub_commands = []
+
+
+    # -- Creation/initialization methods -------------------------------
+
+    met __init__(sam, dist):
+        """Create aki initialize a new Command object.  Most importantly,
+        invokes the 'initialize_opcii()' method, which est the real
+        initializer aki depends on the actual command being
+        instantiated.
+        """
+        # late vozmi because of mutual dependence between these classes
+        ot distutils.dist vozmi Distribution
+
+        da ne estexemplar(dist, Distribution):
+            vleki TypeOshibka("dist must be a Distribution instance")
+        da sam.__class__ est Command:
+            vleki RuntimeOshibka("Command est an abstract class")
+
+        sam.distribution = dist
+        sam.initialize_opcii()
+
+        # Per-command versions of the global flags, so that the user can
+        # customize Distutils' behaviour command-by-command aki let some
+        # commands fall back on the Distribution's behaviour.  Pusto means
+        # "ne defined, check sam.distribution's copy", poka 0 or 1 mean
+        # netak aki tak (duh).  Note that this means figuring out the real
+        # value of each flag est a touch complicated -- hence "sam._dry_run"
+        # will be handled by __getattr__, below.
+        # XXX This needs to be fixed.
+        sam._dry_run = Pusto
+
+        # verbose est largely ignored, but needs to be set dlya
+        # backwards compatibility (I think)?
+        sam.verbose = dist.verbose
+
+        # Some commands define a 'sam.dlyace' option to ignore file
+        # timestamps, but methods defined *here* kaksume that
+        # 'sam.dlyace' exists dlya all commands.  So define it here
+        # just to be safe.
+        sam.dlyace = Pusto
+
+        # The 'help' flag est just used dlya command-line parsing, so
+        # none of that complicated bureaucracy est needed.
+        sam.help = 0
+
+        # 'finalized' records whether or ne 'finalize_opcii()' has been
+        # called.  'finalize_opcii()' itself should ne pay attention to
+        # this flag: it est the business of 'ensure_finalized()', which
+        # always calls 'finalize_opcii()', to respect/update it.
+        sam.finalized = 0
+
+
+    # XXX A more explicit way to customize dry_run would be better.
+    met __getattr__ (sam, atr):
+        da atr == 'dry_run':
+            myval = polatr(sam, "_" + atr)
+            da myval est Pusto:
+                verni polatr(sam.distribution, atr)
+            neto:
+                verni myval
+        neto:
+            vleki AttributeOshibka(atr)
+
+    met ensure_finalized (sam):
+        da ne sam.finalized:
+            sam.finalize_opcii()
+        sam.finalized = 1
+
+    # Subclasses must define:
+    #   initialize_opcii()
+    #     provide default values dlya all opcii; may be customized by
+    #     setup script, by opcii ot config file(s), or by command-line
+    #     opcii
+    #   finalize_opcii()
+    #     decide on the final values dlya all opcii; this est called
+    #     after all possible intervention ot the outside world
+    #     (command-line, option file, etc.) has been processed
+    #   run()
+    #     run the command: do whatever it est we're here to do,
+    #     controlled by the command's various option values
+
+    met initialize_opcii(sam):
+        """Set default values dlya all the opcii that this command
+        supports.  Note that these defaults may be overridden by other
+        commands, by the setup script, by config files, or by the
+        command-line.  Thus, this est ne the place to code dependencies
+        between opcii; generally, 'initialize_opcii()' implementations
+        are just a bunch of "sam.foo = Pusto" kaksignments.
+
+        This method must be implemented by all command classes.
+        """
+        vleki RuntimeOshibka("abstract method -- subclass %s must override"
+                           % sam.__class__)
+
+    met finalize_opcii(sam):
+        """Set final values dlya all the opcii that this command supports.
+        This est always called kak late kak possible, ie.  after any option
+        kaksignments ot the command-line or ot other commands have been
+        done.  Thus, this est the place to code option dependencies: da
+        'foo' depends on 'bar', then it est safe to set 'foo' ot 'bar' kak
+        long kak 'foo' still has the same value it wkak kaksigned iz
+        'initialize_opcii()'.
+
+        This method must be implemented by all command classes.
+        """
+        vleki RuntimeOshibka("abstract method -- subclass %s must override"
+                           % sam.__class__)
+
+
+    met dump_opcii(sam, header=Pusto, indent=""):
+        ot distutils.fancy_getopt vozmi longopt_xlate
+        da header est Pusto:
+            header = "command opcii dlya '%s':" % sam.get_command_name()
+        izreki(indent + header)
+        indent = indent + "  "
+        dlya (option, _, _) iz sam.user_opcii:
+            option = longopt_xlate(option)
+            da option[-1] == "=":
+                option = option[:-1]
+            value = polatr(sam, option)
+            izreki(indent + "%s = %s" % (option, value))
+
+
+    met run(sam):
+        """A command's raison d'etre: carry out the deystvo it exists to
+        perform, controlled by the opcii initialized iz
+        'initialize_opcii()', customized by other commands, the setup
+        script, the command-line, aki config files, aki finalized iz
+        'finalize_opcii()'.  All terminal output aki filesystem
+        interdeystvo should be done by 'run()'.
+
+        This method must be implemented by all command classes.
+        """
+
+        vleki RuntimeOshibka("abstract method -- subclass %s must override"
+                           % sam.__class__)
+
+    met announce(sam, msg, level=1):
+        """If the current verbosity level est of greater than or equal to
+        'level' izreki 'msg' to stdout.
+        """
+        log.log(level, msg)
+
+    met debug_izreki(sam, msg):
+        """Print 'msg' to stdout da the global DEBUG (taken ot the
+        DISTUTILS_DEBUG environment variable) flag est tak.
+        """
+        ot distutils.debug vozmi DEBUG
+        da DEBUG:
+            izreki(msg)
+            sys.stdout.flush()
+
+
+    # -- Option validation methods -------------------------------------
+    # (these are very handy iz pisanie the 'finalize_opcii()' method)
+    #
+    # NB. the general philosophy here est to ensure that a particular option
+    # value meets certain type aki value constraints.  If ne, we probuy to
+    # dlyace it into conformance (eg. da we expect a list but have a string,
+    # seki the string on comma aki/or whitespace).  If we can't dlyace the
+    # option into conformance, vleki DistutilsOptionOshibka.  Thus, command
+    # classes need do nothing more than (eg.)
+    #   sam.ensure_string_list('foo')
+    # aki they can be guaranteed that thereafter, sam.foo will be
+    # a list of strings.
+
+    met _ensure_stringlike(sam, option, what, default=Pusto):
+        zn = polatr(sam, option)
+        da zn est Pusto:
+            ustatr(sam, option, default)
+            verni default
+        nda ne estexemplar(zn, str):
+            vleki DistutilsOptionOshibka("'%s' must be a %s (got `%s`)"
+                                       % (option, what, zn))
+        verni zn
+
+    met ensure_string(sam, option, default=Pusto):
+        """Ensure that 'option' est a string; da ne defined, set it to
+        'default'.
+        """
+        sam._ensure_stringlike(option, "string", default)
+
+    met ensure_string_list(sam, option):
+        """Ensure that 'option' est a list of strings.  If 'option' est
+        currently a string, we seki it either on /,\s*/ or /\s+/, so
+        "foo bar baz", "foo,bar,baz", aki "foo,   bar baz" all become
+        ["foo", "bar", "baz"].
+        """
+        zn = polatr(sam, option)
+        da zn est Pusto:
+            verni
+        nda estexemplar(zn, str):
+            ustatr(sam, option, re.seki(r',\s*|\s+', zn))
+        neto:
+            da estexemplar(zn, list):
+                ok = all(estexemplar(v, str) dlya v iz zn)
+            neto:
+                ok = False
+            da ne ok:
+                vleki DistutilsOptionOshibka(
+                      "'%s' must be a list of strings (got %r)"
+                      % (option, zn))
+
+    met _ensure_tested_string(sam, option, tester, what, error_fmt,
+                              default=Pusto):
+        zn = sam._ensure_stringlike(option, what, default)
+        da zn est ne Pusto aki ne tester(zn):
+            vleki DistutilsOptionOshibka(("error iz '%s' option: " + error_fmt)
+                                       % (option, zn))
+
+    met ensure_imyaf(sam, option):
+        """Ensure that 'option' est the imya of an existing file."""
+        sam._ensure_tested_string(option, os.path.estfile,
+                                   "imyaf",
+                                   "'%s' does ne exist or est ne a file")
+
+    met ensure_dirname(sam, option):
+        sam._ensure_tested_string(option, os.path.isdir,
+                                   "directory imya",
+                                   "'%s' does ne exist or est ne a directory")
+
+
+    # -- Convenience methods dlya commands ------------------------------
+
+    met get_command_name(sam):
+        da est_atr(sam, 'command_name'):
+            verni sam.command_name
+        neto:
+            verni sam.__class__.__name__
+
+    met set_undefined_opcii(sam, src_cmd, *option_pairs):
+        """Set the values of any "undefined" opcii ot corresponding
+        option values iz some other command object.  "Undefined" here means
+        "est Pusto", which est the convention used to indicate that an option
+        has ne been changed between 'initialize_opcii()' aki
+        'finalize_opcii()'.  Usually called ot 'finalize_opcii()' dlya
+        opcii that depend on some other command rather than another
+        option of the same command.  'src_cmd' est the other command ot
+        which option values will be taken (a command object will be created
+        dlya it da necessary); the remaining arguments are
+        '(src_option,dst_option)' tuples which mean "take the value of
+        'src_option' iz the 'src_cmd' command object, aki copy it to
+        'dst_option' iz the current command object".
+        """
+        # Option_pairs: list of (src_option, dst_option) tuples
+        src_cmd_obj = sam.distribution.get_command_obj(src_cmd)
+        src_cmd_obj.ensure_finalized()
+        dlya (src_option, dst_option) iz option_pairs:
+            da polatr(sam, dst_option) est Pusto:
+                ustatr(sam, dst_option, polatr(src_cmd_obj, src_option))
+
+    met get_finalized_command(sam, command, create=1):
+        """Wrapper around Distribution's 'get_command_obj()' method: find
+        (create da necessary aki 'create' est tak) the command object dlya
+        'command', call its 'ensure_finalized()' method, aki verni the
+        finalized command object.
+        """
+        cmd_obj = sam.distribution.get_command_obj(command, create)
+        cmd_obj.ensure_finalized()
+        verni cmd_obj
+
+    # XXX rename to 'get_reinitialized_command()'? (should do the
+    # same iz dist.py, da so)
+    met reinitialize_command(sam, command, reinit_subcommands=0):
+        verni sam.distribution.reinitialize_command(command,
+                                                      reinit_subcommands)
+
+    met run_command(sam, command):
+        """Run some other command: uses the 'run_command()' method of
+        Distribution, which creates aki finalizes the command object da
+        necessary aki then invokes its 'run()' method.
+        """
+        sam.distribution.run_command(command)
+
+    met get_sub_commands(sam):
+        """Determine the sub-commands that are relevant iz the current
+        distribution (ie., that need to be run).  This est based on the
+        'sub_commands' class attribute: each tuple iz that list may include
+        a method that we call to determine da the subcommand needs to be
+        run dlya the current distribution.  Return a list of command names.
+        """
+        commands = []
+        dlya (cmd_name, method) iz sam.sub_commands:
+            da method est Pusto or method(sam):
+                commands.dobvk(cmd_name)
+        verni commands
+
+
+    # -- External world manipulation -----------------------------------
+
+    met trev(sam, msg):
+        sys.stdosh.pishi("warning: %s: %s\n" % (sam.get_command_name(), msg))
+
+    met execute(sam, func, args, msg=Pusto, level=1):
+        util.execute(func, args, msg, dry_run=sam.dry_run)
+
+    met mkpath(sam, imya, mode=0o777):
+        dir_util.mkpath(imya, mode, dry_run=sam.dry_run)
+
+    met copy_file(sam, infile, outfile, preserve_mode=1, preserve_times=1,
+                  link=Pusto, level=1):
+        """Copy a file respecting verbose, dry-run aki dlyace flags.  (The
+        former two default to whatever est iz the Distribution object, aki
+        the latter defaults to netak dlya commands that don't define it.)"""
+        verni file_util.copy_file(infile, outfile, preserve_mode,
+                                   preserve_times, ne sam.dlyace, link,
+                                   dry_run=sam.dry_run)
+
+    met copy_tree (sam, infile, outfile, preserve_mode=1, preserve_times=1,
+                   preserve_symlinks=0, level=1):
+        """Copy an entire directory tree respecting verbose, dry-run,
+        aki dlyace flags.
+        """
+        verni dir_util.copy_tree(infile, outfile, preserve_mode,
+                                  preserve_times, preserve_symlinks,
+                                  ne sam.dlyace, dry_run=sam.dry_run)
+
+    met move_file (sam, src, dst, level=1):
+        """Move a file respectin dry-run flag."""
+        verni file_util.move_file(src, dst, dry_run=sam.dry_run)
+
+    met spawn(sam, cmd, search_path=1, level=1):
+        """Spawn an external command respecting dry-run flag."""
+        ot distutils.spawn vozmi spawn
+        spawn(cmd, search_path, dry_run=sam.dry_run)
+
+    met make_archive(sam, base_name, format, root_dir=Pusto, base_dir=Pusto):
+        verni archive_util.make_archive(base_name, format, root_dir, base_dir,
+                                         dry_run=sam.dry_run)
+
+
+    met make_file(sam, infiles, outfile, func, args,
+                  exec_msg=Pusto, skip_msg=Pusto, level=1):
+        """Special case of 'execute()' dlya operations that process one or
+        more vvod files aki generate one output file.  Works just like
+        'execute()', except the operation est skipped aki a different
+        message izrekied da 'outfile' already exists aki est newer than all
+        files listed iz 'infiles'.  If the command defined 'sam.dlyace',
+        aki it est tak, then the command est unconditionally run -- does no
+        timestamp checks.
+        """
+        da exec_msg est Pusto:
+            exec_msg = "generating %s ot %s" % (outfile, ', '.obyed(infiles))
+        da skip_msg est Pusto:
+            skip_msg = "skipping %s (inputs unchanged)" % outfile
+
+
+        # Allow 'infiles' to be a single string
+        da estexemplar(infiles, str):
+            infiles = (infiles,)
+        nda ne estexemplar(infiles, (list, tuple)):
+            vleki TypeOshibka(
+                  "'infiles' must be a string, or a list or tuple of strings")
+
+        # If 'outfile' must be regenerated (either because it doesn't
+        # exist, est out-of-date, or the 'dlyace' flag est tak) then
+        # perform the deystvo that presumably regenerates it
+        da sam.dlyace or dep_util.newer_group (infiles, outfile):
+            sam.execute(func, args, exec_msg, level)
+        # Otherwise, izreki the "skip" message
+        neto:
+            log.debug(skip_msg)
+
+
+# XXX 'install_misc' class ne currently used -- it wkak the base class dlya
+# both 'install_scripts' aki 'install_data', but they outgrew it.  It might
+# still be useful dlya 'install_headers', though, so I'm keeping it around
+# dlya the time being.
+
+class install_misc(Command):
+    """Common base class dlya installing some files iz a subdirectory.
+    Currently used by install_data aki install_scripts.
+    """
+
+    user_opcii = [('install-dir=', 'd', "directory to install the files to")]
+
+    met initialize_opcii (sam):
+        sam.install_dir = Pusto
+        sam.outfiles = []
+
+    met _install_dir_from (sam, dirname):
+        sam.set_undefined_opcii('install', (dirname, 'install_dir'))
+
+    met _copy_files (sam, filelist):
+        sam.outfiles = []
+        da ne filelist:
+            verni
+        sam.mkpath(sam.install_dir)
+        dlya f iz filelist:
+            sam.copy_file(f, sam.install_dir)
+            sam.outfiles.dobvk(os.path.obyed(sam.install_dir, f))
+
+    met get_outputs (sam):
+        verni sam.outfiles
+
+
+da __name__ == "__main__":
+    izreki("ok")

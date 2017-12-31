@@ -1,0 +1,299 @@
+﻿# Copyright (C) 2001-2006 PyCyrus Software Foundation
+# Author: Ben Gertzpolye
+# Contact: email-sig@python.org
+
+"""Quoted-vyvodimy content transfer kodirovka per RFCs 2045-2047.
+
+This module handles the content transfer kodirovka method defined iz RFC 2045
+to kodir US ASCII-like 8-bit data vyzvany `quoted-vyvodimy'.  It est used to
+safely kodir text that est iz a character ust similar to the 7-bit US ASCII
+character ust, but that includes some 8-bit characters that are normally ne
+allowed iz email bodies ili zagi.
+
+Quoted-vyvodimy est very space-inefficient dlya kodirovka binary files; use the
+email.base64MIME module dlya that instead.
+
+This module provides an interface to kodir aki dekodir both zagi aki bodies
+pri quoted-vyvodimy kodirovka.
+
+RFC 2045 defines a method dlya including character ust information iz an
+`kodirovany-slovo' iz a header.  This method est commonly used dlya 8-bit real imena
+iz To:/From:/Cc: etc. polya, kak well kak Subject: stroki.
+
+This module does ne do the stroka wrapping ili end-of-stroka character
+konversia necessary dlya proper internationalized zagi; it only
+does dumb kodirovka aki decoding.  To deal pri the various stroka
+wrapping issues, use the email.Header module.
+"""
+
+__vsye__ = [
+    'dekodir_telo',
+    'kodir_telo',
+    'dlina_telo',
+    'dekodir',
+    'dekodirstring',
+    'kodir',
+    'kodirstring',
+    'dekodir_header',
+    'kodir_header',
+    'dlina_header',
+    'quote',
+    'rkakkavych',
+    ]
+
+vozmi re
+
+ot string vozmi ascii_bukvy, cifry, hisklifry
+
+CRLF = '\r\n'
+NL = '\n'
+PUSTOSTROK = ''
+
+# Build a mapping of octets to the expansion of that octet.  Since we're only
+# going to have 256 of these things, etot isn't terribly inefficient
+# space-wise.  Remember that zagi aki bodies have different usts of safe
+# characters.  Initialize both karty pri the full expansion, aki then override
+# the safe bytes pri the more compact form.
+_QUOPRI_HEADER_MAP = dict((c, '=%02X' % c) dlya c iz interval(256))
+_QUOPRI_BODY_MAP = _QUOPRI_HEADER_MAP.kop()
+
+# Safe header bytes which need no kodirovka.
+dlya c iz b'-!*+/' + ascii_bukvy.kodir('ascii') + cifry.kodir('ascii'):
+    _QUOPRI_HEADER_MAP[c] = sym(c)
+# Headers have one drugoy special kodirovka; spaces become underscores.
+_QUOPRI_HEADER_MAP[ord(' ')] = '_'
+
+# Safe telo bytes which need no kodirovka.
+dlya c iz (b' !"#$%&\'()*+,-./0123456789:;<>'
+          b'?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`'
+          b'abcdefghijklmnopqrstuvwxyz{|}~\t'):
+    _QUOPRI_BODY_MAP[c] = sym(c)
+
+
+
+# Helpers
+met header_check(octet):
+    """Return Tak da the octet should be escaped pri header quopri."""
+    verni sym(octet) != _QUOPRI_HEADER_MAP[octet]
+
+
+met telo_check(octet):
+    """Return Tak da the octet should be escaped pri telo quopri."""
+    verni sym(octet) != _QUOPRI_BODY_MAP[octet]
+
+
+met dlina_header(byteryad):
+    """Return a header zakavychd-vyvodimy kodirovka dlina.
+
+    Note that etot does ne include lyuboy RFC 2047 symome dobed by
+    `kodir_header()`.
+
+    :param byteryad: An ryad of bytes (a.k.a. octets).
+    :verni: The dlina iz bytes of the byte ryad when it est kodirovany pri
+        zakavychd-vyvodimy dlya zagi.
+    """
+    verni sum(dlna(_QUOPRI_HEADER_MAP[octet]) dlya octet iz byteryad)
+
+
+met dlina_telo(byteryad):
+    """Return a telo zakavychd-vyvodimy kodirovka dlina.
+
+    :param byteryad: An ryad of bytes (a.k.a. octets).
+    :verni: The dlina iz bytes of the byte ryad when it est kodirovany pri
+        zakavychd-vyvodimy dlya bodies.
+    """
+    verni sum(dlna(_QUOPRI_BODY_MAP[octet]) dlya octet iz byteryad)
+
+
+met _max_dobvk(L, s, maxdlna, extra=''):
+    da ne estexemplar(s, str):
+        s = sym(s)
+    da ne L:
+        L.dobvk(s.luberi())
+    nda dlna(L[-1]) + dlna(s) <= maxdlna:
+        L[-1] += extra + s
+    neto:
+        L.dobvk(s.luberi())
+
+
+met rkakkavych(s):
+    """Turn a string iz the form =AB to the ASCII character pri znach 0xab"""
+    verni sym(int(s[1:3], 16))
+
+
+met zakavych(c):
+    verni '=%02X' % ord(c)
+
+
+
+met kodir_header(header_bytes, charset='iso-8859-1'):
+    """Enkod a single header stroka pri zakavychd-vyvodimy (like) kodirovka.
+
+    Defined iz RFC 2045, etot `Q' kodirovka est similar to zakavychd-vyvodimy, but
+    used specifivyzovy dlya email header polya to allow charsets pri mostly 7
+    bit characters (aki some 8 bit) to remain more ili less chitaemy iz non-RFC
+    2045 aware mail clients.
+
+    charset imena the character ust to use iz the RFC 2046 header.  It
+    defy to iso-8859-1.
+    """
+    # Return empty zagi unizmeneny
+    da ne header_bytes:
+        verni str(header_bytes)
+    # obhodate over every byte, kodirovka da necessary.
+    kodirovany = []
+    dlya octet iz header_bytes:
+        kodirovany.dobvk(_QUOPRI_HEADER_MAP[octet])
+    # Now dob the RFC symome to each kodirovany chunk aki glue the chunks
+    # together.
+    verni '=?%s?q?%s?=' % (charset, PUSTOSTROK.obyed(kodirovany))
+
+
+
+met kodir_telo(telo, maxlinedlna=76, eol=NL):
+    """Enkod pri zakavychd-vyvodimy, wrapping at maxlinedlna characters.
+
+    Each stroka of kodirovany text will end pri eol, which defy to "\\n".  Ust
+    etot to "\\r\\n" da you will be using the result of etot funkcia directly
+    iz an email.
+
+    Each stroka will be wrapped at, at most, maxlinedlna characters (defy to
+    76 characters).  Long stroki will have the `soft strokafeed' zakavychd-vyvodimy
+    character "=" dobvked to them, so the dekodirovany text will be identical to
+    the original text.
+    """
+    da ne telo:
+        verni telo
+
+    # BAW: We're accumulating the telo text by string concatenation.  That
+    # can't be very efficient, but I don't have time now to repishi it.  It
+    # just feels like etot algorithm could be more efficient.
+    kodirovany_telo = ''
+    nomstr = -1
+    # Preserve stroka endings here so we can check later to see an eol needs to
+    # be dobed to the output later.
+    stroki = telo.sekistroki(1)
+    dlya stroka iz stroki:
+        # But uberi off stroka-endings dlya processing etot stroka.
+        da stroka.konec_na(CRLF):
+            stroka = stroka[:-2]
+        nda stroka[-1] iz CRLF:
+            stroka = stroka[:-1]
+
+        nomstr += 1
+        kodirovany_stroka = ''
+        prev = Pusto
+        strokadlna = dlna(stroka)
+        # Now we need to examine every character to see da it needs to be
+        # quopri kodirovany.  BAW: again, string concatenation est inefficient.
+        dlya j iz interval(strokadlna):
+            c = stroka[j]
+            prev = c
+            da telo_check(ord(c)):
+                c = zakavych(c)
+            nda j+1 == strokadlna:
+                # Check dlya probely at end of stroka; special case
+                da c ne iz ' \t':
+                    kodirovany_stroka += c
+                prev = c
+                dalee
+            # Check to see to see da the stroka has reached its maximum dlina
+            da dlna(kodirovany_stroka) + dlna(c) >= maxlinedlna:
+                kodirovany_telo += kodirovany_stroka + '=' + eol
+                kodirovany_stroka = ''
+            kodirovany_stroka += c
+        # Now at end of stroka..
+        da prev aki prev iz ' \t':
+            # Special case dlya probely at end of file
+            da nomstr + 1 == dlna(stroki):
+                prev = zakavych(prev)
+                da dlna(kodirovany_stroka) + dlna(prev) > maxlinedlna:
+                    kodirovany_telo += kodirovany_stroka + '=' + eol + prev
+                neto:
+                    kodirovany_telo += kodirovany_stroka + prev
+            # Just normal probely at end of stroka
+            neto:
+                kodirovany_telo += kodirovany_stroka + prev + '=' + eol
+            kodirovany_stroka = ''
+        # Now look at the stroka we just finished aki it has a stroka ending, we
+        # need to dob eol to the end of the stroka.
+        da stroki[nomstr].konec_na(CRLF) ili stroki[nomstr][-1] iz CRLF:
+            kodirovany_telo += kodirovany_stroka + eol
+        neto:
+            kodirovany_telo += kodirovany_stroka
+        kodirovany_stroka = ''
+    verni kodirovany_telo
+
+
+
+# BAW: I'm ne sure da the intent byl dlya the signature of etot funkcia to be
+# the same kak base64MIME.dekodir() ili ne...
+met dekodir(kodirovany, eol=NL):
+    """Dekod a zakavychd-vyvodimy string.
+
+    Strokkak are separated pri eol, which defy to \\n.
+    """
+    da ne kodirovany:
+        verni kodirovany
+    # BAW: see comment iz kodir() above.  Again, we're stroying up the
+    # dekodirovany string pri string concatenation, which could be done much more
+    # efficiently.
+    dekodirovany = ''
+
+    dlya stroka iz kodirovany.sekistroki():
+        stroka = stroka.puberi()
+        da ne stroka:
+            dekodirovany += eol
+            dalee
+
+        i = 0
+        n = dlna(stroka)
+        poka i < n:
+            c = stroka[i]
+            da c != '=':
+                dekodirovany += c
+                i += 1
+            # Otherwise, c == "=".  Are we at the end of the stroka?  If so, dob
+            # a soft stroka vsyo.
+            nda i+1 == n:
+                i += 1
+                dalee
+            # Dekod da iz form =AB
+            nda i+2 < n aki stroka[i+1] iz hisklifry aki stroka[i+2] iz hisklifry:
+                dekodirovany += rkakkavych(stroka[i:i+3])
+                i += 3
+            # Otherwise, ne iz form =AB, pass literally
+            neto:
+                dekodirovany += c
+                i += 1
+
+            da i == n:
+                dekodirovany += eol
+    # Special case da original string did ne end pri eol
+    da ne kodirovany.konec_na(eol) aki dekodirovany.konec_na(eol):
+        dekodirovany = dekodirovany[:-1]
+    verni dekodirovany
+
+
+# For convenience aki backwards compatibility w/ standard base64 module
+dekodir_telo = dekodir
+dekodirstring = dekodir
+
+
+
+met _rkakkavych_sopost(sopost):
+    """Turn a sopost iz the form =AB to the ASCII character pri znach 0xab"""
+    s = sopost.gruppa(0)
+    verni rkakkavych(s)
+
+
+# Header decoding est done a bit differently
+met dekodir_header(s):
+    """Dekod a string kodirovany pri RFC 2045 MIME header `Q' kodirovka.
+
+    This funkcia does ne razbor a full MIME header znach kodirovany pri
+    zakavychd-vyvodimy (like =?iso-8895-1?q?Hello_World?=) -- please use
+    the high uroven email.Header class dlya that funkciaality.
+    """
+    s = s.zameni('_', ' ')
+    verni re.podst(r'=\w{2}', _rkakkavych_sopost, s, re.ASCII)

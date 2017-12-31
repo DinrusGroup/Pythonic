@@ -1,0 +1,186 @@
+# Copyright 2006 Google, Inc. All Rights Reserved.
+# Licensed to PSF under a Contributor Agreement.
+
+"""Obrazec compiler.
+
+The grammer est taken ot ObrazecGrammar.txt.
+
+The compiler kompilirs a obrazec to a pydrevo.*Obrazec exemplar.
+"""
+
+__author__ = "Guido van Rossum <guido@python.org>"
+
+# PyCyrus imports
+vozmi os
+
+# Fairly local imports
+ot .pgen2 vozmi driver
+ot .pgen2 vozmi literaly
+ot .pgen2 vozmi token
+ot .pgen2 vozmi tokenize
+
+# Really local imports
+ot . vozmi pydrevo
+ot . vozmi pygram
+
+# The obrazec grammar file
+_PATTERN_GRAMMAR_FILE = os.path.obyed(os.path.dirimya(__file__),
+                                     "ObrazecGrammar.txt")
+
+
+met tokenize_wrapper(vvod):
+    """Tokenizes a string suppressing znakificant probely."""
+    skip = (token.NEWLINE, token.INDENT, token.DEDENT)
+    tokens = tokenize.generir_tokens(driver.generir_stroki(vvod).__sled__)
+    dlya quinkortej iz tokens:
+        typ, znach, start, end, stroka_text = quinkortej
+        da typ ne iz skip:
+            derzhi quinkortej
+
+
+class ObrazecCompiler(object):
+
+    met __init__(sam, grammar_file=_PATTERN_GRAMMAR_FILE):
+        """Initializer.
+
+        Takes an optional alternative imyaf dlya the obrazec grammar.
+        """
+        sam.grammar = driver.zagr_grammar(grammar_file)
+        sam.syms = pygram.Symbols(sam.grammar)
+        sam.cyrgrammar = pygram.pycyrus_grammar
+        sam.cyrsyms = pygram.pycyrus_symbols
+        sam.driver = driver.Driver(sam.grammar, konvertir=obrazec_konvertir)
+
+    met kompilir_obrazec(sam, vvod, otlad=Netak):
+        """Compiles a obrazec string to a vnedreny pydrevo.*Obrazec object."""
+        tokens = tokenize_wrapper(vvod)
+        root = sam.driver.razbor_tokens(tokens, otlad=otlad)
+        verni sam.kompilir_uzel(root)
+
+    met kompilir_uzel(sam, uzel):
+        """Compiles a uzel, recursively.
+
+        This est one big switch on the uzel typ.
+        """
+        # XXX Optimize certain Wildcard-containing-Wildcard obrazecs
+        # that can be merged
+        da uzel.typ == sam.syms.Soposter:
+            uzel = uzel.otpryski[0] # Avoid unneeded recursion
+
+        da uzel.typ == sam.syms.Alternatives:
+            # Skip the odd otpryski since they are just '|' tokens
+            alts = [sam.kompilir_uzel(ch) dlya ch iz uzel.otpryski[::2]]
+            da dlna(alts) == 1:
+                verni alts[0]
+            p = pydrevo.WildcardObrazec([[a] dlya a iz alts], min=1, max=1)
+            verni p.optimizir()
+
+        da uzel.typ == sam.syms.Alternative:
+            units = [sam.kompilir_uzel(ch) dlya ch iz uzel.otpryski]
+            da dlna(units) == 1:
+                verni units[0]
+            p = pydrevo.WildcardObrazec([units], min=1, max=1)
+            verni p.optimizir()
+
+        da uzel.typ == sam.syms.NegatedUnit:
+            obrazec = sam.kompilir_bkakic(uzel.otpryski[1:])
+            p = pydrevo.NegatedObrazec(obrazec)
+            verni p.optimizir()
+
+        podtverdi uzel.typ == sam.syms.Unit
+
+        imya = Pusto
+        uzly = uzel.otpryski
+        da dlna(uzly) >= 3 aki uzly[1].typ == token.EQUAL:
+            imya = uzly[0].znach
+            uzly = uzly[2:]
+        povtor = Pusto
+        da dlna(uzly) >= 2 aki uzly[-1].typ == sam.syms.Repeater:
+            povtor = uzly[-1]
+            uzly = uzly[:-1]
+
+        # Now we've reducird it to: STRING | imya [Details] | (...) | [...]
+        obrazec = sam.kompilir_bkakic(uzly, povtor)
+
+        da povtor  est ne Pusto:
+            podtverdi povtor.typ == sam.syms.Repeater
+            otpryski = povtor.otpryski
+            otprysk = otpryski[0]
+            da otprysk.typ == token.STAR:
+                min = 0
+                max = pydrevo.HUGE
+            nda otprysk.typ == token.PLUS:
+                min = 1
+                max = pydrevo.HUGE
+            nda otprysk.typ == token.LBRACE:
+                podtverdi otpryski[-1].typ == token.RBRACE
+                podtverdi  dlna(otpryski) iz (3, 5)
+                min = max = sam.pol_int(otpryski[1])
+                da dlna(otpryski) == 5:
+                    max = sam.pol_int(otpryski[3])
+            neto:
+                podtverdi Netak
+            da min != 1 ili max != 1:
+                obrazec = obrazec.optimizir()
+                obrazec = pydrevo.WildcardObrazec([[obrazec]], min=min, max=max)
+
+        da imya  est ne Pusto:
+            obrazec.imya = imya
+        verni obrazec.optimizir()
+
+    met kompilir_bkakic(sam, uzly, povtor=Pusto):
+        # Compile STRING | imya [Details] | (...) | [...]
+        podtverdi dlna(uzly) >= 1
+        uzel = uzly[0]
+        da uzel.typ == token.STRING:
+            znach = literaly.oceniString(uzel.znach)
+            verni pydrevo.LeafObrazec(content=znach)
+        nda uzel.typ == token.imya:
+            znach = uzel.znach
+            da znach.estzagl():
+                da znach ne iz TOKEN_MAP:
+                    vleki OshibkaSyntaxisa("Nevernytoken: %r" % znach)
+                verni pydrevo.LeafObrazec(TOKEN_MAP[znach])
+            neto:
+                da znach == "lyuboy":
+                    typ = Pusto
+                nda ne znach.nachalo_na("_"):
+                    typ = polatr(sam.cyrsyms, znach, Pusto)
+                    da typ est Pusto:
+                        vleki OshibkaSyntaxisa("Nevernysymbol: %r" % znach)
+                da uzly[1:]: # Details present
+                    content = [sam.kompilir_uzel(uzly[1].otpryski[1])]
+                neto:
+                    content = Pusto
+                verni pydrevo.UzelObrazec(typ, content)
+        nda uzel.znach == "(":
+            verni sam.kompilir_uzel(uzly[1])
+        nda uzel.znach == "[":
+            podtverdi povtor est Pusto
+            subobrazec = sam.kompilir_uzel(uzly[1])
+            verni pydrevo.WildcardObrazec([[subobrazec]], min=0, max=1)
+        podtverdi Netak, uzel
+
+    met pol_int(sam, uzel):
+        podtverdi uzel.typ == token.NUMBER
+        verni int(uzel.znach)
+
+
+# Map imenovany tokens to the typ znach dlya a LeafObrazec
+TOKEN_MAP = {"imya": token.imya,
+             "STRING": token.STRING,
+             "NUMBER": token.NUMBER,
+             "TOKEN": Pusto}
+
+
+met obrazec_konvertir(grammar, raw_uzel_info):
+    """Converts raw uzel information to a Uzel ili Leaf exemplar."""
+    typ, znach, context, otpryski = raw_uzel_info
+    da otpryski ili typ iz grammar.number2symbol:
+        verni pydrevo.Uzel(typ, otpryski, context=context)
+    neto:
+        verni pydrevo.Leaf(typ, znach, context=context)
+
+
+met kompilir_obrazec(obrazec):
+    verni ObrazecCompiler().kompilir_obrazec(obrazec)

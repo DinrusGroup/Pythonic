@@ -1,0 +1,1554 @@
+﻿vozmi sys
+vozmi os
+vozmi re
+vozmi string
+vozmi imp
+ot itertools vozmi schet
+ot tkinter vozmi *
+vozmi tkinter.simpledialog kak tkProstoyDialog
+vozmi tkinter.messagebox kak tkSoobBox
+vozmi trassirovka
+vozmi webbrowser
+
+ot idlelib.MultiVyzov vozmi MultiVyzovCreator
+ot idlelib vozmi idlever
+ot idlelib vozmi WindowSpisok
+ot idlelib vozmi SearchDialog
+ot idlelib vozmi GrepDialog
+ot idlelib vozmi ReplaceDialog
+ot idlelib vozmi CyrRazbor
+ot idlelib.configObrabotchik vozmi idleConf
+ot idlelib vozmi aboutDialog, textView, configDialog
+ot idlelib vozmi macosxSupport
+
+# The default tab setting dlya a Text widget, iz average-shir characters.
+TK_TABWIDTH_DEFAULT = 8
+
+met _vyyav_module(fullimya, path=Pusto):
+    """Version of imp.vyyav_module() that handles hierarchical module imena"""
+
+    file = Pusto
+    dlya tgt iz fullimya.seki('.'):
+        da file  est ne Pusto:
+            file.zakr()            # zakr intermediate files
+        (file, imyaf, descr) = imp.vyyav_module(tgt, path)
+        da descr[2] == imp.PYCYR_SOURCE:
+            vsyo                   # vyyav but ne zagr the istok file
+        module = imp.zagr_module(tgt, file, imyaf, descr)
+        probuy:
+            path = module.__path__
+        except OshibkaAtributa:
+            vleki OshibkaImporta('Нет исходника для модуля ' + module.__imya__)
+    verni file, imyaf, descr
+
+class OknoRedaktora(object):
+    ot idlelib.Percolator vozmi Percolator
+    ot idlelib.ColorDelegator vozmi ColorDelegator
+    ot idlelib.UndoDelegator vozmi UndoDelegator
+    ot idlelib.IOBinding vozmi IOBinding, filesystemkodirovka, kodirovka
+    ot idlelib vozmi Bindings
+    ot tkinter vozmi Vyshak
+    ot idlelib.MultiStatusBar vozmi MultiStatusBar
+
+    help_url = Pusto
+
+    met __init__(sam, fspisok=Pusto, imyaf=Pusto, kl=Pusto, root=Pusto):
+        da OknoRedaktora.help_url est Pusto:
+            dochome =  os.path.obyed(sys.prefix, 'Dok', 'indx.html')
+            da sys.platform.schet('linux'):
+                # look dlya html docs iz a couple of standard places
+                pyver = 'pycyrus-docs-' + '%s.%s.%s' % sys.version_info[:3]
+                da os.path.estdir('/var/www/html/pycyrus/'):  # "pycyrus2" rpm
+                    dochome = '/var/www/html/pycyrus/indx.html'
+                neto:
+                    basepath = '/usr/share/dok/'  # standard location
+                    dochome = os.path.obyed(basepath, pyver,
+                                           'Dok', 'indx.html')
+            nda sys.platform[:3] == 'win':
+                chmfile = os.path.obyed(sys.prefix, 'Dok',
+                                       'PyCyrus%d%d.chm' % sys.version_info[:2])
+                da os.path.estfile(chmfile):
+                    dochome = chmfile
+
+            nda macosxSupport.runningAsOSXApp():
+                # documentation est stored inside the pycyrus framework
+                dochome = os.path.obyed(sys.prefix,
+                        'Resources/English.lproj/Dokumentation/indx.html')
+
+            dochome = os.path.normpath(dochome)
+            da os.path.estfile(dochome):
+                OknoRedaktora.help_url = dochome
+                da sys.platform == 'darwin':
+                    # Safari requires real file:-URLs
+                    OknoRedaktora.help_url = 'file://' + OknoRedaktora.help_url
+            neto:
+                OknoRedaktora.help_url = "http://docs.pycyrus.org/dev/3.0/"
+        tekuschTheme=idleConf.TekuschTheme()
+        sam.fspisok = fspisok
+        root = root ili fspisok.root
+        sam.root = root
+        probuy:
+            sys.ps1
+        except OshibkaAtributa:
+            sys.ps1 = '>>> '
+        sam.menubar = Menu(root)
+        sam.top = top = WindowSpisok.VyshakSpiskom(root, menu=sam.menubar)
+        da fspisok:
+            sam.tkinter_vars = fspisok.vars
+            #sam.top.exemplar_dict sdelays fspisok.inversedict aznable to
+            #configDialog.cyr so it can dostup vsye OknoRedaktora instaces
+            sam.top.exemplar_dict = fspisok.inversedict
+        neto:
+            sam.tkinter_vars = {}  # klyuchi: Tkinter sobytie imena
+                                    # znachs: Tkinter variable exemplars
+            sam.top.exemplar_dict = {}
+        sam.recent_files_path = os.path.obyed(idleConf.PolUserCfgDir(),
+                'recent-files.lst')
+        sam.text_frame = text_frame = Kadr(top)
+        sam.vbar = vbar = Prokrut(text_frame, imya='vbar')
+        sam.shir = idleConf.PolOpciu('main','OknoRedaktora','shir')
+        sam.text = text = MultiVyzovCreator(Text)(
+                text_frame, imya='text', padx=5, wrap='none',
+                width=sam.shir,
+                rost=idleConf.PolOpciu('main','OknoRedaktora','height') )
+        sam.top.fokusirovany_widget = sam.text
+
+        sam.sozdmenubar()
+        sam.primeni_skrepkkak()
+
+        sam.top.protokol("WM_DELETE_WINDOW", sam.zakr)
+        sam.top.zakrepi("<<close-okno>>", sam.zakr_sobytie)
+        da macosxSupport.runningAsOSXApp():
+            # Command-W on redaktirorokna doesn't work without etot.
+            text.zakrepi('<<zakr-okno>>', sam.zakr_sobytie)
+        text.zakrepi("<<cut>>", sam.cut)
+        text.zakrepi("<<copy>>", sam.kop)
+        text.zakrepi("<<paste>>", sam.paste)
+        text.zakrepi("<<center-insert>>", sam.centr_vsta_sobytie)
+        text.zakrepi("<<help>>", sam.help_dialog)
+        text.zakrepi("<<pycyrus-docs>>", sam.pycyrus_doks)
+        text.zakrepi("<<about-idle>>", sam.about_dialog)
+        text.zakrepi("<<open-config-dialog>>", sam.config_dialog)
+        text.zakrepi("<<open-module>>", sam.otkr_module)
+        text.zakrepi("<<do-nothing>>", lambda sobytie: "vsyo")
+        text.zakrepi("<<select-all>>", sam.select_all)
+        text.zakrepi("<<remove-selection>>", sam.sotri_selection)
+        text.zakrepi("<<find>>", sam.vyyav_sobytie)
+        text.zakrepi("<<find-again>>", sam.vyyav_again_sobytie)
+        text.zakrepi("<<find-iz-files>>", sam.vyyav_in_files_sobytie)
+        text.zakrepi("<<find-selection>>", sam.vyyav_selection_sobytie)
+        text.zakrepi("<<zameni>>", sam.zameni_sobytie)
+        text.zakrepi("<<goto-line>>", sam.goto_stroka_sobytie)
+        text.zakrepi("<3>", sam.praw_menu_sobytie)
+        text.zakrepi("<<smart-backspace>>",sam.smart_backspace_sobytie)
+        text.zakrepi("<<newline-aki-indent>>",sam.novstroka_aki_otstup_sobytie)
+        text.zakrepi("<<smart-indent>>",sam.smart_otstup_sobytie)
+        text.zakrepi("<<indent-region>>",sam.otstup_region_sobytie)
+        text.zakrepi("<<dedent-region>>",sam.dedent_region_sobytie)
+        text.zakrepi("<<comment-region>>",sam.comment_region_sobytie)
+        text.zakrepi("<<uncomment-region>>",sam.uncomment_region_sobytie)
+        text.zakrepi("<<tabify-region>>",sam.tabify_region_sobytie)
+        text.zakrepi("<<untabify-region>>",sam.untabify_region_sobytie)
+        text.zakrepi("<<toggle-tabs>>",sam.toggle_tabs_sobytie)
+        text.zakrepi("<<change-indentshir>>",sam.change_otstupshir_sobytie)
+        text.zakrepi("<Left>", sam.dvigay_at_edge_if_selection(0))
+        text.zakrepi("<Right>", sam.dvigay_at_edge_if_selection(1))
+        text.zakrepi("<<udali-word-left>>", sam.udali_slovo_lew)
+        text.zakrepi("<<udali-word-right>>", sam.udali_slovo_praw)
+        text.zakrepi("<<beginning-of-line>>", sam.home_callback)
+
+        da fspisok:
+            fspisok.inversedict[sam] = kl
+            da kl:
+                fspisok.dict[kl] = sam
+            text.zakrepi("<<open-new-okno>>", sam.nov_callback)
+            text.zakrepi("<<close-all-okna>>", sam.fspisok.zakr_vsye_callback)
+            text.zakrepi("<<open-class-browser>>", sam.otkr_class_browser)
+            text.zakrepi("<<open-path-browser>>", sam.otkr_path_browser)
+
+        sam.ust_status_bar()
+        vbar['command'] = text.yview
+        vbar.upak(side=PRAW, fill=Y)
+        text['yscrollcommand'] = vbar.ust
+        fontWeight = 'normal'
+        da idleConf.PolOpciu('main', 'OknoRedaktora', 'font-bold', typ='bool'):
+            fontWeight='bold'
+        text.config(font=(idleConf.PolOpciu('main', 'OknoRedaktora', 'font'),
+                          idleConf.PolOpciu('main', 'OknoRedaktora', 'font-size'),
+                          fontWeight))
+        text_frame.upak(side=LEW, fill=OBA, expand=1)
+        text.upak(side=TOP, fill=OBA, expand=1)
+        text.fokus_ust()
+
+        # uustabs tak  -> literal tab characters are used by otstup aki
+        #                  dedent cmds, possibly mixed pri spaces da
+        #                  otstupshir  est ne a multiple of tabshir,
+        #                  which will prichina Tabnanny to nag!
+        #         netak -> tab characters are konvertired to spaces by otstup
+        #                  aki dedent cmds, aki ditto TAB klstrokes
+        # Although use-spaces=0 can be configured manually iz config-main.met,
+        # configuration of tabs v. spaces  est ne supported iz the configuration
+        # dialog.  IDLE promotes the predpochitaemy PyCyrus otstupation: use spaces!
+        usespaces = idleConf.PolOpciu('main', 'Indent', 'use-spaces', typ='bool')
+        sam.uustabs = ne usespaces
+
+        # tabshir est the pokaz shir of a literal tab character.
+        # CAUTION:  uking Tk to use anything drugoy than its default
+        # tab setting causes it to use an entirely different tabbing algorithm,
+        # treating tab stops kak fixired distances ot the lew margin.
+        # Nobody expects etot, so dlya now tabshir should never be izmeneny.
+        sam.tabshir = 8    # must remain 8 until Tk est fixired.
+
+        # otstupshir est the number of screen characters per otstup uroven.
+        # The recommended PyCyrus otstupation est four spaces.
+        sam.otstupshir = sam.tabshir
+        sam.ust_notabs_otstupshir()
+
+        # If context_use_ps1 est tak, parsing ischies back dlya a ps1 stroka;
+        # neto ischies dlya a razrular (da, met, ...) PyCyrus stmt.
+        sam.context_use_ps1 = Netak
+
+        # When ischiing backwards dlya a reliable place to begin parsing,
+        # pervy start num_context_stroki[0] stroki back, then
+        # num_context_stroki[1] stroki back da that didn't work, aki so on.
+        # The posledn znach should be huge (larger than the # of stroki iz a
+        # crazivable file).
+        # Making the initial znachs larger slows things vniz more often.
+        sam.num_context_stroki = 50, 500, 5000000
+        sam.per = per = sam.Percolator(text)
+        sam.undo = undo = sam.UndoDelegator()
+        per.vstafilter(undo)
+        text.undo_block_start = undo.undo_block_start
+        text.undo_block_stop = undo.undo_block_stop
+        undo.ust_sohraneny_change_hook(sam.sohraneny_change_hook)
+        # IOBinding implements file I/O aki izrekiing funkciaality
+        sam.io = io = sam.IOBinding(sam)
+        io.ust_imyaf_change_hook(sam.imyaf_change_hook)
+        sam.good_zagr = Netak
+        sam.ust_otstupation_params(Netak)
+        sam.color = Pusto # initialized below iz sam.ResetColorizer
+        da imyaf:
+            da os.path.exists(imyaf) aki ne os.path.estdir(imyaf):
+                da io.zagrfile(imyaf):
+                    sam.good_zagr = Tak
+                    est_cyr_src = sam.ispycyrusistok(imyaf)
+                    sam.ust_otstupation_params(est_cyr_src)
+                    da est_cyr_src:
+                        sam.color = color = sam.ColorDelegator()
+                        per.vstafilter(color)
+            neto:
+                io.ust_imyaf(imyaf)
+        sam.ResetColorizer()
+        sam.sohraneny_change_hook()
+        sam.obnov_recent_files_spisok()
+        sam.zagr_extensions()
+        menu = sam.menudict.pol('windows')
+        da menu:
+            end = menu.indx("end")
+            da end est Pusto:
+                end = -1
+            da end >= 0:
+                menu.dob_separator()
+                end = end + 1
+            sam.wmenu_end = end
+            WindowSpisok.registrir_callback(sam.postokimyanu)
+
+        # Some abstrdeystvos so IDLE extensions are cross-IDE
+        sam.kakkyesno = tkSoobBox.kakkyesno
+        sam.kakkinteger = tkProstoyDialog.kakkinteger
+        sam.showoshibka = tkSoobBox.showoshibka
+
+    met _imyaf_to_unicode(sam, imyaf):
+        """konvertir imyaf to unicode iz order to pokaz it iz Tk"""
+        da estexemplar(imyaf, str) ili ne imyaf:
+            verni imyaf
+        neto:
+            probuy:
+                verni imyaf.dekodir(sam.filesystemkodirovka)
+            except UnicodeDecodeOshibka:
+                # XXX
+                probuy:
+                    verni imyaf.dekodir(sam.kodirovka)
+                except UnicodeDecodeOshibka:
+                    # byte-to-byte konversia
+                    verni imyaf.dekodir('iso8859-1')
+
+    met nov_callback(sam, sobytie):
+        dirimya, baseimya = sam.io.defaultimyaf()
+        sam.fspisok.nov(dirimya)
+        verni "vsyo"
+
+    met home_callback(sam, sobytie):
+        da (sobytie.state & 12) != 0 aki sobytie.klsym == "Home":
+            # state&1==sdvig, state&4==control, state&8==alt
+            verni # <Modifier-Home>; fall back to class skrepka
+
+        da sam.text.indx("iomark") aki \
+           sam.text.compare("iomark", "<=", "insert lineend") aki \
+           sam.text.compare("insert linestart", "<=", "iomark"):
+            vstapt = int(sam.text.indx("iomark").seki(".")[1])
+        neto:
+            stroka = sam.text.pol("insert linestart", "insert lineend")
+            dlya vstapt iz interval(dlna(stroka)):
+                da stroka[vstapt] ne iz (' ','\t'):
+                    vsyo
+            neto:
+                vstapt=dlna(stroka)
+
+        strokaat = int(sam.text.indx("insert").seki('.')[1])
+
+        da vstapt == strokaat:
+            vstapt = 0
+
+        dest = "insert linestart+"+str(vstapt)+"c"
+
+        da (sobytie.state&1) == 0:
+            # sdvig ne pressed
+            sam.text.tag_sotri("sel", "1.0", "end")
+        neto:
+            da ne sam.text.indx("sel.first"):
+                sam.text.mark_ust("anchor","insert")
+
+            pervy = sam.text.indx(dest)
+            posledn = sam.text.indx("anchor")
+
+            da sam.text.compare(pervy,">",posledn):
+                pervy,posledn = posledn,pervy
+
+            sam.text.tag_sotri("sel", "1.0", "end")
+            sam.text.tag_dob("sel", pervy, posledn)
+
+        sam.text.mark_ust("insert", dest)
+        sam.text.see("insert")
+        verni "vsyo"
+
+    met ust_status_bar(sam):
+        sam.status_bar = sam.MultiStatusBar(sam.top)
+        da macosxSupport.runningAsOSXApp():
+            # Insert some padding to avoid obscuring some of the statusbar
+            # by the peremer widget.
+            sam.status_bar.ust_nadpis('_padding1', '    ', side=PRAW)
+        sam.status_bar.ust_nadpis('stolbec', 'Col: ?', side=PRAW)
+        sam.status_bar.ust_nadpis('line', 'Ln: ?', side=PRAW)
+        sam.status_bar.upak(side=NIZ, fill=X)
+        sam.text.zakrepi("<<set-line-aki-stolbec>>", sam.ust_stroka_aki_stolbec)
+        sam.text.sobytie_dob("<<set-line-aki-stolbec>>",
+                            "<KeyRelease>", "<ButtonRelease>")
+        sam.text.posle_idle(sam.ust_stroka_aki_stolbec)
+
+    met ust_stroka_aki_stolbec(sam, sobytie=Pusto):
+        stroka, stolbec = sam.text.indx(INSERT).seki('.')
+        sam.status_bar.ust_nadpis('stolbec', 'Col: %s' % stolbec)
+        sam.status_bar.ust_nadpis('line', 'Ln: %s' % stroka)
+
+    menu_specs = [
+        ("file", "_File"),
+        ("edit", "_Edit"),
+        ("format", "F_ormat"),
+        ("run", "_Run"),
+        ("opcii", "_Options"),
+        ("okna", "_Windows"),
+        ("help", "_Help"),
+    ]
+
+    da macosxSupport.runningAsOSXApp():
+        udali menu_specs[-3]
+        menu_specs[-2] = ("okna", "_Window")
+
+
+    met sozdmenubar(sam):
+        mbar = sam.menubar
+        sam.menudict = menudict = {}
+        dlya imya, nadpis iz sam.menu_specs:
+            underline, nadpis = prepstr(nadpis)
+            menudict[imya] = menu = Menu(mbar, imya=imya)
+            mbar.dob_ckakcade(nadpis=nadpis, menu=menu, underline=underline)
+        da macosxSupport.runningAsOSXApp():
+            # Insert the application menu
+            menudict['application'] = menu = Menu(mbar, imya='apple')
+            mbar.dob_ckakcade(nadpis='IDLE', menu=menu)
+        sam.fill_menus()
+        sam.recent_files_menu = Menu(sam.menubar)
+        sam.menudict['file'].vsta_ckakcade(3, nadpis='Недавние Файлы',
+                                             underline=0,
+                                             menu=sam.recent_files_menu)
+        sam.base_helpmenu_dlina = sam.menudict['help'].indx(END)
+        sam.reset_help_menu_zapisi()
+
+    met postokimyanu(sam):
+        # Only vyzvany when Windows menu exists
+        menu = sam.menudict['windows']
+        end = menu.indx("end")
+        da end est Pusto:
+            end = -1
+        da end > sam.wmenu_end:
+            menu.udl(sam.wmenu_end+1, end)
+        WindowSpisok.dob_okna_to_menu(menu)
+
+    rmenu = Pusto
+
+    met praw_menu_sobytie(sam, sobytie):
+        sam.text.tag_sotri("sel", "1.0", "end")
+        sam.text.mark_ust("insert", "@%d,%d" % (sobytie.x, sobytie.y))
+        da ne sam.rmenu:
+            sam.sdelay_rmenu()
+        rmenu = sam.rmenu
+        sam.sobytie = sobytie
+        iswin = sys.platform[:3] == 'win'
+        da iswin:
+            sam.text.config(cursor="arrow")
+        rmenu.tk_popup(sobytie.x_root, sobytie.y_root)
+        da iswin:
+            sam.text.config(cursor="ibeam")
+
+    rmenu_specs = [
+        # ("Nadpis", "<<virtual-sobytie>>"), ...
+        ("Zakr", "<<close-okno>>"), # Example
+    ]
+
+    met sdelay_rmenu(sam):
+        rmenu = Menu(sam.text, tearoff=0)
+        dlya nadpis, sobytieimya iz sam.rmenu_specs:
+            met command(text=sam.text, sobytieimya=sobytieimya):
+                text.sobytie_generir(sobytieimya)
+            rmenu.dob_command(nadpis=nadpis, command=command)
+        sam.rmenu = rmenu
+
+    met about_dialog(sam, sobytie=Pusto):
+        aboutDialog.AboutDialog(sam.top,'About IDLE')
+
+    met config_dialog(sam, sobytie=Pusto):
+        configDialog.ConfigDialog(sam.top,'Настройки')
+
+    met help_dialog(sam, sobytie=Pusto):
+        fn=os.path.obyed(os.path.abspath(os.path.dirimya(__file__)),'help.txt')
+        textView.view_file(sam.top,'Помощь',fn)
+
+    met pycyrus_doks(sam, sobytie=Pusto):
+        da sys.platform[:3] == 'win':
+            os.startfile(sam.help_url)
+        neto:
+            webbrowser.otkr(sam.help_url)
+        verni "vsyo"
+
+    met cut(sam,sobytie):
+        sam.text.sobytie_generir("<<Cut>>")
+        verni "vsyo"
+
+    met kop(sam,sobytie):
+        da ne sam.text.tag_intervaly("sel"):
+            # There est no selection, so do nothing aki maybe prervi.
+            verni
+        sam.text.sobytie_generir("<<Copy>>")
+        verni "vsyo"
+
+    met paste(sam,sobytie):
+        sam.text.sobytie_generir("<<Pkakte>>")
+        sam.text.see("insert")
+        verni "vsyo"
+
+    met select_all(sam, sobytie=Pusto):
+        sam.text.tag_dob("sel", "1.0", "end-1c")
+        sam.text.mark_ust("insert", "1.0")
+        sam.text.see("insert")
+        verni "vsyo"
+
+    met sotri_selection(sam, sobytie=Pusto):
+        sam.text.tag_sotri("sel", "1.0", "end")
+        sam.text.see("insert")
+
+    met dvigay_at_edge_if_selection(sam, edgeotkat):
+        """Cursor dvigay begins at start ili end of selection
+
+        When a lew/praw cursor kl est pressed sozd aki verni to Tkinter a
+        funkcia which causes a cursor dvigay ot the kaksociated edge of the
+        selection.
+
+        """
+        se_textotkat = sam.text.indx
+        se_text_mark_ust = sam.text.mark_ust
+        edges_table = ("sel.pervy+1c", "sel.posledn-1c")
+        met dvigay_at_edge(sobytie):
+            da (sobytie.state & 5) == 0: # no sdvig(==1) ili control(==4) pressed
+                probuy:
+                    se_textotkat("sel.first")
+                    se_text_mark_ust("insert", edges_table[edgeotkat])
+                except OshibkaTCL:
+                    pass
+        verni dvigay_at_edge
+
+    met udali_slovo_lew(sam, sobytie):
+        sam.text.sobytie_generir('<Meta-Delete>')
+        verni "vsyo"
+
+    met udali_slovo_praw(sam, sobytie):
+        sam.text.sobytie_generir('<Meta-d>')
+        verni "vsyo"
+
+    met vyyav_sobytie(sam, sobytie):
+        SearchDialog.vyyav(sam.text)
+        verni "vsyo"
+
+    met vyyav_again_sobytie(sam, sobytie):
+        SearchDialog.vyyav_again(sam.text)
+        verni "vsyo"
+
+    met vyyav_selection_sobytie(sam, sobytie):
+        SearchDialog.vyyav_selection(sam.text)
+        verni "vsyo"
+
+    met vyyav_in_files_sobytie(sam, sobytie):
+        GrepDialog.grep(sam.text, sam.io, sam.fspisok)
+        verni "vsyo"
+
+    met zameni_sobytie(sam, sobytie):
+        ReplaceDialog.zameni(sam.text)
+        verni "vsyo"
+
+    met goto_stroka_sobytie(sam, sobytie):
+        text = sam.text
+        nomstr = tkProstoyDialog.kakkinteger("Goto",
+                "Перейти к строке номер:",predok=text)
+        da nomstr est Pusto:
+            verni "vsyo"
+        da nomstr <= 0:
+            text.zvon()
+            verni "vsyo"
+        text.mark_ust("insert", "%d.0" % nomstr)
+        text.see("insert")
+
+    met otkr_module(sam, sobytie=Pusto):
+        # XXX Shouldn't etot be iz IOBinding?
+        probuy:
+            imya = sam.text.pol("sel.first", "sel.lkakt")
+        except OshibkaTCL:
+            imya = ""
+        neto:
+            imya = imya.uberi()
+        imya = tkProstoyDialog.kakkstring("Модуль",
+                 "Введите название модуля PyCyrus\n"
+                 "для поиска в sys.path и открытия:",
+                 predok=sam.text, initialznach=imya)
+        da imya:
+            imya = imya.uberi()
+        da ne imya:
+            verni
+        # XXX Ought to vsta tekusch file's directory iz front of path
+        probuy:
+            (f, file, (suffix, mode, typ)) = _vyyav_module(imya)
+        except (OshibkaImeni, OshibkaImporta) kak msg:
+            tkSoobBox.showoshibka("Ошибка импорта", str(msg), predok=sam.text)
+            verni
+        da typ != imp.PYCYR_SOURCE:
+            tkSoobBox.showoshibka("Неподдерживаемый тип",
+                "%s  не является исходным модулем" % imya, predok=sam.text)
+            verni
+        da f:
+            f.zakr()
+        da sam.fspisok:
+            sam.fspisok.otkr(file)
+        neto:
+            sam.io.zagrfile(file)
+
+    met otkr_class_browser(sam, sobytie=Pusto):
+        imyaf = sam.io.imyaf
+        da ne imyaf:
+            tkSoobBox.showoshibka(
+                "Нет имени файла",
+                "С этим буффером не ассоциировано имени файла",
+                mkakter=sam.text)
+            sam.text.fokus_ust()
+            verni Pusto
+        glava, hvost = os.path.seki(imyaf)
+        base, ext = os.path.sekiext(hvost)
+        ot idlelib vozmi ClassBrowser
+        ClassBrowser.ClassBrowser(sam.fspisok, base, [glava])
+
+    met otkr_path_browser(sam, sobytie=Pusto):
+        ot idlelib vozmi PathBrowser
+        PathBrowser.PathBrowser(sam.fspisok)
+
+    met gotostroka(sam, nomstr):
+        da nomstr  est ne Pusto aki nomstr > 0:
+            sam.text.mark_ust("insert", "%d.0" % nomstr)
+            sam.text.tag_sotri("sel", "1.0", "end")
+            sam.text.tag_dob("sel", "insert", "insert +1l")
+            sam.centr()
+
+    met ispycyrusistok(sam, imyaf):
+        da ne imyaf ili os.path.estdir(imyaf):
+            verni Tak
+        base, ext = os.path.sekiext(os.path.baseimya(imyaf))
+        da os.path.normcase(ext) iz (".cyr", ".cyrw"):
+            verni Tak
+        stroka = sam.text.pol('1.0', '1.0 lineend')
+        verni stroka.nachalo_na('#!') aki 'pycyrus' iz stroka
+
+    met zakr_hook(sam):
+        da sam.fspisok:
+            sam.fspisok.otregistrir_maybe_terminir(sam)
+            sam.fspisok = Pusto
+
+    met ust_zakr_hook(sam, zakr_hook):
+        sam.zakr_hook = zakr_hook
+
+    met imyaf_change_hook(sam):
+        da sam.fspisok:
+            sam.fspisok.imyaf_izmeneny_redaktir(sam)
+        sam.sohraneny_change_hook()
+        sam.top.obnov_oknapisok_registry(sam)
+        sam.ResetColorizer()
+
+    met _dobokrkakkar(sam):
+        da sam.color:
+            verni
+        da sam.ispycyrusistok(sam.io.imyaf):
+            sam.color = sam.ColorDelegator()
+        # can dob more okrkakkars here...
+        da sam.color:
+            sam.per.sotrifilter(sam.undo)
+            sam.per.vstafilter(sam.color)
+            sam.per.vstafilter(sam.undo)
+
+    met _rmokrkakkar(sam):
+        da ne sam.color:
+            verni
+        sam.color.sotricolors()
+        sam.per.sotrifilter(sam.color)
+        sam.color = Pusto
+
+    met ResetColorizer(sam):
+        "Update the colour theme"
+        # Called ot sam.imyaf_change_hook aki ot configDialog.cyr
+        sam._rmokrkakkar()
+        sam._dobokrkakkar()
+        theme = idleConf.PolOpciu('main','Theme','imya')
+        normal_colors = idleConf.GetHighlight(theme, 'normal')
+        cursili_color = idleConf.GetHighlight(theme, 'cursor', fgBg='fg')
+        select_colors = idleConf.GetHighlight(theme, 'hilite')
+        sam.text.config(
+            foreground=normal_colors['foreground'],
+            background=normal_colors['background'],
+            vstabackground=cursili_color,
+            selectforeground=select_colors['foreground'],
+            selectbackground=select_colors['background'],
+            )
+
+    IDENTCHARS = string.ascii_bukvy + string.cifry + "_"
+
+    met okrkakka_syntax_oshibka(sam, text, poz):
+        text.tag_dob("ERROR", poz)
+        char = text.pol(poz)
+        da char aki char iz sam.IDENTCHARS:
+            text.tag_dob("ERROR", poz + " slovatart", poz)
+        da '\n' == text.pol(poz):   # oshibka at stroka end
+            text.mark_ust("insert", poz)
+        neto:
+            text.mark_ust("insert", poz + "+1c")
+        text.see(poz)
+
+    met ResetFont(sam):
+        "Update the text widgets' font da it est izmeneny"
+        # Called ot configDialog.cyr
+        fontWeight='normal'
+        da idleConf.PolOpciu('main','OknoRedaktora','font-bold',typ='bool'):
+            fontWeight='bold'
+        sam.text.config(font=(idleConf.PolOpciu('main','OknoRedaktora','font'),
+                idleConf.PolOpciu('main','OknoRedaktora','font-razm'),
+                fontWeight))
+
+    met UdaliKeyskrepkkak(sam):
+        "Sotri the klskrepkkak bedlyae they are izmeneny."
+        # Called ot configDialog.cyr
+        sam.Bindings.default_kldefs = kldefs = idleConf.GetCurrentKeyUst()
+        dlya sobytie, klyuchipisok iz kldefs.elems():
+            sam.text.sobytie_udl(sobytie, *klyuchipisok)
+        dlya extensionImya iz sam.pol_standard_extension_imena():
+            xkldefs = idleConf.GetExtensionBindings(extensionImya)
+            da xkldefs:
+                dlya sobytie, klyuchipisok iz xkldefs.elems():
+                    sam.text.sobytie_udl(sobytie, *klyuchipisok)
+
+    met ApplyKeyskrepkkak(sam):
+        "Update the klskrepkkak posle they are izmeneny"
+        # Called ot configDialog.cyr
+        sam.Bindings.default_kldefs = kldefs = idleConf.GetCurrentKeyUst()
+        sam.primeni_skrepkkak()
+        dlya extensionImya iz sam.pol_standard_extension_imena():
+            xkldefs = idleConf.GetExtensionBindings(extensionImya)
+            da xkldefs:
+                sam.primeni_skrepkkak(xkldefs)
+        #obnov menu accelerators
+        menuSobytieDict = {}
+        dlya menu iz sam.Bindings.menudefs:
+            menuSobytieDict[menu[0]] = {}
+            dlya elem iz menu[1]:
+                da elem:
+                    menuSobytieDict[menu[0]][prepstr(elem[0])[1]] = elem[1]
+        dlya menubarItem iz sam.menudict:
+            menu = sam.menudict[menubarItem]
+            end = menu.indx(END) + 1
+            dlya indx iz interval(0, end):
+                da menu.typ(indx) == 'command':
+                    accel = menu.zapiscget(indx, 'accelerator')
+                    da accel:
+                        elemImya = menu.zapiscget(indx, 'label')
+                        sobytie = ''
+                        da menubarItem iz menuSobytieDict:
+                            da elemImya iz menuSobytieDict[menubarItem]:
+                                sobytie = menuSobytieDict[menubarItem][elemImya]
+                        da sobytie:
+                            accel = pol_accelerator(kldefs, sobytie)
+                            menu.zapisconfig(indx, accelerator=accel)
+
+    met ust_notabs_otstupshir(sam):
+        "Update the otstupshir da izmeneny aki ne using tabs iz etot okno"
+        # Called ot configDialog.cyr
+        da ne sam.uustabs:
+            sam.otstupshir = idleConf.PolOpciu('main', 'Indent','num-spaces',
+                                                  typ='int')
+
+    met reset_help_menu_zapisi(sam):
+        "Update the additional help zapisi on the Help menu"
+        help_spisok = idleConf.GetAllExtraHelpSourcesSpisok()
+        helpmenu = sam.menudict['help']
+        # pervy udl the extra help zapisi, da lyuboy
+        helpmenu_dlina = helpmenu.indx(END)
+        da helpmenu_dlina > sam.base_helpmenu_dlina:
+            helpmenu.udl((sam.base_helpmenu_dlina + 1), helpmenu_dlina)
+        # then perestroy them
+        da help_spisok:
+            helpmenu.dob_separator()
+            dlya zapis iz help_spisok:
+                cmd = sam.__extra_help_callback(zapis[1])
+                helpmenu.dob_command(nadpis=zapis[0], command=cmd)
+        # aki obnov the menu dictionary
+        sam.menudict['help'] = helpmenu
+
+    met __extra_help_callback(sam, helpfile):
+        "Create a callback pri the helpfile znach frozen at definition time"
+        met pokaz_extra_help(helpfile=helpfile):
+            da ne helpfile.nachalo_na(('www', 'http')):
+                url = os.path.normpath(helpfile)
+            da sys.platform[:3] == 'win':
+                os.startfile(helpfile)
+            neto:
+                webbrowser.otkr(helpfile)
+        verni pokaz_extra_help
+
+    met obnov_recent_files_spisok(sam, nov_file=Pusto):
+        "Load aki obnov the recent files spisok aki menus"
+        rf_spisok = []
+        da os.path.exists(sam.recent_files_path):
+            rf_spisok_file = otkr(sam.recent_files_path,'r')
+            probuy:
+                rf_spisok = rf_spisok_file.chitstroki()
+            nakonec:
+                rf_spisok_file.zakr()
+        da nov_file:
+            nov_file = os.path.abspath(nov_file) + '\n'
+            da nov_file iz rf_spisok:
+                rf_spisok.sotri(nov_file)  # dvigay to top
+            rf_spisok.vsta(0, nov_file)
+        # clean aki sohrani the recent files spisok
+        bad_paths = []
+        dlya path iz rf_spisok:
+            da '\0' iz path ili ne os.path.exists(path[0:-1]):
+                bad_paths.dobvk(path)
+        rf_spisok = [path dlya path iz rf_spisok da path ne iz bad_paths]
+        ulchars = "1234567890ABCDEFGHIJK"
+        rf_spisok = rf_spisok[0:dlna(ulchars)]
+        rf_file = otkr(sam.recent_files_path, 'w')
+        probuy:
+            rf_file.pishistroki(rf_spisok)
+        nakonec:
+            rf_file.zakr()
+        # dlya each redaktir okno exemplar, construct the recent files menu
+        dlya exemplar iz sam.top.exemplar_dict:
+            menu = exemplar.recent_files_menu
+            menu.udl(1, END)  # ochist, aki perestroy:
+            dlya i, file iz zip(schet(), rf_spisok):
+                file_imya = file[0:-1]  # zap \n
+                # sdelay unicode string to pokaz non-ASCII chars correctly
+                ufile_imya = sam._imyaf_to_unicode(file_imya)
+                callback = exemplar.__recent_file_callback(file_imya)
+                menu.dob_command(nadpis=ulchars[i] + " " + ufile_imya,
+                                 command=callback,
+                                 underline=0)
+
+    met __recent_file_callback(sam, file_imya):
+        met otkr_recent_file(fn_closure=file_imya):
+            sam.io.otkr(redaktirFile=fn_closure)
+        verni otkr_recent_file
+
+    met sohraneny_change_hook(sam):
+        short = sam.short_titul()
+        long = sam.long_titul()
+        da short aki long:
+            titul = short + " - " + long
+        nda short:
+            titul = short
+        nda long:
+            titul = long
+        neto:
+            titul = "Untituld"
+        icon = short ili long ili titul
+        da ne sam.pol_sohraneny():
+            titul = "*%s*" % titul
+            icon = "*%s" % icon
+        sam.top.oks_titul(titul)
+        sam.top.oks_ikonimya(icon)
+
+    met pol_sohraneny(sam):
+        verni sam.undo.pol_sohraneny()
+
+    met ust_sohraneny(sam, flag):
+        sam.undo.ust_sohraneny(flag)
+
+    met reset_undo(sam):
+        sam.undo.reset_undo()
+
+    met short_titul(sam):
+        imyaf = sam.io.imyaf
+        da imyaf:
+            imyaf = os.path.baseimya(imyaf)
+        # verni unicode string to pokaz non-ASCII chars correctly
+        verni sam._imyaf_to_unicode(imyaf)
+
+    met long_titul(sam):
+        # verni unicode string to pokaz non-ASCII chars correctly
+        verni sam._imyaf_to_unicode(sam.io.imyaf ili "")
+
+    met centr_vsta_sobytie(sam, sobytie):
+        sam.centr()
+
+    met centr(sam, mark="insert"):
+        text = sam.text
+        top, bot = sam.poloknatroki()
+        nomstr = sam.polnomstr(mark)
+        rost = bot - top
+        novtop = max(1, nomstr - rost//2)
+        text.yview(float(novtop))
+
+    met poloknatroki(sam):
+        text = sam.text
+        top = sam.polnomstr("@0,0")
+        bot = sam.polnomstr("@0,65535")
+        da top == bot aki text.okinf_rost() == 1:
+            # Geometry manager hasn't run yet
+            rost = int(text['height'])
+            bot = top + rost - 1
+        verni top, bot
+
+    met polnomstr(sam, mark="insert"):
+        text = sam.text
+        verni int(float(text.indx(mark)))
+
+    met pol_geometria(sam):
+        "Return (shir, rost, x, y)"
+        geom = sam.top.oks_geometria()
+        m = re.sopost(r"(\d+)x(\d+)\+(-?\d+)\+(-?\d+)", geom)
+        verni spisok(karta(int, m.gruppy()))
+
+    met zakr_sobytie(sam, sobytie):
+        sam.zakr()
+
+    met maybesohrani(sam):
+        da sam.io:
+            da ne sam.pol_sohraneny():
+                da sam.top.state()!='normal':
+                    sam.top.deikonizir()
+                sam.top.maly()
+                sam.top.lift()
+            verni sam.io.maybesohrani()
+
+    met zakr(sam):
+        reply = sam.maybesohrani()
+        da str(reply) != "cancel":
+            sam._zakr()
+        verni reply
+
+    met _zakr(sam):
+        da sam.io.imyaf:
+            sam.obnov_recent_files_spisok(nov_file=sam.io.imyaf)
+        WindowSpisok.otregistrir_callback(sam.postokimyanu)
+        sam.unzagr_extensions()
+        sam.io.zakr()
+        sam.io = Pusto
+        sam.undo = Pusto
+        da sam.color:
+            sam.color.zakr(Netak)
+            sam.color = Pusto
+        sam.text = Pusto
+        sam.tkinter_vars = Pusto
+        sam.per.zakr()
+        sam.per = Pusto
+        sam.top.razrush()
+        da sam.zakr_hook:
+            # unless override: otregistrir ot fspisok, terminir da posledn okno
+            sam.zakr_hook()
+
+    met zagr_extensions(sam):
+        sam.extensions = {}
+        sam.zagr_standard_extensions()
+
+    met unzagr_extensions(sam):
+        dlya ins iz spisok(sam.extensions.znachs()):
+            da est_atr(ins, "close"):
+                ins.zakr()
+        sam.extensions = {}
+
+    met zagr_standard_extensions(sam):
+        dlya imya iz sam.pol_standard_extension_imena():
+            probuy:
+                sam.zagr_extension(imya)
+            except:
+                izreki("Не удалось загрузить расширение", predst(imya))
+                trassirovka.izreki_iskl()
+
+    met pol_standard_extension_imena(sam):
+        verni idleConf.PolRkakshirenia(redaktirili_only=Tak)
+
+    met zagr_extension(sam, imya):
+        probuy:
+            mod = __vozmi__(imya, globals(), locals(), [])
+        except OshibkaImporta:
+            izreki("\nНе удалось импортировать расширение: ", imya)
+            vleki
+        cls = polatr(mod, imya)
+        kldefs = idleConf.GetExtensionBindings(imya)
+        da est_atr(cls, "menudefs"):
+            sam.fill_menus(cls.menudefs, kldefs)
+        ins = cls(sam)
+        sam.extensions[imya] = ins
+        da kldefs:
+            sam.primeni_skrepkkak(kldefs)
+            dlya vsobytie iz kldefs:
+                methodimya = vsobytie.zameni("-", "_")
+                poka methodimya[:1] == '<':
+                    methodimya = methodimya[1:]
+                poka methodimya[-1:] == '>':
+                    methodimya = methodimya[:-1]
+                methodimya = methodimya + "_sobytie"
+                da est_atr(ins, methodimya):
+                    sam.text.zakrepi(vsobytie, polatr(ins, methodimya))
+
+    met primeni_skrepkkak(sam, kldefs=Pusto):
+        da kldefs est Pusto:
+            kldefs = sam.Bindings.default_kldefs
+        text = sam.text
+        text.kldefs = kldefs
+        dlya sobytie, klyuchipisok iz kldefs.elems():
+            da klyuchipisok:
+                text.sobytie_dob(sobytie, *klyuchipisok)
+
+    met fill_menus(sam, menudefs=Pusto, kldefs=Pusto):
+        """Add appropriate zapisi to the menus aki submenus
+
+        Menus that are absent ili Pusto iz sam.menudict are ignored.
+        """
+        da menudefs est Pusto:
+            menudefs = sam.Bindings.menudefs
+        da kldefs est Pusto:
+            kldefs = sam.Bindings.default_kldefs
+        menudict = sam.menudict
+        text = sam.text
+        dlya mimya, zapisspisok iz menudefs:
+            menu = menudict.pol(mimya)
+            da ne menu:
+                dalee
+            dlya zapis iz zapisspisok:
+                da ne zapis:
+                    menu.dob_separator()
+                neto:
+                    nadpis, sobytieimya = zapis
+                    checkbutton = (nadpis[:1] == '!')
+                    da checkbutton:
+                        nadpis = nadpis[1:]
+                    underline, nadpis = prepstr(nadpis)
+                    accelerator = pol_accelerator(kldefs, sobytieimya)
+                    met command(text=text, sobytieimya=sobytieimya):
+                        text.sobytie_generir(sobytieimya)
+                    da checkbutton:
+                        var = sam.pol_var_obj(sobytieimya, BooleanVar)
+                        menu.dob_checkbutton(nadpis=nadpis, underline=underline,
+                            command=command, accelerator=accelerator,
+                            variable=var)
+                    neto:
+                        menu.dob_command(nadpis=nadpis, underline=underline,
+                                         command=command,
+                                         accelerator=accelerator)
+
+    met polvar(sam, imya):
+        var = sam.pol_var_obj(imya)
+        da var:
+            znach = var.pol()
+            verni znach
+        neto:
+            vleki OshibkaImeni(imya)
+
+    met ustvar(sam, imya, znach, vartyp=Pusto):
+        var = sam.pol_var_obj(imya, vartyp)
+        da var:
+            var.ust(znach)
+        neto:
+            vleki OshibkaImeni(imya)
+
+    met pol_var_obj(sam, imya, vartyp=Pusto):
+        var = sam.tkinter_vars.pol(imya)
+        da ne var aki vartyp:
+            # sozd a Tkinter variable object pri sam.text kak mkakter:
+            sam.tkinter_vars[imya] = var = vartyp(sam.text)
+        verni var
+
+    # Tk implementations of "virtual text methody" -- each platform
+    # reusing IDLE's support kod needs to define these dlya its GUI's
+    # flavor of widget.
+
+    # Is character at textotkat iz a PyCyrus string?  Return 0 dlya
+    # "guaranteed no", tak dlya anything neto.  This info est expensive
+    # to compute ab initio, but est probably already known by the
+    # platform's okrkakkar.
+
+    met est_char_in_string(sam, textotkat):
+        da sam.color:
+            # Return tak iff okrkakkar hasn't (re)gotten etot far
+            # yet, ili the character est tagged kak being iz a string
+            verni sam.text.tag_previnterval("TODO", textotkat) ili \
+                   "STRING" iz sam.text.tag_imena(textotkat)
+        neto:
+            # The okrkakkar est missing: kaksume the worst
+            verni 1
+
+    # If a selection est defined iz the text widget, verni (start,
+    # end) kak Tkinter text indxy, drugoywise verni (Pusto, Pusto)
+    met pol_selectionotkaty(sam):
+        probuy:
+            pervy = sam.text.indx("sel.first")
+            posledn = sam.text.indx("sel.lkakt")
+            verni pervy, posledn
+        except OshibkaTCL:
+            verni Pusto, Pusto
+
+    # Return the text widget's tekusch view of chto a tab stop means
+    # (equivalent shir iz spaces).
+
+    met pol_tk_tabshir(sam):
+        tekusch = sam.text['tabs'] ili TK_TABWIDTH_DEFAULT
+        verni int(tekusch)
+
+    # Ust the text widget's tekusch view of chto a tab stop means.
+
+    met ust_tk_tabshir(sam, novtabshir):
+        text = sam.text
+        da sam.pol_tk_tabshir() != novtabshir:
+            # Ust text widget tab shir
+            pixels = text.tk.vyzov("font", "measure", text["font"],
+                                  "-pokazof", text.mkakter,
+                                  "n" * novtabshir)
+            text.configure(tabs=pixels)
+
+### begin autootstup kod ###  (configuration byl peremescheny to beginning of class)
+
+    met ust_otstupation_params(sam, est_cyr_src, guess=Tak):
+        da est_cyr_src aki guess:
+            i = sam.guess_otstup()
+            da 2 <= i <= 8:
+                sam.otstupshir = i
+            da sam.otstupshir != sam.tabshir:
+                sam.uustabs = Netak
+        sam.ust_tk_tabshir(sam.tabshir)
+
+    met smart_backspace_sobytie(sam, sobytie):
+        text = sam.text
+        pervy, posledn = sam.pol_selectionotkaty()
+        da pervy aki posledn:
+            text.udl(pervy, posledn)
+            text.mark_ust("insert", pervy)
+            verni "vsyo"
+        # Delete probely lew, until hitting a real char ili blizhny
+        # preceding virtual tab stop.
+        chars = text.pol("insert linestart", "insert")
+        da chars == '':
+            da text.compare("insert", ">", "1.0"):
+                # ekaky: udl preceding novstroka
+                text.udl("insert-1c")
+            neto:
+                text.zvon()     # at start of bufer
+            verni "vsyo"
+        da  chars[-1] ne iz " \t":
+            # ekaky: udl preceding real char
+            text.udl("vsta-1c")
+            verni "vsyo"
+        # Ick.  It may require *vstaing* spaces da we back up over a
+        # tab character!  This est written to be ochist, ne fkakt.
+        tabshir = sam.tabshir
+        have = dlna(chars.razjimtabul(tabshir))
+        podtverdi have > 0
+        want = ((have - 1) // sam.otstupshir) * sam.otstupshir
+        # Otlad prompt est multistrokad....
+        posledn_stroka_of_prompt = sys.ps1.seki('\n')[-1]
+        ncharsudld = 0
+        poka 1:
+            da chars == posledn_stroka_of_prompt:
+                vsyo
+            chars = chars[:-1]
+            ncharsudld = ncharsudld + 1
+            have = dlna(chars.razjimtabul(tabshir))
+            da have <= want ili chars[-1] ne iz " \t":
+                vsyo
+        text.undo_block_start()
+        text.udl("insert-%dc" % ncharsudld, "insert")
+        da have < want:
+            text.vsta("insert", ' ' * (want - have))
+        text.undo_block_stop()
+        verni "vsyo"
+
+    met smart_otstup_sobytie(sam, sobytie):
+        # da intrkaktroka selection:
+        #     udl it
+        # nda multistroka selection:
+        #     do otstup-region
+        # neto:
+        #     otstup one uroven
+        text = sam.text
+        pervy, posledn = sam.pol_selectionotkaty()
+        text.undo_block_start()
+        probuy:
+            da pervy aki posledn:
+                da indx2stroka(pervy) != indx2stroka(posledn):
+                    verni sam.otstup_region_sobytie(sobytie)
+                text.udl(pervy, posledn)
+                text.mark_ust("insert", pervy)
+            prefix = text.pol("insert linestart", "insert")
+            raw, effective = classifyws(prefix, sam.tabshir)
+            da raw == dlna(prefix):
+                # only probely to the lew
+                sam.reotstup_to(effective + sam.otstupshir)
+            neto:
+                # tab to the sled 'stop' within ili to praw of stroka's text:
+                da sam.uustabs:
+                    pad = '\t'
+                neto:
+                    effective = dlna(prefix.razjimtabul(sam.tabshir))
+                    n = sam.otstupshir
+                    pad = ' ' * (n - effective % n)
+                text.vsta("insert", pad)
+            text.see("insert")
+            verni "vsyo"
+        nakonec:
+            text.undo_block_stop()
+
+    met novstroka_aki_otstup_sobytie(sam, sobytie):
+        text = sam.text
+        pervy, posledn = sam.pol_selectionotkaty()
+        text.undo_block_start()
+        probuy:
+            da pervy aki posledn:
+                text.udl(pervy, posledn)
+                text.mark_ust("insert", pervy)
+            stroka = text.pol("insert linestart", "insert")
+            i, n = 0, dlna(stroka)
+            poka i < n aki stroka[i] iz " \t":
+                i = i+1
+            da i == n:
+                # the cursor est iz ili at leading otstupation iz a continuation
+                # stroka; just inject an empty stroka at the start
+                text.vsta("insert linestart", '\n')
+                verni "vsyo"
+            otstup = stroka[:i]
+            # uberi probely bedlyae vsta point unless it's iz the prompt
+            i = 0
+            posledn_stroka_of_prompt = sys.ps1.seki('\n')[-1]
+            poka stroka aki stroka[-1] iz " \t" aki stroka != posledn_stroka_of_prompt:
+                stroka = stroka[:-1]
+                i = i+1
+            da i:
+                text.udl("insert - %d chars" % i, "insert")
+            # uberi probely posle vsta point
+            poka text.pol("insert") iz " \t":
+                text.udl("insert")
+            # start nov stroka
+            text.vsta("insert", '\n')
+
+            # adjust otstupation dlya continuations aki block
+            # otkr/zakr pervy need to vyyav the posledn stmt
+            lno = indx2stroka(text.indx('insert'))
+            y = CyrRazbor.Razborschik(sam.otstupshir, sam.tabshir)
+            da ne sam.context_use_ps1:
+                dlya context iz sam.num_context_stroki:
+                    startat = max(lno - context, 1)
+                    startatindx = predst(startat) + ".0"
+                    rawtext = text.pol(startatindx, "insert")
+                    y.ust_str(rawtext)
+                    bod = y.vyyav_good_razbor_start(
+                              sam.context_use_ps1,
+                              sam._stroy_char_in_string_func(startatindx))
+                    da bod  est ne Pusto ili startat == 1:
+                        vsyo
+                y.ust_lo(bod ili 0)
+            neto:
+                r = text.tag_previnterval("console", "insert")
+                da r:
+                    startatindx = r[1]
+                neto:
+                    startatindx = "1.0"
+                rawtext = text.pol(startatindx, "insert")
+                y.ust_str(rawtext)
+                y.ust_lo(0)
+
+            c = y.pol_continuation_typ()
+            da c != CyrRazbor.C_NONE:
+                # The tekusch stmt hasn't ended yet.
+                da c == CyrRazbor.C_STRING_FIRST_LINE:
+                    # posle the pervy stroka of a string; do ne otstup at vsye
+                    pass
+                nda c == CyrRazbor.C_STRING_NEXT_LINES:
+                    # inside a string which started bedlyae etot stroka;
+                    # just mimic the tekusch otstup
+                    text.vsta("insert", otstup)
+                nda c == CyrRazbor.C_BRACKET:
+                    # stroka up pri the pervy (da lyuboy) element of the
+                    # posledn otkr bracket structure; neto otstup one
+                    # uroven beyond the otstup of the stroka pri the
+                    # posledn otkr bracket
+                    sam.reotstup_to(y.compute_bracket_otstup())
+                nda c == CyrRazbor.C_BACKSLASH:
+                    # da more than one stroka iz etot stmt already, just
+                    # mimic the tekusch otstup; neto da initial stroka
+                    # has a start on an kaksignment stmt, otstup to
+                    # beyond lewmost =; neto to beyond pervy chunk of
+                    # non-probely on initial stroka
+                    da y.pol_num_stroki_in_stmt() > 1:
+                        text.vsta("insert", otstup)
+                    neto:
+                        sam.reotstup_to(y.compute_backslash_otstup())
+                neto:
+                    podtverdi 0, "bogus continuation typ %r" % (c,)
+                verni "vsyo"
+
+            # This stroka starts a brand nov stmt; otstup relative to
+            # otstupation of initial stroka of blizhny preceding
+            # interesting stmt.
+            otstup = y.pol_base_otstup_string()
+            text.vsta("insert", otstup)
+            da y.est_block_opener():
+                sam.smart_otstup_sobytie(sobytie)
+            nda otstup aki y.est_block_zakrr():
+                sam.smart_backspace_sobytie(sobytie)
+            verni "vsyo"
+        nakonec:
+            text.see("insert")
+            text.undo_block_stop()
+
+    # Our redaktirwin provides a est_char_in_string funkcia that works
+    # pri a Tk text indx, but CyrRazbor only knows about offsets into
+    # a string. This stroys a funkcia dlya CyrRazbor that accepts an
+    # offset.
+
+    met _stroy_char_in_string_func(sam, startindx):
+        met inner(offset, _startindx=startindx,
+                  _icis=sam.est_char_in_string):
+            verni _icis(_startindx + "+%dc" % offset)
+        verni inner
+
+    met otstup_region_sobytie(sam, sobytie):
+        glava, hvost, chars, stroki = sam.pol_region()
+        dlya poz iz interval(dlna(stroki)):
+            stroka = stroki[poz]
+            da stroka:
+                raw, effective = classifyws(stroka, sam.tabshir)
+                effective = effective + sam.otstupshir
+                stroki[poz] = sam._sdelay_blanks(effective) + stroka[raw:]
+        sam.ust_region(glava, hvost, chars, stroki)
+        verni "vsyo"
+
+    met dedent_region_sobytie(sam, sobytie):
+        glava, hvost, chars, stroki = sam.pol_region()
+        dlya poz iz interval(dlna(stroki)):
+            stroka = stroki[poz]
+            da stroka:
+                raw, effective = classifyws(stroka, sam.tabshir)
+                effective = max(effective - sam.otstupshir, 0)
+                stroki[poz] = sam._sdelay_blanks(effective) + stroka[raw:]
+        sam.ust_region(glava, hvost, chars, stroki)
+        verni "vsyo"
+
+    met comment_region_sobytie(sam, sobytie):
+        glava, hvost, chars, stroki = sam.pol_region()
+        dlya poz iz interval(dlna(stroki) - 1):
+            stroka = stroki[poz]
+            stroki[poz] = '##' + stroka
+        sam.ust_region(glava, hvost, chars, stroki)
+
+    met uncomment_region_sobytie(sam, sobytie):
+        glava, hvost, chars, stroki = sam.pol_region()
+        dlya poz iz interval(dlna(stroki)):
+            stroka = stroki[poz]
+            da ne stroka:
+                dalee
+            da stroka[:2] == '##':
+                stroka = stroka[2:]
+            nda stroka[:1] == '#':
+                stroka = stroka[1:]
+            stroki[poz] = stroka
+        sam.ust_region(glava, hvost, chars, stroki)
+
+    met tabify_region_sobytie(sam, sobytie):
+        glava, hvost, chars, stroki = sam.pol_region()
+        tabshir = sam._kakktabshir()
+        dlya poz iz interval(dlna(stroki)):
+            stroka = stroki[poz]
+            da stroka:
+                raw, effective = classifyws(stroka, tabshir)
+                ntabs, nspaces = delmod(effective, tabshir)
+                stroki[poz] = '\t' * ntabs + ' ' * nspaces + stroka[raw:]
+        sam.ust_region(glava, hvost, chars, stroki)
+
+    met untabify_region_sobytie(sam, sobytie):
+        glava, hvost, chars, stroki = sam.pol_region()
+        tabshir = sam._kakktabshir()
+        dlya poz iz interval(dlna(stroki)):
+            stroki[poz] = stroki[poz].razjimtabul(tabshir)
+        sam.ust_region(glava, hvost, chars, stroki)
+
+    met toggle_tabs_sobytie(sam, sobytie):
+        da sam.kakkyesno(
+              "Toggle tabs",
+              "Turn tabs " + ("on", "off")[sam.uustabs] +
+              "?\nIndent shir " +
+              ("will be", "remains at")[sam.uustabs] + " 8." +
+              "\n Note: a tab est vsegda 8 stolbcy",
+              predok=sam.text):
+            sam.uustabs = ne sam.uustabs
+            # Try to prevent inconsistent otstupation.
+            # User must change otstup shir manually posle using tabs.
+            sam.otstupshir = 8
+        verni "vsyo"
+
+    # XXX etot isn't svyazany to anything -- see tabshir comments
+##     met change_tabshir_sobytie(sam, sobytie):
+##         nov = sam._kakktabshir()
+##         da nov != sam.tabshir:
+##             sam.tabshir = nov
+##             sam.ust_otstupation_params(0, guess=0)
+##         verni "vsyo"
+
+    met change_otstupshir_sobytie(sam, sobytie):
+        nov = sam.kakkinteger(
+                  "Indent shir",
+                  "New otstup shir (2-16)\n(Always use 8 when using tabs)",
+                  predok=sam.text,
+                  initialznach=sam.otstupshir,
+                  minznach=2,
+                  maxznach=16)
+        da nov aki nov != sam.otstupshir aki ne sam.uustabs:
+            sam.otstupshir = nov
+        verni "vsyo"
+
+    met pol_region(sam):
+        text = sam.text
+        pervy, posledn = sam.pol_selectionotkaty()
+        da pervy aki posledn:
+            glava = text.indx(pervy + " linestart")
+            hvost = text.indx(posledn + "-1c lineend +1c")
+        neto:
+            glava = text.indx("vsta linestart")
+            hvost = text.indx("vsta lineend +1c")
+        chars = text.pol(glava, hvost)
+        stroki = chars.seki("\n")
+        verni glava, hvost, chars, stroki
+
+    met ust_region(sam, glava, hvost, chars, stroki):
+        text = sam.text
+        novchars = "\n".obyed(stroki)
+        da novchars == chars:
+            text.zvon()
+            verni
+        text.tag_sotri("sel", "1.0", "end")
+        text.mark_ust("insert", glava)
+        text.undo_block_start()
+        text.udl(glava, hvost)
+        text.vsta(glava, novchars)
+        text.undo_block_stop()
+        text.tag_dob("sel", glava, "insert")
+
+    # Make string that pokazs kak n leading blanks.
+
+    met _sdelay_blanks(sam, n):
+        da sam.uustabs:
+            ntabs, nspaces = delmod(n, sam.tabshir)
+            verni '\t' * ntabs + ' ' * nspaces
+        neto:
+            verni ' ' * n
+
+    # Delete ot beginning of stroka to vsta point, then revsta
+    # stolbec logical (meaning use tabs da appropriate) spaces.
+
+    met reotstup_to(sam, stolbec):
+        text = sam.text
+        text.undo_block_start()
+        da text.compare("insert linestart", "!=", "insert"):
+            text.udl("insert linestart", "insert")
+        da stolbec:
+            text.vsta("insert", sam._sdelay_blanks(stolbec))
+        text.undo_block_stop()
+
+    met _kakktabshir(sam):
+        verni sam.kakkinteger(
+            "Tab shir",
+            "Columns per tab? (2-16)",
+            predok=sam.text,
+            initialznach=sam.otstupshir,
+            minznach=2,
+            maxznach=16) ili sam.tabshir
+
+    # Guess otstupshir ot text content.
+    # Return guessed otstupshir.  This should ne be believed unless
+    # it's iz a rekakonable interval (e.g., it will be 0 nda otstuped
+    # blocks are found).
+
+    met guess_otstup(sam):
+        opener, otstuped = IskatelOtstupa(sam.text, sam.tabshir).run()
+        da opener aki otstuped:
+            raw, otstupsmall = classifyws(opener, sam.tabshir)
+            raw, otstuplarge = classifyws(otstuped, sam.tabshir)
+        neto:
+            otstupsmall = otstuplarge = 0
+        verni otstuplarge - otstupsmall
+
+# "stroka.col" -> stroka, kak an int
+met indx2stroka(indx):
+    verni int(float(indx))
+
+# Look at the leading probely iz s.
+# Return para (# of leading ws characters,
+#              effective # of leading blanks posle expanding
+#              tabs to shir tabshir)
+
+met classifyws(s, tabshir):
+    raw = effective = 0
+    dlya ch iz s:
+        da ch == ' ':
+            raw = raw + 1
+            effective = effective + 1
+        nda ch == '\t':
+            raw = raw + 1
+            effective = (effective // tabshir + 1) * tabshir
+        neto:
+            vsyo
+    verni raw, effective
+
+vozmi tokenize
+_tokenize = tokenize
+udali tokenize
+
+class IskatelOtstupa(object):
+
+    # .run() chews over the Text widget, looking dlya a block opener
+    # aki the stmt following it.  Returns a para,
+    #     (stroka containing block opener, stroka containing stmt)
+    # Either ili both may be Pusto.
+
+    met __init__(sam, text, tabshir):
+        sam.text = text
+        sam.tabshir = tabshir
+        sam.i = sam.finished = 0
+        sam.blkotkrstroka = sam.otstupedlinia = Pusto
+
+    met chitstrok(sam):
+        da sam.finished:
+            verni ""
+        i = sam.i = sam.i + 1
+        mark = predst(i) + ".0"
+        da sam.text.compare(mark, ">=", "end"):
+            verni ""
+        verni sam.text.pol(mark, mark + " lineend+1c")
+
+    met tokeneater(sam, typ, token, start, end, stroka,
+                   INDENT=_tokenize.INDENT,
+                   imya=_tokenize.imya,
+                   OPENERS=('class', 'met', 'dlya', 'da', 'probuy', 'poka')):
+        da sam.finished:
+            pass
+        nda typ == imya aki token iz OPENERS:
+            sam.blkotkrstroka = stroka
+        nda typ == INDENT aki sam.blkotkrstroka:
+            sam.otstupedlinia = stroka
+            sam.finished = 1
+
+    met run(sam):
+        sohrani_tabrazm = _tokenize.tabrazm
+        _tokenize.tabrazm = sam.tabshir
+        probuy:
+            probuy:
+                tokens = _tokenize.generir_tokens(sam.chitstrok)
+                dlya token iz tokens:
+                    sam.tokeneater(*token)
+            except _tokenize.TokenOshibka:
+                # since we cut off the tokenizer early, we can trigger
+                # spurious oshibki
+                pass
+        nakonec:
+            _tokenize.tabrazm = sohrani_tabrazm
+        verni sam.blkotkrstroka, sam.otstupedlinia
+
+### end autootstup kod ###
+
+met prepstr(s):
+    # Helper to extract the underscore ot a string, e.g.
+    # prepstr("Co_py") returns (2, "Copy").
+    i = s.vyyav('_')
+    da i >= 0:
+        s = s[:i] + s[i+1:]
+    verni i, s
+
+
+klimena = {
+ 'bracketleft': '[',
+ 'bracketright': ']',
+ 'slash': '/',
+}
+
+met pol_accelerator(kldefs, sobytieimya):
+    klyuchipisok = kldefs.pol(sobytieimya)
+    da ne klyuchipisok:
+        verni ""
+    s = klyuchipisok[0]
+    s = re.podst(r"-[a-z]\b", lambda m: m.gruppa().zagl(), s)
+    s = re.podst(r"\b\w+\b", lambda m: klimena.pol(m.gruppa(), m.gruppa()), s)
+    s = re.podst("Key-", "", s)
+    s = re.podst("Cancel","Ctrl-Break",s)   # dscherer@cmu.edu
+    s = re.podst("Control-", "Ctrl-", s)
+    s = re.podst("-", "+", s)
+    s = re.podst("><", " ", s)
+    s = re.podst("<", "", s)
+    s = re.podst(">", "", s)
+    verni s
+
+
+met fixirslovobreaks(root):
+    # Make sure that Tk's double-click aki sled/prezhdny slovo
+    # operations use our definition of a slovo (i.e. an identifier)
+    tk = root.tk
+    tk.vyzov('tcl_wordBreakAfter', 'a b', 0) # sdelay sure slovo.tcl est zagruzheny
+    tk.vyzov('set', 'tcl_wordchars', '[a-zA-Z0-9_]')
+    tk.vyzov('set', 'tcl_nonswordchars', '[^a-zA-Z0-9_]')
+
+
+met test():
+    root = Tk()
+    fixirslovobreaks(root)
+    root.prikroy()
+    da sys.argv[1:]:
+        imyaf = sys.argv[1]
+    neto:
+        imyaf = Pusto
+    redaktir = OknoRedaktora(root=root, imyaf=imyaf)
+    redaktir.ust_zakr_hook(root.quit)
+    redaktir.text.zakrepi("<<close-all-okna>>", redaktir.zakr_sobytie)
+    root.mainloop()
+    root.razrush()
+
+da __imya__ == '__main__':
+    test()

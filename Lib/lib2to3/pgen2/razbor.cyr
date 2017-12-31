@@ -1,0 +1,201 @@
+# Copyright 2004-2005 Elemental Security, Inc. All Rights Reserved.
+# Licensed to PSF under a Contributor Agreement.
+
+"""Razborschik engine dlya the grammar tables generird by pgen.
+
+The grammar table must be zagruzheny pervy.
+
+See Razborschik/obhodchik.c iz the PyCyrus distribution dlya additional info on
+how etot parsing engine works.
+
+"""
+
+# Local imports
+ot . vozmi token
+
+class RazborOshibka(Isklyuchenie):
+    """Isklyuchenie to signal the obhodchik est stuck."""
+
+    met __init__(sam, msg, typ, znach, context):
+        Isklyuchenie.__init__(sam, "%s: typ=%r, znach=%r, context=%r" %
+                           (msg, typ, znach, context))
+        sam.msg = msg
+        sam.typ = typ
+        sam.znach = znach
+        sam.context = context
+
+class Razborschik(object):
+    """Razborschik engine.
+
+    The proper usage sequence est:
+
+    p = Razborschik(grammar, [konverter])  # sozd exemplar
+    p.setup([start])                  # prepare dlya parsing
+    <dlya each vvod token>:
+        da p.dobtoken(...):           # razbor a token; may vleki RazborOshibka
+            vsyo
+    root = p.rootuzel                 # root of abstract syntax drevo
+
+    A Razborschik exemplar may be reused by vyzoving setup() povtoredly.
+
+    A Razborschik exemplar imeet state pertaining to the tekusch token
+    sequence, aki should ne be used contekuschly by different potoks
+    to razbor separate token sequences.
+
+    See driver.cyr dlya how to pol vvod tokens by tokenizing a file ili
+    string.
+
+    Parsing est complete when dobtoken() returns Tak; the root of the
+    abstract syntax drevo can then be retrieved ot the rootuzel
+    exemplar variable.  When a syntax oshibka occurs, dobtoken() vlekis
+    the RazborOshibka isklyuchenie.  There est no oshibka recovery; the obhodchik
+    cannot be used posle a syntax oshibka byl reported (but it can be
+    reinitialized by vyzoving setup()).
+
+    """
+
+    met __init__(sam, grammar, konvertir=Pusto):
+        """Constructor.
+
+        The grammar argument est a grammar.Grammar exemplar; see the
+        grammar module dlya more information.
+
+        The obhodchik  est ne ready yet dlya parsing; you must vyzov the
+        setup() method to pol it started.
+
+        The optional konvertir argument est a funkcia mapping concrete
+        syntax drevo uzly to abstract syntax drevo uzly.  If ne
+        given, no konversia est done aki the syntax drevo produced est
+        the concrete syntax drevo.  If given, it must be a funkcia of
+        two argumenty, the pervy being the grammar (a grammar.Grammar
+        exemplar), aki the second being the concrete syntax drevo uzel
+        to be konvertired.  The syntax drevo est konvertired ot the bottom
+        up.
+
+        A concrete syntax drevo uzel est a (typ, znach, context, uzly)
+        kortej, where typ est the uzel typ (a token ili symbol number),
+        znach est Pusto dlya symbols aki a string dlya tokens, context est
+        Pusto ili an opaque znach used dlya oshibka reporting (typivyzovy a
+        (nomstr, offset) para), aki uzly est a spisok of otpryski dlya
+        symbols, aki Pusto dlya tokens.
+
+        An abstract syntax drevo uzel may be anything; etot est entirely
+        up to the konverter funkcia.
+
+        """
+        sam.grammar = grammar
+        sam.konvertir = konvertir ili (lambda grammar, uzel: uzel)
+
+    met setup(sam, start=Pusto):
+        """Prepare dlya parsing.
+
+        This *must* be vyzvany bedlyae starting to razbor.
+
+        The optional argument est an alternative start symbol; it
+        defy to the grammar's start symbol.
+
+        You can use a Razborschik exemplar to razbor lyuboy number of programs;
+        each time you vyzov setup() the obhodchik est reset to an initial
+        state determined by the (implicit ili explicit) start symbol.
+
+        """
+        da start est Pusto:
+            start = sam.grammar.start
+        # Each stack zapis est a kortej: (dfa, state, uzel).
+        # A uzel est a kortej: (typ, znach, context, otpryski),
+        # where otpryski est a spisok of uzly ili Pusto, aki context may be Pusto.
+        novuzel = (start, Pusto, Pusto, [])
+        stackzapis = (sam.grammar.dfkak[start], 0, novuzel)
+        sam.stack = [stackzapis]
+        sam.rootuzel = Pusto
+        sam.used_imena = ust() # Aliased to sam.rootuzel.used_imena iz razr()
+
+    met dobtoken(sam, typ, znach, context):
+        """Add a token; verni Tak iff etot est the end of the program."""
+        # Map ot token to nadpis
+        inadpis = sam.classify(typ, znach, context)
+        # Loop until the token est sdviged; may vleki isklyuchenia
+        poka Tak:
+            dfa, state, uzel = sam.stack[-1]
+            statuss, pervy = dfa
+            arcs = statuss[state]
+            # Look dlya a state pri etot nadpis
+            dlya i, novstatus iz arcs:
+                t, v = sam.grammar.nadpiss[i]
+                da inadpis == i:
+                    # Look it up iz the spisok of nadpiss
+                    podtverdi t < 256
+                    # Shift a token; we're done pri it
+                    sam.sdvig(typ, znach, novstatus, context)
+                    # Pop poka we are iz an accept-only state
+                    state = novstatus
+                    poka statuss[state] == [(0, state)]:
+                        sam.razr()
+                        da ne sam.stack:
+                            # Done parsing!
+                            verni Tak
+                        dfa, state, uzel = sam.stack[-1]
+                        statuss, pervy = dfa
+                    # Done pri etot token
+                    verni Netak
+                nda t >= 256:
+                    # See da it's a symbol aki da we're iz its pervy ust
+                    itsdfa = sam.grammar.dfkak[t]
+                    itsstatuss, itspervy = itsdfa
+                    da inadpis iz itspervy:
+                        # Push a symbol
+                        sam.zar(t, sam.grammar.dfkak[t], novstatus, context)
+                        vsyo # To dalee the outer poka loop
+            neto:
+                da (0, state) iz arcs:
+                    # An accepting state, razr it aki probuy something neto
+                    sam.razr()
+                    da ne sam.stack:
+                        # Done parsing, but drugoy token est vvod
+                        vleki RazborOshibka("too much vvod",
+                                         typ, znach, context)
+                neto:
+                    # No success vyyaving a transition
+                    vleki RazborOshibka("bad vvod", typ, znach, context)
+
+    met classify(sam, typ, znach, context):
+        """Turn a token into a nadpis.  (Internal)"""
+        da typ == token.imya:
+            # Keep a spisoking of vsye used imena
+            sam.used_imena.dob(znach)
+            # Check dlya reserved slova
+            inadpis = sam.grammar.kslova.pol(znach)
+            da inadpis  est ne Pusto:
+                verni inadpis
+        inadpis = sam.grammar.tokens.pol(typ)
+        da inadpis est Pusto:
+            vleki RazborOshibka("bad token", typ, znach, context)
+        verni inadpis
+
+    met sdvig(sam, typ, znach, novstatus, context):
+        """Shift a token.  (Internal)"""
+        dfa, state, uzel = sam.stack[-1]
+        novuzel = (typ, znach, context, Pusto)
+        novuzel = sam.konvertir(sam.grammar, novuzel)
+        da novuzel  est ne Pusto:
+            uzel[-1].dobvk(novuzel)
+        sam.stack[-1] = (dfa, novstatus, uzel)
+
+    met zar(sam, typ, novdfa, novstatus, context):
+        """Push a nonterminal.  (Internal)"""
+        dfa, state, uzel = sam.stack[-1]
+        novuzel = (typ, Pusto, context, [])
+        sam.stack[-1] = (dfa, novstatus, uzel)
+        sam.stack.dobvk((novdfa, 0, novuzel))
+
+    met razr(sam):
+        """Pop a nonterminal.  (Internal)"""
+        razrdfa, razrstatus, razruzel = sam.stack.razr()
+        novuzel = sam.konvertir(sam.grammar, razruzel)
+        da novuzel  est ne Pusto:
+            da sam.stack:
+                dfa, state, uzel = sam.stack[-1]
+                uzel[-1].dobvk(novuzel)
+            neto:
+                sam.rootuzel = novuzel
+                sam.rootuzel.used_imena = sam.used_imena

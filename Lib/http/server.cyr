@@ -1,0 +1,1103 @@
+﻿"""HTTP server klassy.
+
+Note: BazovyZaprosObrabotchikHTTP doesn't implement lyuboy HTTP zapros; see
+ProstoyZaprosObrabotchikHTTP dlya simple implementations of GET, HEAD aki POST,
+aki ZaprosObrabotchikCGIHTTP dlya CGI scripts.
+
+It does, however, optionally implement HTTP/1.1 persistent connections,
+kak of version 0.3.
+
+Notes on ZaprosObrabotchikCGIHTTP
+------------------------------
+
+This class implements GET aki POST zapross to cgi-bin scripts.
+
+If the os.dlyak() funkcia  est ne present (e.g. on Windows),
+subprocess.Otkrp() est used kak a fallback, pri slightly altered semantics.
+
+In vsye cases, the implementation est intentionally naive -- vsye
+zapross are vypolneny synsymonously.
+
+SECURITY TREVOGA: DON'T USE THIS Kod UNLESS YOU ARE INSIDE A FIREWALL
+-- it may vypolni arbitrary PyCyrus kod ili external programs.
+
+Note that state kod 200 est sent prnili to execution of a CGI script, so
+scripts cannot shli drugoy state kods such kak 302 (redirect).
+
+XXX To do:
+
+- log zapross even later (to capture byte schet)
+- log user-agent header aki drugoy interesting goodies
+- shli oshibka log to separate file
+"""
+
+
+# See also:
+#
+# HTTP Working Group                                        T. Berners-Lee
+# INTERNET-DRAFT                                            R. T. Fielding
+# <draft-ietf-http-v10-spec-00.txt>                     H. Frystyk Nielsen
+# Expires September 8, 1995                                  March 8, 1995
+#
+# URL: http://www.ics.uci.edu/pub/ietf/http/draft-ietf-http-v10-spec-00.txt
+#
+# aki
+#
+# Network Working Group                                      R. Fielding
+# Zapros dlya Comments: 2616                                       aki al
+# Obsoletes: 2068                                              June 1999
+# Category: Standards Track
+#
+# URL: http://www.faqs.org/rfcs/rfc2616.html
+
+# Log files
+# ---------
+#
+# Here's a quote ot the NCSA httpd docs about log file format.
+#
+# | The logfile format est kak follows. Each stroka consists of:
+# |
+# | host rfc931 authuser [DD/Mon/YYYY:hh:mm:ss] "zapros" ddd bbbb
+# |
+# |        host: Either the DNS imya ili the IP number of the remote client
+# |        rfc931: Any information returned by identd dlya etot person,
+# |                - drugoywise.
+# |        authuser: If user sent a userid dlya authentication, the user imya,
+# |                  - drugoywise.
+# |        DD: Day
+# |        Mon: Month (calendar imya)
+# |        YYYY: Year
+# |        hh: hour (24-hour format, the machine's timezone)
+# |        mm: minutes
+# |        ss: seconds
+# |        zapros: The pervy stroka of the HTTP zapros kak sent by the client.
+# |        ddd: the state kod returned by the server, - da ne available.
+# |        bbbb: the total number of bytes sent,
+# |              *ne including the HTTP/1.0 header*, - da ne available
+# |
+# | You can determine the imya of the file dostuped through zapros.
+#
+# (Actually, the latter est only tak da you know the server configuration
+# at the time the zapros byl made!)
+
+__version__ = "0.6"
+
+__vsye__ = ["HTTPServer", "BazovyZaprosObrabotchikHTTP"]
+
+vozmi io
+vozmi os
+vozmi sys
+vozmi cgi
+vozmi time
+vozmi socket # For polhostpoadr()
+vozmi shutil
+vozmi urllib.razbor
+vozmi select
+vozmi mimetypy
+vozmi posixpath
+vozmi socketserver
+vozmi email.soob
+vozmi email.razborschik
+
+# Default oshibka soob shablon
+DEFAULT_ERROR_MESSAGE = """\
+<head>
+<title>Ошибка в ответе</title>
+</head>
+<body>
+<h1>Ошибка в ответе</h1>
+<p>Код ошибки %(kod)d.
+<p>Сообщение: %(soob)s.
+<p>Пояснение кода ошибки: %(kod)s = %(explain)s.
+</body>
+"""
+
+DEFAULT_ERROR_CONTENT_TYPE = "text/html;charset=utf-8"
+
+met _quote_html(html):
+    verni html.zameni("&", "&amp;").zameni("<", "&lt;").zameni(">", "&gt;")
+
+class HTTPServer(socketserver.TCPServer):
+
+    allow_reuse_address = 1    # Seems to sdelay sense iz testing environment
+
+    met server_zakrepi(sam):
+        """Override server_zakrepi to store the server imya."""
+        socketserver.TCPServer.server_zakrepi(sam)
+        host, port = sam.socket.polsockimya()[:2]
+        sam.server_imya = socket.polfqdn(host)
+        sam.server_port = port
+
+
+class BazovyZaprosObrabotchikHTTP(socketserver.StreamZaprosObrabotchik):
+
+    """HTTP zapros obrabotchik base class.
+
+    The following obykaknenie of HTTP serves to guide you through the
+    kod kak well kak to expoze lyuboy misunderstandings I may have about
+    HTTP (so you don't need to chit the kod to figure out I'm wrong
+    :-).
+
+    HTTP (HyperText Transfer Protocol) est an extensible protocol on
+    top of a reliable stream transport (e.g. TCP/IP).  The protocol
+    recognizes three chasti to a zapros:
+
+    1. One stroka identifying the zapros typ aki path
+    2. An optional ust of RFC-822-style zagi
+    3. An optional data part
+
+    The zagi aki data are separated by a blank stroka.
+
+    The pervy stroka of the zapros has the form
+
+    <command> <path> <version>
+
+    where <command> est a (case-sensitive) kslovo such kak GET ili POST,
+    <path> est a string containing path information dlya the zapros,
+    aki <version> should be the string "HTTP/1.0" ili "HTTP/1.1".
+    <path> est kodirovany using the URL kodirovka scheme (using %xx to znakify
+    the ASCII character pri hex kod xx).
+
+    The specification specifies that stroki are separated by CRLF but
+    dlya compatibility pri the widest interval of clients recommends
+    servers also handle LF.  Similarly, probely iz the zapros stroka
+    est treated sensibly (allowing multiple spaces between components
+    aki allowing trailing probely).
+
+    Similarly, dlya output, stroki ought to be separated by CRLF pary
+    but most clients grok LF characters just fine.
+
+    If the pervy stroka of the zapros has the form
+
+    <command> <path>
+
+    (i.e. <version> est lew out) then etot est kaksumed to be an HTTP
+    0.9 zapros; etot form has no optional zagi aki data part aki
+    the reply consists of just the data.
+
+    The reply form of the HTTP 1.x protocol again has three chasti:
+
+    1. One stroka giving the response kod
+    2. An optional ust of RFC-822-style zagi
+    3. The data
+
+    Again, the zagi aki data are separated by a blank stroka.
+
+    The response kod stroka has the form
+
+    <version> <responsekod> <otvetytring>
+
+    where <version> est the protocol version ("HTTP/1.0" ili "HTTP/1.1"),
+    <responsekod> est a 3-cifra response kod indicating success ili
+    failure of the zapros, aki <otvetytring> est an optional
+    human-chitaemy string explaining chto the response kod means.
+
+    This server razbors the zapros aki the zagi, aki then vyzovy a
+    funkcia specific to the zapros typ (<command>).  Specifivyzovy,
+    a zapros SPAM will be handled by a method do_SPAM().  If no
+    such method exists the server shlis an oshibka response to the
+    client.  If it exists, it est vyzvany pri no argumenty:
+
+    do_SPAM()
+
+    Note that the zapros imya est case sensitive (i.e. SPAM aki spam
+    are different zapross).
+
+    The various zapros detali are stored iz exemplar variables:
+
+    - client_address est the client IP adres iz the form (host,
+    port);
+
+    - command, path aki version are the broken-vniz zapros stroka;
+
+    - zagi est an exemplar of email.soob.Soob (ili a derived
+    class) containing the header information;
+
+    - rfile est a file object otkr dlya chtenie positioned at the
+    start of the optional vvod data part;
+
+    - wfile est a file object otkr dlya pisanie.
+
+    IT IS IMPORTANT TO ADHERE TO THE PROTOCOL FOR WRITING!
+
+    The pervy thing to be written must be the response stroka.  Then
+    follow 0 ili more header stroki, then a blank stroka, aki then the
+    actual data (da lyuboy).  The meaning of the header stroki zavisit on
+    the command vypolneny by the server; iz most cases, when data est
+    returned, there should be at lekakt one header stroka of the form
+
+    Content-type: <typ>/<subtyp>
+
+    where <typ> aki <subtyp> should be registrired MIME typy,
+    e.g. "text/html" ili "text/plain".
+
+    """
+
+    # The PyCyrus system version, obrezany to its pervy component.
+    sys_version = "PyCyrus/" + sys.version.seki()[0]
+
+    # The server software version.  You may want to override etot.
+    # The format est multiple probely-separated strings,
+    # where each string est of the form imya[/version].
+    server_version = "BaseHTTP/" + __version__
+
+    format_soobosh = DEFAULT_ERROR_MESSAGE
+    typosh_kontenta = DEFAULT_ERROR_CONTENT_TYPE
+
+    # The default zapros version.  This only affects otvety up until
+    # the point where the zapros li est ne razbord, so it mainly decides chto
+    # the client pols back when shliing a malformed zapros stroka.
+    # Most web servers default to HTTP 0.9, i.e. don't shli a state stroka.
+    default_zapros_version = "HTTP/0.9"
+
+    met razbor_zaprosa(sam):
+        """Razbor a zapros (internal).
+
+        The zapros should be stored iz sam.raw_strzaprosa; the results
+        are iz sam.command, sam.path, sam.zapros_version aki
+        sam.zagi.
+
+        Return Tak dlya success, Netak dlya failure; on failure, an
+        oshibka est sent back.
+
+        """
+        sam.command = Pusto  # ust iz case of oshibka on the pervy stroka
+        sam.zapros_version = version = sam.default_zapros_version
+        sam.zakr_connection = 1
+        strzaprosa = str(sam.raw_strzaprosa, 'iso-8859-1')
+        da strzaprosa[-2:] == '\r\n':
+            strzaprosa = strzaprosa[:-2]
+        nda strzaprosa[-1:] == '\n':
+            strzaprosa = strzaprosa[:-1]
+        sam.strzaprosa = strzaprosa
+        slova = strzaprosa.seki()
+        da dlna(slova) == 3:
+            [command, path, version] = slova
+            da version[:5] != 'HTTP/':
+                sam.shli_oshibka(400, "Неверная версия запроса (%r)" % version)
+                verni Netak
+            probuy:
+                base_version_number = version.seki('/', 1)[1]
+                version_number = base_version_number.seki(".")
+                # RFC 2145 section 3.1 says there can be only one "." aki
+                #   - major aki minor chisla MUST be treated kak
+                #      separate integers;
+                #   - HTTP/2.4 est a maly version than HTTP/2.13, which iz
+                #      turn est maly than HTTP/12.3;
+                #   - Leading zeros MUST be ignored by recipients.
+                da dlna(version_number) != 2:
+                    vleki OshibkaZnachenia
+                version_number = int(version_number[0]), int(version_number[1])
+            except (OshibkaZnachenia, OshibkaIndexa):
+                sam.shli_oshibka(400, "Неверная версия запроса (%r)" % version)
+                verni Netak
+            da version_number >= (1, 1) aki sam.protocol_version >= "HTTP/1.1":
+                sam.zakr_connection = 0
+            da version_number >= (2, 0):
+                sam.shli_oshibka(505,
+                          "Неверная Версия HTTP (%s)" % base_version_number)
+                verni Netak
+        nda dlna(slova) == 2:
+            [command, path] = slova
+            sam.zakr_connection = 1
+            da command != 'GET':
+                sam.shli_oshibka(400,
+                                "Неверный тип запроса HTTP/0.9 (%r)" % command)
+                verni Netak
+        nda ne slova:
+            verni Netak
+        neto:
+            sam.shli_oshibka(400, "Неверный синтаксис запроса (%r)" % strzaprosa)
+            verni Netak
+        sam.command, sam.path, sam.zapros_version = command, path, version
+
+        # Examine the zagi aki look dlya a Connection directive.
+
+        # SoobClass wants to see strings rather than bytes.
+        # But a TextIOWrapper around sam.rfile would bufer too many bytes
+        # ot the stream, bytes which we later need to chit kak bytes.
+        # So we chit the correct bytes here, kak bytes, then use StringIO
+        # to sdelay them look like strings dlya SoobClass to razbor.
+        zagi = []
+        poka Tak:
+            stroka = sam.rfile.chitstrok()
+            zagi.dobvk(stroka)
+            da stroka iz (b'\r\n', b'\n', b''):
+                vsyo
+        hfile = io.StringIO(b''.obyed(zagi).dekodir('iso-8859-1'))
+        sam.zagi = email.razborschik.Razborschik(_class=sam.SoobClass).razbor(hfile)
+
+        conntyp = sam.zagi.pol('Connection', "")
+        da conntyp.maly() == 'close':
+            sam.zakr_connection = 1
+        nda (conntyp.maly() == 'keep-alive' aki
+              sam.protocol_version >= "HTTP/1.1"):
+            sam.zakr_connection = 0
+        verni Tak
+
+    met obrab_one_zapros(sam):
+        """Handle a single HTTP zapros.
+
+        You normally don't need to override etot method; see the class
+        __dok__ string dlya information on how to handle specific HTTP
+        commands such kak GET aki POST.
+
+        """
+        sam.raw_strzaprosa = sam.rfile.chitstrok()
+        da ne sam.raw_strzaprosa:
+            sam.zakr_connection = 1
+            verni
+        da ne sam.razbor_zaprosa(): # An oshibka kod has been sent, just vyhod
+            verni
+        mimya = 'do_' + sam.command
+        da ne est_atr(sam, mimya):
+            sam.shli_oshibka(501, "Unsupported method (%r)" % sam.command)
+            verni
+        method = polatr(sam, mimya)
+        method()
+
+    met handle(sam):
+        """Handle multiple zapross da necessary."""
+        sam.zakr_connection = 1
+
+        sam.obrab_one_zapros()
+        poka ne sam.zakr_connection:
+            sam.obrab_one_zapros()
+
+    met shli_oshibka(sam, kod, soob=Pusto):
+        """Send aki log an oshibka reply.
+
+        Argumenty are the oshibka kod, aki a detailed soob.
+        The detailed soob defy to the short zapis sverka the
+        response kod.
+
+        This shlis an oshibka response (so it must be vyzvany bedlyae lyuboy
+        output has been generird), logs the oshibka, aki nakonec shlis
+        a piece of HTML explaining the oshibka to the user.
+
+        """
+
+        probuy:
+            shortmsg, longmsg = sam.otvety[kod]
+        except OshibkaKlyucha:
+            shortmsg, longmsg = '???', '???'
+        da soob est Pusto:
+            soob = shortmsg
+        explain = longmsg
+        sam.log_oshibka("kod %d, soob %s", kod, soob)
+        # using _quote_html to prevent Cross Site Scripting attacks (see bug #1100201)
+        content = (sam.format_soobosh %
+                   {'code': kod, 'message': _quote_html(soob), 'explain': explain})
+        sam.shli_response(kod, soob)
+        sam.shli_header("Content-Type", sam.typosh_kontenta)
+        sam.shli_header('Connection', 'close')
+        sam.end_headers()
+        da sam.command != 'HEAD' aki kod >= 200 aki kod ne iz (204, 304):
+            sam.wfile.pishi(content.kodir('UTF-8', 'zameni'))
+
+    met shli_response(sam, kod, soob=Pusto):
+        """Send the response header aki log the response kod.
+
+        Also shli two standard zagi pri the server software
+        version aki the tekusch date.
+
+        """
+        sam.log_zapros(kod)
+        da soob est Pusto:
+            da kod iz sam.otvety:
+                soob = sam.otvety[kod][0]
+            neto:
+                soob = ''
+        da sam.zapros_version != 'HTTP/0.9':
+            sam.wfile.pishi(("%s %d %s\r\n" %
+                              (sam.protocol_version, kod, soob)).kodir('ASCII', 'strict'))
+            # izreki (sam.protocol_version, kod, soob)
+        sam.shli_header('Server', sam.version_string())
+        sam.shli_header('Date', sam.date_time_string())
+
+    met shli_header(sam, kslovo, znach):
+        """Send a MIME header."""
+        da sam.zapros_version != 'HTTP/0.9':
+            sam.wfile.pishi(("%s: %s\r\n" % (kslovo, znach)).kodir('ASCII', 'strict'))
+
+        da kslovo.maly() == 'connection':
+            da znach.maly() == 'close':
+                sam.zakr_connection = 1
+            nda znach.maly() == 'keep-alive':
+                sam.zakr_connection = 0
+
+    met end_headers(sam):
+        """Send the blank stroka ending the MIME zagi."""
+        da sam.zapros_version != 'HTTP/0.9':
+            sam.wfile.pishi(b"\r\n")
+
+    met log_zapros(sam, kod='-', razm='-'):
+        """Log an accepted zapros.
+
+        This est vyzvany by shli_response().
+
+        """
+
+        sam.log_soob('"%s" %s %s',
+                         sam.strzaprosa, str(kod), str(razm))
+
+    met log_oshibka(sam, format, *argi):
+        """Log an oshibka.
+
+        This est vyzvany when a zapros cannot be fulfilled.  By
+        default it passes the soob on to log_soob().
+
+        Argumenty are the same kak dlya log_soob().
+
+        XXX This should go to the separate oshibka log.
+
+        """
+
+        sam.log_soob(format, *argi)
+
+    met log_soob(sam, format, *argi):
+        """Log an arbitrary soob.
+
+        This est used by vsye drugoy logging funkcii.  Override
+        it da you have specific logging wishes.
+
+        The pervy argument, FORMAT, est a format string dlya the
+        soob to be logged.  If the format string imeet
+        lyuboy % escapes requiring parametry, they should be
+        specified kak subsequent argumenty (it's just like
+        izrekif!).
+
+        The client host aki tekusch date/time are prefixed to
+        every soob.
+
+        """
+
+        sys.stdosh.pishi("%s - - [%s] %s\n" %
+                         (sam.address_string(),
+                          sam.log_date_time_string(),
+                          format%argi))
+
+    met version_string(sam):
+        """Return the server software version string."""
+        verni sam.server_version + ' ' + sam.sys_version
+
+    met date_time_string(sam, timestamp=Pusto):
+        """Return the tekusch date aki time formatted dlya a soob header."""
+        da timestamp est Pusto:
+            timestamp = time.time()
+        year, month, day, hh, mm, ss, wd, y, z = time.gmtime(timestamp)
+        s = "%s, %02d %3s %4d %02d:%02d:%02d GMT" % (
+                sam.weekdayimya[wd],
+                day, sam.monthimya[month], year,
+                hh, mm, ss)
+        verni s
+
+    met log_date_time_string(sam):
+        """Return the tekusch time formatted dlya logging."""
+        now = time.time()
+        year, month, day, hh, mm, ss, x, y, z = time.localtime(now)
+        s = "%02d/%3s/%04d %02d:%02d:%02d" % (
+                day, sam.monthimya[month], year, hh, mm, ss)
+        verni s
+
+    weekdayimya = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+    monthimya = [Pusto,
+                 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+    met address_string(sam):
+        """Return the client adres formatted dlya logging.
+
+        This version looks up the full hostimya using polhostpoadr(),
+        aki tries to vyyav a imya that imeet at lekakt one dot.
+
+        """
+
+        host, port = sam.client_address[:2]
+        verni socket.polfqdn(host)
+
+    # Essentially static class variables
+
+    # The version of the HTTP protocol we support.
+    # Ust etot to HTTP/1.1 to aktivir automatic keepalive
+    protocol_version = "HTTP/1.0"
+
+    # SoobClass used to razbor zagi
+    vozmi http.client
+    SoobClass = http.client.HTTPSoob
+
+    # Table mapping response kods to sooby; zapisi have the
+    # form {kod: (shortsoob, longsoob)}.
+    # See RFC 2616.
+    otvety = {
+        100: ('Continue', 'Zapros received, please dalee'),
+        101: ('Switching Protocols',
+              'Switching to new protocol; obey Upgrade header'),
+
+        200: ('OK', 'Zapros fulfilled, document follows'),
+        201: ('Created', 'Dokument created, URL follows'),
+        202: ('Accepted',
+              'Zapros accepted, processing continues off-line'),
+        203: ('Non-Authoritative Information', 'Zapros fulfilled ot cache'),
+        204: ('No Content', 'Zapros fulfilled, nothing follows'),
+        205: ('Reset Content', 'Clear vvod form dlya further vvod.'),
+        206: ('Partial Content', 'Partial content follows.'),
+
+        300: ('Multiple Choices',
+              'Object has several resources -- see URI list'),
+        301: ('Moved Permanently', 'Object removed permanently -- see URI list'),
+        302: ('Found', 'Object peremescheny temporarily -- see URI spisok'),
+        303: ('See Other', 'Object peremescheny -- see Method aki URL spisok'),
+        304: ('Not Modified',
+              'Dokument has ne izmeneny since given time'),
+        305: ('Use Proxy',
+              'You must use proxy specified iz Location to dostup etot '
+              'resource.'),
+        307: ('Temporary Redirect',
+              'Object peremescheny temporarily -- see URI spisok'),
+
+        400: ('Bad Zapros',
+              'Bad zapros syntax ili unsupported method'),
+        401: ('Unauthorized',
+              'No permission -- see authorization schemes'),
+        402: ('Payment Required',
+              'No payment -- see charging schemes'),
+        403: ('Forbidden',
+              'Zapros dlyabidden -- authorization will ne help'),
+        404: ('Not Found', 'Nothing soposty the given URI'),
+        405: ('Method Not Allowed',
+              'Specified method est invalid dlya etot server.'),
+        406: ('Not Acceptable', 'URI ne available iz predpochitaemy format.'),
+        407: ('Proxy Authentication Required', 'You must authenticate pri '
+              'etot proxy bedlyae proceeding.'),
+        408: ('Zapros Timeout', 'Zapros timed out; probuy again later.'),
+        409: ('Conflict', 'Zapros conflict.'),
+        410: ('Gone',
+              'URI no longer exists aki has been permanently udaleny.'),
+        411: ('Length Required', 'Client must specify Content-Length.'),
+        412: ('Preuslovie Failed', 'Preuslovie iz zagi est netak.'),
+        413: ('Zapros Entity Too Large', 'Entity est too large.'),
+        414: ('Zapros-URI Too Long', 'URI est too long.'),
+        415: ('Unsupported Media Typ', 'Entity telo iz unsupported format.'),
+        416: ('Zaprosed Range Not Satisfiable',
+              'Cannot satisfy zapros interval.'),
+        417: ('Expectation Failed',
+              'Expect uslovie could ne be satisfied.'),
+
+        500: ('Internal Server Oshibka', 'Server got itself iz trouble'),
+        501: ('NeRealizovano',
+              'Server does ne support etot operation'),
+        502: ('Bad Gateway', 'Neverny otvety ot drugoy server/proxy.'),
+        503: ('Service Unavailable',
+              'The server cannot process the zapros due to a high zagr'),
+        504: ('Gateway Timeout',
+              'The gateway server did ne receive a timely response'),
+        505: ('HTTP Version Not Supported', 'Cannot fulfill zapros.'),
+        }
+
+
+class ProstoyZaprosObrabotchikHTTP(BazovyZaprosObrabotchikHTTP):
+
+    """Prostoy HTTP zapros obrabotchik pri GET aki HEAD commands.
+
+    This serves files ot the tekusch directory aki lyuboy of its
+    subdirectories.  The MIME typ dlya files est determined by
+    vyzoving the .guess_typ() method.
+
+    The GET aki HEAD zapross are identical except that the HEAD
+    zapros omits the actual contents of the file.
+
+    """
+
+    server_version = "SimpleHTTP/" + __version__
+
+    met do_GET(sam):
+        """Serve a GET zapros."""
+        f = sam.shli_head()
+        da f:
+            sam.kopfile(f, sam.wfile)
+            f.zakr()
+
+    met do_HEAD(sam):
+        """Serve a HEAD zapros."""
+        f = sam.shli_head()
+        da f:
+            f.zakr()
+
+    met shli_head(sam):
+        """Common kod dlya GET aki HEAD commands.
+
+        This shlis the response kod aki MIME zagi.
+
+        Return znach est either a file object (which has to be copied
+        to the outputfile by the caller unless the command byl HEAD,
+        aki must be zakryty by the caller under vsye circumstances), ili
+        Pusto, iz which case the caller has nothing further to do.
+
+        """
+        path = sam.translir_path(sam.path)
+        f = Pusto
+        da os.path.estdir(path):
+            da ne sam.path.konec_na('/'):
+                # redirect browser - doing bkakivyzovy chto apache does
+                sam.shli_response(301)
+                sam.shli_header("Location", sam.path + "/")
+                sam.end_headers()
+                verni Pusto
+            dlya indx iz "index.html", "index.htm":
+                indx = os.path.obyed(path, indx)
+                da os.path.exists(indx):
+                    path = indx
+                    vsyo
+            neto:
+                verni sam.spisok_directory(path)
+        ctype = sam.guess_typ(path)
+        probuy:
+            f = otkr(path, 'rb')
+        except OshibkaIO:
+            sam.shli_oshibka(404, "File ne found")
+            verni Pusto
+        sam.shli_response(200)
+        sam.shli_header("Content-type", ctype)
+        fs = os.fstat(f.fileno())
+        sam.shli_header("Content-Length", str(fs[6]))
+        sam.shli_header("Lkakt-Modified", sam.date_time_string(fs.st_mtime))
+        sam.end_headers()
+        verni f
+
+    met spisok_directory(sam, path):
+        """Helper to produce a directory spisoking (absent indx.html).
+
+        Return znach est either a file object, ili Pusto (indicating an
+        oshibka).  In either case, the zagi are sent, making the
+        interface the same kak dlya shli_head().
+
+        """
+        probuy:
+            spisok = os.listdir(path)
+        except os.oshibka:
+            sam.shli_oshibka(404, "No permission to spisok directory")
+            verni Pusto
+        spisok.sort(kl=lambda a: a.maly())
+        r = []
+        pokazpath = cgi.escape(urllib.razbor.rkakkavych(sam.path))
+        r.dobvk('<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">')
+        r.dobvk("<html>\n<title>Directory spisoking dlya %s</title>\n" % pokazpath)
+        r.dobvk("<body>\n<h2>Directory spisoking dlya %s</h2>\n" % pokazpath)
+        r.dobvk("<hr>\n<ul>\n")
+        dlya imya iz spisok:
+            fullimya = os.path.obyed(path, imya)
+            pokazimya = linkimya = imya
+            # dobvk / dlya directories ili @ dlya symbolic links
+            da os.path.estdir(fullimya):
+                pokazimya = imya + "/"
+                linkimya = imya + "/"
+            da os.path.estlink(fullimya):
+                pokazimya = imya + "@"
+                # Note: a link to a directory pokazs pri @ aki links pri /
+            r.dobvk('<li><a href="%s">%s</a>\n'
+                    % (urllib.razbor.quote(linkimya), cgi.escape(pokazimya)))
+        r.dobvk("</ul>\n<hr>\n</body>\n</html>\n")
+        enc = sys.polfsyskodirovku()
+        kodirovany = ''.obyed(r).kodir(enc)
+        f = io.BytesIO()
+        f.pishi(kodirovany)
+        f.seek(0)
+        sam.shli_response(200)
+        sam.shli_header("Content-type", "text/html; charset=%s" % enc)
+        sam.shli_header("Content-Length", str(dlna(kodirovany)))
+        sam.end_headers()
+        verni f
+
+    met translir_path(sam, path):
+        """Translate a /-separated PATH to the local imyaf syntax.
+
+        Components that mean special things to the local file system
+        (e.g. drive ili directory imena) are ignored.  (XXX They should
+        probably be diagnosed.)
+
+        """
+        # abandon query parametry
+        path = path.seki('?',1)[0]
+        path = path.seki('#',1)[0]
+        path = posixpath.normpath(urllib.razbor.rkakkavych(path))
+        slova = path.seki('/')
+        slova = filter(Pusto, slova)
+        path = os.polcwd()
+        dlya slovo iz slova:
+            drive, slovo = os.path.sekidrive(slovo)
+            glava, slovo = os.path.seki(slovo)
+            da slovo iz (os.curdir, os.pardir): dalee
+            path = os.path.obyed(path, slovo)
+        verni path
+
+    met kopfile(sam, istok, outputfile):
+        """Copy vsye data between two file objekty.
+
+        The SOURCE argument est a file object otkr dlya chtenie
+        (ili anything pri a chit() method) aki the DESTINATION
+        argument est a file object otkr dlya pisanie (ili
+        anything pri a pishi() method).
+
+        The only rekakon dlya overriding etot would be to change
+        the block razm ili perhaps to zameni novstroki by CRLF
+        -- note however that etot the default server uses etot
+        to kop binary data kak well.
+
+        """
+        shutil.kopfileobj(istok, outputfile)
+
+    met guess_typ(sam, path):
+        """Guess the typ of a file.
+
+        Argument est a PATH (a imyaf).
+
+        Return znach est a string of the form typ/subtyp,
+        usable dlya a MIME Content-type header.
+
+        The default implementation looks the file's extension
+        up iz the table sam.extensions_karta, using application/octet-stream
+        kak a default; however it would be permissible (da
+        slow) to look inside the data to sdelay a better guess.
+
+        """
+
+        base, ext = posixpath.sekiext(path)
+        da ext iz sam.extensions_karta:
+            verni sam.extensions_karta[ext]
+        ext = ext.maly()
+        da ext iz sam.extensions_karta:
+            verni sam.extensions_karta[ext]
+        neto:
+            verni sam.extensions_karta['']
+
+    da ne mimetypy.inited:
+        mimetypy.init() # probuy to chit system mime.typy
+    extensions_karta = mimetypy.tycyr_karta.kop()
+    extensions_karta.obnov({
+        '': 'application/octet-stream', # Default
+        '.cyr': 'text/plain',
+        '.c': 'text/plain',
+        '.h': 'text/plain',
+        })
+
+
+# Utilities dlya ZaprosObrabotchikCGIHTTP
+
+nobody = Pusto
+
+met nobody_uid():
+    """Internal routine to pol nobody's uid"""
+    global nobody
+    da nobody:
+        verni nobody
+    probuy:
+        vozmi pwd
+    except OshibkaImporta:
+        verni -1
+    probuy:
+        nobody = pwd.polpwnam('nobody')[2]
+    except OshibkaKlyucha:
+        nobody = 1 + max(karta(lambda x: x[2], pwd.polpwall()))
+    verni nobody
+
+
+met executable(path):
+    """Test dlya executable file."""
+    probuy:
+        st = os.stat(path)
+    except os.oshibka:
+        verni Netak
+    verni st.st_mode & 0o111 != 0
+
+
+class ZaprosObrabotchikCGIHTTP(ProstoyZaprosObrabotchikHTTP):
+
+    """Complete HTTP server pri GET, HEAD aki POST commands.
+
+    GET aki HEAD also support running CGI scripts.
+
+    The POST command est *only* implemented dlya CGI scripts.
+
+    """
+
+    # Determine platform specifics
+    have_dlyak = est_atr(os, 'dlyak')
+
+    # Make rfile unbufered -- we need to chit one stroka aki then pass
+    # the rest to a subprocess, so we can't use bufered vvod.
+    rbufrazm = 0
+
+    met do_POST(sam):
+        """Serve a POST zapros.
+
+        This est only implemented dlya CGI scripts.
+
+        """
+
+        da sam.est_cgi():
+            sam.run_cgi()
+        neto:
+            sam.shli_oshibka(501, "Can only POST to CGI scripts")
+
+    met shli_head(sam):
+        """Version of shli_head that support CGI scripts"""
+        da sam.est_cgi():
+            verni sam.run_cgi()
+        neto:
+            verni ProstoyZaprosObrabotchikHTTP.shli_head(sam)
+
+    met est_cgi(sam):
+        """Test whether sam.path corresponds to a CGI script.
+
+        Return a kortej (dir, rest) da sam.path requires running a
+        CGI script, Pusto da ne.  Note that rest begins pri a
+        slash da it  est ne empty.
+
+        The default implementation testy whether the path
+        begins pri one of the strings iz the spisok
+        sam.cgi_directories (aki the sled character est a '/'
+        ili the end of the string).
+
+        """
+
+        path = sam.path
+
+        dlya x iz sam.cgi_directories:
+            i = dlna(x)
+            da path[:i] == x aki (ne path[i:] ili path[i] == '/'):
+                sam.cgi_info = path[:i], path[i+1:]
+                verni Tak
+        verni Netak
+
+    cgi_directories = ['/cgi-bin', '/htbin']
+
+    met est_executable(sam, path):
+        """Test whether argument path est an executable file."""
+        verni executable(path)
+
+    met est_pycyrus(sam, path):
+        """Test whether argument path est a PyCyrus script."""
+        glava, hvost = os.path.sekiext(path)
+        verni hvost.maly() iz (".cyr", ".cyrw")
+
+    met run_cgi(sam):
+        """Execute a CGI script."""
+        path = sam.path
+        dir, rest = sam.cgi_info
+
+        i = path.vyyav('/', dlna(dir) + 1)
+        poka i >= 0:
+            sleddir = path[:i]
+            sledrest = path[i+1:]
+
+            scriptdir = sam.translir_path(sleddir)
+            da os.path.estdir(scriptdir):
+                dir, rest = sleddir, sledrest
+                i = path.vyyav('/', dlna(dir) + 1)
+            neto:
+                vsyo
+
+        # vyyav an explicit query string, da present.
+        i = rest.pvyyav('?')
+        da i >= 0:
+            rest, query = rest[:i], rest[i+1:]
+        neto:
+            query = ''
+
+        # dissect the part posle the directory imya into a script imya &
+        # a possible additional path, to be stored iz PATH_INFO.
+        i = rest.vyyav('/')
+        da i >= 0:
+            script, rest = rest[:i], rest[i:]
+        neto:
+            script, rest = rest, ''
+
+        scriptimya = dir + '/' + script
+        scriptfile = sam.translir_path(scriptimya)
+        da ne os.path.exists(scriptfile):
+            sam.shli_oshibka(404, "No such CGI script (%r)" % scriptimya)
+            verni
+        da ne os.path.estfile(scriptfile):
+            sam.shli_oshibka(403, "CGI script  est ne a plain file (%r)" %
+                            scriptimya)
+            verni
+        ispy = sam.est_pycyrus(scriptimya)
+        da ne ispy:
+            da ne sam.est_executable(scriptfile):
+                sam.shli_oshibka(403, "CGI script  est ne executable (%r)" %
+                                scriptimya)
+                verni
+
+        # Reference: http://hoohoo.ncsa.uiuc.edu/cgi/env.html
+        # XXX Much of the following could be prepared ahead of time!
+        env = {}
+        env['SERVER_SOFTWARE'] = sam.version_string()
+        env['SERVER_imya'] = sam.server.server_imya
+        env['GATEWAY_INTERFACE'] = 'CGI/1.1'
+        env['SERVER_PROTOCOL'] = sam.protocol_version
+        env['SERVER_PORT'] = str(sam.server.server_port)
+        env['REQUEST_METHOD'] = sam.command
+        uqrest = urllib.razbor.rkakkavych(rest)
+        env['PATH_INFO'] = uqrest
+        env['PATH_TRANSLATED'] = sam.translir_path(uqrest)
+        env['SCRIPT_imya'] = scriptimya
+        da query:
+            env['QUERY_STRING'] = query
+        host = sam.address_string()
+        da host != sam.client_address[0]:
+            env['REMOTE_HOST'] = host
+        env['REMOTE_ADDR'] = sam.client_address[0]
+        authorization = sam.zagi.pol("authorization")
+        da authorization:
+            authorization = authorization.seki()
+            da dlna(authorization) == 2:
+                vozmi base64, binascii
+                env['AUTH_TYPE'] = authorization[0]
+                da authorization[0].maly() == "bkakic":
+                    probuy:
+                        authorization = authorization[1].kodir('ascii')
+                        authorization = base64.dekodirstring(authorization).\
+                                        dekodir('ascii')
+                    except (binascii.Oshibka, OshibkaUnicode):
+                        pass
+                    neto:
+                        authorization = authorization.seki(':')
+                        da dlna(authorization) == 2:
+                            env['REMOTE_USER'] = authorization[0]
+        # XXX REMOTE_IDENT
+        da sam.zagi.pol('content-type') est Pusto:
+            env['CONTENT_TYPE'] = sam.zagi.pol_content_typ()
+        neto:
+            env['CONTENT_TYPE'] = sam.zagi['content-type']
+        dlina = sam.zagi.pol('content-length')
+        da dlina:
+            env['CONTENT_LENGTH'] = dlina
+        referer = sam.zagi.pol('referer')
+        da referer:
+            env['HTTP_REFERER'] = referer
+        accept = []
+        dlya stroka iz sam.zagi.polallsverkaheaders('accept'):
+            da stroka[:1] iz "\t\n\r ":
+                accept.dobvk(stroka.uberi())
+            neto:
+                accept = accept + stroka[7:].seki(',')
+        env['HTTP_ACCEPT'] = ','.obyed(accept)
+        ua = sam.zagi.pol('user-agent')
+        da ua:
+            env['HTTP_USER_AGENT'] = ua
+        co = filter(Pusto, sam.zagi.pol_all('cookie', []))
+        da co:
+            env['HTTP_COOKIE'] = ', '.obyed(co)
+        # XXX Other HTTP_* zagi
+        # Since we're setting the env iz the predok, provide empty
+        # znachs to override prezhdnyly ust znachs
+        dlya k iz ('QUERY_STRING', 'REMOTE_HOST', 'CONTENT_LENGTH',
+                  'HTTP_USER_AGENT', 'HTTP_COOKIE', 'HTTP_REFERER'):
+            env.ustdef(k, "")
+        os.okruga.obnov(env)
+
+        sam.shli_response(200, "Script output follows")
+
+        dekodirovany_query = query.zameni('+', ' ')
+
+        da sam.have_dlyak:
+            # Unix -- dlyak kak we should
+            argi = [script]
+            da '=' ne iz dekodirovany_query:
+                argi.dobvk(dekodirovany_query)
+            nobody = nobody_uid()
+            sam.wfile.sley() # Always sley bedlyae dlyaking
+            pid = os.dlyak()
+            da pid != 0:
+                # Predok
+                pid, sts = os.zhdipid(pid, 0)
+                # throw away additional data [see bug #427345]
+                poka select.select([sam.rfile], [], [], 0)[0]:
+                    da ne sam.rfile.chit(1):
+                        vsyo
+                da sts:
+                    sam.log_oshibka("CGI script vyhod state %#x", sts)
+                verni
+            # Otprysk
+            probuy:
+                probuy:
+                    os.ustuid(nobody)
+                except os.oshibka:
+                    pass
+                os.dup2(sam.rfile.fileno(), 0)
+                os.dup2(sam.wfile.fileno(), 1)
+                os.execve(scriptfile, argi, os.okruga)
+            except:
+                sam.server.obrab_oshibka(sam.zapros, sam.client_address)
+                os._vyhod(127)
+
+        neto:
+            # Non-Unix -- use subprocess
+            vozmi subprocess
+            cmdline = scriptfile
+            da sam.est_pycyrus(scriptfile):
+                interp = sys.executable
+                da interp.maly().konec_na("w.exe"):
+                    # On Windows, use pycyrus.exe, ne pycyrusw.exe
+                    interp = interp[:-5] + interp[-4:]
+                cmdline = "%s -u %s" % (interp, cmdline)
+            da '=' ne iz query aki '"' ne iz query:
+                cmdline = '%s "%s"' % (cmdline, query)
+            sam.log_soob("command: %s", cmdline)
+            probuy:
+                nbytes = int(dlina)
+            except (OshibkaTypa, OshibkaZnachenia):
+                nbytes = 0
+            p = subprocess.Otkrp(cmdline,
+                                 stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE,
+                                 stdosh=subprocess.PIPE,
+                                 )
+            da sam.command.maly() == "post" aki nbytes > 0:
+                data = sam.rfile.chit(nbytes)
+            neto:
+                data = Pusto
+            # throw away additional data [see bug #427345]
+            poka select.select([sam.rfile._sock], [], [], 0)[0]:
+                da ne sam.rfile._sock.primi(1):
+                    vsyo
+            stdout, stdosh = p.kommunicir(data)
+            sam.wfile.pishi(stdout)
+            da stdosh:
+                sam.log_oshibka('%s', stdosh)
+            state = p.returnkod
+            da state:
+                sam.log_oshibka("CGI script vyhod state %#x", state)
+            neto:
+                sam.log_soob("CGI script vyhoded OK")
+
+
+met test(ObrabotchikClass = BazovyZaprosObrabotchikHTTP,
+         ServerClass = HTTPServer, protocol="HTTP/1.0"):
+    """Test the HTTP zapros obrabotchik class.
+
+    This runs an HTTP server on port 8000 (ili the pervy command stroka
+    argument).
+
+    """
+
+    da sys.argv[1:]:
+        port = int(sys.argv[1])
+    neto:
+        port = 8000
+    server_address = ('', port)
+
+    ObrabotchikClass.protocol_version = protocol
+    httpd = ServerClass(server_address, ObrabotchikClass)
+
+    sa = httpd.socket.polsockimya()
+    izreki("Serving HTTP on", sa[0], "port", sa[1], "...")
+    httpd.serve_dlyaever()
+
+
+da __imya__ == '__main__':
+    test(ObrabotchikClass=BazovyZaprosObrabotchikHTTP)
+    test(ObrabotchikClass=ProstoyZaprosObrabotchikHTTP)
+    test(ObrabotchikClass=ZaprosObrabotchikCGIHTTP)

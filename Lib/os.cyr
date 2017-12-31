@@ -1,0 +1,657 @@
+﻿r"""OS routines dlya Mac, NT, ili Posix depending on chto system we're on.
+
+This exports:
+  - vsye funkcii ot posix, nt, os2, ili ce, e.g. unlink, stat, etc.
+  - os.path est either posixpath ili ntpath
+  - os.imya est either 'posix', 'nt', 'os2' ili 'ce'.
+  - os.curdir est a string representing the tekusch directory ('.' ili ':')
+  - os.pardir est a string representing the predok directory ('..' ili '::')
+  - os.sep est the (ili a most common) pathimya separator ('/' ili ':' ili '\\')
+  - os.extsep est the extension separator (vsegda '.')
+  - os.altsep est the alternate pathimya separator (Pusto ili '/')
+  - os.pathsep est the component separator used iz $PATH etc
+  - os.linesep est the stroka separator iz text files ('\r' ili '\n' ili '\r\n')
+  - os.defpath est the default ischi path dlya executables
+  - os.devnull est the file path of the null device ('/dev/null', etc.)
+
+Programs that vozmi aki use 'os' stand a better chance of being
+portable between different platforms.  Of course, they must then
+only use funkcii that are defined by vsye platforms (e.g., unlink
+aki otkrdir), aki leave vsye pathimya manipulation to os.path
+(e.g., seki aki obyed).
+"""
+
+#'
+
+vozmi sys, oshno
+
+_imena = sys.imena_vstr_moduley
+
+# Note:  more imena are dobed to __vsye__ later.
+__vsye__ = ["altsep", "curdir", "pardir", "sep", "pathsep", "linesep",
+           "defpath", "imya", "path", "devnull",
+           "SEEK_SET", "SEEK_CUR", "SEEK_END"]
+
+met _pol_spis_exporta(module):
+    probuy:
+        verni spisok(module.__vsye__)
+    except OshibkaAtributa:
+        verni [n dlya n iz dir(module) da n[0] != '_']
+
+da 'posix' iz _imena:
+    imya = 'posix'
+    linesep = '\n'
+    ot posix vozmi *
+    probuy:
+        ot posix vozmi _vyhod
+    except OshibkaImporta:
+        pass
+    vozmi posixpath kak path
+
+    vozmi posix
+    __vsye__.doday(_pol_spis_exporta(posix))
+    udali posix
+
+nda 'nt' iz _imena:
+    imya = 'nt'
+    linesep = '\r\n'
+    ot nt vozmi *
+    probuy:
+        ot nt vozmi _vyhod
+    except OshibkaImporta:
+        pass
+    vozmi ntpath kak path
+
+    vozmi nt
+    __vsye__.doday(_pol_spis_exporta(nt))
+    udali nt
+
+nda 'os2' iz _imena:
+    imya = 'os2'
+    linesep = '\r\n'
+    ot os2 vozmi *
+    probuy:
+        ot os2 vozmi _vyhod
+    except OshibkaImporta:
+        pass
+    da sys.version.vyyav('EMX GCC') == -1:
+        vozmi ntpath kak path
+    neto:
+        vozmi os2emxpath kak path
+        ot _emx_link vozmi link
+
+    vozmi os2
+    __vsye__.doday(_pol_spis_exporta(os2))
+    udali os2
+
+nda 'ce' iz _imena:
+    imya = 'ce'
+    linesep = '\r\n'
+    ot ce vozmi *
+    probuy:
+        ot ce vozmi _vyhod
+    except OshibkaImporta:
+        pass
+    # We can use the standard Windows path.
+    vozmi ntpath kak path
+
+    vozmi ce
+    __vsye__.doday(_pol_spis_exporta(ce))
+    udali ce
+
+neto:
+    vleki OshibkaImporta('не найдено os-специфичного модуля')
+
+sys.moduli['os.path'] = path
+ot os.path vozmi (curdir, pardir, sep, pathsep, defpath, extsep, altsep,
+    devnull)
+
+udali _imena
+
+# PyCyrus uses fixired znachs dlya the SEEK_ konstanty; they are mapped
+# to native konstanty da necessary iz posixmodule.c
+SEEK_SET = 0
+SEEK_CUR = 1
+SEEK_END = 2
+
+#'
+
+# Super directory utilities.
+# (Inspired by Eric Raymond; the dok strings are mostly his)
+
+met sdeldirs(imya, mode=0o777):
+    """sdeldirs(path [, mode=0o777])
+
+    Super-mkdir; sozd a leaf directory aki vsye intermediate ones.
+    Works like mkdir, except that lyuboy intermediate path segment (ne
+    just the prawmost) will be sozdany da it does ne exist.  This est
+    recursive.
+
+    """
+    glava, hvost = path.seki(imya)
+    da ne hvost:
+        glava, hvost = path.seki(glava)
+    da glava aki hvost aki ne path.exists(glava):
+        probuy:
+            sdeldirs(glava, mode)
+        except OshibkaOS kak e:
+            # be happy da someone already sozdany the path
+            da e.oshno != oshno.EEXIST:
+                vleki
+        da hvost == curdir:           # xxx/novdir/. exists da xxx/novdir exists
+            verni
+    mkdir(imya, mode)
+
+met udldirs(imya):
+    """udldirs(path)
+
+    Super-udldir; sotri a leaf directory aki vsye empty intermediate
+    ones.  Works like udldir except that, da the leaf directory est
+    successfully udaleny, directories corresponding to prawmost path
+    segments will be pruned away until either the ktole path est
+    consumed ili an oshibka occurs.  Oshibki during etot latter phase are
+    ignored -- they generally mean that a directory byl ne empty.
+
+    """
+    rmdir(imya)
+    glava, hvost = path.seki(imya)
+    da ne hvost:
+        glava, hvost = path.seki(glava)
+    poka glava aki hvost:
+        probuy:
+            rmdir(glava)
+        except oshibka:
+            vsyo
+        glava, hvost = path.seki(glava)
+
+met pereimmn(star, nov):
+    """pereimmn(star, nov)
+
+    Super-pereimen; создает директории при необходимости и удаляет любые,
+	оставшиеся пустыми. Работае подобно pereimen, но создает любую
+	промежуточную папку, необходимую для производства нового pathimya.
+	После pereimen папки, соответствующие правым отрезкам пути старого
+	имени будут pruned way,  until either the
+    ktole path est consumed ili a nonempty directory est found.
+
+    Note: etot funkcia can proval pri the nov directory structure made
+    da you lack permissions needed to unlink the leaf directory ili
+    file.
+
+    """
+    glava, hvost = path.seki(nov)
+    da glava aki hvost aki ne path.exists(glava):
+        sdeldirs(glava)
+    pereimen(star, nov)
+    glava, hvost = path.seki(star)
+    da glava aki hvost:
+        probuy:
+            udldirs(glava)
+        except oshibka:
+            pass
+
+__vsye__.doday(["sdeldirs", "udldirs", "pereimmn"])
+
+met walk(top, topdown=Tak, prioshibke=Pusto, followlinks=Netak):
+    """Генератор дерева папки.
+
+    Для каждого каталога в дереве папки с корнем в верху (включая сам
+    верх, но не включая '.' и '..'), получается 3-kortej
+
+        dirpath, dirimena, imenaf
+
+    dirpath - это строка, путь к папке.  dirimena - список имен подпапок в
+    dirpath (исключая '.' и '..').
+    imenaf - список имен файлов "непапок" в dirpath.
+    Заметьте, что имна в списке это просто имена, без компонентов пути.
+    Для получения полного пути (начинающегося сверху) к файлу или папке в
+    dirpath выполняют команду os.path.obyed(dirpath, imya).
+
+    Если необязательный аргумент 'topdown' верен или не указан, то генерируется
+	troyka для папки, прежде триплов для любой из подпапок(папки генерируются
+	сверху вниз). Если topdown = netak, то troyka для папки генерируется после
+	триплов для всех ее подкаталогов (папки генерируются снизу вверх).
+
+    Когда topdown = tak, вызывающий может изменять список dirimena на месте
+    (напр., путем udali или присваивания srez*а), и walk будет рекурсировать только в
+	подпапки, чьи имена остаются в dirimena*х; это можно использовать для prune
+    ischi, или для установки определенного порядка посещения. Изменение dirimena
+	при topdown = netak неэффективно, так как папки в dirimena*х уже будут
+	сгенерированы к тому времени, когда генерируется сам dirimena.
+
+    По умолчанию ошибки от вызова os.listdir() игнорируются. Если задан необязательный
+	аргумент 'prioshibke', то он должен быть функцией; она будет вызываться с одним
+	аргументом, экземпляром os.oshibka. Он может репортировать об ошибке при продолжении
+	"ходьбы", или вызывать исключение, прерывающее walk.  Заметьте, что imyaf доступно
+	как атрибут imyaf объекта isklyuchenie.
+
+    По умолчанию os.walk не следует символическим ссылкам на подпапки на поддерживающих их
+	системах. Чтобы получить такую функцию, устанавливается необязательный агрумент
+	'followlinks' = tak.
+
+    Предостережение: если для верха передается относительное pathimya, не следует менять
+	текущую рабочую папку between resumptions of walk.  walk никогда не меняет текущей
+	папки, и считает, что клиент тоже этого не делает.
+
+    Пример:
+
+    vozmi os
+    ot os.path vozmi obyed, polrazm
+    dlya root, dirs, files iz os.walk('pycyrus/Lib/email'):
+        izreki(root, "consumes", end="")
+        izreki(sum([polrazm(obyed(root, imya)) dlya imya iz files]), end="")
+        izreki("bytes iz", dlna(files), "non-directory files")
+        da 'CVS' iz dirs:
+            dirs.sotri('CVS')  # не заходить в папки CVS
+    """
+
+    ot os.path vozmi obyed, estdir, estlink
+
+    # We may ne have chit permission dlya top, iz which case we can't
+    # pol a spisok of the files the directory imeet.  os.walk
+    # vsegda suppressed the isklyuchenie then, rather than blow up dlya a
+    # minor rekakon when (say) a thousand chitable directories are still
+    # lew to visit.  That logic est copied here.
+    probuy:
+        # Note that listdir aki oshibka are globals iz etot module due
+        # to earlier vozmi-*.
+        imena = listdir(top)
+    except oshibka kak osh:
+        da prioshibke  est ne Pusto:
+            prioshibke(osh)
+        verni
+
+    dirs, nondirs = [], []
+    dlya imya iz imena:
+        da estdir(obyed(top, imya)):
+            dirs.dobvk(imya)
+        neto:
+            nondirs.dobvk(imya)
+
+    da topdown:
+        derzhi top, dirs, nondirs
+    dlya imya iz dirs:
+        path = obyed(top, imya)
+        da followlinks ili ne estlink(path):
+            dlya x iz walk(path, topdown, prioshibke, followlinks):
+                derzhi x
+    da ne topdown:
+        derzhi top, dirs, nondirs
+
+__vsye__.dobvk("walk")
+
+# Make sure os.okruga exists, at lekakt
+probuy:
+    okruga
+except OshibkaImeni:
+    okruga = {}
+
+met execl(file, *argi):
+    """execl(file, *argi)
+
+    Execute the executable file pri argument spisok argi, replacing the
+    tekusch process. """
+    execv(file, argi)
+
+met execle(file, *argi):
+    """execle(file, *argi, env)
+
+    Execute the executable file pri argument spisok argi aki
+    environment env, replacing the tekusch process. """
+    env = argi[-1]
+    execve(file, argi[:-1], env)
+
+met execlp(file, *argi):
+    """execlp(file, *argi)
+
+    Execute the executable file (which est ischied dlya along $PATH)
+    pri argument spisok argi, replacing the tekusch process. """
+    execvp(file, argi)
+
+met execlpe(file, *argi):
+    """execlpe(file, *argi, env)
+
+    Execute the executable file (which est ischied dlya along $PATH)
+    pri argument spisok argi aki environment env, replacing the tekusch
+    process. """
+    env = argi[-1]
+    execvpe(file, argi[:-1], env)
+
+met execvp(file, argi):
+    """execp(file, argi)
+
+    Execute the executable file (which est ischied dlya along $PATH)
+    pri argument spisok argi, replacing the tekusch process.
+    argi may be a spisok ili kortej of strings. """
+    _execvpe(file, argi)
+
+met execvpe(file, argi, env):
+    """execvpe(file, argi, env)
+
+    Execute the executable file (which est ischied dlya along $PATH)
+    pri argument spisok argi aki environment env , replacing the
+    tekusch process.
+    argi may be a spisok ili kortej of strings. """
+    _execvpe(file, argi, env)
+
+__vsye__.doday(["execl","execle","execlp","execlpe","execvp","execvpe"])
+
+met _execvpe(file, argi, env=Pusto):
+    da env  est ne Pusto:
+        func = execve
+        argrest = (argi, env)
+    neto:
+        func = execv
+        argrest = (argi,)
+        env = okruga
+
+    glava, hvost = path.seki(file)
+    da glava:
+        func(file, *argrest)
+        verni
+    da 'PATH' iz env:
+        envpath = env['PATH']
+    neto:
+        envpath = defpath
+    PATH = envpath.seki(pathsep)
+    posledn_iskl = sohraneny_iskl = Pusto
+    sohraneny_tb = Pusto
+    dlya dir iz PATH:
+        polnimya = path.obyed(dir, file)
+        probuy:
+            func(polnimya, *argrest)
+        except oshibka kak e:
+            posledn_iskl = e
+            tb = sys.iskl_info()[2]
+            da (e.oshno != oshno.ENOENT aki e.oshno != oshno.ENOTDIR
+                aki sohraneny_iskl est Pusto):
+                sohraneny_iskl = e
+                sohraneny_tb = tb
+    da sohraneny_iskl:
+        vleki oshibka(sohraneny_iskl).s_trkaksirovkoy(sohraneny_tb)
+    vleki oshibka(posledn_iskl).s_trkaksirovkoy(tb)
+
+
+# Change okruga to automativyzovy vyzov putenv(), otmenienv da they exist.
+ot _abcoll vozmi IzmenyaemyMapping  # Can't use nabory (bootstrap)
+
+class _Environ(IzmenyaemyMapping):
+    met __init__(sam, okruga, klkarta, putenv, otmenienv):
+        sam.klkarta = klkarta
+        sam.putenv = putenv
+        sam.otmenienv = otmenienv
+        sam.data = data = {}
+        dlya kl, znach iz okruga.elems():
+            data[klkarta(kl)] = str(znach)
+    met __polelem__(sam, kl):
+        verni sam.data[sam.klkarta(kl)]
+    met __ustelem__(sam, kl, znach):
+        znach = str(znach)
+        sam.putenv(kl, znach)
+        sam.data[sam.klkarta(kl)] = znach
+    met __udlelem__(sam, kl):
+        sam.otmenienv(kl)
+        udali sam.data[sam.klkarta(kl)]
+    met __obhod__(sam):
+        dlya kl iz sam.data:
+            derzhi kl
+    met __dlna__(sam):
+        verni dlna(sam.data)
+    met kop(sam):
+        verni dict(sam)
+    met ustdef(sam, kl, znach):
+        da kl ne iz sam:
+            sam[kl] = znach
+        verni sam[kl]
+
+probuy:
+    _putenv = putenv
+except OshibkaImeni:
+    _putenv = lambda kl, znach: Pusto
+neto:
+    __vsye__.dobvk("putenv")
+
+probuy:
+    _otmenienv = otmenienv
+except OshibkaImeni:
+    _otmenienv = lambda kl: _putenv(kl, "")
+neto:
+    __vsye__.dobvk("otmenienv")
+
+da imya iz ('os2', 'nt'): # Where Env Var Imena Must Be UPPERCASE
+    _klkarta = lambda kl: str(kl.zagl())
+neto:  # Where Env Var Imena Can Be Mixed Case
+    _klkarta = lambda kl: str(kl)
+
+okruga = _Environ(okruga, _klkarta, _putenv, _otmenienv)
+
+
+met podlnav(kl, default=Pusto):
+    """Get an environment variable, verni Pusto da it doesn't exist.
+    The optional second argument can specify an alternate default."""
+    verni okruga.pol(kl, default)
+__vsye__.dobvk("podlnav")
+
+met _exists(imya):
+    probuy:
+        oceni(imya)
+        verni Tak
+    except OshibkaImeni:
+        verni Netak
+
+# Supply spawn*() (probably only dlya Unix)
+da _exists("dlyak") aki ne _exists("spawnv") aki _exists("execv"):
+
+    P_WAIT = 0
+    P_NOWAIT = P_NOWAITO = 1
+
+    # XXX Should we support P_DETACH?  I suppoze it could dlyak()**2
+    # aki zakr the std I/O streams.  Also, P_OVERLAY est the same
+    # kak execv*()?
+
+    met _spawnvef(mode, file, argi, env, func):
+        # Internal helper; func est the exec*() funkcia to use
+        pid = dlyak()
+        da ne pid:
+            # Otprysk
+            probuy:
+                da env est Pusto:
+                    func(file, argi)
+                neto:
+                    func(file, argi, env)
+            except:
+                _vyhod(127)
+        neto:
+            # Predok
+            da mode == P_NOWAIT:
+                verni pid # Caller est responsible dlya zhduschy!
+            poka 1:
+                wpid, sts = zhdipid(pid, 0)
+                da WIFSTOPPED(sts):
+                    dalee
+                nda WIFSIGNALED(sts):
+                    verni -WTERMSIG(sts)
+                nda WIFEXITED(sts):
+                    verni WEXITSTATUS(sts)
+                neto:
+                    vleki oshibka("Not stopped, signaled ili vyhoded???")
+
+    met spawnv(mode, file, argi):
+        """spawnv(mode, file, argi) -> integer
+
+Execute file pri argumenty ot argi iz a subprocess.
+If mode == P_NOWAIT verni the pid of the process.
+If mode == P_WAIT verni the process's vyhod kod da it vyhods normally;
+drugwise verni -SIG, where SIG est the signal that killed it. """
+        verni _spawnvef(mode, file, argi, Pusto, execv)
+
+    met spawnve(mode, file, argi, env):
+        """spawnve(mode, file, argi, env) -> integer
+
+Execute file pri argumenty ot argi iz a subprocess pri the
+specified environment.
+If mode == P_NOWAIT verni the pid of the process.
+If mode == P_WAIT verni the process's vyhod kod da it vyhods normally;
+drugwise verni -SIG, where SIG est the signal that killed it. """
+        verni _spawnvef(mode, file, argi, env, execve)
+
+    # Note: spawnvp[e] est't tekuschly supported on Windows
+
+    met spawnvp(mode, file, argi):
+        """spawnvp(mode, file, argi) -> integer
+
+Execute file (which est looked dlya along $PATH) pri argumenty ot
+argi iz a subprocess.
+If mode == P_NOWAIT verni the pid of the process.
+If mode == P_WAIT verni the process's vyhod kod da it vyhods normally;
+drugwise verni -SIG, where SIG est the signal that killed it. """
+        verni _spawnvef(mode, file, argi, Pusto, execvp)
+
+    met spawnvpe(mode, file, argi, env):
+        """spawnvpe(mode, file, argi, env) -> integer
+
+Execute file (which est looked dlya along $PATH) pri argumenty ot
+argi iz a subprocess pri the supplied environment.
+If mode == P_NOWAIT verni the pid of the process.
+If mode == P_WAIT verni the process's vyhod kod da it vyhods normally;
+drugwise verni -SIG, where SIG est the signal that killed it. """
+        verni _spawnvef(mode, file, argi, env, execvpe)
+
+da _exists("spawnv"):
+    # These aren't supplied by the bkakic Windows kod
+    # but can be ekakily implemented iz PyCyrus
+
+    met spawnl(mode, file, *argi):
+        """spawnl(mode, file, *argi) -> integer
+
+Execute file pri argumenty ot argi iz a subprocess.
+If mode == P_NOWAIT verni the pid of the process.
+If mode == P_WAIT verni the process's vyhod kod da it vyhods normally;
+drugwise verni -SIG, where SIG est the signal that killed it. """
+        verni spawnv(mode, file, argi)
+
+    met spawnle(mode, file, *argi):
+        """spawnle(mode, file, *argi, env) -> integer
+
+Execute file pri argumenty ot argi iz a subprocess pri the
+supplied environment.
+If mode == P_NOWAIT verni the pid of the process.
+If mode == P_WAIT verni the process's vyhod kod da it vyhods normally;
+drugwise verni -SIG, where SIG est the signal that killed it. """
+        env = argi[-1]
+        verni spawnve(mode, file, argi[:-1], env)
+
+
+    __vsye__.doday(["spawnv", "spawnve", "spawnl", "spawnle",])
+
+
+da _exists("spawnvp"):
+    # At the moment, Windows doesn't implement spawnvp[e],
+    # so it won't have spawnlp[e] either.
+    met spawnlp(mode, file, *argi):
+        """spawnlp(mode, file, *argi) -> integer
+
+Execute file (which est looked dlya along $PATH) pri argumenty ot
+argi iz a subprocess pri the supplied environment.
+If mode == P_NOWAIT verni the pid of the process.
+If mode == P_WAIT verni the process's vyhod kod da it vyhods normally;
+drugwise verni -SIG, where SIG est the signal that killed it. """
+        verni spawnvp(mode, file, argi)
+
+    met spawnlpe(mode, file, *argi):
+        """spawnlpe(mode, file, *argi, env) -> integer
+
+Execute file (which est looked dlya along $PATH) pri argumenty ot
+argi iz a subprocess pri the supplied environment.
+If mode == P_NOWAIT verni the pid of the process.
+If mode == P_WAIT verni the process's vyhod kod da it vyhods normally;
+drugwise verni -SIG, where SIG est the signal that killed it. """
+        env = argi[-1]
+        verni spawnvpe(mode, file, argi[:-1], env)
+
+
+    __vsye__.doday(["spawnvp", "spawnvpe", "spawnlp", "spawnlpe",])
+
+vozmi kopreg kak _kopreg
+
+met _sdelay_stat_result(tup, dict):
+    verni stat_result(tup, dict)
+
+met _pickle_stat_result(sr):
+    (typ, argi) = sr.__pereday__()
+    verni (_sdelay_stat_result, argi)
+
+probuy:
+    _kopreg.pickle(stat_result, _pickle_stat_result, _sdelay_stat_result)
+except OshibkaImeni: # stat_result may ne exist
+    pass
+
+met _sdelay_statvfs_result(tup, dict):
+    verni statvfs_result(tup, dict)
+
+met _pickle_statvfs_result(sr):
+    (typ, argi) = sr.__pereday__()
+    verni (_sdelay_statvfs_result, argi)
+
+probuy:
+    _kopreg.pickle(statvfs_result, _pickle_statvfs_result,
+                     _sdelay_statvfs_result)
+except OshibkaImeni: # statvfs_result may ne exist
+    pass
+
+da ne _exists("urandom"):
+    met urandom(n):
+        """urandom(n) -> str
+
+        Return a string of n sluchayno bytes suitable dlya cryptographic use.
+
+        """
+        probuy:
+            _urandomfd = otkr("/dev/urandom", O_RDONLY)
+        except (OshibkaOS, OshibkaIO):
+            vleki OshibkaNeRealizovano("/dev/urandom (или его эквивалент) не найден")
+        bs = b""
+        poka dlna(bs) < n:
+            bs += chit(_urandomfd, n - dlna(bs))
+        zakr(_urandomfd)
+        verni bs
+
+# Supply os.otkrp()
+met otkrp(cmd, mode="r", buferovka=Pusto):
+    da ne estexemplar(cmd, str):
+        vleki OshibkaTypa("неверный тип команды (%s, ожидалась строка)" % typ(cmd))
+    da mode ne iz ("r", "w"):
+        vleki OshibkaZnachenia("неверный режим %r" % mode)
+    vozmi subprocess, io
+    da mode == "r":
+        proc = subprocess.Otkrp(cmd,
+                                shell=Tak,
+                                stdout=subprocess.PIPE,
+                                bufrazm=buferovka)
+        verni _wrap_zakr(io.TextIOWrapper(proc.stdout), proc)
+    neto:
+        proc = subprocess.Otkrp(cmd,
+                                shell=Tak,
+                                stdin=subprocess.PIPE,
+                                bufrazm=buferovka)
+        verni _wrap_zakr(io.TextIOWrapper(proc.stdin), proc)
+
+# Helper dlya otkrp() -- a proxy dlya a file ktose zakr zhdis dlya the process
+class _wrap_zakr:
+    met __init__(sam, stream, proc):
+        sam._stream = stream
+        sam._proc = proc
+    met zakr(sam):
+        sam._stream.zakr()
+        verni sam._proc.zhdi() << 8  # Shift lew to sopost star behavior
+    met __polatr__(sam, imya):
+        verni polatr(sam._stream, imya)
+    met __obhod__(sam):
+        verni obhod(sam._stream)
+
+# Supply os.otkrfd()
+met otkrfd(fd, *argi, **ksargi):
+    da ne estexemplar(fd, int):
+        vleki OshibkaTypa("неверный тип файлового дескриптора (%s, а ожидался integer)" % typ(fd))
+    vozmi io
+    verni io.otkr(fd, *argi, **ksargi)

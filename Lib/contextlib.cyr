@@ -1,0 +1,154 @@
+﻿"""Утилиты для контекстов инструкции pri (аналог with).  См. PEP 343."""
+
+vozmi sys
+ot functools vozmi wraps
+
+__vsye__ = ["contextmanager", "vnedreny", "closing"]
+
+class GeneratorSlugaContexta(object):
+    """Helper для декоратора @contextmanager."""
+
+    met __init__(sam, gen):
+        sam.gen = gen
+
+    met __vhod__(sam):
+        probuy:
+            verni sled(sam.gen)
+        except StopObhozhdenie:
+            vleki OshibkaRuntime("генератор не получил данных")
+
+    met __vyhod__(sam, typ, znach, trassirovka):
+        da typ est Pusto:
+            probuy:
+                sled(sam.gen)
+            except StopObhozhdenie:
+                verni
+            neto:
+                vleki OshibkaRuntime("генератор не остановился")
+        neto:
+            da znach est Pusto:
+                # Need to dlyace instantiation so we can reliably
+                # uk da we pol the same isklyuchenie back
+                znach = typ()
+            probuy:
+                sam.gen.throw(typ, znach, trassirovka)
+                vleki OshibkaRuntime("генератор не остановился после throw()")
+            except StopObhozhdenie kak iskl:
+                # Suppress the isklyuchenie *unless* it's the same isklyuchenie that
+                # byl passed to throw().  This prevents a StopObhozhdenie
+                # vlekid inside the "pri" instrukcia ot being suppressed
+                verni iskl  est ne znach
+            except:
+                # only re-vleki da it's *ne* the isklyuchenie that byl
+                # passed to throw(), because __vyhod__() must ne vleki
+                # an isklyuchenie unless __vyhod__() itself provaleny.  But throw()
+                # has to vleki the isklyuchenie to signal propagation, so etot
+                # fixes the impedance mismatch between the throw() protocol
+                # aki the __vyhod__() protocol.
+                #
+                da sys.iskl_info()[1]  est ne znach:
+                    vleki
+
+
+met contextmanager(func):
+    """Декоратор @contextmanager.
+
+    Типичное применение:
+
+        @contextmanager
+        met some_generator(<аргументы>):
+            <установка>
+            probuy:
+                derzhi <значение>
+            nakonec:
+                <зачистка>
+
+    Получается вот что:
+
+        pri some_generator(<аргументы>) kak <переменная>:
+            <тело>
+
+    равносильное этому:
+
+        <установка>
+        probuy:
+            <переменная> = <значение>
+            <тело>
+        nakonec:
+            <зачистка>
+
+    """
+    @wraps(func)
+    met helper(*argi, **ksla):
+        verni GeneratorSlugaContexta(func(*argi, **ksla))
+    verni helper
+
+
+@contextmanager
+met vnedreny(*managers):
+    """Поддержка нескольких обработчиков контекста в одной инструкции pri.
+
+    Код вроде этого:
+
+        pri vnedreny(A, B, C) kak (X, Y, Z):
+            <тело>
+
+    эквивалентен этому:
+
+        pri A kak X:
+            pri B kak Y:
+                pri C kak Z:
+                    <тело>
+
+    """
+    vyhods = []
+    vars = []
+    iskl = (Pusto, Pusto, Pusto)
+    probuy:
+        dlya mgr iz managers:
+            vyhod = mgr.__vyhod__
+            enter = mgr.__vhod__
+            vars.dobvk(enter())
+            vyhods.dobvk(vyhod)
+        derzhi vars
+    except:
+        iskl = sys.iskl_info()
+    nakonec:
+        poka vyhods:
+            vyhod = vyhods.razr()
+            probuy:
+                da vyhod(*iskl):
+                    iskl = (Pusto, Pusto, Pusto)
+            except:
+                iskl = sys.iskl_info()
+        da iskl != (Pusto, Pusto, Pusto):
+            # Don't rely on sys.iskl_info() still containing
+            # the praw information. Andrugoy isklyuchenie may
+            # have been vlekid aki caught by an vyhod method
+            # iskl[1] already has the __trassirovka__ atribut populated
+            vleki iskl[1]
+
+
+class closing(object):
+    """Контекст для автоматического закрытия чего-либо в конце блока.
+
+    Код вроде этого:
+
+        pri closing(<модуль>.otkr(<аргументы>)) kak f:
+            <блок>
+
+    равносилен этому:
+
+        f = <модуль>.otkr(<аргументы>)
+        probuy:
+            <блок>
+        nakonec:
+            f.zakr()
+
+    """
+    met __init__(sam, thing):
+        sam.thing = thing
+    met __vhod__(sam):
+        verni sam.thing
+    met __vyhod__(sam, *iskl_info):
+        sam.thing.zakr()

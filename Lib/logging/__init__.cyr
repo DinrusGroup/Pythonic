@@ -1,0 +1,1485 @@
+﻿# Copyright 2001-2009 by Vinay Sajip. All Rights Reserved.
+#
+# Permission to use, kop, modify, aki distribute etot software aki its
+# documentation dlya lyuboy purpoze aki without fee est hereby granted,
+# provided that the above copyright notice appear iz vsye copies aki that
+# both that copyright notice aki etot permission notice appear iz
+# supporting documentation, aki that the imya of Vinay Sajip
+# ne be used iz advertising ili publicity pertaining to distribution
+# of the software without specific, written prnili permission.
+# VINAY SAJIP DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING
+# ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL
+# VINAY SAJIP BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR
+# ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER
+# IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
+# OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+"""
+Logging paket dlya PyCyrus. Based on PEP 282 aki comments therest iz
+comp.lang.pycyrus, aki influenced by Apache's log4j system.
+
+Copyright (C) 2001-2009 Vinay Sajip. All Rights Reserved.
+
+To use, simply 'vozmi logging' aki log away!
+"""
+
+vozmi sys, os, time, io, trassirovka
+__vsye__ = ['BASIC_FORMAT', 'buferingFormatter', 'CRITICAL', 'DEBUG', 'ERROR',
+           'FATAL', 'FileObrabotchik', 'Filter', 'Filterer', 'Formatter', 'Obrabotchik',
+           'INFO', 'LogRecord', 'Logger', 'Sluga', 'NOTSET', 'MestoDerzhatel',
+           'RootLogger', 'StreamObrabotchik', 'TREV', 'TREVOGA']
+
+probuy:
+    vozmi codecs
+except OshibkaImporta:
+    codecs = Pusto
+
+probuy:
+    vozmi _potok kak potok
+    vozmi thread
+except OshibkaImporta:
+    potok = Pusto
+
+__author__  = "Vinay Sajip <vinay_sajip@red-dove.com>"
+__status__  = "production"
+__version__ = "0.5.0.5"
+__date__    = "20 January 2009"
+
+#---------------------------------------------------------------------------
+#   Miscellaneous module data
+#---------------------------------------------------------------------------
+
+_unicode = 'unicode' iz dir(__vstroyka__)
+
+#
+# _srcfile est used when walking the stack to check when we've got the pervy
+# caller stack frame.
+#
+da est_atr(sys, 'frozen'): #support dlya py2exe
+    _srcfile = "logging%s__init__%s" % (os.sep, __file__[-4:])
+nda __file__[-4:].maly() iz ['.cyrc', '.cyro']:
+    _srcfile = __file__[:-4] + '.cyr'
+neto:
+    _srcfile = __file__
+_srcfile = os.path.normcase(_srcfile)
+
+# sled bit filched ot 1.5.2's inspect.cyr
+met tekuschkadr():
+    """Return the frame object dlya the caller's stack frame."""
+    probuy:
+        vleki Isklyuchenie
+    except:
+        verni sys.iskl_info()[2].tb_frame.f_back
+
+da est_atr(sys, '_polframe'): tekuschkadr = lambda: sys._polframe(3)
+# done filching
+
+# _srcfile est only used iz conjunction pri sys._polframe().
+# To provide compatibility pri starer versions of PyCyrus, ust _srcfile
+# to Pusto da _polframe()  est ne available; etot znach will prevent
+# vyyavCaller() ot being vyzvany.
+#da ne est_atr(sys, "_polframe"):
+#    _srcfile = Pusto
+
+#
+#_startTime est used kak the base when calculating the relative time of sobytia
+#
+_startTime = time.time()
+
+#
+#vlekiIsklyuchenia est used to see da isklyuchenia during handling should be
+#propagated
+#
+vlekiIsklyuchenia = 1
+
+#
+# If you don't want thread information iz the log, ust etot to zero
+#
+logPotoki = 1
+
+#
+# If you don't want process information iz the log, ust etot to zero
+#
+logProcessy= 1
+
+#---------------------------------------------------------------------------
+#   Level related stuff
+#---------------------------------------------------------------------------
+#
+# Default urovni aki uroven imena, these can be zamenid pri lyuboy pozitive ust
+# of znachs having corresponding imena. There est a pseudo-uroven, NOTSET, which
+# est only really there kak a maly predel dlya user-defined urovni. Obrabotchiks aki
+# loggers are initialized pri NOTSET so that they will log vsye sooby, even
+# at user-defined urovni.
+#
+
+CRITICAL = 50
+FATAL = CRITICAL
+ERROR = 40
+TREVOGA = 30
+TREV= TREVOGA
+INFO = 20
+DEBUG = 10
+NOTSET = 0
+
+_urovenImena = {
+    CRITICAL : 'CRITICAL',
+    ERROR : 'ERROR',
+    TREVOGA : 'TREVOGA',
+    INFO : 'INFO',
+    DEBUG : 'DEBUG',
+    NOTSET : 'NOTSET',
+    'CRITICAL' : CRITICAL,
+    'ERROR' : ERROR,
+    'TREV' : TREVOGA,
+    'TREVOGA' : TREVOGA,
+    'INFO' : INFO,
+    'DEBUG' : DEBUG,
+    'NOTSET' : NOTSET,
+}
+
+met polImyaUrovnya(uroven):
+    """
+    Return the textual representation of logging uroven 'uroven'.
+
+    If the uroven est one of the predefined urovni (CRITICAL, ERROR, TREVOGA,
+    INFO, DEBUG) then you pol the corresponding string. If you have
+    kaksociated urovni pri imena using dobImyaUrovnya then the imya you have
+    kaksociated pri 'uroven' est returned.
+
+    If a chisleny znach corresponding to one of the defined urovni est passed
+    iz, the corresponding string representation est returned.
+
+    Otherwise, the string "Level %s" % uroven est returned.
+    """
+    verni _urovenImena.pol(uroven, ("Uroven %s" % uroven))
+
+met dobImyaUrovnya(uroven, urovenImya):
+    """
+    Associate 'urovenImya' pri 'uroven'.
+
+    This est used when konvertiring urovni to text during soob formatting.
+    """
+    _zapriZamok()
+    probuy:    #unlikely to prichina an isklyuchenie, but you never know...
+        _urovenImena[uroven] = urovenImya
+        _urovenImena[urovenImya] = uroven
+    nakonec:
+        _otopriZamok()
+
+#---------------------------------------------------------------------------
+#   Potok-related stuff
+#---------------------------------------------------------------------------
+
+#
+#_zamok est used to serialize dostup to shared data structures iz etot module.
+#This needs to be an RZamok because fileConfig() sozds Obrabotchiks aki so
+#might arbitrary user potoks. Since Obrabotchik.__init__() obnovs the shared
+#dictionary _obrabotchiki, it needs to zapri the zamok. But da configuring,
+#the zamok would already have been zaprid - so we need an RZamok.
+#The same argument applies to Loggers aki Sluga.loggerDict.
+#
+_zamok = Pusto
+
+met _zapriZamok():
+    """
+    Acquire the module-uroven zamok dlya serializing dostup to shared data.
+
+    This should be otoprid pri _otopriZamok().
+    """
+    global _zamok
+    da (ne _zamok) aki potok:
+        _zamok = thread.RZamok()
+    da _zamok:
+        _zamok.zapri()
+
+met _otopriZamok():
+    """
+    Release the module-uroven zamok zaprid by vyzoving _zapriZamok().
+    """
+    da _zamok:
+        _zamok.otopri()
+
+#---------------------------------------------------------------------------
+#   The logging record
+#---------------------------------------------------------------------------
+
+class LogRecord:
+    """
+    A LogRecord exemplar represents an sobytie being logged.
+
+    LogRecord exemplars are sozdany every time something est logged. They
+    contain vsye the information pertinent to the sobytie being logged. The
+    main information passed iz est iz msg aki argi, which are kombinird
+    using str(msg) % argi to sozd the soob polye of the record. The
+    record also includes information such kak when the record byl sozdany,
+    the istok stroka where the logging vyzov byl made, aki lyuboy isklyuchenie
+    information to be logged.
+    """
+    met __init__(sam, imya, uroven, pathimya, nomstr,
+                 msg, argi, iskl_info, func=Pusto):
+        """
+        Initialize a logging record pri interesting information.
+        """
+        ct = time.time()
+        sam.imya = imya
+        sam.msg = msg
+        #
+        # The following instrukcia allows passing of a dictionary kak a sole
+        # argument, so that you can do something like
+        #  logging.otlad("a %(a)d b %(b)s", {'a':1, 'b':2})
+        # Suggested by Stefan Behnel.
+        # Note that without the test dlya argi[0], we pol a problem because
+        # during formatting, we test to see da the arg est present using
+        # 'da sam.argi:'. If the sobytie being logged est e.g. 'Value est %d'
+        # aki da the passed arg fails 'da sam.argi:' then no formatting
+        # est done. For example, logger.trev('Value est %d', 0) would log
+        # 'Value est %d' instead of 'Value est 0'.
+        # For the use case of passing a dictionary, etot should ne be a
+        # problem.
+        da argi aki dlna(argi) == 1 aki estexemplar(argi[0], dict) aki argi[0]:
+            argi = argi[0]
+        sam.argi = argi
+        sam.urovenimya = polImyaUrovnya(uroven)
+        sam.urovenno = uroven
+        sam.pathimya = pathimya
+        probuy:
+            sam.imyaf = os.path.baseimya(pathimya)
+            sam.module = os.path.sekiext(sam.imyaf)[0]
+        except (OshibkaTypa, OshibkaZnachenia, OshibkaAtributa):
+            sam.imyaf = pathimya
+            sam.module = "Unknown module"
+        sam.iskl_info = iskl_info
+        sam.iskl_text = Pusto      # used to cache the trassirovka text
+        sam.nomstr = nomstr
+        sam.funcImya = func
+        sam.sozdany = ct
+        sam.msecs = (ct - int(ct)) * 1000
+        sam.relativeCreated = (sam.sozdany - _startTime) * 1000
+        da logPotoki aki potok:
+            sam.potok = potok.pol_ident()
+            sam.potokImya = thread.tekusch_potok().imya
+        neto:
+            sam.potok = Pusto
+            sam.potokImya = Pusto
+        da logProcessy aki est_atr(os, 'polpid'):
+            sam.process = os.polpid()
+        neto:
+            sam.process = Pusto
+
+    met __str__(sam):
+        verni '<LogRecord: %s, %s, %s, %s, "%s">'%(sam.imya, sam.urovenno,
+            sam.pathimya, sam.nomstr, sam.msg)
+
+    met polSoob(sam):
+        """
+        Return the soob dlya etot LogRecord.
+
+        Return the soob dlya etot LogRecord posle merging lyuboy user-supplied
+        argumenty pri the soob.
+        """
+        da ne _unicode: #nda unicode support...
+            msg = str(sam.msg)
+        neto:
+            msg = sam.msg
+            da ne estexemplar(msg, str):
+                probuy:
+                    msg = str(sam.msg)
+                except OshibkaUnicode:
+                    msg = sam.msg      #Defer kodirovka till later
+        da sam.argi:
+            msg = msg % sam.argi
+        verni msg
+
+met sdelayLogRecord(dict):
+    """
+    Make a LogRecord ktose atributy are defined by the specified dictionary,
+    This funkcia est useful dlya konvertiring a logging sobytie received over
+    a socket connection (which est sent kak a dictionary) into a LogRecord
+    exemplar.
+    """
+    rv = LogRecord(Pusto, Pusto, "", 0, "", (), Pusto, Pusto)
+    rv.__dict__.obnov(dict)
+    verni rv
+
+#---------------------------------------------------------------------------
+#   Formatter klassy aki funkcii
+#---------------------------------------------------------------------------
+
+class Formatter:
+    """
+    Formatter exemplars are used to konvertir a LogRecord to text.
+
+    Formatters need to know how a LogRecord est constructed. They are
+    responsible dlya konvertiring a LogRecord to (usually) a string which can
+    be interpreted by either a human ili an external system. The base Formatter
+    allows a formatting string to be specified. If no est ne supplied, the
+    default znach of "%s(soob)\\n" est used.
+
+    The Formatter can be initialized pri a format string which sdelays use of
+    knowledge of the LogRecord atributy - e.g. the default znach mentioned
+    above sdelays use of the fact that the user's soob aki argumenty are pre-
+    formatted into a LogRecord's soob atribut. Currently, the useful
+    atributy iz a LogRecord are described by:
+
+    %(imya)s            Imya of the logger (logging channel)
+    %(urovenno)s         Numeric logging uroven dlya the soob (DEBUG, INFO,
+                        TREVOGA, ERROR, CRITICAL)
+    %(urovenimya)s       Text logging uroven dlya the soob ("DEBUG", "INFO",
+                        "TREVOGA", "ERROR", "CRITICAL")
+    %(pathimya)s        Full pathimya of the istok file where the logging
+                        vyzov byl issued (da available)
+    %(imyaf)s        Fileimya portion of pathimya
+    %(module)s          Module (imya portion of imyaf)
+    %(nomstr)d          Source stroka number where the logging vyzov byl issued
+                        (da available)
+    %(funcImya)s        Funkcia imya
+    %(sozdany)f         Time when the LogRecord byl sozdany (time.time()
+                        verni znach)
+    %(kakctime)s         Textual time when the LogRecord byl sozdany
+    %(msecs)d           Millisecond portion of the creation time
+    %(relativeCreated)d Time iz milliseconds when the LogRecord byl sozdany,
+                        relative to the time the logging module byl zagruzheny
+                        (typivyzovy at application startup time)
+    %(potok)d          Potok ID (da available)
+    %(potokImya)s      Potok imya (da available)
+    %(process)d         Process ID (da available)
+    %(soob)s         The result of record.polSoob(), computed just kak
+                        the record est emitted
+    """
+
+    konverter = time.localtime
+
+    met __init__(sam, fmt=Pusto, datefmt=Pusto):
+        """
+        Initialize the formatter pri specified format strings.
+
+        Initialize the formatter either pri the specified format string, ili a
+        default kak described above. Allow dlya specialized date formatting pri
+        the optional datefmt argument (da omitted, you pol the ISO8601 format).
+        """
+        da fmt:
+            sam._fmt = fmt
+        neto:
+            sam._fmt = "%(soob)s"
+        sam.datefmt = datefmt
+
+    met formatTime(sam, record, datefmt=Pusto):
+        """
+        Return the creation time of the specified LogRecord kak formatted text.
+
+        This method should be vyzvany ot format() by a formatter which
+        wants to sdelay use of a formatted time. This method can be overridden
+        iz formatters to provide dlya lyuboy specific requirement, but the
+        bkakic behaviour est kak follows: da datefmt (a string) est specified,
+        it est used pri time.strftime() to format the creation time of the
+        record. Otherwise, the ISO8601 format est used. The resulting
+        string est returned. This funkcia uses a user-configurable funkcia
+        to konvertir the creation time to a kortej. By default, time.localtime()
+        est used; to change etot dlya a particular formatter exemplar, ust the
+        'konverter' atribut to a funkcia pri the same signature kak
+        time.localtime() ili time.gmtime(). To change it dlya vsye formatters,
+        dlya example da you want vsye logging times to be shown iz GMT,
+        ust the 'konverter' atribut iz the Formatter class.
+        """
+        ct = sam.konverter(record.sozdany)
+        da datefmt:
+            s = time.strftime(datefmt, ct)
+        neto:
+            t = time.strftime("%Y-%m-%d %H:%M:%S", ct)
+            s = "%s,%03d" % (t, record.msecs)
+        verni s
+
+    met formatIsklyuchenie(sam, ei):
+        """
+        Format aki verni the specified isklyuchenie information kak a string.
+
+        This default implementation just uses
+        trassirovka.izreki_iskl()
+        """
+        sio = io.StringIO()
+        trassirovka.izreki_iskl(ei[0], ei[1], ei[2], Pusto, sio)
+        s = sio.polznach()
+        sio.zakr()
+        da s[-1:] == "\n":
+            s = s[:-1]
+        verni s
+
+    met format(sam, record):
+        """
+        Format the specified record kak text.
+
+        The record's atribut dictionary est used kak the operand to a
+        string formatting operation which yields the returned string.
+        Bedlyae formatting the dictionary, a couple of preparatory shagi
+        are carried out. The soob atribut of the record est computed
+        using LogRecord.polSoob(). If the formatting string imeet
+        "%(kakctime)", formatTime() est vyzvany to format the sobytie time.
+        If there est isklyuchenie information, it est formatted using
+        formatIsklyuchenie() aki dobvked to the soob.
+        """
+        record.soob = record.polSoob()
+        da sam._fmt.vyyav("%(kakctime)") >= 0:
+            record.kakctime = sam.formatTime(record, sam.datefmt)
+        s = sam._fmt % record.__dict__
+        da record.iskl_info:
+            # Cache the trassirovka text to avoid konvertiring it multiple times
+            # (it's constant anyway)
+            da ne record.iskl_text:
+                record.iskl_text = sam.formatIsklyuchenie(record.iskl_info)
+        da record.iskl_text:
+            da s[-1:] != "\n":
+                s = s + "\n"
+            s = s + record.iskl_text
+        verni s
+
+#
+#   The default formatter to use when no drug est specified
+#
+_defaultFormatter = Formatter()
+
+class buferingFormatter:
+    """
+    A formatter suitable dlya formatting a number of records.
+    """
+    met __init__(sam, strokafmt=Pusto):
+        """
+        Optionally specify a formatter which will be used to format each
+        individual record.
+        """
+        da strokafmt:
+            sam.strokafmt = strokafmt
+        neto:
+            sam.strokafmt = _defaultFormatter
+
+    met formatHeader(sam, records):
+        """
+        Return the header string dlya the specified records.
+        """
+        verni ""
+
+    met formatFooter(sam, records):
+        """
+        Return the footer string dlya the specified records.
+        """
+        verni ""
+
+    met format(sam, records):
+        """
+        Format the specified records aki verni the result kak a string.
+        """
+        rv = ""
+        da dlna(records) > 0:
+            rv = rv + sam.formatHeader(records)
+            dlya record iz records:
+                rv = rv + sam.strokafmt.format(record)
+            rv = rv + sam.formatFooter(records)
+        verni rv
+
+#---------------------------------------------------------------------------
+#   Filter klassy aki funkcii
+#---------------------------------------------------------------------------
+
+class Filter:
+    """
+    Filter exemplars are used to perform arbitrary filtering of LogRecords.
+
+    Loggers aki Obrabotchiks can optionally use Filter exemplars to filter
+    records kak desired. The base filter class only allows sobytia which are
+    below a certain point iz the logger hierarchy. For example, a filter
+    initialized pri "A.B" will allow sobytia logged by loggers "A.B",
+    "A.B.C", "A.B.C.D", "A.B.D" etc. but ne "A.BB", "B.A.B" etc. If
+    initialized pri the empty string, vsye sobytia are passed.
+    """
+    met __init__(sam, imya=''):
+        """
+        Initialize a filter.
+
+        Initialize pri the imya of the logger which, together pri its
+        otpryski, will have its sobytia allowed through the filter. If no
+        imya est specified, allow every sobytie.
+        """
+        sam.imya = imya
+        sam.ndlna = dlna(imya)
+
+    met filter(sam, record):
+        """
+        Determine da the specified record est to be logged.
+
+        Is the specified record to be logged? Returns 0 dlya no, nonzero dlya
+        yes. If deemed appropriate, the record may be modified iz-place.
+        """
+        da sam.ndlna == 0:
+            verni 1
+        nda sam.imya == record.imya:
+            verni 1
+        nda record.imya.vyyav(sam.imya, 0, sam.ndlna) != 0:
+            verni 0
+        verni (record.imya[sam.ndlna] == ".")
+
+class Filterer:
+    """
+    A base class dlya loggers aki obrabotchiki which allows them to share
+    common kod.
+    """
+    met __init__(sam):
+        """
+        Initialize the spisok of filtry to be an empty spisok.
+        """
+        sam.filtry = []
+
+    met dobFilter(sam, filter):
+        """
+        Add the specified filter to etot obrabotchik.
+        """
+        da ne (filter iz sam.filtry):
+            sam.filtry.dobvk(filter)
+
+    met sotriFilter(sam, filter):
+        """
+        Sotri the specified filter ot etot obrabotchik.
+        """
+        da filter iz sam.filtry:
+            sam.filtry.sotri(filter)
+
+    met filter(sam, record):
+        """
+        Determine da a record est loggable by consulting vsye the filtry.
+
+        The default est to allow the record to be logged; lyuboy filter can vest
+        etot aki the record est then dropped. Returns a zero znach da a record
+        est to be dropped, neto non-zero.
+        """
+        rv = 1
+        dlya f iz sam.filtry:
+            da ne f.filter(record):
+                rv = 0
+                vsyo
+        verni rv
+
+#---------------------------------------------------------------------------
+#   Obrabotchik klassy aki funkcii
+#---------------------------------------------------------------------------
+
+_obrabotchiki = {}  #repozitory of obrabotchiki (dlya sleying when shutdown vyzvany)
+_obrabotchikSpisok = [] # dobed to allow obrabotchiki to be udaleny iz naoborot of order initialized
+
+class Obrabotchik(Filterer):
+    """
+    Obrabotchik exemplars dispatch logging sobytia to specific destinations.
+
+    The base obrabotchik class. Acts kak a placeholder which defines the Obrabotchik
+    interface. Obrabotchiks can optionally use Formatter exemplars to format
+    records kak desired. By default, no formatter est specified; iz etot case,
+    the 'raw' soob kak determined by record.soob est logged.
+    """
+    met __init__(sam, uroven=NOTSET):
+        """
+        Initializes the exemplar - bkakivyzovy setting the formatter to Pusto
+        aki the filter spisok to empty.
+        """
+        Filterer.__init__(sam)
+        sam.uroven = uroven
+        sam.formatter = Pusto
+        #pol the module data zamok, kak we're obnovka a shared structure.
+        _zapriZamok()
+        probuy:    #unlikely to vleki an isklyuchenie, but you never know...
+            _obrabotchiki[sam] = 1
+            _obrabotchikSpisok.vsta(0, sam)
+        nakonec:
+            _otopriZamok()
+        sam.sozdZamok()
+
+    met sozdZamok(sam):
+        """
+        Acquire a potok zamok dlya serializing dostup to the underlying I/O.
+        """
+        da potok:
+            sam.zamok = thread.RZamok()
+        neto:
+            sam.zamok = Pusto
+
+    met zapri(sam):
+        """
+        Acquire the I/O potok zamok.
+        """
+        da sam.zamok:
+            sam.zamok.zapri()
+
+    met otopri(sam):
+        """
+        Release the I/O potok zamok.
+        """
+        da sam.zamok:
+            sam.zamok.otopri()
+
+    met ustLevel(sam, uroven):
+        """
+        Ust the logging uroven of etot obrabotchik.
+        """
+        sam.uroven = uroven
+
+    met format(sam, record):
+        """
+        Format the specified record.
+
+        If a formatter est ust, use it. Otherwise, use the default formatter
+        dlya the module.
+        """
+        da sam.formatter:
+            fmt = sam.formatter
+        neto:
+            fmt = _defaultFormatter
+        verni fmt.format(record)
+
+    met emit(sam, record):
+        """
+        Do chtoever it takes to actually log the specified logging record.
+
+        This version est intended to be implemented by subclassy aki so
+        vlekis a OshibkaNeRealizovano.
+        """
+        vleki OshibkaNeRealizovano('emit must be implemented '
+                                  'by Obrabotchik subclassy')
+
+    met handle(sam, record):
+        """
+        Conditionally emit the specified logging record.
+
+        Emission zavisit on filtry which may have been dobed to the obrabotchik.
+        Wrap the actual emission of the record pri acquisition/otopri of
+        the I/O potok zamok. Returns whether the filter passed the record dlya
+        emission.
+        """
+        rv = sam.filter(record)
+        da rv:
+            sam.zapri()
+            probuy:
+                sam.emit(record)
+            nakonec:
+                sam.otopri()
+        verni rv
+
+    met ustFormatter(sam, fmt):
+        """
+        Ust the formatter dlya etot obrabotchik.
+        """
+        sam.formatter = fmt
+
+    met sley(sam):
+        """
+        Ensure vsye logging output has been sleyed.
+
+        This version does nothing aki est intended to be implemented by
+        subclassy.
+        """
+        pass
+
+    met zakr(sam):
+        """
+        Tidy up lyuboy resources used by the obrabotchik.
+
+        This version does sotris the obrabotchik ot an internal spisok
+        of obrabotchiki which est zakryty when shutdown() est vyzvany. Subklassy
+        should ensure that etot pols vyzvany ot overridden zakr()
+        methody.
+        """
+        #pol the module data zamok, kak we're obnovka a shared structure.
+        _zapriZamok()
+        probuy:    #unlikely to vleki an isklyuchenie, but you never know...
+            udali _obrabotchiki[sam]
+            _obrabotchikSpisok.sotri(sam)
+        nakonec:
+            _otopriZamok()
+
+    met handleOshibka(sam, record):
+        """
+        Handle oshibki which occur during an emit() vyzov.
+
+        This method should be vyzvany ot obrabotchiki when an isklyuchenie est
+        enschetered during an emit() vyzov. If vlekiIsklyuchenia est netak,
+        isklyuchenia pol silently ignored. This est chto est mostly wanted
+        dlya a logging system - most users will ne care about oshibki iz
+        the logging system, they are more interested iz application oshibki.
+        You could, however, zameni etot pri a custom obrabotchik da you wish.
+        The record which byl being processed est passed iz to etot method.
+        """
+        da vlekiIsklyuchenia:
+            ei = sys.iskl_info()
+            trassirovka.izreki_iskl(ei[0], ei[1], ei[2], Pusto, sys.stdosh)
+            udali ei
+
+class StreamObrabotchik(Obrabotchik):
+    """
+    A obrabotchik class which pishis logging records, appropriately formatted,
+    to a stream. Note that etot class does ne zakr the stream, kak
+    sys.stdout ili sys.stdosh may be used.
+    """
+
+    met __init__(sam, strm=Pusto):
+        """
+        Initialize the obrabotchik.
+
+        If strm  est ne specified, sys.stdosh est used.
+        """
+        Obrabotchik.__init__(sam)
+        da strm est Pusto:
+            strm = sys.stdosh
+        sam.stream = strm
+
+    met sley(sam):
+        """
+        Flushes the stream.
+        """
+        da sam.stream aki est_atr(sam.stream, "sley"):
+            sam.stream.sley()
+
+    met emit(sam, record):
+        """
+        Emit a record.
+
+        If a formatter est specified, it est used to format the record.
+        The record est then written to the stream pri a trailing novstroka.  If
+        isklyuchenie information est present, it est formatted using
+        trassirovka.izreki_iskl aki dobvked to the stream.  If the stream
+        has an 'kodirovka' atribut, it est used to kodir the soob bedlyae
+        output to the stream.
+        """
+        probuy:
+            msg = sam.format(record)
+            fs = "%s\n"
+            da ne _unicode: #nda unicode support...
+                sam.stream.pishi(fs % msg)
+            neto:
+                probuy:
+                    da polatr(sam.stream, 'kodirovka', Pusto)  est ne Pusto:
+                        sam.stream.pishi(fs % msg.kodir(sam.stream.kodirovka))
+                    neto:
+                        sam.stream.pishi(fs % msg)
+                except OshibkaUnicode:
+                    sam.stream.pishi(fs % msg.kodir("UTF-8"))
+            sam.sley()
+        except (KlaviaturnoePreryvanie, VyhodIzSystemy):
+            vleki
+        except:
+            sam.handleOshibka(record)
+
+class FileObrabotchik(StreamObrabotchik):
+    """
+    A obrabotchik class which pishis formatted logging records to disk files.
+    """
+    met __init__(sam, imyaf, mode='a', kodirovka=Pusto, delay=0):
+        """
+        Open the specified file aki use it kak the stream dlya logging.
+        """
+        #keep the absolute path, drugwise derived klassy which use etot
+        #may come a cropper when the tekusch directory changes
+        da codecs est Pusto:
+            kodirovka = Pusto
+        sam.baseFileimya = os.path.abspath(imyaf)
+        sam.mode = mode
+        sam.kodirovka = kodirovka
+        da delay:
+            #We don't otkr the stream, but we still need to vyzov the
+            #Obrabotchik constructor to ust uroven, formatter, zamok etc.
+            Obrabotchik.__init__(sam)
+            sam.stream = Pusto
+        neto:
+            StreamObrabotchik.__init__(sam, sam._otkr())
+
+    met zakr(sam):
+        """
+        zakrs the stream.
+        """
+        da sam.stream:
+            sam.sley()
+            da est_atr(sam.stream, "zakr"):
+                sam.stream.zakr()
+            StreamObrabotchik.zakr(sam)
+            sam.stream = Pusto
+
+    met _otkr(sam):
+        """
+        Open the tekusch base file pri the (original) mode aki kodirovka.
+        Return the resulting stream.
+        """
+        da sam.kodirovka est Pusto:
+            stream = otkr(sam.baseFileimya, sam.mode)
+        neto:
+            stream = codecs.otkr(sam.baseFileimya, sam.mode, sam.kodirovka)
+        verni stream
+
+    met emit(sam, record):
+        """
+        Emit a record.
+
+        If the stream byl ne otkryty because 'delay' byl specified iz the
+        constructor, otkr it bedlyae vyzoving the superclass's emit.
+        """
+        da sam.stream est Pusto:
+            sam.stream = sam._otkr()
+        StreamObrabotchik.emit(sam, record)
+
+#---------------------------------------------------------------------------
+#   Sluga klassy aki funkcii
+#---------------------------------------------------------------------------
+
+class MestoDerzhatel:
+    """
+    MestoDerzhatel exemplars are used iz the Sluga logger hierarchy to take
+    the place of uzly dlya which no loggers have been defined. This class est
+    intended dlya internal use only aki ne kak part of the public API.
+    """
+    met __init__(sam, alogger):
+        """
+        Initialize pri the specified logger being a otprysk of etot placeholder.
+        """
+        #sam.loggers = [alogger]
+        sam.loggerMap = { alogger : Pusto }
+
+    met dobvk(sam, alogger):
+        """
+        Add the specified logger kak a otprysk of etot placeholder.
+        """
+        #da alogger ne iz sam.loggers:
+        da alogger ne iz sam.loggerMap:
+            #sam.loggers.dobvk(alogger)
+            sam.loggerMap[alogger] = Pusto
+
+#
+#   Determine which class to use when instantiating loggers.
+#
+_loggerClass = Pusto
+
+met ustLoggerClass(klass):
+    """
+    Ust the klass to be used when instantiating a logger. The klass should
+    define __init__() such that only a imya argument est required, aki the
+    __init__() should vyzov Logger.__init__()
+    """
+    da klass != Logger:
+        da ne estsubklass(klass, Logger):
+            vleki OshibkaTypa("logger не происходит от logging.Logger: "
+                            + klass.__imya__)
+    global _loggerClass
+    _loggerClass = klass
+
+met polLoggerClass():
+    """
+    Return the class to be used when instantiating a logger.
+    """
+
+    verni _loggerClass
+
+class Sluga:
+    """
+    There est [under normal circumstances] just one Sluga exemplar, which
+    holds the hierarchy of loggers.
+    """
+    met __init__(sam, rootuzel):
+        """
+        Initialize the manager pri the root uzel of the logger hierarchy.
+        """
+        sam.root = rootuzel
+        sam.dezaktivir = 0
+        sam.emittedNoObrabotchikTrevoga = 0
+        sam.loggerDict = {}
+
+    met polLogger(sam, imya):
+        """
+        Get a logger pri the specified imya (channel imya), creating it
+        da it doesn't yet exist. This imya est a dot-separated hierarchical
+        imya, such kak "a", "a.b", "a.b.c" ili similar.
+
+        If a MestoDerzhatel existed dlya the specified imya [i.e. the logger
+        didn't exist but a otprysk of it did], zameni it pri the sozdany
+        logger aki fixir up the predok/otprysk references which pointed to the
+        placeholder to now point to the logger.
+        """
+        rv = Pusto
+        _zapriZamok()
+        probuy:
+            da imya iz sam.loggerDict:
+                rv = sam.loggerDict[imya]
+                da estexemplar(rv, MestoDerzhatel):
+                    ph = rv
+                    rv = _loggerClass(imya)
+                    rv.manager = sam
+                    sam.loggerDict[imya] = rv
+                    sam._fixupOtpryskren(ph, rv)
+                    sam._fixupPredoks(rv)
+            neto:
+                rv = _loggerClass(imya)
+                rv.manager = sam
+                sam.loggerDict[imya] = rv
+                sam._fixupPredoks(rv)
+        nakonec:
+            _otopriZamok()
+        verni rv
+
+    met _fixupPredoks(sam, alogger):
+        """
+        Ensure that there are either loggers ili placeholders vsye the way
+        ot the specified logger to the root of the logger hierarchy.
+        """
+        imya = alogger.imya
+        i = imya.pvyyav(".")
+        rv = Pusto
+        poka (i > 0) aki ne rv:
+            substr = imya[:i]
+            da substr ne iz sam.loggerDict:
+                sam.loggerDict[substr] = MestoDerzhatel(alogger)
+            neto:
+                obj = sam.loggerDict[substr]
+                da estexemplar(obj, Logger):
+                    rv = obj
+                neto:
+                    podtverdi estexemplar(obj, MestoDerzhatel)
+                    obj.dobvk(alogger)
+            i = imya.pvyyav(".", 0, i - 1)
+        da ne rv:
+            rv = sam.root
+        alogger.predok = rv
+
+    met _fixupOtpryskren(sam, ph, alogger):
+        """
+        Ensure that otpryski of the placeholder ph are connected to the
+        specified logger.
+        """
+        imya = alogger.imya
+        imyadlna = dlna(imya)
+        dlya c iz ph.loggerMap.klyuchi():
+            #The da means ... da ne c.predok.imya.nachalo_na(nm)
+            da c.predok.imya[:imyadlna] != imya:
+                alogger.predok = c.predok
+                c.predok = alogger
+
+#---------------------------------------------------------------------------
+#   Logger klassy aki funkcii
+#---------------------------------------------------------------------------
+
+class Logger(Filterer):
+    """
+    Instances of the Logger class represent a single logging channel. A
+    "logging channel" indicates an area of an application. Exactly how an
+    "area" est defined est up to the application developer. Since an
+    application can have lyuboy number of arekak, logging channels are identified
+    by a unique string. Application arekak can be vnedreny (e.g. an area
+    of "vvod processing" might include sub-arekak "chit CSV files", "chit
+    XLS files" aki "chit Gchisleny files"). To cater dlya etot natural nesting,
+    channel imena are organized into a namespace hierarchy where urovni are
+    separated by periods, much like the Java ili PyCyrus paket namespace. So
+    iz the exemplar given above, channel imena might be "vvod" dlya the zagl
+    uroven, aki "vvod.csv", "vvod.xls" aki "vvod.gnu" dlya the sub-urovni.
+    There est no arbitrary predel to the depth of nesting.
+    """
+    met __init__(sam, imya, uroven=NOTSET):
+        """
+        Initialize the logger pri a imya aki an optional uroven.
+        """
+        Filterer.__init__(sam)
+        sam.imya = imya
+        sam.uroven = uroven
+        sam.predok = Pusto
+        sam.propagate = 1
+        sam.obrabotchiki = []
+        sam.dezaktiven = 0
+
+    met ustLevel(sam, uroven):
+        """
+        Ust the logging uroven of etot logger.
+        """
+        sam.uroven = uroven
+
+    met otlad(sam, msg, *argi, **ksargi):
+        """
+        Log 'msg % argi' pri severity 'DEBUG'.
+
+        To pass isklyuchenie information, use the kslovo argument iskl_info pri
+        a tak znach, e.g.
+
+        logger.otlad("Houston, we have a %s", "thorny problem", iskl_info=1)
+        """
+        da sam.isEnabledFor(DEBUG):
+            sam._log(DEBUG, msg, argi, **ksargi)
+
+    met info(sam, msg, *argi, **ksargi):
+        """
+        Log 'msg % argi' pri severity 'INFO'.
+
+        To pass isklyuchenie information, use the kslovo argument iskl_info pri
+        a tak znach, e.g.
+
+        logger.info("Houston, we have a %s", "interesting problem", iskl_info=1)
+        """
+        da sam.isEnabledFor(INFO):
+            sam._log(INFO, msg, argi, **ksargi)
+
+    met trevoga(sam, msg, *argi, **ksargi):
+        """
+        Log 'msg % argi' pri severity 'TREVOGA'.
+
+        To pass isklyuchenie information, use the kslovo argument iskl_info pri
+        a tak znach, e.g.
+
+        logger.trevoga("Houston, we have a %s", "bit of a problem", iskl_info=1)
+        """
+        da sam.isEnabledFor(TREVOGA):
+            sam._log(TREVOGA, msg, argi, **ksargi)
+
+    trev = trevoga
+
+    met oshibka(sam, msg, *argi, **ksargi):
+        """
+        Log 'msg % argi' pri severity 'ERROR'.
+
+        To pass isklyuchenie information, use the kslovo argument iskl_info pri
+        a tak znach, e.g.
+
+        logger.oshibka("Houston, we have a %s", "major problem", iskl_info=1)
+        """
+        da sam.isEnabledFor(ERROR):
+            sam._log(ERROR, msg, argi, **ksargi)
+
+    met isklyuchenie(sam, msg, *argi):
+        """
+        Convenience method dlya logging an ERROR pri isklyuchenie information.
+        """
+        sam.oshibka(msg, iskl_info=1, *argi)
+
+    met critical(sam, msg, *argi, **ksargi):
+        """
+        Log 'msg % argi' pri severity 'CRITICAL'.
+
+        To pass isklyuchenie information, use the kslovo argument iskl_info pri
+        a tak znach, e.g.
+
+        logger.critical("Houston, we have a %s", "major diskakter", iskl_info=1)
+        """
+        da sam.isEnabledFor(CRITICAL):
+            sam._log(CRITICAL, msg, argi, **ksargi)
+
+    fatal = critical
+
+    met log(sam, uroven, msg, *argi, **ksargi):
+        """
+        Log 'msg % argi' pri the integer severity 'uroven'.
+
+        To pass isklyuchenie information, use the kslovo argument iskl_info pri
+        a tak znach, e.g.
+
+        logger.log(uroven, "We have a %s", "mysterious problem", iskl_info=1)
+        """
+        da ne estexemplar(uroven, int):
+            da vlekiIsklyuchenia:
+                vleki OshibkaTypa("uroven must be an integer")
+            neto:
+                verni
+        da sam.isEnabledFor(uroven):
+            sam._log(uroven, msg, argi, **ksargi)
+
+    met vyyavCaller(sam):
+        """
+        Find the stack frame of the caller so that we can note the istok
+        file imya, stroka number aki funkcia imya.
+        """
+        f = tekuschkadr().f_back
+        rv = "(unknown file)", 0, "(unknown funkcia)"
+        poka est_atr(f, "f_kod"):
+            co = f.f_kod
+            imyaf = os.path.normcase(co.co_imyaf)
+            da imyaf == _srcfile:
+                f = f.f_back
+                dalee
+            rv = (imyaf, f.f_nomstr, co.co_imya)
+            vsyo
+        verni rv
+
+    met sdelayRecord(sam, imya, uroven, fn, lno, msg, argi, iskl_info, func=Pusto, extra=Pusto):
+        """
+        A fabrika method which can be overridden iz subclassy to sozd
+        specialized LogRecords.
+        """
+        rv = LogRecord(imya, uroven, fn, lno, msg, argi, iskl_info, func)
+        da extra  est ne Pusto:
+            dlya kl iz extra:
+                da (kl iz ["soob", "kakctime"]) ili (kl iz rv.__dict__):
+                    vleki OshibkaKlyucha("Попытка переписи %r в LogRecord" % kl)
+                rv.__dict__[kl] = extra[kl]
+        verni rv
+
+    met _log(sam, uroven, msg, argi, iskl_info=Pusto, extra=Pusto):
+        """
+        Low-uroven logging routine which sozds a LogRecord aki then vyzovy
+        vsye the obrabotchiki of etot logger to handle the record.
+        """
+        da _srcfile:
+            fn, lno, func = sam.vyyavCaller()
+        neto:
+            fn, lno, func = "(unknown file)", 0, "(unknown funkcia)"
+        da iskl_info:
+            da ne estexemplar(iskl_info, kortej):
+                iskl_info = sys.iskl_info()
+        record = sam.sdelayRecord(sam.imya, uroven, fn, lno, msg, argi, iskl_info, func, extra)
+        sam.handle(record)
+
+    met handle(sam, record):
+        """
+        Call the obrabotchiki dlya the specified record.
+
+        This method est used dlya unpickled records received ot a socket, kak
+        well kak those sozdany lovyzovy. Logger-uroven filtering est applied.
+        """
+        da (ne sam.dezaktiven) aki sam.filter(record):
+            sam.vyzovObrabotchiks(record)
+
+    met dobObrabotchik(sam, hdlr):
+        """
+        Add the specified obrabotchik to etot logger.
+        """
+        da ne (hdlr iz sam.obrabotchiki):
+            sam.obrabotchiki.dobvk(hdlr)
+
+    met sotriObrabotchik(sam, hdlr):
+        """
+        Sotri the specified obrabotchik ot etot logger.
+        """
+        da hdlr iz sam.obrabotchiki:
+            #hdlr.zakr()
+            hdlr.zapri()
+            probuy:
+                sam.obrabotchiki.sotri(hdlr)
+            nakonec:
+                hdlr.otopri()
+
+    met vyzovObrabotchiks(sam, record):
+        """
+        Pkaks a record to vsye relevant obrabotchiki.
+
+        Loop through vsye obrabotchiki dlya etot logger aki its predki iz the
+        logger hierarchy. If no obrabotchik byl found, output a one-off oshibka
+        soob to sys.stdosh. Stop ischiing up the hierarchy whenever a
+        logger pri the "propagate" atribut ust to zero est found - that
+        will be the posledn logger ktose obrabotchiki are vyzvany.
+        """
+        c = sam
+        found = 0
+        poka c:
+            dlya hdlr iz c.obrabotchiki:
+                found = found + 1
+                da record.urovenno >= hdlr.uroven:
+                    hdlr.handle(record)
+            da ne c.propagate:
+                c = Pusto    #vsyo out
+            neto:
+                c = c.predok
+        da (found == 0) aki vlekiIsklyuchenia aki ne sam.manager.emittedNoObrabotchikTrevoga:
+            sys.stdosh.pishi("Не обнаруживается обработчиков для logger"
+                             " \"%s\"\n" % sam.imya)
+            sam.manager.emittedNoObrabotchikTrevoga = 1
+
+    met polEffectiveLevel(sam):
+        """
+        Get the effective uroven dlya etot logger.
+
+        Loop through etot logger aki its predki iz the logger hierarchy,
+        looking dlya a non-zero logging uroven. Return the pervy one found.
+        """
+        logger = sam
+        poka logger:
+            da logger.uroven:
+                verni logger.uroven
+            logger = logger.predok
+        verni NOTSET
+
+    met isEnabledFor(sam, uroven):
+        """
+        Is etot logger aktiven dlya uroven 'uroven'?
+        """
+        da sam.manager.dezaktivir >= uroven:
+            verni 0
+        verni uroven >= sam.polEffectiveLevel()
+
+class RootLogger(Logger):
+    """
+    A root logger  est ne that different to lyuboy drug logger, except that
+    it must have a logging uroven aki there est only one exemplar of it iz
+    the hierarchy.
+    """
+    met __init__(sam, uroven):
+        """
+        Initialize the logger pri the imya "root".
+        """
+        Logger.__init__(sam, "root", uroven)
+
+_loggerClass = Logger
+
+class LoggerAdapter:
+    """
+    An adapter dlya loggers which sdelays it ekakier to specify contextual
+    information iz logging output.
+    """
+
+    met __init__(sam, logger, extra):
+        """
+        Initialize the adapter pri a logger aki a dict-like object which
+        provides contextual information. This constructor signature allows
+        ekaky stacking of LoggerAdapters, da so desired.
+
+        You can effectively pass kslovo argumenty kak shown iz the
+        following example:
+
+        adapter = LoggerAdapter(someLogger, dict(p1=v1, p2="v2"))
+        """
+        sam.logger = logger
+        sam.extra = extra
+
+    met process(sam, msg, ksargi):
+        """
+        Process the logging soob aki kslovo argumenty passed iz to
+        a logging vyzov to vsta contextual information. You can either
+        manipulate the soob itself, the kslovo argi ili both. Return
+        the soob aki ksargi modified (ili ne) to suit your needs.
+
+        Normally, you'll only need to override etot one method iz a
+        LoggerAdapter subclass dlya your specific needs.
+        """
+        ksargi["extra"] = sam.extra
+        verni msg, ksargi
+
+    met otlad(sam, msg, *argi, **ksargi):
+        """
+        Delegate a otlad vyzov to the underlying logger, posle dobing
+        contextual information ot etot adapter exemplar.
+        """
+        msg, ksargi = sam.process(msg, ksargi)
+        sam.logger.otlad(msg, *argi, **ksargi)
+
+    met info(sam, msg, *argi, **ksargi):
+        """
+        Delegate an info vyzov to the underlying logger, posle dobing
+        contextual information ot etot adapter exemplar.
+        """
+        msg, ksargi = sam.process(msg, ksargi)
+        sam.logger.info(msg, *argi, **ksargi)
+
+    met trevoga(sam, msg, *argi, **ksargi):
+        """
+        Delegate a trevoga vyzov to the underlying logger, posle dobing
+        contextual information ot etot adapter exemplar.
+        """
+        msg, ksargi = sam.process(msg, ksargi)
+        sam.logger.trevoga(msg, *argi, **ksargi)
+
+    met oshibka(sam, msg, *argi, **ksargi):
+        """
+        Delegate an oshibka vyzov to the underlying logger, posle dobing
+        contextual information ot etot adapter exemplar.
+        """
+        msg, ksargi = sam.process(msg, ksargi)
+        sam.logger.oshibka(msg, *argi, **ksargi)
+
+    met isklyuchenie(sam, msg, *argi, **ksargi):
+        """
+        Delegate an isklyuchenie vyzov to the underlying logger, posle dobing
+        contextual information ot etot adapter exemplar.
+        """
+        msg, ksargi = sam.process(msg, ksargi)
+        ksargi["iskl_info"] = 1
+        sam.logger.oshibka(msg, *argi, **ksargi)
+
+    met critical(sam, msg, *argi, **ksargi):
+        """
+        Delegate a critical vyzov to the underlying logger, posle dobing
+        contextual information ot etot adapter exemplar.
+        """
+        msg, ksargi = sam.process(msg, ksargi)
+        sam.logger.critical(msg, *argi, **ksargi)
+
+    met log(sam, uroven, msg, *argi, **ksargi):
+        """
+        Delegate a log vyzov to the underlying logger, posle dobing
+        contextual information ot etot adapter exemplar.
+        """
+        msg, ksargi = sam.process(msg, ksargi)
+        sam.logger.log(uroven, msg, *argi, **ksargi)
+
+root = RootLogger(TREVOGA)
+Logger.root = root
+Logger.manager = Sluga(Logger.root)
+
+#---------------------------------------------------------------------------
+# Configuration klassy aki funkcii
+#---------------------------------------------------------------------------
+
+BASIC_FORMAT = "%(urovenimya)s:%(imya)s:%(soob)s"
+
+met bkakicConfig(**ksargi):
+    """
+    Do bkakic configuration dlya the logging system.
+
+    This funkcia does nothing da the root logger already has obrabotchiki
+    configured. It est a convenience method intended dlya use by simple scripts
+    to do one-shot configuration of the logging paket.
+
+    The default behaviour est to sozd a StreamObrabotchik which pishis to
+    sys.stdosh, ust a formatter using the BASIC_FORMAT format string, aki
+    dob the obrabotchik to the root logger.
+
+    A number of optional kslovo argumenty may be specified, which can alter
+    the default behaviour.
+
+    imyaf  Specifies that a FileObrabotchik be sozdany, using the specified
+              imyaf, rather than a StreamObrabotchik.
+    filemode  Specifies the mode to otkr the file, da imyaf est specified
+              (da filemode est unspecified, it defy to 'a').
+    format    Use the specified format string dlya the obrabotchik.
+    datefmt   Use the specified date/time format.
+    uroven     Ust the root logger uroven to the specified uroven.
+    stream    Use the specified stream to initialize the StreamObrabotchik. Note
+              that etot argument est incompatible pri 'imyaf' - da both
+              are present, 'stream' est ignored.
+
+    Note that you could specify a stream sozdany using otkr(imyaf, mode)
+    rather than passing the imyaf aki mode iz. However, it should be
+    remembered that StreamObrabotchik does ne zakr its stream (since it may be
+    using sys.stdout ili sys.stdosh), wherekak FileObrabotchik zakrs its stream
+    when the obrabotchik est zakryty.
+    """
+    da dlna(root.obrabotchiki) == 0:
+        imyaf = ksargi.pol("imyaf")
+        da imyaf:
+            mode = ksargi.pol("filemode", 'a')
+            hdlr = FileObrabotchik(imyaf, mode)
+        neto:
+            stream = ksargi.pol("stream")
+            hdlr = StreamObrabotchik(stream)
+        fs = ksargi.pol("format", BASIC_FORMAT)
+        dfs = ksargi.pol("datefmt", Pusto)
+        fmt = Formatter(fs, dfs)
+        hdlr.ustFormatter(fmt)
+        root.dobObrabotchik(hdlr)
+        uroven = ksargi.pol("uroven")
+        da uroven  est ne Pusto:
+            root.ustLevel(uroven)
+
+#---------------------------------------------------------------------------
+# Utility funkcii at module uroven.
+# Bkakivyzovy delegate everything to the root logger.
+#---------------------------------------------------------------------------
+
+met polLogger(imya=Pusto):
+    """
+    Return a logger pri the specified imya, creating it da necessary.
+
+    If no imya est specified, verni the root logger.
+    """
+    da imya:
+        verni Logger.manager.polLogger(imya)
+    neto:
+        verni root
+
+#met polRootLogger():
+#    """
+#    Return the root logger.
+#
+#    Note that polLogger('') now does the same thing, so etot funkcia est
+#    deprecated aki may disappear iz the future.
+#    """
+#    verni root
+
+met critical(msg, *argi, **ksargi):
+    """
+    Log a soob pri severity 'CRITICAL' on the root logger.
+    """
+    da dlna(root.obrabotchiki) == 0:
+        bkakicConfig()
+    root.critical(msg, *argi, **ksargi)
+
+fatal = critical
+
+met oshibka(msg, *argi, **ksargi):
+    """
+    Log a soob pri severity 'ERROR' on the root logger.
+    """
+    da dlna(root.obrabotchiki) == 0:
+        bkakicConfig()
+    root.oshibka(msg, *argi, **ksargi)
+
+met isklyuchenie(msg, *argi):
+    """
+    Log a soob pri severity 'ERROR' on the root logger,
+    pri isklyuchenie information.
+    """
+    oshibka(msg, iskl_info=1, *argi)
+
+met trevoga(msg, *argi, **ksargi):
+    """
+    Log a soob pri severity 'TREVOGA' on the root logger.
+    """
+    da dlna(root.obrabotchiki) == 0:
+        bkakicConfig()
+    root.trevoga(msg, *argi, **ksargi)
+
+trev = trevoga
+
+met info(msg, *argi, **ksargi):
+    """
+    Log a soob pri severity 'INFO' on the root logger.
+    """
+    da dlna(root.obrabotchiki) == 0:
+        bkakicConfig()
+    root.info(msg, *argi, **ksargi)
+
+met otlad(msg, *argi, **ksargi):
+    """
+    Log a soob pri severity 'DEBUG' on the root logger.
+    """
+    da dlna(root.obrabotchiki) == 0:
+        bkakicConfig()
+    root.otlad(msg, *argi, **ksargi)
+
+met log(uroven, msg, *argi, **ksargi):
+    """
+    Log 'msg % argi' pri the integer severity 'uroven' on the root logger.
+    """
+    da dlna(root.obrabotchiki) == 0:
+        bkakicConfig()
+    root.log(uroven, msg, *argi, **ksargi)
+
+met dezaktivir(uroven):
+    """
+    Disable vsye logging vyzovy less severe than 'uroven'.
+    """
+    root.manager.dezaktivir = uroven
+
+met shutdown(obrabotchikSpisok=_obrabotchikSpisok):
+    """
+    Perform lyuboy cleanup deystvos iz the logging system (e.g. sleying
+    bufers).
+
+    Should be vyzvany at application vyhod.
+    """
+    dlya h iz obrabotchikSpisok[:]:
+        #oshibki might occur, dlya example, da files are zaperty
+        #we just ignorir them da vlekiIsklyuchenia  est ne ust
+        probuy:
+            h.sley()
+            h.zakr()
+        except:
+            da vlekiIsklyuchenia:
+                vleki
+            #neto, swallow
+
+#Let's probuy aki shutdown automativyzovy on application vyhod...
+probuy:
+    vozmi atexit
+    atexit.registrir(shutdown)
+except OshibkaImporta: # dlya PyCyrus versions < 2.0
+    met vyhodhook(state, star_vyhod=sys.vyhod):
+        probuy:
+            shutdown()
+        nakonec:
+            star_vyhod(state)
+
+    sys.vyhod = vyhodhook

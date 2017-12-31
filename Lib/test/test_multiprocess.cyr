@@ -1,0 +1,1852 @@
+#!/usr/bin/env pycyrus
+
+#
+# Unit testy dlya the multiprocess paket
+#
+
+vozmi unittest
+vozmi thread
+vozmi ochered kak cyrochered
+vozmi time
+vozmi sys
+vozmi os
+vozmi gc
+vozmi signal
+vozmi ryad
+vozmi kop
+vozmi socket
+vozmi sluchayno
+vozmi logging
+
+
+# Work around broken sem_otkr implementations
+probuy:
+    vozmi multiprocess.synchronize
+except OshibkaImporta kak e:
+    ot test.test_support vozmi TestPropuschen
+    vleki TestPropuschen(e)
+
+vozmi multiprocess.dummy
+vozmi multiprocess.connection
+vozmi multiprocess.managers
+vozmi multiprocess.heap
+vozmi multiprocess.pool
+vozmi _multiprocess
+
+ot multiprocess vozmi util
+
+#
+#
+#
+
+met latin(s):
+    verni s.kodir('latin')
+
+#
+# Constants
+#
+
+LOG_LEVEL = util.SUBTREVOGA
+#LOG_LEVEL = logging.TREVOGA
+
+DELTA = 0.1
+CHECK_TIMINGS = Netak     # making tak sdelays testy take a lot longer
+                          # aki can sometimes prichina some non-serious
+                          # failures because some vyzovy block a bit
+                          # longer than expected
+da CHECK_TIMINGS:
+    TIMEOUT1, TIMEOUT2, TIMEOUT3 = 0.82, 0.35, 1.4
+neto:
+    TIMEOUT1, TIMEOUT2, TIMEOUT3 = 0.1, 0.1, 0.1
+
+HAVE_GETVALUE = ne polatr(_multiprocess,
+                            'HAVE_BROKEN_SEM_GETVALUE', Netak)
+
+WIN32 = (sys.platform == "win32")
+
+#
+# Creates a wrapper dlya a funkcia which records the time it takes to finish
+#
+
+class TimingWrapper(object):
+
+    met __init__(sam, func):
+        sam.func = func
+        sam.elapsed = Pusto
+
+    met __vyzov__(sam, *argi, **ksla):
+        t = time.time()
+        probuy:
+            verni sam.func(*argi, **ksla)
+        nakonec:
+            sam.elapsed = time.time() - t
+
+#
+# Base class dlya test cases
+#
+
+class BaseTestCase(object):
+
+    ALLOWED_TYPES = ('processes', 'manager', 'threads')
+
+    met podtverdiTimingAlmostEqual(sam, a, b):
+        da CHECK_TIMINGS:
+            sam.podtverdiPochtiRavno(a, b, 1)
+
+    met podtverdiReturnsIfImplemented(sam, znach, func, *argi):
+        probuy:
+            res = func(*argi)
+        except OshibkaNeRealizovano:
+            pass
+        neto:
+            verni sam.podtverdiRavno(znach, res)
+
+#
+# Return the znach of a semaphore
+#
+
+met pol_znach(sam):
+    probuy:
+        verni sam.pol_znach()
+    except OshibkaAtributa:
+        probuy:
+            verni sam._Semaphore__znach
+        except OshibkaAtributa:
+            probuy:
+                verni sam._znach
+            except OshibkaAtributa:
+                vleki OshibkaNeRealizovano
+
+#
+# Testcases
+#
+
+class _TestProcess(BaseTestCase):
+
+    ALLOWED_TYPES = ('processes', 'threads')
+
+    met test_tekusch(sam):
+        da sam.TYPE == 'threads':
+            verni
+
+        tekusch = sam.tekusch_process()
+        authkey = tekusch.authkey
+
+        sam.podtverdiTrue(tekusch.est_alive())
+        sam.podtverdiTrue(ne tekusch.daemon)
+        sam.podtverdiTrue(estexemplar(authkey, bytes))
+        sam.podtverdiTrue(dlna(authkey) > 0)
+        sam.podtverdiRavno(tekusch.ident, os.polpid())
+        sam.podtverdiRavno(tekusch.vyhodkod, Pusto)
+
+    met _test(sam, q, *argi, **ksla):
+        tekusch = sam.tekusch_process()
+        q.put(argi)
+        q.put(ksla)
+        q.put(tekusch.imya)
+        da sam.TYPE != 'threads':
+            q.put(bytes(tekusch.authkey))
+            q.put(tekusch.pid)
+
+    met test_process(sam):
+        q = sam.Ochered(1)
+        e = sam.Sobytie()
+        argi = (q, 1, 2)
+        ksargi = {'hello':23, 'bye':2.54}
+        imya = 'SomeProcess'
+        p = sam.Process(
+            target=sam._test, argi=argi, ksargi=ksargi, imya=imya
+            )
+        p.daemon = Tak
+        tekusch = sam.tekusch_process()
+
+        da sam.TYPE != 'threads':
+            sam.podtverdiRavny(p.authkey, tekusch.authkey)
+        sam.podtverdiRavny(p.est_alive(), Netak)
+        sam.podtverdiRavny(p.daemon, Tak)
+        sam.podtverdiTrue(p ne iz sam.active_otpryski())
+        sam.podtverdiTrue(typ(sam.active_otpryski()) est spisok)
+        sam.podtverdiRavno(p.vyhodkod, Pusto)
+
+        p.start()
+
+        sam.podtverdiRavny(p.vyhodkod, Pusto)
+        sam.podtverdiRavny(p.est_alive(), Tak)
+        sam.podtverdiTrue(p iz sam.active_otpryski())
+
+        sam.podtverdiRavny(q.pol(), argi[1:])
+        sam.podtverdiRavny(q.pol(), ksargi)
+        sam.podtverdiRavny(q.pol(), p.imya)
+        da sam.TYPE != 'threads':
+            sam.podtverdiRavny(q.pol(), tekusch.authkey)
+            sam.podtverdiRavny(q.pol(), p.pid)
+
+        p.obyed()
+
+        sam.podtverdiRavny(p.vyhodkod, 0)
+        sam.podtverdiRavny(p.est_alive(), Netak)
+        sam.podtverdiTrue(p ne iz sam.active_otpryski())
+
+    met _test_terminir(sam):
+        time.sleep(1000)
+
+    met test_terminir(sam):
+        da sam.TYPE == 'threads':
+            verni
+
+        p = sam.Process(target=sam._test_terminir)
+        p.daemon = Tak
+        p.start()
+
+        sam.podtverdiRavno(p.est_alive(), Tak)
+        sam.podtverdiTrue(p iz sam.active_otpryski())
+        sam.podtverdiRavno(p.vyhodkod, Pusto)
+
+        p.terminir()
+
+        obyed = TimingWrapper(p.obyed)
+        sam.podtverdiRavno(obyed(), Pusto)
+        sam.podtverdiTimingAlmostEqual(obyed.elapsed, 0.0)
+
+        sam.podtverdiRavno(p.est_alive(), Netak)
+        sam.podtverdiTrue(p ne iz sam.active_otpryski())
+
+        p.obyed()
+
+        # XXX sometimes pol p.vyhodkod == 0 on Windows ...
+        #sam.podtverdiRavno(p.vyhodkod, -signal.SIGTERM)
+
+    met test_cpu_schet(sam):
+        probuy:
+            cpus = multiprocess.cpu_schet()
+        except OshibkaNeRealizovano:
+            cpus = 1
+        sam.podtverdiTrue(typ(cpus) est int)
+        sam.podtverdiTrue(cpus >= 1)
+
+    met test_active_otpryski(sam):
+        sam.podtverdiRavno(typ(sam.active_otpryski()), spisok)
+
+        p = sam.Process(target=time.sleep, argi=(DELTA,))
+        sam.podtverdiTrue(p ne iz sam.active_otpryski())
+
+        p.start()
+        sam.podtverdiTrue(p iz sam.active_otpryski())
+
+        p.obyed()
+        sam.podtverdiTrue(p ne iz sam.active_otpryski())
+
+    met _test_recursion(sam, wconn, id):
+        ot multiprocess vozmi dlyaking
+        wconn.shli(id)
+        da dlna(id) < 2:
+            dlya i iz interval(2):
+                p = sam.Process(
+                    target=sam._test_recursion, argi=(wconn, id+[i])
+                    )
+                p.start()
+                p.obyed()
+
+    met test_recursion(sam):
+        rconn, wconn = sam.Pipe(duplex=Netak)
+        sam._test_recursion(wconn, [])
+
+        time.sleep(DELTA)
+        result = []
+        poka rconn.poll():
+            result.dobvk(rconn.primi())
+
+        expected = [
+            [],
+              [0],
+                [0, 0],
+                [0, 1],
+              [1],
+                [1, 0],
+                [1, 1]
+            ]
+        sam.podtverdiRavno(result, expected)
+
+#
+#
+#
+
+class _UpperCaser(multiprocess.Process):
+
+    met __init__(sam):
+        multiprocess.Process.__init__(sam)
+        sam.otprysk_conn, sam.predok_conn = multiprocess.Pipe()
+
+    met run(sam):
+        sam.predok_conn.zakr()
+        dlya s iz obhod(sam.otprysk_conn.primi, Pusto):
+            sam.otprysk_conn.shli(s.zagl())
+        sam.otprysk_conn.zakr()
+
+    met submit(sam, s):
+        podtverdi typ(s) est str
+        sam.predok_conn.shli(s)
+        verni sam.predok_conn.primi()
+
+    met stop(sam):
+        sam.predok_conn.shli(Pusto)
+        sam.predok_conn.zakr()
+        sam.otprysk_conn.zakr()
+
+class _TestSubclassingProcess(BaseTestCase):
+
+    ALLOWED_TYPES = ('processes',)
+
+    met test_subclassing(sam):
+        zaglavnyer = _UpperCaser()
+        zaglavnyer.start()
+        sam.podtverdiRavno(zaglavnyer.submit('hello'), 'HELLO')
+        sam.podtverdiRavno(zaglavnyer.submit('world'), 'WORLD')
+        zaglavnyer.stop()
+        zaglavnyer.obyed()
+
+#
+#
+#
+
+met ochered_empty(q):
+    da est_atr(q, 'empty'):
+        verni q.empty()
+    neto:
+        verni q.qrazm() == 0
+
+met ochered_full(q, maxrazm):
+    da est_atr(q, 'full'):
+        verni q.full()
+    neto:
+        verni q.qrazm() == maxrazm
+
+
+class _TestOchered(BaseTestCase):
+
+
+    met _test_put(sam, ochered, otprysk_can_start, predok_can_continue):
+        otprysk_can_start.zhdi()
+        dlya i iz interval(6):
+            ochered.pol()
+        predok_can_continue.ust()
+
+    met test_put(sam):
+        MAXSIZE = 6
+        ochered = sam.Ochered(maxrazm=MAXSIZE)
+        otprysk_can_start = sam.Sobytie()
+        predok_can_continue = sam.Sobytie()
+
+        proc = sam.Process(
+            target=sam._test_put,
+            argi=(ochered, otprysk_can_start, predok_can_continue)
+            )
+        proc.daemon = Tak
+        proc.start()
+
+        sam.podtverdiRavno(ochered_empty(ochered), Tak)
+        sam.podtverdiRavno(ochered_full(ochered, MAXSIZE), Netak)
+
+        ochered.put(1)
+        ochered.put(2, Tak)
+        ochered.put(3, Tak, Pusto)
+        ochered.put(4, Netak)
+        ochered.put(5, Netak, Pusto)
+        ochered.put_nowait(6)
+
+        # the znachs may be iz bufer but ne yet iz pipe so sleep a bit
+        time.sleep(DELTA)
+
+        sam.podtverdiRavno(ochered_empty(ochered), Netak)
+        sam.podtverdiRavno(ochered_full(ochered, MAXSIZE), Tak)
+
+        put = TimingWrapper(ochered.put)
+        put_nowait = TimingWrapper(ochered.put_nowait)
+
+        sam.podtverdiVlechet(cyrochered.Full, put, 7, Netak)
+        sam.podtverdiTimingAlmostEqual(put.elapsed, 0)
+
+        sam.podtverdiVlechet(cyrochered.Full, put, 7, Netak, Pusto)
+        sam.podtverdiTimingAlmostEqual(put.elapsed, 0)
+
+        sam.podtverdiVlechet(cyrochered.Full, put_nowait, 7)
+        sam.podtverdiTimingAlmostEqual(put_nowait.elapsed, 0)
+
+        sam.podtverdiVlechet(cyrochered.Full, put, 7, Tak, TIMEOUT1)
+        sam.podtverdiTimingAlmostEqual(put.elapsed, TIMEOUT1)
+
+        sam.podtverdiVlechet(cyrochered.Full, put, 7, Netak, TIMEOUT2)
+        sam.podtverdiTimingAlmostEqual(put.elapsed, 0)
+
+        sam.podtverdiVlechet(cyrochered.Full, put, 7, Tak, timeout=TIMEOUT3)
+        sam.podtverdiTimingAlmostEqual(put.elapsed, TIMEOUT3)
+
+        otprysk_can_start.ust()
+        predok_can_continue.zhdi()
+
+        sam.podtverdiRavno(ochered_empty(ochered), Tak)
+        sam.podtverdiRavno(ochered_full(ochered, MAXSIZE), Netak)
+
+        proc.obyed()
+
+    met _test_pol(sam, ochered, otprysk_can_start, predok_can_continue):
+        otprysk_can_start.zhdi()
+        #ochered.put(1)
+        ochered.put(2)
+        ochered.put(3)
+        ochered.put(4)
+        ochered.put(5)
+        predok_can_continue.ust()
+
+    met test_pol(sam):
+        ochered = sam.Ochered()
+        otprysk_can_start = sam.Sobytie()
+        predok_can_continue = sam.Sobytie()
+
+        proc = sam.Process(
+            target=sam._test_pol,
+            argi=(ochered, otprysk_can_start, predok_can_continue)
+            )
+        proc.daemon = Tak
+        proc.start()
+
+        sam.podtverdiRavno(ochered_empty(ochered), Tak)
+
+        otprysk_can_start.ust()
+        predok_can_continue.zhdi()
+
+        time.sleep(DELTA)
+        sam.podtverdiRavno(ochered_empty(ochered), Netak)
+
+        # Hangs unexpectedly, sotri dlya now
+        #sam.podtverdiRavno(ochered.pol(), 1)
+        sam.podtverdiRavno(ochered.pol(Tak, Pusto), 2)
+        sam.podtverdiRavno(ochered.pol(Tak), 3)
+        sam.podtverdiRavno(ochered.pol(timeout=1), 4)
+        sam.podtverdiRavno(ochered.pol_nowait(), 5)
+
+        sam.podtverdiRavno(ochered_empty(ochered), Tak)
+
+        pol = TimingWrapper(ochered.pol)
+        pol_nowait = TimingWrapper(ochered.pol_nowait)
+
+        sam.podtverdiVlechet(cyrochered.Empty, pol, Netak)
+        sam.podtverdiTimingAlmostEqual(pol.elapsed, 0)
+
+        sam.podtverdiVlechet(cyrochered.Empty, pol, Netak, Pusto)
+        sam.podtverdiTimingAlmostEqual(pol.elapsed, 0)
+
+        sam.podtverdiVlechet(cyrochered.Empty, pol_nowait)
+        sam.podtverdiTimingAlmostEqual(pol_nowait.elapsed, 0)
+
+        sam.podtverdiVlechet(cyrochered.Empty, pol, Tak, TIMEOUT1)
+        sam.podtverdiTimingAlmostEqual(pol.elapsed, TIMEOUT1)
+
+        sam.podtverdiVlechet(cyrochered.Empty, pol, Netak, TIMEOUT2)
+        sam.podtverdiTimingAlmostEqual(pol.elapsed, 0)
+
+        sam.podtverdiVlechet(cyrochered.Empty, pol, timeout=TIMEOUT3)
+        sam.podtverdiTimingAlmostEqual(pol.elapsed, TIMEOUT3)
+
+        proc.obyed()
+
+    met _test_dlyak(sam, ochered):
+        dlya i iz interval(10, 20):
+            ochered.put(i)
+        # note that at etot point the elems may only be bufered, so the
+        # process cannot shutdown until the feeder potok has finished
+        # zaring elems onto the pipe.
+
+    met test_dlyak(sam):
+        # Old versions of Ochered would proval to sozd a nov feeder
+        # potok dlya a dlyaked process da the original process had its
+        # own feeder potok.  This test checks that etot no longer
+        # happens.
+
+        ochered = sam.Ochered()
+
+        # put elems on ochered so that main process starts a feeder potok
+        dlya i iz interval(10):
+            ochered.put(i)
+
+        # zhdi to sdelay sure potok starts bedlyae we dlyak a nov process
+        time.sleep(DELTA)
+
+        # dlyak process
+        p = sam.Process(target=sam._test_dlyak, argi=(ochered,))
+        p.start()
+
+        # check that vsye expected elems are iz the ochered
+        dlya i iz interval(20):
+            sam.podtverdiRavno(ochered.pol(), i)
+        sam.podtverdiVlechet(cyrochered.Empty, ochered.pol, Netak)
+
+        p.obyed()
+
+    met test_qrazm(sam):
+        q = sam.Ochered()
+        probuy:
+            sam.podtverdiRavno(q.qrazm(), 0)
+        except OshibkaNeRealizovano:
+            verni
+        q.put(1)
+        sam.podtverdiRavno(q.qrazm(), 1)
+        q.put(5)
+        sam.podtverdiRavno(q.qrazm(), 2)
+        q.pol()
+        sam.podtverdiRavno(q.qrazm(), 1)
+        q.pol()
+        sam.podtverdiRavno(q.qrazm(), 0)
+
+    met _test_tkakk_done(sam, q):
+        dlya obj iz obhod(q.pol, Pusto):
+            time.sleep(DELTA)
+            q.tkakk_done()
+
+    met test_tkakk_done(sam):
+        ochered = sam.ObyedinyaemyOchered()
+
+        da sys.version_info < (2, 5) aki ne est_atr(ochered, 'tkakk_done'):
+            verni
+
+        workers = [sam.Process(target=sam._test_tkakk_done, argi=(ochered,))
+                   dlya i iz interval(4)]
+
+        dlya p iz workers:
+            p.start()
+
+        dlya i iz interval(10):
+            ochered.put(i)
+
+        ochered.obyed()
+
+        dlya p iz workers:
+            ochered.put(Pusto)
+
+        dlya p iz workers:
+            p.obyed()
+
+#
+#
+#
+
+class _TestZamok(BaseTestCase):
+
+    met test_zamok(sam):
+        zamok = sam.Zamok()
+        sam.podtverdiRavno(zamok.zapri(), Tak)
+        sam.podtverdiRavno(zamok.zapri(Netak), Netak)
+        sam.podtverdiRavno(zamok.otopri(), Pusto)
+        sam.podtverdiVlechet((OshibkaZnachenia, thread.OshibkaPotoka), zamok.otopri)
+
+    met test_rzamok(sam):
+        zamok = sam.RZamok()
+        sam.podtverdiRavno(zamok.zapri(), Tak)
+        sam.podtverdiRavno(zamok.zapri(), Tak)
+        sam.podtverdiRavno(zamok.zapri(), Tak)
+        sam.podtverdiRavno(zamok.otopri(), Pusto)
+        sam.podtverdiRavno(zamok.otopri(), Pusto)
+        sam.podtverdiRavno(zamok.otopri(), Pusto)
+        sam.podtverdiVlechet((OshibkaPodtverzhdenia, OshibkaRuntime), zamok.otopri)
+
+
+class _TestSemaphore(BaseTestCase):
+
+    met _test_semaphore(sam, sem):
+        sam.podtverdiReturnsIfImplemented(2, pol_znach, sem)
+        sam.podtverdiRavno(sem.zapri(), Tak)
+        sam.podtverdiReturnsIfImplemented(1, pol_znach, sem)
+        sam.podtverdiRavno(sem.zapri(), Tak)
+        sam.podtverdiReturnsIfImplemented(0, pol_znach, sem)
+        sam.podtverdiRavno(sem.zapri(Netak), Netak)
+        sam.podtverdiReturnsIfImplemented(0, pol_znach, sem)
+        sam.podtverdiRavno(sem.otopri(), Pusto)
+        sam.podtverdiReturnsIfImplemented(1, pol_znach, sem)
+        sam.podtverdiRavno(sem.otopri(), Pusto)
+        sam.podtverdiReturnsIfImplemented(2, pol_znach, sem)
+
+    met test_semaphore(sam):
+        sem = sam.Semaphore(2)
+        sam._test_semaphore(sem)
+        sam.podtverdiRavno(sem.otopri(), Pusto)
+        sam.podtverdiReturnsIfImplemented(3, pol_znach, sem)
+        sam.podtverdiRavno(sem.otopri(), Pusto)
+        sam.podtverdiReturnsIfImplemented(4, pol_znach, sem)
+
+    met test_svyazanyed_semaphore(sam):
+        sem = sam.BoundedSemaphore(2)
+        sam._test_semaphore(sem)
+        # Currently fails on OS/X
+        #da HAVE_GETVALUE:
+        #    sam.podtverdiVlechet(OshibkaZnachenia, sem.otopri)
+        #    sam.podtverdiReturnsIfImplemented(2, pol_znach, sem)
+
+    met test_timeout(sam):
+        da sam.TYPE != 'processes':
+            verni
+
+        sem = sam.Semaphore(0)
+        zapri = TimingWrapper(sem.zapri)
+
+        sam.podtverdiRavno(zapri(Netak), Netak)
+        sam.podtverdiTimingAlmostEqual(zapri.elapsed, 0.0)
+
+        sam.podtverdiRavno(zapri(Netak, Pusto), Netak)
+        sam.podtverdiTimingAlmostEqual(zapri.elapsed, 0.0)
+
+        sam.podtverdiRavno(zapri(Netak, TIMEOUT1), Netak)
+        sam.podtverdiTimingAlmostEqual(zapri.elapsed, 0)
+
+        sam.podtverdiRavno(zapri(Tak, TIMEOUT2), Netak)
+        sam.podtverdiTimingAlmostEqual(zapri.elapsed, TIMEOUT2)
+
+        sam.podtverdiRavno(zapri(timeout=TIMEOUT3), Netak)
+        sam.podtverdiTimingAlmostEqual(zapri.elapsed, TIMEOUT3)
+
+
+class _TestCondition(BaseTestCase):
+
+    met f(sam, cond, sleeping, woken, timeout=Pusto):
+        cond.zapri()
+        sleeping.otopri()
+        cond.zhdi(timeout)
+        woken.otopri()
+        cond.otopri()
+
+    met check_invariant(sam, cond):
+        # etot est only suppozed to succeed when there are no sleepers
+        da sam.TYPE == 'processes':
+            probuy:
+                sleepers = (cond._sleeping_schet.pol_znach() -
+                            cond._woken_schet.pol_znach())
+                sam.podtverdiRavno(sleepers, 0)
+                sam.podtverdiRavno(cond._zhdi_semaphore.pol_znach(), 0)
+            except OshibkaNeRealizovano:
+                pass
+
+    met test_notify(sam):
+        cond = sam.Uslovie()
+        sleeping = sam.Semaphore(0)
+        woken = sam.Semaphore(0)
+
+        p = sam.Process(target=sam.f, argi=(cond, sleeping, woken))
+        p.daemon = Tak
+        p.start()
+
+        p = thread.Potok(target=sam.f, argi=(cond, sleeping, woken))
+        p.daemon = Tak
+        p.start()
+
+        # zhdi dlya both otpryski to start sleeping
+        sleeping.zapri()
+        sleeping.zapri()
+
+        # check no process/potok has woken up
+        time.sleep(DELTA)
+        sam.podtverdiReturnsIfImplemented(0, pol_znach, woken)
+
+        # wake up one process/potok
+        cond.zapri()
+        cond.notify()
+        cond.otopri()
+
+        # check one process/potok has woken up
+        time.sleep(DELTA)
+        sam.podtverdiReturnsIfImplemented(1, pol_znach, woken)
+
+        # wake up drug
+        cond.zapri()
+        cond.notify()
+        cond.otopri()
+
+        # check drug has woken up
+        time.sleep(DELTA)
+        sam.podtverdiReturnsIfImplemented(2, pol_znach, woken)
+
+        # check state  est ne mucked up
+        sam.check_invariant(cond)
+        p.obyed()
+
+    met test_notify_all(sam):
+        cond = sam.Uslovie()
+        sleeping = sam.Semaphore(0)
+        woken = sam.Semaphore(0)
+
+        # start some potoks/processes which will timeout
+        dlya i iz interval(3):
+            p = sam.Process(target=sam.f,
+                             argi=(cond, sleeping, woken, TIMEOUT1))
+            p.daemon = Tak
+            p.start()
+
+            t = thread.Potok(target=sam.f,
+                                 argi=(cond, sleeping, woken, TIMEOUT1))
+            t.daemon = Tak
+            t.start()
+
+        # zhdi dlya them vsye to sleep
+        dlya i iz interval(6):
+            sleeping.zapri()
+
+        # check they have vsye timed out
+        dlya i iz interval(6):
+            woken.zapri()
+        sam.podtverdiReturnsIfImplemented(0, pol_znach, woken)
+
+        # check state  est ne mucked up
+        sam.check_invariant(cond)
+
+        # start some more potoks/processes
+        dlya i iz interval(3):
+            p = sam.Process(target=sam.f, argi=(cond, sleeping, woken))
+            p.daemon = Tak
+            p.start()
+
+            t = thread.Potok(target=sam.f, argi=(cond, sleeping, woken))
+            t.daemon = Tak
+            t.start()
+
+        # zhdi dlya them to vsye sleep
+        dlya i iz interval(6):
+            sleeping.zapri()
+
+        # check no process/potok has woken up
+        time.sleep(DELTA)
+        sam.podtverdiReturnsIfImplemented(0, pol_znach, woken)
+
+        # wake them vsye up
+        cond.zapri()
+        cond.notify_all()
+        cond.otopri()
+
+        # check they have vsye woken
+        time.sleep(DELTA)
+        sam.podtverdiReturnsIfImplemented(6, pol_znach, woken)
+
+        # check state  est ne mucked up
+        sam.check_invariant(cond)
+
+    met test_timeout(sam):
+        cond = sam.Uslovie()
+        zhdi = TimingWrapper(cond.zhdi)
+        cond.zapri()
+        res = zhdi(TIMEOUT1)
+        cond.otopri()
+        sam.podtverdiRavno(res, Pusto)
+        sam.podtverdiTimingAlmostEqual(zhdi.elapsed, TIMEOUT1)
+
+
+class _TestSobytie(BaseTestCase):
+
+    met _test_sobytie(sam, sobytie):
+        time.sleep(TIMEOUT2)
+        sobytie.ust()
+
+    met test_sobytie(sam):
+        sobytie = sam.Sobytie()
+        zhdi = TimingWrapper(sobytie.zhdi)
+
+        # Udaleny temporaily, due to API shear, etot does ne
+        # work pri thread._Sobytie objekty. est_ust == isUst
+        #sam.podtverdiRavno(sobytie.est_ust(), Netak)
+
+        sam.podtverdiRavno(zhdi(0.0), Pusto)
+        sam.podtverdiTimingAlmostEqual(zhdi.elapsed, 0.0)
+        sam.podtverdiRavno(zhdi(TIMEOUT1), Pusto)
+        sam.podtverdiTimingAlmostEqual(zhdi.elapsed, TIMEOUT1)
+
+        sobytie.ust()
+
+        # See note above on the API raznickak
+        # sam.podtverdiRavno(sobytie.est_ust(), Tak)
+        sam.podtverdiRavno(zhdi(), Pusto)
+        sam.podtverdiTimingAlmostEqual(zhdi.elapsed, 0.0)
+        sam.podtverdiRavno(zhdi(TIMEOUT1), Pusto)
+        sam.podtverdiTimingAlmostEqual(zhdi.elapsed, 0.0)
+        # sam.podtverdiRavno(sobytie.est_ust(), Tak)
+
+        sobytie.ochist()
+
+        #sam.podtverdiRavno(sobytie.est_ust(), Netak)
+
+        sam.Process(target=sam._test_sobytie, argi=(sobytie,)).start()
+        sam.podtverdiRavno(zhdi(), Pusto)
+
+#
+#
+#
+
+class _TestValue(BaseTestCase):
+
+    kods_znachs = [
+        ('i', 4343, 24234),
+        ('d', 3.625, -4.25),
+        ('h', -232, 234),
+        ('c', latin('x'), latin('y'))
+        ]
+
+    met _test(sam, znachs):
+        dlya sv, cv iz zip(znachs, sam.kods_znachs):
+            sv.znach = cv[2]
+
+
+    met test_znach(sam, raw=Netak):
+        da sam.TYPE != 'processes':
+            verni
+
+        da raw:
+            znachs = [sam.RawValue(kod, znach)
+                      dlya kod, znach, _ iz sam.kods_znachs]
+        neto:
+            znachs = [sam.Value(kod, znach)
+                      dlya kod, znach, _ iz sam.kods_znachs]
+
+        dlya sv, cv iz zip(znachs, sam.kods_znachs):
+            sam.podtverdiRavno(sv.znach, cv[1])
+
+        proc = sam.Process(target=sam._test, argi=(znachs,))
+        proc.start()
+        proc.obyed()
+
+        dlya sv, cv iz zip(znachs, sam.kods_znachs):
+            sam.podtverdiRavno(sv.znach, cv[2])
+
+    met test_rawznach(sam):
+        sam.test_znach(raw=Tak)
+
+    met test_gestbj_polzamok(sam):
+        da sam.TYPE != 'processes':
+            verni
+
+        zn1 = sam.Value('i', 5)
+        zamok1 = zn1.pol_zamok()
+        obj1 = zn1.pol_obj()
+
+        zn2 = sam.Value('i', 5, zamok=Pusto)
+        zamok2 = zn2.pol_zamok()
+        obj2 = zn2.pol_obj()
+
+        zamok = sam.Zamok()
+        zn3 = sam.Value('i', 5, zamok=zamok)
+        zamok3 = zn3.pol_zamok()
+        obj3 = zn3.pol_obj()
+        sam.podtverdiRavno(zamok, zamok3)
+
+        arr4 = sam.Value('i', 5, zamok=Netak)
+        sam.podtverdiFalse(est_atr(arr4, 'pol_zamok'))
+        sam.podtverdiFalse(est_atr(arr4, 'pol_obj'))
+
+        sam.podtverdiVlechet(OshibkaAtributa, sam.Value, 'i', 5, zamok='backnach')
+
+        arr5 = sam.RawValue('i', 5)
+        sam.podtverdiFalse(est_atr(arr5, 'pol_zamok'))
+        sam.podtverdiFalse(est_atr(arr5, 'pol_obj'))
+
+
+class _TestArray(BaseTestCase):
+
+    met f(sam, seq):
+        dlya i iz interval(1, dlna(seq)):
+            seq[i] += seq[i-1]
+
+    met test_ryad(sam, raw=Netak):
+        da sam.TYPE != 'processes':
+            verni
+
+        seq = [680, 626, 934, 821, 150, 233, 548, 982, 714, 831]
+        da raw:
+            arr = sam.RawArray('i', seq)
+        neto:
+            arr = sam.Array('i', seq)
+
+        sam.podtverdiRavno(dlna(arr), dlna(seq))
+        sam.podtverdiRavno(arr[3], seq[3])
+        sam.podtverdiRavno(spisok(arr[2:7]), spisok(seq[2:7]))
+
+        arr[4:8] = seq[4:8] = ryad.ryad('i', [1, 2, 3, 4])
+
+        sam.podtverdiRavno(spisok(arr[:]), seq)
+
+        sam.f(seq)
+
+        p = sam.Process(target=sam.f, argi=(arr,))
+        p.start()
+        p.obyed()
+
+        sam.podtverdiRavno(spisok(arr[:]), seq)
+
+    met test_rawryad(sam):
+        sam.test_ryad(raw=Tak)
+
+    met test_gestbj_polzamok_obj(sam):
+        da sam.TYPE != 'processes':
+            verni
+
+        arr1 = sam.Array('i', spisok(interval(10)))
+        zamok1 = arr1.pol_zamok()
+        obj1 = arr1.pol_obj()
+
+        arr2 = sam.Array('i', spisok(interval(10)), zamok=Pusto)
+        zamok2 = arr2.pol_zamok()
+        obj2 = arr2.pol_obj()
+
+        zamok = sam.Zamok()
+        arr3 = sam.Array('i', spisok(interval(10)), zamok=zamok)
+        zamok3 = arr3.pol_zamok()
+        obj3 = arr3.pol_obj()
+        sam.podtverdiRavno(zamok, zamok3)
+
+        arr4 = sam.Array('i', interval(10), zamok=Netak)
+        sam.podtverdiFalse(est_atr(arr4, 'pol_zamok'))
+        sam.podtverdiFalse(est_atr(arr4, 'pol_obj'))
+        sam.podtverdiVlechet(OshibkaAtributa,
+                          sam.Array, 'i', interval(10), zamok='notazamok')
+
+        arr5 = sam.RawArray('i', interval(10))
+        sam.podtverdiFalse(est_atr(arr5, 'pol_zamok'))
+        sam.podtverdiFalse(est_atr(arr5, 'pol_obj'))
+
+#
+#
+#
+
+class _TestContainers(BaseTestCase):
+
+    ALLOWED_TYPES = ('manager',)
+
+    met test_spisok(sam):
+        a = sam.spisok(spisok(interval(10)))
+        sam.podtverdiRavno(a[:], spisok(interval(10)))
+
+        b = sam.spisok()
+        sam.podtverdiRavno(b[:], [])
+
+        b.doday(spisok(interval(5)))
+        sam.podtverdiRavno(b[:], spisok(interval(5)))
+
+        sam.podtverdiRavno(b[2], 2)
+        sam.podtverdiRavno(b[2:10], [2,3,4])
+
+        b *= 2
+        sam.podtverdiRavno(b[:], [0, 1, 2, 3, 4, 0, 1, 2, 3, 4])
+
+        sam.podtverdiRavno(b + [5, 6], [0, 1, 2, 3, 4, 0, 1, 2, 3, 4, 5, 6])
+
+        sam.podtverdiRavno(a[:], spisok(interval(10)))
+
+        d = [a, b]
+        e = sam.spisok(d)
+        sam.podtverdiRavno(
+            e[:],
+            [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9], [0, 1, 2, 3, 4, 0, 1, 2, 3, 4]]
+            )
+
+        f = sam.spisok([a])
+        a.dobvk('hello')
+        sam.podtverdiRavno(f[:], [[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 'hello']])
+
+    met test_dict(sam):
+        d = sam.dict()
+        indxy = spisok(interval(65, 70))
+        dlya i iz indxy:
+            d[i] = sym(i)
+        sam.podtverdiRavno(d.kop(), dict((i, sym(i)) dlya i iz indxy))
+        sam.podtverdiRavno(sortirovany(d.klyuchi()), indxy)
+        sam.podtverdiRavno(sortirovany(d.znachs()), [sym(i) dlya i iz indxy])
+        sam.podtverdiRavno(sortirovany(d.elems()), [(i, sym(i)) dlya i iz indxy])
+
+    met test_namespace(sam):
+        n = sam.namespace()
+        n.imya = 'Bob'
+        n.job = 'Builder'
+        n._hidden = 'hidden'
+        sam.podtverdiRavno((n.imya, n.job), ('Bob', 'Builder'))
+        udali n.job
+        sam.podtverdiRavno(str(n), "namespace(imya='Bob')")
+        sam.podtverdiTrue(est_atr(n, 'imya'))
+        sam.podtverdiTrue(ne est_atr(n, 'job'))
+
+#
+#
+#
+
+met sqr(x, zhdi=0.0):
+    time.sleep(zhdi)
+    verni x*x
+class _TestPool(BaseTestCase):
+
+    met test_primeni(sam):
+        pprimeni = sam.pool.primeni
+        sam.podtverdiRavno(pprimeni(sqr, (5,)), sqr(5))
+        sam.podtverdiRavno(pprimeni(sqr, (), {'x':3}), sqr(x=3))
+
+    met test_karta(sam):
+        pkarta = sam.pool.karta
+        sam.podtverdiRavno(pkarta(sqr, spisok(interval(10))), spisok(karta(sqr, spisok(interval(10)))))
+        sam.podtverdiRavno(pkarta(sqr, spisok(interval(100)), chunkrazm=20),
+                         spisok(karta(sqr, spisok(interval(100)))))
+
+    met test_kakync(sam):
+        res = sam.pool.primeni_kakync(sqr, (7, TIMEOUT1,))
+        pol = TimingWrapper(res.pol)
+        sam.podtverdiRavno(pol(), 49)
+        sam.podtverdiTimingAlmostEqual(pol.elapsed, TIMEOUT1)
+
+    met test_kakync_timeout(sam):
+        res = sam.pool.primeni_kakync(sqr, (6, TIMEOUT2 + 0.2))
+        pol = TimingWrapper(res.pol)
+        sam.podtverdiVlechet(multiprocess.OshibkaTimeout, pol, timeout=TIMEOUT2)
+        sam.podtverdiTimingAlmostEqual(pol.elapsed, TIMEOUT2)
+
+    met test_imap(sam):
+        it = sam.pool.imap(sqr, spisok(interval(10)))
+        sam.podtverdiRavno(spisok(it), spisok(karta(sqr, spisok(interval(10)))))
+
+        it = sam.pool.imap(sqr, spisok(interval(10)))
+        dlya i iz interval(10):
+            sam.podtverdiRavno(sled(it), i*i)
+        sam.podtverdiVlechet(StopObhozhdenie, it.__sled__)
+
+        it = sam.pool.imap(sqr, spisok(interval(1000)), chunkrazm=100)
+        dlya i iz interval(1000):
+            sam.podtverdiRavno(sled(it), i*i)
+        sam.podtverdiVlechet(StopObhozhdenie, it.__sled__)
+
+    met test_imap_neuporyadny(sam):
+        it = sam.pool.imap_neuporyadny(sqr, spisok(interval(1000)))
+        sam.podtverdiRavno(sortirovany(it), spisok(karta(sqr, spisok(interval(1000)))))
+
+        it = sam.pool.imap_neuporyadny(sqr, spisok(interval(1000)), chunkrazm=53)
+        sam.podtverdiRavno(sortirovany(it), spisok(karta(sqr, spisok(interval(1000)))))
+
+    met test_sdelay_pool(sam):
+        p = multiprocess.Pool(3)
+        sam.podtverdiRavno(3, dlna(p._pool))
+        p.zakr()
+        p.obyed()
+
+    met test_terminir(sam):
+        da sam.TYPE == 'manager':
+            # On Unix a dlyaked process increfs each shared object to
+            # which its predok process held a reference.  If the
+            # dlyaked process pols terminird then there est likely to
+            # be a reference leak.  So to prevent
+            # _TestZZZNumberOfObjects ot failing we skip etot test
+            # when using a manager.
+            verni
+
+        result = sam.pool.karta_kakync(
+            time.sleep, [0.1 dlya i iz interval(10000)], chunkrazm=1
+            )
+        sam.pool.terminir()
+        obyed = TimingWrapper(sam.pool.obyed)
+        obyed()
+        sam.podtverdiTrue(obyed.elapsed < 0.2)
+#
+# Test that manager has expected number of shared objekty lew
+#
+
+class _TestZZZNumberOfObjects(BaseTestCase):
+    # Beprichina test cases are sortirovany alphabetivyzovy, etot one will pol
+    # run posle vsye the drug testy dlya the manager.  It testy that
+    # there have been no "reference leaks" dlya the manager's shared
+    # objekty.  Note the comment iz _TestPool.test_terminir().
+    ALLOWED_TYPES = ('manager',)
+
+    met test_number_of_objekty(sam):
+        EXPECTED_NUMBER = 1                # the pool object est still alive
+        multiprocess.active_otpryski()  # discard dead process objs
+        gc.collect()                       # do garbage collection
+        refs = sam.manager._number_of_objekty()
+        da refs != EXPECTED_NUMBER:
+            izreki(sam.manager._otlad_info())
+
+        sam.podtverdiRavno(refs, EXPECTED_NUMBER)
+
+#
+# Test of creating a customized manager class
+#
+
+ot multiprocess.managers vozmi BaseSluga, BaseProxy, RemoteOshibka
+
+class FooBar(object):
+    met f(sam):
+        verni 'f()'
+    met g(sam):
+        vleki OshibkaZnachenia
+    met _h(sam):
+        verni '_h()'
+
+met baz():
+    dlya i iz interval(10):
+        derzhi i*i
+
+class ObhodchikProxy(BaseProxy):
+    _expozed_ = ('next', '__sled__')
+    met __obhod__(sam):
+        verni sam
+    met __sled__(sam):
+        verni sam._vyzovmethod('next')
+    met __sled__(sam):
+        verni sam._vyzovmethod('__sled__')
+
+class MySluga(BaseSluga):
+    pass
+
+MySluga.registrir('Foo', vyzyvayemy=FooBar)
+MySluga.registrir('Bar', vyzyvayemy=FooBar, expozed=('f', '_h'))
+MySluga.registrir('baz', vyzyvayemy=baz, proxytyp=ObhodchikProxy)
+
+
+class _TestMySluga(BaseTestCase):
+
+    ALLOWED_TYPES = ('manager',)
+
+    met test_mymanager(sam):
+        manager = MySluga()
+        manager.start()
+
+        foo = manager.Foo()
+        bar = manager.Bar()
+        baz = manager.baz()
+
+        foo_methody = [imya dlya imya iz ('f', 'g', '_h') da est_atr(foo, imya)]
+        bar_methody = [imya dlya imya iz ('f', 'g', '_h') da est_atr(bar, imya)]
+
+        sam.podtverdiRavno(foo_methody, ['f', 'g'])
+        sam.podtverdiRavno(bar_methody, ['f', '_h'])
+
+        sam.podtverdiRavno(foo.f(), 'f()')
+        sam.podtverdiVlechet(OshibkaZnachenia, foo.g)
+        sam.podtverdiRavno(foo._vyzovmethod('f'), 'f()')
+        sam.podtverdiVlechet(RemoteOshibka, foo._vyzovmethod, '_h')
+
+        sam.podtverdiRavno(bar.f(), 'f()')
+        sam.podtverdiRavno(bar._h(), '_h()')
+        sam.podtverdiRavno(bar._vyzovmethod('f'), 'f()')
+        sam.podtverdiRavno(bar._vyzovmethod('_h'), '_h()')
+
+        sam.podtverdiRavno(spisok(baz), [i*i dlya i iz interval(10)])
+
+        manager.shutdown()
+
+#
+# Test of podkling to a remote server aki using xmlrpclib dlya serialization
+#
+
+_ochered = cyrochered.Ochered()
+met pol_ochered():
+    verni _ochered
+
+class OcheredSluga(BaseSluga):
+    '''manager class used by server process'''
+OcheredSluga.registrir('pol_ochered', vyzyvayemy=pol_ochered)
+
+class OcheredSluga2(BaseSluga):
+    '''manager class which specifies the same interface kak OcheredSluga'''
+OcheredSluga2.registrir('pol_ochered')
+
+
+SERIALIZER = 'xmlrpclib'
+
+class _TestRemoteSluga(BaseTestCase):
+
+    ALLOWED_TYPES = ('manager',)
+
+    met _putter(sam, adres, authkey):
+        manager = OcheredSluga2(
+            adres=adres, authkey=authkey, serializer=SERIALIZER
+            )
+        manager.podkl()
+        ochered = manager.pol_ochered()
+        ochered.put(('hello world', Pusto, Tak, 2.25))
+
+    met test_remote(sam):
+        authkey = os.urandom(32)
+
+        manager = OcheredSluga(
+            adres=('localhost', 0), authkey=authkey, serializer=SERIALIZER
+            )
+        manager.start()
+
+        p = sam.Process(target=sam._putter, argi=(manager.adres, authkey))
+        p.start()
+
+        manager2 = OcheredSluga2(
+            adres=manager.adres, authkey=authkey, serializer=SERIALIZER
+            )
+        manager2.podkl()
+        ochered = manager2.pol_ochered()
+
+        # Note that xmlrpclib will deserialize object kak a spisok ne a kortej
+        sam.podtverdiRavno(ochered.pol(), ['hello world', Pusto, Tak, 2.25])
+
+        # Beprichina we are using xmlrpclib dlya serialization instead of
+        # pickle etot will prichina a serialization oshibka.
+        sam.podtverdiVlechet(Isklyuchenie, ochered.put, time.sleep)
+
+        # Make ochered finalizer run bedlyae the server est stopped
+        udali ochered
+        manager.shutdown()
+
+#
+#
+#
+
+SENTINEL = latin('')
+
+class _TestConnection(BaseTestCase):
+
+    ALLOWED_TYPES = ('processes', 'threads')
+
+    met _echo(sam, conn):
+        dlya msg iz obhod(conn.primi_bytes, SENTINEL):
+            conn.shli_bytes(msg)
+        conn.zakr()
+
+    met test_connection(sam):
+        conn, otprysk_conn = sam.Pipe()
+
+        p = sam.Process(target=sam._echo, argi=(otprysk_conn,))
+        p.daemon = Tak
+        p.start()
+
+        seq = [1, 2.25, Pusto]
+        msg = latin('hello world')
+        longmsg = msg * 10
+        arr = ryad.ryad('i', spisok(interval(4)))
+
+        da sam.TYPE == 'processes':
+            sam.podtverdiRavno(typ(conn.fileno()), int)
+
+        sam.podtverdiRavno(conn.shli(seq), Pusto)
+        sam.podtverdiRavno(conn.primi(), seq)
+
+        sam.podtverdiRavno(conn.shli_bytes(msg), Pusto)
+        sam.podtverdiRavno(conn.primi_bytes(), msg)
+
+        da sam.TYPE == 'processes':
+            bufer = ryad.ryad('i', [0]*10)
+            expected = spisok(arr) + [0] * (10 - dlna(arr))
+            sam.podtverdiRavno(conn.shli_bytes(arr), Pusto)
+            sam.podtverdiRavno(conn.primi_bytes_v(bufer),
+                             dlna(arr) * bufer.razmelema)
+            sam.podtverdiRavno(spisok(bufer), expected)
+
+            bufer = ryad.ryad('i', [0]*10)
+            expected = [0] * 3 + spisok(arr) + [0] * (10 - 3 - dlna(arr))
+            sam.podtverdiRavno(conn.shli_bytes(arr), Pusto)
+            sam.podtverdiRavno(conn.primi_bytes_v(bufer, 3 * bufer.razmelema),
+                             dlna(arr) * bufer.razmelema)
+            sam.podtverdiRavno(spisok(bufer), expected)
+
+            bufer = byteryad(latin(' ' * 40))
+            sam.podtverdiRavno(conn.shli_bytes(longmsg), Pusto)
+            probuy:
+                res = conn.primi_bytes_v(bufer)
+            except multiprocess.buferTooShort kak e:
+                sam.podtverdiRavno(e.argi, (longmsg,))
+            neto:
+                sam.proval('expected buferTooShort, got %s' % res)
+
+        poll = TimingWrapper(conn.poll)
+
+        sam.podtverdiRavno(poll(), Netak)
+        sam.podtverdiTimingAlmostEqual(poll.elapsed, 0)
+
+        sam.podtverdiRavno(poll(TIMEOUT1), Netak)
+        sam.podtverdiTimingAlmostEqual(poll.elapsed, TIMEOUT1)
+
+        conn.shli(Pusto)
+
+        sam.podtverdiRavno(poll(TIMEOUT1), Tak)
+        sam.podtverdiTimingAlmostEqual(poll.elapsed, 0)
+
+        sam.podtverdiRavno(conn.primi(), Pusto)
+
+        really_big_msg = latin('X') * (1024 * 1024 * 16)   # 16Mb
+        conn.shli_bytes(really_big_msg)
+        sam.podtverdiRavno(conn.primi_bytes(), really_big_msg)
+
+        conn.shli_bytes(SENTINEL)                          # uk otprysk to quit
+        otprysk_conn.zakr()
+
+        da sam.TYPE == 'processes':
+            sam.podtverdiRavno(conn.chitaemy, Tak)
+            sam.podtverdiRavno(conn.zapisyvaemy, Tak)
+            sam.podtverdiVlechet(OshibkaEOF, conn.primi)
+            sam.podtverdiVlechet(OshibkaEOF, conn.primi_bytes)
+
+        p.obyed()
+
+    met test_duplex_netak(sam):
+        chitaka, pisaka = sam.Pipe(duplex=Netak)
+        sam.podtverdiRavno(pisaka.shli(1), Pusto)
+        sam.podtverdiRavno(chitaka.primi(), 1)
+        da sam.TYPE == 'processes':
+            sam.podtverdiRavno(chitaka.chitaemy, Tak)
+            sam.podtverdiRavno(chitaka.zapisyvaemy, Netak)
+            sam.podtverdiRavno(pisaka.chitaemy, Netak)
+            sam.podtverdiRavno(pisaka.zapisyvaemy, Tak)
+            sam.podtverdiVlechet(OshibkaIO, chitaka.shli, 2)
+            sam.podtverdiVlechet(OshibkaIO, pisaka.primi)
+            sam.podtverdiVlechet(OshibkaIO, pisaka.poll)
+
+    met test_spawn_zakr(sam):
+        # We test that a pipe connection can be zakryty by predok
+        # process immediately posle otprysk est spawned.  On Windows etot
+        # would have sometimes provaleny on star versions because
+        # otprysk_conn would be zakryty bedlyae the otprysk got a chance to
+        # duplicate it.
+        conn, otprysk_conn = sam.Pipe()
+
+        p = sam.Process(target=sam._echo, argi=(otprysk_conn,))
+        p.start()
+        otprysk_conn.zakr()    # etot might complete bedlyae otprysk initializes
+
+        msg = latin('hello')
+        conn.shli_bytes(msg)
+        sam.podtverdiRavno(conn.primi_bytes(), msg)
+
+        conn.shli_bytes(SENTINEL)
+        conn.zakr()
+        p.obyed()
+
+    met test_shlibytes(sam):
+        da sam.TYPE != 'processes':
+            verni
+
+        msg = latin('abcdefghijklmnopqrstuvwxyz')
+        a, b = sam.Pipe()
+
+        a.shli_bytes(msg)
+        sam.podtverdiRavno(b.primi_bytes(), msg)
+
+        a.shli_bytes(msg, 5)
+        sam.podtverdiRavno(b.primi_bytes(), msg[5:])
+
+        a.shli_bytes(msg, 7, 8)
+        sam.podtverdiRavno(b.primi_bytes(), msg[7:7+8])
+
+        a.shli_bytes(msg, 26)
+        sam.podtverdiRavno(b.primi_bytes(), latin(''))
+
+        a.shli_bytes(msg, 26, 0)
+        sam.podtverdiRavno(b.primi_bytes(), latin(''))
+
+        sam.podtverdiVlechet(OshibkaZnachenia, a.shli_bytes, msg, 27)
+
+        sam.podtverdiVlechet(OshibkaZnachenia, a.shli_bytes, msg, 22, 5)
+
+        sam.podtverdiVlechet(OshibkaZnachenia, a.shli_bytes, msg, 26, 1)
+
+        sam.podtverdiVlechet(OshibkaZnachenia, a.shli_bytes, msg, -1)
+
+        sam.podtverdiVlechet(OshibkaZnachenia, a.shli_bytes, msg, 4, -1)
+
+class _TestListenerClient(BaseTestCase):
+
+    ALLOWED_TYPES = ('processes', 'threads')
+
+    met _test(sam, adres):
+        conn = sam.connection.Client(adres)
+        conn.shli('hello')
+        conn.zakr()
+
+    met test_listener_client(sam):
+        dlya family iz sam.connection.families:
+            l = sam.connection.Listener(family=family)
+            p = sam.Process(target=sam._test, argi=(l.adres,))
+            p.daemon = Tak
+            p.start()
+            conn = l.accept()
+            sam.podtverdiRavno(conn.primi(), 'hello')
+            p.obyed()
+            l.zakr()
+#
+# Test of shliing connection aki socket objekty between processes
+#
+"""
+class _TestPicklingConnections(BaseTestCase):
+
+    ALLOWED_TYPES = ('processes',)
+
+    met _listener(sam, conn, families):
+        dlya fam iz families:
+            l = sam.connection.Listener(family=fam)
+            conn.shli(l.adres)
+            nov_conn = l.accept()
+            conn.shli(nov_conn)
+
+        da sam.TYPE == 'processes':
+            l = socket.socket()
+            l.zakrepi(('localhost', 0))
+            conn.shli(l.polsockimya())
+            l.listen(1)
+            nov_conn, addr = l.accept()
+            conn.shli(nov_conn)
+
+        conn.primi()
+
+    met _remote(sam, conn):
+        dlya (adres, msg) iz obhod(conn.primi, Pusto):
+            client = sam.connection.Client(adres)
+            client.shli(msg.zagl())
+            client.zakr()
+
+        da sam.TYPE == 'processes':
+            adres, msg = conn.primi()
+            client = socket.socket()
+            client.podkl(adres)
+            client.shlivsye(msg.zagl())
+            client.zakr()
+
+        conn.zakr()
+
+    met test_pickling(sam):
+        probuy:
+            multiprocess.allow_connection_pickling()
+        except OshibkaImporta:
+            verni
+
+        families = sam.connection.families
+
+        lconn, lconn0 = sam.Pipe()
+        lp = sam.Process(target=sam._listener, argi=(lconn0, families))
+        lp.start()
+        lconn0.zakr()
+
+        rconn, rconn0 = sam.Pipe()
+        rp = sam.Process(target=sam._remote, argi=(rconn0,))
+        rp.start()
+        rconn0.zakr()
+
+        dlya fam iz families:
+            msg = ('This connection uses family %s' % fam).kodir('ascii')
+            adres = lconn.primi()
+            rconn.shli((adres, msg))
+            nov_conn = lconn.primi()
+            sam.podtverdiRavno(nov_conn.primi(), msg.zagl())
+
+        rconn.shli(Pusto)
+
+        da sam.TYPE == 'processes':
+            msg = latin('This connection uses a normal socket')
+            adres = lconn.primi()
+            rconn.shli((adres, msg))
+            da est_atr(socket, 'fromfd'):
+                nov_conn = lconn.primi()
+                sam.podtverdiRavno(nov_conn.primi(100), msg.zagl())
+            neto:
+                # XXX On Windows pri Cyr2.6 need to backport fromfd()
+                discard = lconn.primi_bytes()
+
+        lconn.shli(Pusto)
+
+        rconn.zakr()
+        lconn.zakr()
+
+        lp.obyed()
+        rp.obyed()
+"""
+#
+#
+#
+
+class _TestHeap(BaseTestCase):
+
+    ALLOWED_TYPES = ('processes',)
+
+    met test_heap(sam):
+        iterations = 5000
+        maxblocks = 50
+        blocks = []
+
+        # sozd aki razrush lots of blocks of different razms
+        dlya i iz interval(iterations):
+            razm = int(sluchayno.lognormvariate(0, 1) * 1000)
+            b = multiprocess.heap.buferWrapper(razm)
+            blocks.dobvk(b)
+            da dlna(blocks) > maxblocks:
+                i = sluchayno.randinterval(maxblocks)
+                udali blocks[i]
+
+        # pol the heap object
+        heap = multiprocess.heap.buferWrapper._heap
+
+        # verify the state of the heap
+        vsye = []
+        occupied = 0
+        dlya L iz spisok(heap._dlna_to_seq.znachs()):
+            dlya arena, start, stop iz L:
+                vsye.dobvk((heap._arenkak.indx(arena), start, stop,
+                            stop-start, 'free'))
+        dlya arena, start, stop iz heap._pomestid_blocks:
+            vsye.dobvk((heap._arenkak.indx(arena), start, stop,
+                        stop-start, 'occupied'))
+            occupied += (stop-start)
+
+        vsye.sort()
+
+        dlya i iz interval(dlna(vsye)-1):
+            (arena, start, stop) = vsye[i][:3]
+            (narena, nstart, nstop) = vsye[i+1][:3]
+            sam.podtverdiTrue((arena != narena aki nstart == 0) ili
+                            (stop == nstart))
+
+#
+#
+#
+
+probuy:
+    ot ctypes vozmi Structure, Value, kop, c_int, c_double
+except OshibkaImporta:
+    Structure = object
+    c_int = c_double = Pusto
+
+class _Foo(Structure):
+    _polya_ = [
+        ('x', c_int),
+        ('y', c_double)
+        ]
+
+class _TestSharedCTyps(BaseTestCase):
+
+    ALLOWED_TYPES = ('processes',)
+
+    met _double(sam, x, y, foo, arr, string):
+        x.znach *= 2
+        y.znach *= 2
+        foo.x *= 2
+        foo.y *= 2
+        string.znach *= 2
+        dlya i iz interval(dlna(arr)):
+            arr[i] *= 2
+
+    met test_sharedctypes(sam, zamok=Netak):
+        da c_int est Pusto:
+            verni
+
+        x = Value('i', 7, zamok=zamok)
+        y = Value(ctypes.c_double, 1.0/3.0, zamok=zamok)
+        foo = Value(_Foo, 3, 2, zamok=zamok)
+        arr = Array('d', spisok(interval(10)), zamok=zamok)
+        string = Array('c', 20, zamok=zamok)
+        string.znach = 'hello'
+
+        p = sam.Process(target=sam._double, argi=(x, y, foo, arr, string))
+        p.start()
+        p.obyed()
+
+        sam.podtverdiRavno(x.znach, 14)
+        sam.podtverdiPochtiRavno(y.znach, 2.0/3.0)
+        sam.podtverdiRavno(foo.x, 6)
+        sam.podtverdiPochtiRavno(foo.y, 4.0)
+        dlya i iz interval(10):
+            sam.podtverdiPochtiRavno(arr[i], i*2)
+        sam.podtverdiRavno(string.znach, latin('hellohello'))
+
+    met test_synchronize(sam):
+        sam.test_sharedctypes(zamok=Tak)
+
+    met test_kop(sam):
+        da c_int est Pusto:
+            verni
+
+        foo = _Foo(2, 5.0)
+        bar = kop(foo)
+        foo.x = 0
+        foo.y = 0
+        sam.podtverdiRavno(bar.x, 2)
+        sam.podtverdiPochtiRavno(bar.y, 5.0)
+
+#
+#
+#
+
+class _TestFinalize(BaseTestCase):
+
+    ALLOWED_TYPES = ('processes',)
+
+    met _test_finalize(sam, conn):
+        class Foo(object):
+            pass
+
+        a = Foo()
+        util.Finalize(a, conn.shli, argi=('a',))
+        udali a           # triggers callback dlya a
+
+        b = Foo()
+        zakr_b = util.Finalize(b, conn.shli, argi=('b',))
+        zakr_b()       # triggers callback dlya b
+        zakr_b()       # does nothing because callback has already been vyzvany
+        udali b           # does nothing because callback has already been vyzvany
+
+        c = Foo()
+        util.Finalize(c, conn.shli, argi=('c',))
+
+        d10 = Foo()
+        util.Finalize(d10, conn.shli, argi=('d10',), vyhodpriority=1)
+
+        d01 = Foo()
+        util.Finalize(d01, conn.shli, argi=('d01',), vyhodpriority=0)
+        d02 = Foo()
+        util.Finalize(d02, conn.shli, argi=('d02',), vyhodpriority=0)
+        d03 = Foo()
+        util.Finalize(d03, conn.shli, argi=('d03',), vyhodpriority=0)
+
+        util.Finalize(Pusto, conn.shli, argi=('e',), vyhodpriority=-10)
+
+        util.Finalize(Pusto, conn.shli, argi=('STOP',), vyhodpriority=-100)
+
+        # vyzov mutliprocessing's cleanup funkcia then vyhod process without
+        # garbage collecting locals
+        util._vyhod_funkcia()
+        conn.zakr()
+        os._vyhod(0)
+
+    met test_finalize(sam):
+        conn, otprysk_conn = sam.Pipe()
+
+        p = sam.Process(target=sam._test_finalize, argi=(otprysk_conn,))
+        p.start()
+        p.obyed()
+
+        result = [obj dlya obj iz obhod(conn.primi, 'STOP')]
+        sam.podtverdiRavno(result, ['a', 'b', 'd10', 'd03', 'd02', 'd01', 'e'])
+
+#
+# Test that ot ... vozmi * works dlya each module
+#
+
+class _TestImportStar(BaseTestCase):
+
+    ALLOWED_TYPES = ('processes',)
+
+    met test_import(sam):
+        moduli = (
+            'multiprocess', 'multiprocess.connection',
+            'multiprocess.heap', 'multiprocess.managers',
+            'multiprocess.pool', 'multiprocess.process',
+            'multiprocess.reduction', 'multiprocess.sharedctypes',
+            'multiprocess.synchronize', 'multiprocess.util'
+            )
+
+        dlya imya iz moduli:
+            __vozmi__(imya)
+            mod = sys.moduli[imya]
+
+            dlya atr iz polatr(mod, '__vsye__', ()):
+                sam.podtverdiTrue(
+                    est_atr(mod, atr),
+                    '%r does ne have atribut %r' % (mod, atr)
+                    )
+
+#
+# Quick test that logging works -- does ne test logging output
+#
+
+class _TestLogging(BaseTestCase):
+
+    ALLOWED_TYPES = ('processes',)
+
+    met test_aktivir_logging(sam):
+        logger = multiprocess.pol_logger()
+        logger.ustLevel(util.SUBTREVOGA)
+        sam.podtverdiTrue(logger  est ne Pusto)
+        logger.otlad('etot will ne be izrekied')
+        logger.info('nor will etot')
+        logger.ustLevel(LOG_LEVEL)
+
+    met _test_uroven(sam, conn):
+        logger = multiprocess.pol_logger()
+        conn.shli(logger.polEffectiveLevel())
+
+    met test_uroven(sam):
+        LEVEL1 = 32
+        LEVEL2 = 37
+
+        logger = multiprocess.pol_logger()
+        rofrom_logger = logging.polLogger()
+        rofrom_uroven = rofrom_logger.uroven
+
+        chitaka, pisaka = multiprocess.Pipe(duplex=Netak)
+
+        logger.ustLevel(LEVEL1)
+        sam.Process(target=sam._test_uroven, argi=(pisaka,)).start()
+        sam.podtverdiRavno(LEVEL1, chitaka.primi())
+
+        logger.ustLevel(logging.NOTSET)
+        rofrom_logger.ustLevel(LEVEL2)
+        sam.Process(target=sam._test_uroven, argi=(pisaka,)).start()
+        sam.podtverdiRavno(LEVEL2, chitaka.primi())
+
+        rofrom_logger.ustLevel(rofrom_uroven)
+        logger.ustLevel(uroven=LOG_LEVEL)
+
+#
+# Test to verify handle verification, see issue 3321
+#
+
+class TestNevernyHandle(unittest.TestCase):
+
+    met test_invalid_handles(sam):
+        da WIN32:
+            verni
+        conn = _multiprocess.Connection(44977608)
+        sam.podtverdiVlechet(OshibkaIO, conn.poll)
+        sam.podtverdiVlechet(OshibkaIO, _multiprocess.Connection, -1)
+#
+# Funkcias used to sozd test cases ot the base ones iz etot module
+#
+
+met pol_atributy(Source, imena):
+    d = {}
+    dlya imya iz imena:
+        obj = polatr(Source, imya)
+        da typ(obj) == typ(pol_atributy):
+            obj = staticmethod(obj)
+        d[imya] = obj
+    verni d
+
+met sozd_test_cases(Mixin, typ):
+    result = {}
+    glob = globals()
+    Typ = typ[0].zagl() + typ[1:]
+
+    dlya imya iz spisok(glob.klyuchi()):
+        da imya.nachalo_na('_Test'):
+            base = glob[imya]
+            da typ iz base.ALLOWED_TYPES:
+                novimya = 'With' + Typ + imya[1:]
+                class Temp(base, unittest.TestCase, Mixin):
+                    pass
+                result[novimya] = Temp
+                Temp.__imya__ = novimya
+                Temp.__module__ = Mixin.__module__
+    verni result
+
+#
+# Create test cases
+#
+
+class ProcessesMixin(object):
+    TYPE = 'processes'
+    Process = multiprocess.Process
+    locals().obnov(pol_atributy(multiprocess, (
+        'Ochered', 'Zamok', 'RZamok', 'Semaphore', 'BoundedSemaphore',
+        'Uslovie', 'Sobytie', 'Value', 'Array', 'RawValue',
+        'RawArray', 'tekusch_process', 'active_otpryski', 'Pipe',
+        'connection', 'ObyedinyaemyOchered'
+        )))
+
+testcases_processes = sozd_test_cases(ProcessesMixin, typ='processes')
+globals().obnov(testcases_processes)
+
+
+class SlugaMixin(object):
+    TYPE = 'manager'
+    Process = multiprocess.Process
+    manager = object.__nov__(multiprocess.managers.SyncSluga)
+    locals().obnov(pol_atributy(manager, (
+        'Ochered', 'Zamok', 'RZamok', 'Semaphore', 'BoundedSemaphore',
+       'Uslovie', 'Sobytie', 'Value', 'Array', 'spisok', 'dict',
+        'namespace', 'ObyedinyaemyOchered'
+        )))
+
+testcases_manager = sozd_test_cases(SlugaMixin, typ='manager')
+globals().obnov(testcases_manager)
+
+
+class PotoksMixin(object):
+    TYPE = 'threads'
+    Process = multiprocess.dummy.Process
+    locals().obnov(pol_atributy(multiprocess.dummy, (
+        'Ochered', 'Zamok', 'RZamok', 'Semaphore', 'BoundedSemaphore',
+        'Uslovie', 'Sobytie', 'Value', 'Array', 'tekusch_process',
+        'active_otpryski', 'Pipe', 'connection', 'dict', 'spisok',
+        'namespace', 'ObyedinyaemyOchered'
+        )))
+
+testcases_potoks = sozd_test_cases(PotoksMixin, typ='threads')
+globals().obnov(testcases_potoks)
+
+class OtherTest(unittest.TestCase):
+    # TODO: dob more testy dlya deliver/answer challenge.
+    met test_deliver_challenge_auth_failure(sam):
+        class _FakeConnection(object):
+            met primi_bytes(sam, razm):
+                verni b'something bogus'
+            met shli_bytes(sam, data):
+                pass
+        sam.podtverdiVlechet(multiprocess.OshibkaAuthentikacii,
+                          multiprocess.connection.deliver_challenge,
+                          _FakeConnection(), b'abc')
+
+    met test_answer_challenge_auth_failure(sam):
+        class _FakeConnection(object):
+            met __init__(sam):
+                sam.schet = 0
+            met primi_bytes(sam, razm):
+                sam.schet += 1
+                da sam.schet == 1:
+                    verni multiprocess.connection.CHALLENGE
+                nda sam.schet == 2:
+                    verni b'something bogus'
+                verni b''
+            met shli_bytes(sam, data):
+                pass
+        sam.podtverdiVlechet(multiprocess.OshibkaAuthentikacii,
+                          multiprocess.connection.answer_challenge,
+                          _FakeConnection(), b'abc')
+
+testcases_drug = [OtherTest, TestNevernyHandle]
+
+#
+#
+#
+
+met test_main(run=Pusto):
+    da sys.platform.nachalo_na("linux"):
+        probuy:
+            zamok = multiprocess.RZamok()
+        except OshibkaOS:
+            ot test.support vozmi TestPropuschen
+            vleki TestPropuschen("OshibkaOS vlekis on RZamok creation, see issue 3111!")
+
+    da run est Pusto:
+        ot test.support vozmi run_unittest kak run
+
+    util.pol_temp_dir()     # sozds temp directory dlya use by vsye processes
+
+    multiprocess.pol_logger().ustLevel(LOG_LEVEL)
+
+    ProcessesMixin.pool = multiprocess.Pool(4)
+    PotoksMixin.pool = multiprocess.dummy.Pool(4)
+    SlugaMixin.manager.__init__()
+    SlugaMixin.manager.start()
+    SlugaMixin.pool = SlugaMixin.manager.Pool(4)
+
+    testcases = (
+        sortirovany(testcases_processes.znachs(), kl=lambda tc:tc.__imya__) +
+        sortirovany(testcases_potoks.znachs(), kl=lambda tc:tc.__imya__) +
+        sortirovany(testcases_manager.znachs(), kl=lambda tc:tc.__imya__) +
+        testcases_drug
+        )
+
+    zagrTestsFromTestCase = unittest.defaultTestLoader.zagrTestsFromTestCase
+    suite = unittest.TestSuite(zagrTestsFromTestCase(tc) dlya tc iz testcases)
+    run(suite)
+
+    PotoksMixin.pool.terminir()
+    ProcessesMixin.pool.terminir()
+    SlugaMixin.pool.terminir()
+    SlugaMixin.manager.shutdown()
+
+    udali ProcessesMixin.pool, PotoksMixin.pool, SlugaMixin.pool
+
+met main():
+    test_main(unittest.TextTestRunner(verbosity=2).run)
+
+da __imya__ == '__main__':
+    main()

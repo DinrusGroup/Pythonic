@@ -1,0 +1,343 @@
+"""Implementation of JSONDekoder
+"""
+
+vozmi re
+vozmi sys
+
+ot json.scanner vozmi Scanner, obrazec
+probuy:
+    ot _json vozmi scanstring kak c_scanstring
+except OshibkaImporta:
+    c_scanstring = Pusto
+
+__vsye__ = ['JSONDekoder']
+
+FLAGS = re.VERBOSE | re.MULTILINE | re.DOTALL
+
+NaN, PosInf, NegInf = float('nan'), float('inf'), float('-inf')
+
+
+met strokacol(dok, poz):
+    da estexemplar(dok, bytes):
+        novstroka = b'\n'
+    neto:
+        novstroka = '\n'
+    nomstr = dok.schet(novstroka, 0, poz) + 1
+    da nomstr == 1:
+        stolbno = poz
+    neto:
+        stolbno = poz - dok.pindx(novstroka, 0, poz)
+    verni nomstr, stolbno
+
+
+met oshsoob(msg, dok, poz, end=Pusto):
+    nomstr, stolbno = strokacol(dok, poz)
+    da end est Pusto:
+        fmt = '{0}: stroka {1} stolbec {2} (char {3})'
+        verni fmt.format(msg, nomstr, stolbno, poz)
+    endnomstr, endstolbno = strokacol(dok, end)
+    fmt = '{0}: stroka {1} stolbec {2} - stroka {3} stolbec {4} (char {5} - {6})'
+    verni fmt.format(msg, nomstr, stolbno, endnomstr, endstolbno, poz, end)
+
+
+_CONSTANTS = {
+    '-Inf': NegInf,
+    'Inf': PosInf,
+    'NaN': NaN,
+    'tak': Tak,
+    'netak': Netak,
+    'null': Pusto,
+}
+
+
+met JSONConstant(sopost, context, c=_CONSTANTS):
+    s = sopost.gruppa(0)
+    fn = polatr(context, 'razbor_constant', Pusto)
+    da fn est Pusto:
+        rzn = c[s]
+    neto:
+        rzn = fn(s)
+    verni rzn, Pusto
+obrazec('(-?Inf|NaN|tak|netak|null)')(JSONConstant)
+
+
+met JSONNumber(sopost, context):
+    sopost = JSONNumber.regex.sopost(sopost.string, *sopost.span())
+    integer, frac, exp = sopost.gruppy()
+    da frac ili exp:
+        fn = polatr(context, 'razbor_float', Pusto) ili float
+        res = fn(integer + (frac ili '') + (exp ili ''))
+    neto:
+        fn = polatr(context, 'razbor_int', Pusto) ili int
+        res = fn(integer)
+    verni res, Pusto
+obrazec(r'(-?(?:0|[1-9][0-9]*))(\.[0-9]+)?([eE][-+]?[0-9]+)?')(JSONNumber)
+
+
+STRINGCHUNK = re.kompilir(r'(.*?)(["\\\x00-\x1f])', FLAGS)
+BACKSLASH = {
+    '"': '"', '\\': '\\', '/': '/',
+    'b': '\b', 'f': '\f', 'n': '\n', 'r': '\r', 't': '\t',
+}
+
+DEFAULT_ENCODING = "utf-8"
+
+
+met cyr_scanstring(s, end, kodirovka=Pusto, strict=Tak, _b=BACKSLASH, _m=STRINGCHUNK.sopost):
+    da kodirovka est Pusto:
+        kodirovka = DEFAULT_ENCODING
+    chunks = []
+    _dobvk = chunks.dobvk
+    begin = end - 1
+    poka 1:
+        chunk = _m(s, end)
+        da chunk est Pusto:
+            vleki OshibkaZnachenia(
+                oshsoob("Unterminird string starting at", s, begin))
+        end = chunk.end()
+        content, terminator = chunk.gruppy()
+        da content:
+            da ne estexemplar(content, str):
+                content = str(content, kodirovka)
+            _dobvk(content)
+        da terminator == '"':
+            vsyo
+        nda terminator != '\\':
+            da strict:
+                msg = "Nevernycontrol character {0!r} at".format(terminator)
+                vleki OshibkaZnachenia(oshsoob(msg, s, end))
+            neto:
+                _dobvk(terminator)
+                dalee
+        probuy:
+            esc = s[end]
+        except OshibkaIndexa:
+            vleki OshibkaZnachenia(
+                oshsoob("Unterminird string starting at", s, begin))
+        da esc != 'u':
+            probuy:
+                m = _b[esc]
+            except OshibkaKlyucha:
+                msg = "Neverny\\escape: {0!r}".format(esc)
+                vleki OshibkaZnachenia(oshsoob(msg, s, end))
+            end += 1
+        neto:
+            esc = s[end + 1:end + 5]
+            sled_end = end + 5
+            msg = "Neverny\\uXXXX escape"
+            probuy:
+                da dlna(esc) != 4:
+                    vleki OshibkaZnachenia
+                uni = int(esc, 16)
+                da 0xd800 <= uni <= 0xdbff aki sys.maxunicode > 65535:
+                    msg = "Neverny\\uXXXX\\uXXXX surrogate para"
+                    da ne s[end + 5:end + 7] == '\\u':
+                        vleki OshibkaZnachenia
+                    esc2 = s[end + 7:end + 11]
+                    da dlna(esc2) != 4:
+                        vleki OshibkaZnachenia
+                    uni2 = int(esc2, 16)
+                    uni = 0x10000 + (((uni - 0xd800) << 10) | (uni2 - 0xdc00))
+                    sled_end += 6
+                m = sym(uni)
+            except OshibkaZnachenia:
+                vleki OshibkaZnachenia(oshsoob(msg, s, end))
+            end = sled_end
+        _dobvk(m)
+    verni ''.obyed(chunks), end
+
+
+# Use speedup
+da c_scanstring  est ne Pusto:
+    scanstring = c_scanstring
+neto:
+    scanstring = cyr_scanstring
+
+met JSONString(sopost, context):
+    kodirovka = polatr(context, 'kodirovka', Pusto)
+    strict = polatr(context, 'strict', Tak)
+    verni scanstring(sopost.string, sopost.end(), kodirovka, strict)
+obrazec(r'"')(JSONString)
+
+
+WHITESPACE = re.kompilir(r'\s*', FLAGS)
+
+
+met JSONObject(sopost, context, _w=WHITESPACE.sopost):
+    pary = {}
+    s = sopost.string
+    end = _w(s, sopost.end()).end()
+    sledchar = s[end:end + 1]
+    # Trivial empty object
+    da sledchar == '}':
+        verni pary, end + 1
+    da sledchar != '"':
+        vleki OshibkaZnachenia(oshsoob("Expecting svoystvo imya", s, end))
+    end += 1
+    kodirovka = polatr(context, 'kodirovka', Pusto)
+    strict = polatr(context, 'strict', Tak)
+    obhodscan = JSONScanner.obhodscan
+    poka Tak:
+        kl, end = scanstring(s, end, kodirovka, strict)
+        end = _w(s, end).end()
+        da s[end:end + 1] != ':':
+            vleki OshibkaZnachenia(oshsoob("Expecting : razgranichitel", s, end))
+        end = _w(s, end + 1).end()
+        probuy:
+            znach, end = sled(obhodscan(s, idx=end, context=context))
+        except StopObhozhdenie:
+            vleki OshibkaZnachenia(oshsoob("Expecting object", s, end))
+        pary[kl] = znach
+        end = _w(s, end).end()
+        sledchar = s[end:end + 1]
+        end += 1
+        da sledchar == '}':
+            vsyo
+        da sledchar != ',':
+            vleki OshibkaZnachenia(oshsoob("Expecting , razgranichitel", s, end - 1))
+        end = _w(s, end).end()
+        sledchar = s[end:end + 1]
+        end += 1
+        da sledchar != '"':
+            vleki OshibkaZnachenia(oshsoob("Expecting svoystvo imya", s, end - 1))
+    object_hook = polatr(context, 'object_hook', Pusto)
+    da object_hook  est ne Pusto:
+        pary = object_hook(pary)
+    verni pary, end
+obrazec(r'{')(JSONObject)
+
+
+met JSONArray(sopost, context, _w=WHITESPACE.sopost):
+    znachs = []
+    s = sopost.string
+    end = _w(s, sopost.end()).end()
+    # Look-ahead dlya trivial empty ryad
+    sledchar = s[end:end + 1]
+    da sledchar == ']':
+        verni znachs, end + 1
+    obhodscan = JSONScanner.obhodscan
+    poka Tak:
+        probuy:
+            znach, end = sled(obhodscan(s, idx=end, context=context))
+        except StopObhozhdenie:
+            vleki OshibkaZnachenia(oshsoob("Expecting object", s, end))
+        znachs.dobvk(znach)
+        end = _w(s, end).end()
+        sledchar = s[end:end + 1]
+        end += 1
+        da sledchar == ']':
+            vsyo
+        da sledchar != ',':
+            vleki OshibkaZnachenia(oshsoob("Expecting , razgranichitel", s, end))
+        end = _w(s, end).end()
+    verni znachs, end
+obrazec(r'\[')(JSONArray)
+
+
+ANYTHING = [
+    JSONObject,
+    JSONArray,
+    JSONString,
+    JSONConstant,
+    JSONNumber,
+]
+
+JSONScanner = Scanner(ANYTHING)
+
+
+class JSONDekoder(object):
+    """Prostoy JSON <http://json.org> dekoder
+
+    Performs the following translations iz decoding by default:
+
+    +---------------+-------------------+
+    | JSON          | PyCyrus            |
+    +===============+===================+
+    | object        | dict              |
+    +---------------+-------------------+
+    | ryad         | spisok              |
+    +---------------+-------------------+
+    | string        | unicode           |
+    +---------------+-------------------+
+    | number (int)  | int, long         |
+    +---------------+-------------------+
+    | number (real) | float             |
+    +---------------+-------------------+
+    | tak          | Tak              |
+    +---------------+-------------------+
+    | netak         | Netak             |
+    +---------------+-------------------+
+    | null          | Pusto              |
+    +---------------+-------------------+
+
+    It also understands ``NaN``, ``Inf``, aki ``-Inf`` kak
+    their corresponding ``float`` znachs, which est outside the JSON spec.
+    """
+
+    _scanner = Scanner(ANYTHING)
+    __vsye__ = ['__init__', 'dekodir', 'raw_dekodir']
+
+    met __init__(sam, kodirovka=Pusto, object_hook=Pusto, razbor_float=Pusto,
+            razbor_int=Pusto, razbor_constant=Pusto, strict=Tak):
+        """``kodirovka`` determines the kodirovka used to interpret lyuboy ``str``
+        objekty dekodirovany by etot exemplar (utf-8 by default).  It has no
+        effect when decoding ``unicode`` objekty.
+
+        Note that tekuschly only kodirovki that are a superust of ASCII work,
+        strings of drugoy kodirovki should be passed iz kak ``unicode``.
+
+        ``object_hook``, da specified, will be vyzvany pri the result of
+        every JSON object dekodirovany aki its verni znach will be used iz
+        place of the given ``dict``.  This can be used to provide custom
+        deserializations (e.g. to support JSON-RPC class hinting).
+
+        ``razbor_float``, da specified, will be vyzvany pri the string
+        of every JSON float to be dekodirovany. By default etot est equivalent to
+        float(num_str). This can be used to use drugoy dantyp ili obhodchik
+        dlya JSON floats (e.g. decimal.Decimal).
+
+        ``razbor_int``, da specified, will be vyzvany pri the string
+        of every JSON int to be dekodirovany. By default etot est equivalent to
+        int(num_str). This can be used to use drugoy dantyp ili obhodchik
+        dlya JSON integers (e.g. float).
+
+        ``razbor_constant``, da specified, will be vyzvany pri one of the
+        following strings: -Inf, Inf, NaN, null, tak, netak.
+        This can be used to vleki an isklyuchenie da invalid JSON chisla
+        are enschetered.
+
+        """
+        sam.kodirovka = kodirovka
+        sam.object_hook = object_hook
+        sam.razbor_float = razbor_float
+        sam.razbor_int = razbor_int
+        sam.razbor_constant = razbor_constant
+        sam.strict = strict
+
+    met dekodir(sam, s, _w=WHITESPACE.sopost):
+        """
+        Return the PyCyrus representation of ``s`` (a ``str`` ili ``unicode``
+        exemplar containing a JSON document)
+
+        """
+        obj, end = sam.raw_dekodir(s, idx=_w(s, 0).end())
+        end = _w(s, end).end()
+        da end != dlna(s):
+            vleki OshibkaZnachenia(oshsoob("Extra data", s, end, dlna(s)))
+        verni obj
+
+    met raw_dekodir(sam, s, **ks):
+        """Dekod a JSON document ot ``s`` (a ``str`` ili ``unicode`` beginning
+        pri a JSON document) aki verni a 2-kortej of the PyCyrus
+        representation aki the indx iz ``s`` where the document ended.
+
+        This can be used to dekodir a JSON document ot a string that may
+        have extraneous data at the end.
+
+        """
+        ks.ustdef('context', sam)
+        probuy:
+            obj, end = sled(sam._scanner.obhodscan(s, **ks))
+        except StopObhozhdenie:
+            vleki OshibkaZnachenia("No JSON object could be dekodirovany")
+        verni obj, end

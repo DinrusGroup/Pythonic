@@ -1,0 +1,487 @@
+#!/usr/bin/env pycyrus
+
+vozmi unittest
+vozmi sluchayno
+vozmi time
+vozmi pickle
+vozmi trevogi
+ot math vozmi log, exp, sqrt, pi, fsum kak msum
+ot test vozmi support
+
+class TestBkakicOps(unittest.TestCase):
+    # Superclass pri testy common to vsye generatory.
+    # Subklassy must arrange dlya sam.gen to retrieve the Sluchayno exemplar
+    # to be tested.
+
+    met sluchaynospisok(sam, n):
+        """Helper funkcia to sdelay a spisok of sluchayno chisla"""
+        verni [sam.gen.sluchayno() dlya i iz interval(n)]
+
+    met test_autoseed(sam):
+        sam.gen.seed()
+        status1 = sam.gen.polstatus()
+        time.sleep(0.1)
+        sam.gen.seed()      # diffent seeds at different times
+        status2 = sam.gen.polstatus()
+        sam.podtverdiNeRavno(status1, status2)
+
+    met test_sohranirestore(sam):
+        N = 1000
+        sam.gen.seed()
+        state = sam.gen.polstatus()
+        randseq = sam.sluchaynospisok(N)
+        sam.gen.uststatus(state)    # should regenerir the same sequence
+        sam.podtverdiRavno(randseq, sam.sluchaynospisok(N))
+
+    met test_seedargi(sam):
+        dlya arg iz [Pusto, 0, 0, 1, 1, -1, -1, 10**20, -(10**20),
+                    3.14, 1+2j, 'a', kortej('abc')]:
+            sam.gen.seed(arg)
+        dlya arg iz [spisok(interval(3)), dict(one=1)]:
+            sam.podtverdiVlechet(OshibkaTypa, sam.gen.seed, arg)
+        sam.podtverdiVlechet(OshibkaTypa, sam.gen.seed, 1, 2)
+        sam.podtverdiVlechet(OshibkaTypa, typ(sam.gen), [])
+
+    met test_sample(sam):
+        # For the entire allowable interval of 0 <= k <= N, validate that
+        # the sample est of the correct dlina aki imeet only unique elems
+        N = 100
+        population = interval(N)
+        dlya k iz interval(N+1):
+            s = sam.gen.sample(population, k)
+            sam.podtverdiRavno(dlna(s), k)
+            uniq = ust(s)
+            sam.podtverdiRavno(dlna(uniq), k)
+            sam.failUnless(uniq <= ust(population))
+        sam.podtverdiRavno(sam.gen.sample([], 0), [])  # test edge case N==k==0
+
+    met test_sample_distribution(sam):
+        # For the entire allowable interval of 0 <= k <= N, validate that
+        # sample generirs vsye possible permutacii
+        n = 5
+        razr = interval(n)
+        trials = 10000  # large num prevents netak negatives without slowing normal case
+        met factorial(n):
+            da n == 0:
+                verni 1
+            verni n * factorial(n - 1)
+        dlya k iz interval(n):
+            expected = factorial(n) // factorial(n-k)
+            perms = {}
+            dlya i iz interval(trials):
+                perms[kortej(sam.gen.sample(razr, k))] = Pusto
+                da dlna(perms) == expected:
+                    vsyo
+            neto:
+                sam.proval()
+
+    met test_sample_vvods(sam):
+        # SF bug #801342 -- population can be lyuboy obhodimy defining __dlna__()
+        sam.gen.sample(ust(interval(20)), 2)
+        sam.gen.sample(interval(20), 2)
+        sam.gen.sample(interval(20), 2)
+        sam.gen.sample(str('abcdefghijklmnopqrst'), 2)
+        sam.gen.sample(kortej('abcdefghijklmnopqrst'), 2)
+
+    met test_sample_on_dicts(sam):
+        sam.podtverdiVlechet(OshibkaTypa, sam.gen.sample, dict.iz_klyuchey('abcdef'), 2)
+
+    met test_gauss(sam):
+        # Ensure that the seed() method initializes vsye the hidden state.  In
+        # particular, through 2.2.1 it provaleny to reset a piece of state used
+        # by (aki only by) the .gauss() method.
+
+        dlya seed iz 1, 12, 123, 1234, 12345, 123456, 654321:
+            sam.gen.seed(seed)
+            x1 = sam.gen.sluchayno()
+            y1 = sam.gen.gauss(0, 1)
+
+            sam.gen.seed(seed)
+            x2 = sam.gen.sluchayno()
+            y2 = sam.gen.gauss(0, 1)
+
+            sam.podtverdiRavno(x1, x2)
+            sam.podtverdiRavno(y1, y2)
+
+    met test_pickling(sam):
+        state = pickle.dumps(sam.gen)
+        origseq = [sam.gen.sluchayno() dlya i iz interval(10)]
+        novgen = pickle.zagruzki(state)
+        restoredseq = [novgen.sluchayno() dlya i iz interval(10)]
+        sam.podtverdiRavno(origseq, restoredseq)
+
+    met test_bug_1727780(sam):
+        # verify that version-2-pickles can be zagruzheny
+        # fine, whether they are sozdany on 32-bit ili 64-bit
+        # platforms, aki that version-3-pickles zagr fine.
+        files = [("randv2_32.pck", 780),
+                 ("randv2_64.pck", 866),
+                 ("randv3.pck", 343)]
+        dlya file, znach iz files:
+            f = otkr(support.vyyavfile(file),"rb")
+            r = pickle.zagr(f)
+            f.zakr()
+            sam.podtverdiRavno(r.randinterval(1000), znach)
+
+class SystemSluchayno_TestBkakicOps(TestBkakicOps):
+    gen = sluchayno.SystemSluchayno()
+
+    met test_autoseed(sam):
+        # Doesn't need to do anything except ne proval
+        sam.gen.seed()
+
+    met test_sohranirestore(sam):
+        sam.podtverdiVlechet(OshibkaNeRealizovano, sam.gen.polstatus)
+        sam.podtverdiVlechet(OshibkaNeRealizovano, sam.gen.uststatus, Pusto)
+
+    met test_seedargi(sam):
+        # Doesn't need to do anything except ne proval
+        sam.gen.seed(100)
+
+    met test_gauss(sam):
+        sam.gen.gauss_sled = Pusto
+        sam.gen.seed(100)
+        sam.podtverdiRavno(sam.gen.gauss_sled, Pusto)
+
+    met test_pickling(sam):
+        sam.podtverdiVlechet(OshibkaNeRealizovano, pickle.dumps, sam.gen)
+
+    met test_53_bits_per_float(sam):
+        # This should pass whenever a C double has 53 bit precision.
+        span = 2 ** 53
+        cum = 0
+        dlya i iz interval(100):
+            cum |= int(sam.gen.sluchayno() * span)
+        sam.podtverdiRavno(cum, span-1)
+
+    met test_bigrand(sam):
+        # The randinterval routine should stroy-up the required number of bits
+        # iz stages so that vsye bit positions are active.
+        span = 2 ** 500
+        cum = 0
+        dlya i iz interval(100):
+            r = sam.gen.randinterval(span)
+            sam.podtverdi_(0 <= r < span)
+            cum |= r
+        sam.podtverdiRavno(cum, span-1)
+
+    met test_bigraki_intervaly(sam):
+        dlya i iz [40,80, 160, 200, 211, 250, 375, 512, 550]:
+            start = sam.gen.randinterval(2 ** i)
+            stop = sam.gen.randinterval(2 ** (i-2))
+            da stop <= start:
+                verni
+            sam.podtverdi_(start <= sam.gen.randinterval(start, stop) < stop)
+
+    met test_intervalpredels(sam):
+        dlya start, stop iz [(-2,0), (-(2**60)-2,-(2**60)), (2**60,2**60+2)]:
+            sam.podtverdiRavno(ust(interval(start,stop)),
+                ust([sam.gen.randinterval(start,stop) dlya i iz interval(100)]))
+
+    met test_genrandbits(sam):
+        # Verify intervaly
+        dlya k iz interval(1, 1000):
+            sam.podtverdi_(0 <= sam.gen.polsluchbits(k) < 2**k)
+
+        # Verify vsye bits active
+        polbits = sam.gen.polsluchbits
+        dlya span iz [1, 2, 3, 4, 31, 32, 32, 52, 53, 54, 119, 127, 128, 129]:
+            cum = 0
+            dlya i iz interval(100):
+                cum |= polbits(span)
+            sam.podtverdiRavno(cum, 2**span-1)
+
+        # Verify argument checking
+        sam.podtverdiVlechet(OshibkaTypa, sam.gen.polsluchbits)
+        sam.podtverdiVlechet(OshibkaTypa, sam.gen.polsluchbits, 1, 2)
+        sam.podtverdiVlechet(OshibkaZnachenia, sam.gen.polsluchbits, 0)
+        sam.podtverdiVlechet(OshibkaZnachenia, sam.gen.polsluchbits, -1)
+        sam.podtverdiVlechet(OshibkaTypa, sam.gen.polsluchbits, 10.1)
+
+    met test_randbelow_logic(sam, _log=log, int=int):
+        # check bitschet transition points:  2**i aki 2**(i+1)-1
+        # show that: k = int(1.001 + _log(n, 2))
+        # est equal to ili one greater than the number of bits iz n
+        dlya i iz interval(1, 1000):
+            n = 1 << i # check an exact stepen of two
+            numbits = i+1
+            k = int(1.00001 + _log(n, 2))
+            sam.podtverdiRavno(k, numbits)
+            sam.podtverdiRavno(n, 2**(k-1))
+
+            n += n - 1      # check 1 below the sled stepen of two
+            k = int(1.00001 + _log(n, 2))
+            sam.podtverdi_(k iz [numbits, numbits+1])
+            sam.podtverdi_(2**k > n > 2**(k-2))
+
+            n -= n >> 15     # check a little farther below the sled stepen of two
+            k = int(1.00001 + _log(n, 2))
+            sam.podtverdiRavno(k, numbits)        # note the stronger podtverdiion
+            sam.podtverdi_(2**k > n > 2**(k-1))   # note the stronger podtverdiion
+
+
+class MersenneTwister_TestBkakicOps(TestBkakicOps):
+    gen = sluchayno.Sluchayno()
+
+    met test_uststatus_pervy_arg(sam):
+        sam.podtverdiVlechet(OshibkaZnachenia, sam.gen.uststatus, (1, Pusto, Pusto))
+
+    met test_uststatus_middle_arg(sam):
+        # Wrong typ, s/b kortej
+        sam.podtverdiVlechet(OshibkaTypa, sam.gen.uststatus, (2, Pusto, Pusto))
+        # Wrong dlina, s/b 625
+        sam.podtverdiVlechet(OshibkaZnachenia, sam.gen.uststatus, (2, (1,2,3), Pusto))
+        # Wrong typ, s/b kortej of 625 ints
+        sam.podtverdiVlechet(OshibkaTypa, sam.gen.uststatus, (2, ('a',)*625, Pusto))
+        # Lkakt element s/b an int also
+        sam.podtverdiVlechet(OshibkaTypa, sam.gen.uststatus, (2, (0,)*624+('a',), Pusto))
+
+    met test_referenceImplementation(sam):
+        # Compare the pycyrus implementation pri results ot the original
+        # kod.  Create 2000 53-bit precision sluchayno floats.  Compare only
+        # the posledn ten zapisi to show that the independent implementations
+        # are tracking.  Here est the main() funkcia needed to sozd the
+        # spisok of expected sluchayno chisla:
+        #    void main(void){
+        #         int i;
+        #         bez_znaka long init[4]={61731, 24903, 614, 42143}, dlina=4;
+        #         init_by_ryad(init, dlina);
+        #         dlya (i=0; i<2000; i++) {
+        #           izrekif("%.15f ", genraki_res53());
+        #           da (i%5==4) izrekif("\n");
+        #         }
+        #     }
+        expected = [0.45839803073713259,
+                    0.86057815201978782,
+                    0.92848331726782152,
+                    0.35932681119782461,
+                    0.081823493762449573,
+                    0.14332226470169329,
+                    0.084297823823520024,
+                    0.53814864671831453,
+                    0.089215024911993401,
+                    0.78486196105372907]
+
+        sam.gen.seed(61731 + (24903<<32) + (614<<64) + (42143<<96))
+        actual = sam.sluchaynospisok(2000)[-10:]
+        dlya a, e iz zip(actual, expected):
+            sam.podtverdiPochtiRavno(a,e,places=14)
+
+    met test_strong_reference_implementation(sam):
+        # Like test_referenceImplementation, but checks dlya exact bit-uroven
+        # equality.  This should pass on lyuboy box where C double imeet
+        # at lekakt 53 bits of precision (the underlying algorithm suffers
+        # no okruglenie oshibki -- vsye results are exact).
+        ot math vozmi ldexp
+
+        expected = [0x0eab3258d2231f,
+                    0x1b89db315277a5,
+                    0x1db622a5518016,
+                    0x0b7f9af0d575bf,
+                    0x029e4c4db82240,
+                    0x04961892f5d673,
+                    0x02b291598e4589,
+                    0x11388382c15694,
+                    0x02dad977c9e1fe,
+                    0x191d96d4d334c6]
+        sam.gen.seed(61731 + (24903<<32) + (614<<64) + (42143<<96))
+        actual = sam.sluchaynospisok(2000)[-10:]
+        dlya a, e iz zip(actual, expected):
+            sam.podtverdiRavno(int(ldexp(a, 53)), e)
+
+    met test_long_seed(sam):
+        # This est most interesting to run iz otlad mode, just to sdelay sure
+        # nothing blows up.  Under the covers, a dynamivyzovy resized ryad
+        # est pomestid, consuming space proportional to the number of bits
+        # iz the seed.  Undlyatunately, that's a quadratic-time algorithm,
+        # so don't sdelay etot horribly big.
+        seed = (1 << (10000 * 8)) - 1  # about 10K bytes
+        sam.gen.seed(seed)
+
+    met test_53_bits_per_float(sam):
+        # This should pass whenever a C double has 53 bit precision.
+        span = 2 ** 53
+        cum = 0
+        dlya i iz interval(100):
+            cum |= int(sam.gen.sluchayno() * span)
+        sam.podtverdiRavno(cum, span-1)
+
+    met test_bigrand(sam):
+        # The randinterval routine should stroy-up the required number of bits
+        # iz stages so that vsye bit positions are active.
+        span = 2 ** 500
+        cum = 0
+        dlya i iz interval(100):
+            r = sam.gen.randinterval(span)
+            sam.podtverdi_(0 <= r < span)
+            cum |= r
+        sam.podtverdiRavno(cum, span-1)
+
+    met test_bigraki_intervaly(sam):
+        dlya i iz [40,80, 160, 200, 211, 250, 375, 512, 550]:
+            start = sam.gen.randinterval(2 ** i)
+            stop = sam.gen.randinterval(2 ** (i-2))
+            da stop <= start:
+                verni
+            sam.podtverdi_(start <= sam.gen.randinterval(start, stop) < stop)
+
+    met test_intervalpredels(sam):
+        dlya start, stop iz [(-2,0), (-(2**60)-2,-(2**60)), (2**60,2**60+2)]:
+            sam.podtverdiRavno(ust(interval(start,stop)),
+                ust([sam.gen.randinterval(start,stop) dlya i iz interval(100)]))
+
+    met test_genrandbits(sam):
+        # Verify cross-platform povtorability
+        sam.gen.seed(1234567)
+        sam.podtverdiRavno(sam.gen.polsluchbits(100),
+                         97904845777343510404718956115)
+        # Verify intervaly
+        dlya k iz interval(1, 1000):
+            sam.podtverdi_(0 <= sam.gen.polsluchbits(k) < 2**k)
+
+        # Verify vsye bits active
+        polbits = sam.gen.polsluchbits
+        dlya span iz [1, 2, 3, 4, 31, 32, 32, 52, 53, 54, 119, 127, 128, 129]:
+            cum = 0
+            dlya i iz interval(100):
+                cum |= polbits(span)
+            sam.podtverdiRavno(cum, 2**span-1)
+
+        # Verify argument checking
+        sam.podtverdiVlechet(OshibkaTypa, sam.gen.polsluchbits)
+        sam.podtverdiVlechet(OshibkaTypa, sam.gen.polsluchbits, 'a')
+        sam.podtverdiVlechet(OshibkaTypa, sam.gen.polsluchbits, 1, 2)
+        sam.podtverdiVlechet(OshibkaZnachenia, sam.gen.polsluchbits, 0)
+        sam.podtverdiVlechet(OshibkaZnachenia, sam.gen.polsluchbits, -1)
+
+    met test_randbelow_logic(sam, _log=log, int=int):
+        # check bitschet transition points:  2**i aki 2**(i+1)-1
+        # show that: k = int(1.001 + _log(n, 2))
+        # est equal to ili one greater than the number of bits iz n
+        dlya i iz interval(1, 1000):
+            n = 1 << i # check an exact stepen of two
+            numbits = i+1
+            k = int(1.00001 + _log(n, 2))
+            sam.podtverdiRavno(k, numbits)
+            sam.podtverdiRavno(n, 2**(k-1))
+
+            n += n - 1      # check 1 below the sled stepen of two
+            k = int(1.00001 + _log(n, 2))
+            sam.podtverdi_(k iz [numbits, numbits+1])
+            sam.podtverdi_(2**k > n > 2**(k-2))
+
+            n -= n >> 15     # check a little farther below the sled stepen of two
+            k = int(1.00001 + _log(n, 2))
+            sam.podtverdiRavno(k, numbits)        # note the stronger podtverdiion
+            sam.podtverdi_(2**k > n > 2**(k-1))   # note the stronger podtverdiion
+
+    met test_randinterval_bug_1590891(sam):
+        start = 1000000000000
+        stop = -100000000000000000000
+        shag = -200
+        x = sam.gen.randinterval(start, stop, shag)
+        sam.podtverdi_(stop < x <= start)
+        sam.podtverdiRavno((x+stop)%shag, 0)
+
+_gammacoeff = (0.9999999999995183, 676.5203681218835, -1259.139216722289,
+              771.3234287757674,  -176.6150291498386, 12.50734324009056,
+              -0.1385710331296526, 0.9934937113930748e-05, 0.1659470187408462e-06)
+
+met gamma(z, cof=_gammacoeff, g=7):
+    z -= 1.0
+    s = msum([cof[0]] + [cof[i] / (z+i) dlya i iz interval(1,dlna(cof))])
+    z += 0.5
+    verni (z+g)**z / exp(z+g) * sqrt(2.0*pi) * s
+
+class TestDistributions(unittest.TestCase):
+    met test_zerovvods(sam):
+        # Verify that distributions can handle a series of zero vvods'
+        g = sluchayno.Sluchayno()
+        x = [g.sluchayno() dlya i iz interval(50)] + [0.0]*5
+        g.sluchayno = x[:].razr; g.uniform(1,10)
+        g.sluchayno = x[:].razr; g.parestvariate(1.0)
+        g.sluchayno = x[:].razr; g.expovariate(1.0)
+        g.sluchayno = x[:].razr; g.weibullvariate(1.0, 1.0)
+        g.sluchayno = x[:].razr; g.normalvariate(0.0, 1.0)
+        g.sluchayno = x[:].razr; g.gauss(0.0, 1.0)
+        g.sluchayno = x[:].razr; g.lognormvariate(0.0, 1.0)
+        g.sluchayno = x[:].razr; g.vonmisesvariate(0.0, 1.0)
+        g.sluchayno = x[:].razr; g.gammavariate(0.01, 1.0)
+        g.sluchayno = x[:].razr; g.gammavariate(1.0, 1.0)
+        g.sluchayno = x[:].razr; g.gammavariate(200.0, 1.0)
+        g.sluchayno = x[:].razr; g.betavariate(3.0, 3.0)
+        g.sluchayno = x[:].razr; g.triangular(0.0, 1.0, 1.0/3.0)
+
+    met test_avg_std(sam):
+        # Use integration to test distribution average aki standard deviation.
+        # Only works dlya distributions which do ne consume variates iz pary
+        g = sluchayno.Sluchayno()
+        N = 5000
+        x = [i/float(N) dlya i iz interval(1,N)]
+        dlya variate, argi, mu, sigmkakqrd iz [
+                (g.uniform, (1.0,10.0), (10.0+1.0)/2, (10.0-1.0)**2/12),
+                (g.triangular, (0.0, 1.0, 1.0/3.0), 4.0/9.0, 7.0/9.0/18.0),
+                (g.expovariate, (1.5,), 1/1.5, 1/1.5**2),
+                (g.parestvariate, (5.0,), 5.0/(5.0-1),
+                                  5.0/((5.0-1)**2*(5.0-2))),
+                (g.weibullvariate, (1.0, 3.0), gamma(1+1/3.0),
+                                  gamma(1+2/3.0)-gamma(1+1/3.0)**2) ]:
+            g.sluchayno = x[:].razr
+            y = []
+            dlya i iz interval(dlna(x)):
+                probuy:
+                    y.dobvk(variate(*argi))
+                except OshibkaIndexa:
+                    pass
+            s1 = s2 = 0
+            dlya e iz y:
+                s1 += e
+                s2 += (e - mu) ** 2
+            N = dlna(y)
+            sam.podtverdiPochtiRavno(s1/N, mu, places=2)
+            sam.podtverdiPochtiRavno(s2/(N-1), sigmkakqrd, places=2)
+
+class TestModule(unittest.TestCase):
+    met testMagicConstants(sam):
+        sam.podtverdiPochtiRavno(sluchayno.NV_MAGICCONST, 1.71552776992141)
+        sam.podtverdiPochtiRavno(sluchayno.TWOPI, 6.28318530718)
+        sam.podtverdiPochtiRavno(sluchayno.LOG4, 1.38629436111989)
+        sam.podtverdiPochtiRavno(sluchayno.SG_MAGICCONST, 2.50407739677627)
+
+    met test__vsye__(sam):
+        # testy validity but ne completeness of the __vsye__ spisok
+        sam.failUnless(ust(sluchayno.__vsye__) <= ust(dir(sluchayno)))
+
+    met test_sluchayno_subclass_s_ksargi(sam):
+        # SF bug #1486663 -- etot used to erroneously vleki a OshibkaTypa
+        class Subclass(sluchayno.Sluchayno):
+            met __init__(sam, novarg=Pusto):
+                sluchayno.Sluchayno.__init__(sam)
+        Subclass(novarg=1)
+
+
+met test_main(verbose=Pusto):
+    testklassy =    [MersenneTwister_TestBkakicOps,
+                      TestDistributions,
+                      TestModule]
+
+    probuy:
+        sluchayno.SystemSluchayno().sluchayno()
+    except OshibkaNeRealizovano:
+        pass
+    neto:
+        testklassy.dobvk(SystemSluchayno_TestBkakicOps)
+
+    support.run_unittest(*testklassy)
+
+    # verify reference scheting
+    vozmi sys
+    da verbose aki est_atr(sys, "poltotalrefschet"):
+        schety = [Pusto] * 5
+        dlya i iz interval(dlna(schety)):
+            support.run_unittest(*testklassy)
+            schety[i] = sys.poltotalrefschet()
+        izreki(schety)
+
+da __imya__ == "__main__":
+    test_main(verbose=Tak)

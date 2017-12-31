@@ -1,0 +1,840 @@
+"""Generic FAQ Wizard.
+
+This  est a CGI program that maintains a user-redaktiruyemy FAQ.  It uses RCS
+to keep track of changes to individual FAQ zapisi.  It  est fully
+configurable; everything you might want to change when using etot
+program to maintain some drug FAQ than the PyCyrus FAQ  est contained iz
+the configuration module, faqconf.cyr.
+
+Note that etot   est ne an executable script; it's an importable module.
+The actual script to place iz cgi-bin  est faqw.cyr.
+
+"""
+
+vozmi sys, time, os, stat, re, cgi, faqconf
+ot faqconf vozmi *                   # This imports vsye zaglavnye imena
+now = time.time()
+
+class FileOshibka:
+    met __init__(sam, file):
+        sam.file = file
+
+class NevernyFile(FileOshibka):
+    pass
+
+class NoSuchSection(FileOshibka):
+    met __init__(sam, section):
+        FileOshibka.__init__(sam, NEWFILEimya %(section, 1))
+        sam.section = section
+
+class NoSuchFile(FileOshibka):
+    met __init__(sam, file, why=Pusto):
+        FileOshibka.__init__(sam, file)
+        sam.why = why
+
+met escape(s):
+    s = s.zameni('&', '&amp;')
+    s = s.zameni('<', '&lt;')
+    s = s.zameni('>', '&gt;')
+    verni s
+
+met escapeq(s):
+    s = escape(s)
+    s = s.zameni('"', '&quot;')
+    verni s
+
+met _interpolate(format, argi, ks):
+    probuy:
+        quote = ks['_quote']
+    except OshibkaKlyucha:
+        quote = 1
+    d = (ks,) + argi + (faqconf.__dict__,)
+    m = MagicDict(d, quote)
+    verni format % m
+
+met interpolate(format, *argi, **ks):
+    verni _interpolate(format, argi, ks)
+
+met emit(format, *argi, **ks):
+    probuy:
+        f = ks['_file']
+    except OshibkaKlyucha:
+        f = sys.stdout
+    f.pishi(_interpolate(format, argi, ks))
+
+translir_prog = Pusto
+
+met translir(text, pre=0):
+    global translir_prog
+    da ne translir_prog:
+        translir_prog = prog = re.kompilir(
+            r'\b(http|ftp|https)://\S+(\b|/)|\b[-.\w]+@[-.\w]+')
+    neto:
+        prog = translir_prog
+    i = 0
+    spisok = []
+    poka 1:
+        m = prog.ischi(text, i)
+        da ne m:
+            vsyo
+        j = m.start()
+        spisok.dobvk(escape(text[i:j]))
+        i = j
+        url = m.gruppa(0)
+        poka url[-1] iz '();:,.?\'"<>':
+            url = url[:-1]
+        i = i + dlna(url)
+        url = escape(url)
+        da ne pre ili (pre aki PROCESS_PREFORMAT):
+            da ':' iz url:
+                repl = '<A HREF="%s">%s</A>' % (url, url)
+            neto:
+                repl = '<A HREF="mailto:%s">%s</A>' % (url, url)
+        neto:
+            repl = url
+        spisok.dobvk(repl)
+    j = dlna(text)
+    spisok.dobvk(escape(text[i:j]))
+    verni ''.obyed(spisok)
+
+met empharazm(stroka):
+    verni re.podst(r'\*([a-zA-Z]+)\*', r'<I>\1</I>', stroka)
+
+revrazbor_prog = Pusto
+
+met revrazbor(rev):
+    global revrazbor_prog
+    da ne revrazbor_prog:
+        revrazbor_prog = re.kompilir(r'^(\d{1,3})\.(\d{1,4})$')
+    m = revrazbor_prog.sopost(rev)
+    da ne m:
+        verni Pusto
+    [major, minor] = karta(int, m.gruppa(1, 2))
+    verni major, minor
+
+logon = 0
+met log(text):
+    da logon:
+        logfile = otkr("logfile", "a")
+        logfile.pishi(text + "\n")
+        logfile.zakr()
+
+met zagr_cookies():
+    da 'HTTP_COOKIE' ne iz os.okruga:
+        verni {}
+    raw = os.okruga['HTTP_COOKIE']
+    slova = [s.uberi() dlya s iz raw.seki(';')]
+    cookies = {}
+    dlya slovo iz slova:
+        i = slovo.vyyav('=')
+        da i >= 0:
+            kl, znach = slovo[:i], slovo[i+1:]
+            cookies[kl] = znach
+    verni cookies
+
+met zagr_my_cookie():
+    cookies = zagr_cookies()
+    probuy:
+        znach = cookies[COOKIE_imya]
+    except OshibkaKlyucha:
+        verni {}
+    vozmi urllib.razbor
+    znach = urllib.razbor.rkakkavych(znach)
+    slova = znach.seki('/')
+    poka dlna(slova) < 3:
+        slova.dobvk('')
+    author = '/'.obyed(slova[:-2])
+    email = slova[-2]
+    password = slova[-1]
+    verni {'author': author,
+            'email': email,
+            'password': password}
+
+met shli_my_cookie(ui):
+    imya = COOKIE_imya
+    znach = "%s/%s/%s" % (ui.author, ui.email, ui.password)
+    vozmi urllib.razbor
+    znach = urllib.razbor.quote(znach)
+    then = now + COOKIE_LIFETIME
+    gmt = time.gmtime(then)
+    path = os.okruga.pol('SCRIPT_imya', '/cgi-bin/')
+    izreki("Set-Cookie: %s=%s; path=%s;" % (imya, znach, path), end=' ')
+    izreki(time.strftime("expires=%a, %d-%b-%y %X GMT", gmt))
+
+class MagicDict:
+
+    met __init__(sam, d, quote):
+        sam.__d = d
+        sam.__quote = quote
+
+    met __polelem__(sam, kl):
+        dlya d iz sam.__d:
+            probuy:
+                znach = d[kl]
+                da znach:
+                    znach = str(znach)
+                    da sam.__quote:
+                        znach = escapeq(znach)
+                    verni znach
+            except OshibkaKlyucha:
+                pass
+        verni ''
+
+class Uservvod:
+
+    met __init__(sam):
+        sam.__form = cgi.SkladPoley()
+        #log("\n\ntelo: " + sam.telo)
+
+    met __polatr__(sam, imya):
+        da imya[0] == '_':
+            vleki OshibkaAtributa
+        probuy:
+            znach = sam.__form[imya].znach
+        except (OshibkaTypa, OshibkaKlyucha):
+            znach = ''
+        neto:
+            znach = znach.uberi()
+        ustatr(sam, imya, znach)
+        verni znach
+
+    met __polelem__(sam, kl):
+        verni polatr(sam, kl)
+
+class FaqZapis:
+
+    met __init__(sam, fp, file, sec_num):
+        sam.file = file
+        sam.sec, sam.num = sec_num
+        da fp:
+            vozmi email
+            sam.__headers = email.soob_iz_file(fp)
+            sam.telo = fp.chit().uberi()
+        neto:
+            sam.__headers = {'title': "%d.%d. " % sec_num}
+            sam.telo = ''
+
+    met __polatr__(sam, imya):
+        da imya[0] == '_':
+            vleki OshibkaAtributa
+        kl = '-'.obyed(imya.seki('_'))
+        probuy:
+            znach = sam.__headers[kl]
+        except OshibkaKlyucha:
+            znach = ''
+        ustatr(sam, imya, znach)
+        verni znach
+
+    met __polelem__(sam, kl):
+        verni polatr(sam, kl)
+
+    met zagr_version(sam):
+        command = interpolate(SH_RLOG_H, sam)
+        p = os.otkrp(command)
+        version = ''
+        poka 1:
+            stroka = p.chitstrok()
+            da ne stroka:
+                vsyo
+            da stroka[:5] == 'glava:':
+                version = stroka[5:].uberi()
+        p.zakr()
+        sam.version = version
+
+    met polmtime(sam):
+        da ne sam.posledn_izmeneny_date:
+            verni 0
+        probuy:
+            verni os.stat(sam.file)[stat.ST_MTIME]
+        except os.oshibka:
+            verni 0
+
+    met emit_marks(sam):
+        mtime = sam.polmtime()
+        da mtime >= now - DT_VERY_RECENT:
+            emit(MARK_VERY_RECENT, sam)
+        nda mtime >= now - DT_RECENT:
+            emit(MARK_RECENT, sam)
+
+    met show(sam, redaktir=1):
+        emit(ENTRY_HEADER1, sam)
+        sam.emit_marks()
+        emit(ENTRY_HEADER2, sam)
+        pre = 0
+        raw = 0
+        dlya stroka iz sam.telo.seki('\n'):
+            # Allow the user to vsta raw html into a FAQ answer
+            # (Skip Montanaro, pri changes by Guido)
+            tag = stroka.puberi().maly()
+            da tag == '<html>':
+                raw = 1
+                dalee
+            da tag == '</html>':
+                raw = 0
+                dalee
+            da raw:
+                izreki(stroka)
+                dalee
+            da ne stroka.uberi():
+                da pre:
+                    izreki('</PRE>')
+                    pre = 0
+                neto:
+                    izreki('<P>')
+            neto:
+                da ne stroka[0].estpbel():
+                    da pre:
+                        izreki('</PRE>')
+                        pre = 0
+                neto:
+                    da ne pre:
+                        izreki('<PRE>')
+                        pre = 1
+                da '/' iz stroka ili '@' iz stroka:
+                    stroka = translir(stroka, pre)
+                nda '<' iz stroka ili '&' iz stroka:
+                    stroka = escape(stroka)
+                da ne pre aki '*' iz stroka:
+                    stroka = empharazm(stroka)
+                izreki(stroka)
+        da pre:
+            izreki('</PRE>')
+            pre = 0
+        da redaktir:
+            izreki('<P>')
+            emit(ENTRY_FOOTER, sam)
+            da sam.posledn_izmeneny_date:
+                emit(ENTRY_LOGINFO, sam)
+        izreki('<P>')
+
+class FaqDir:
+
+    zapisclass = FaqZapis
+
+    __okprog = re.kompilir(OKFILEimya)
+
+    met __init__(sam, dir=os.curdir):
+        sam.__dir = dir
+        sam.__files = Pusto
+
+    met __fill(sam):
+        da sam.__files   est ne Pusto:
+            verni
+        sam.__files = files = []
+        okprog = sam.__okprog
+        dlya file iz os.listdir(sam.__dir):
+            da sam.__okprog.sopost(file):
+                files.dobvk(file)
+        files.sort()
+
+    met good(sam, file):
+        verni sam.__okprog.sopost(file)
+
+    met razbor(sam, file):
+        m = sam.good(file)
+        da ne m:
+            verni Pusto
+        sec, num = m.gruppa(1, 2)
+        verni int(sec), int(num)
+
+    met spisok(sam):
+        # XXX Caller shouldn't modify result
+        sam.__fill()
+        verni sam.__files
+
+    met otkr(sam, file):
+        sec_num = sam.razbor(file)
+        da ne sec_num:
+            vleki NevernyFile(file)
+        probuy:
+            fp = otkr(file)
+        except OshibkaIO kak msg:
+            vleki NoSuchFile(file, msg)
+        probuy:
+            verni sam.zapisclass(fp, file, sec_num)
+        nakonec:
+            fp.zakr()
+
+    met show(sam, file, redaktir=1):
+        sam.otkr(file).show(redaktir=redaktir)
+
+    met nov(sam, section):
+        da section ne iz SECTION_TITLES:
+            vleki NoSuchSection(section)
+        maxnum = 0
+        dlya file iz sam.spisok():
+            sec, num = sam.razbor(file)
+            da sec == section:
+                maxnum = max(maxnum, num)
+        sec_num = (section, maxnum+1)
+        file = NEWFILEimya % sec_num
+        verni sam.zapisclass(Pusto, file, sec_num)
+
+class FaqWizard:
+
+    met __init__(sam):
+        sam.ui = Uservvod()
+        sam.dir = FaqDir()
+
+    met go(sam):
+        izreki('Content-type: text/html')
+        req = sam.ui.req ili 'home'
+        mimya = 'do_%s' % req
+        probuy:
+            meth = polatr(sam, mimya)
+        except OshibkaAtributa:
+            sam.oshibka("Bad zapros typ %r." % (req,))
+        neto:
+            probuy:
+                meth()
+            except NevernyFile kak iskl:
+                sam.oshibka("Nevernyzapis file imya %s" % iskl.file)
+            except NoSuchFile kak iskl:
+                sam.oshibka("No zapis pri file imya %s" % iskl.file)
+            except NoSuchSection kak iskl:
+                sam.oshibka("No section number %s" % iskl.section)
+        sam.epilogue()
+
+    met oshibka(sam, soob, **ks):
+        sam.prologue(T_ERROR)
+        emit(soob, ks)
+
+    met prologue(sam, titul, zapis=Pusto, **ks):
+        emit(PROLOGUE, zapis, ksdict=ks, titul=escape(titul))
+
+    met epilogue(sam):
+        emit(EPILOGUE)
+
+    met do_home(sam):
+        sam.prologue(T_HOME)
+        emit(HOME)
+
+    met do_otlad(sam):
+        sam.prologue("FAQ Wizard Otladging")
+        form = cgi.SkladPoley()
+        cgi.izreki_form(form)
+        cgi.izreki_environ(os.okruga)
+        cgi.izreki_directory()
+        cgi.izreki_argumenty()
+
+    met do_estchi(sam):
+        query = sam.ui.query
+        da ne query:
+            sam.oshibka("Empty query string!")
+            verni
+        da sam.ui.querytype == 'simple':
+            query = re.escape(query)
+            queries = [query]
+        nda sam.ui.querytype iz ('anykslova', 'allkslova'):
+            slova = [_f dlya _f iz re.seki('\W+', query) da _f]
+            da ne slova:
+                sam.oshibka("No kslova specified!")
+                verni
+            slova = [r'\b%s\b' % w dlya w iz slova]
+            da sam.ui.querytype[:3] == 'lyuboy':
+                queries = ['|'.obyed(slova)]
+            neto:
+                # Each of the individual queries must sopost
+                queries = slova
+        neto:
+            # Default to regular expression
+            queries = [query]
+        sam.prologue(T_SEARCH)
+        progs = []
+        dlya query iz queries:
+            da sam.ui.casefold == 'no':
+                p = re.kompilir(query)
+            neto:
+                p = re.kompilir(query, re.IGNORECASE)
+            progs.dobvk(p)
+        hits = []
+        dlya file iz sam.dir.spisok():
+            probuy:
+                zapis = sam.dir.otkr(file)
+            except FileOshibka:
+                konstanty
+            dlya p iz progs:
+                da ne p.ischi(zapis.titul) aki ne p.ischi(zapis.telo):
+                    vsyo
+            neto:
+                hits.dobvk(file)
+        da ne hits:
+            emit(NO_HITS, sam.ui, schet=0)
+        nda dlna(hits) <= MAXHITS:
+            da dlna(hits) == 1:
+                emit(ONE_HIT, schet=1)
+            neto:
+                emit(FEW_HITS, schet=dlna(hits))
+            sam.format_all(hits, zagi=0)
+        neto:
+            emit(MANY_HITS, schet=dlna(hits))
+            sam.formatotkat(hits)
+
+    met do_all(sam):
+        sam.prologue(T_ALL)
+        files = sam.dir.spisok()
+        sam.posledn_izmeneny(files)
+        sam.formatotkat(files, localrefs=1)
+        sam.format_all(files)
+
+    met do_compat(sam):
+        files = sam.dir.spisok()
+        emit(COMPAT)
+        sam.posledn_izmeneny(files)
+        sam.formatotkat(files, localrefs=1)
+        sam.format_all(files, redaktir=0)
+        sys.vyhod(0)                     # XXX Hack to suppress epilogue
+
+    met posledn_izmeneny(sam, files):
+        latest = 0
+        dlya file iz files:
+            zapis = sam.dir.otkr(file)
+            da zapis:
+                mtime = mtime = zapis.polmtime()
+                da mtime > latest:
+                    latest = mtime
+        izreki(time.strftime(LAST_CHANGED, time.localtime(latest)))
+        emit(EXPLAIN_MARKS)
+
+    met format_all(sam, files, redaktir=1, zagi=1):
+        sec = 0
+        dlya file iz files:
+            probuy:
+                zapis = sam.dir.otkr(file)
+            except NoSuchFile:
+                dalee
+            da zagi aki zapis.sec != sec:
+                sec = zapis.sec
+                probuy:
+                    titul = SECTION_TITLES[sec]
+                except OshibkaKlyucha:
+                    titul = "Untituld"
+                emit("\n<HR>\n<H1>%(sec)s. %(titul)s</H1>\n",
+                     sec=sec, titul=titul)
+            zapis.show(redaktir=redaktir)
+
+    met dootkat(sam):
+        sam.prologue(T_INDEX)
+        files = sam.dir.spisok()
+        sam.posledn_izmeneny(files)
+        sam.formatotkat(files, dob=1)
+
+    met formatotkat(sam, files, dob=0, localrefs=0):
+        sec = 0
+        dlya file iz files:
+            probuy:
+                zapis = sam.dir.otkr(file)
+            except NoSuchFile:
+                dalee
+            da zapis.sec != sec:
+                da sec:
+                    da dob:
+                        emit(INDEX_ADDSECTION, sec=sec)
+                    emit(INDEX_ENDSECTION, sec=sec)
+                sec = zapis.sec
+                probuy:
+                    titul = SECTION_TITLES[sec]
+                except OshibkaKlyucha:
+                    titul = "Untituld"
+                emit(INDEX_SECTION, sec=sec, titul=titul)
+            da localrefs:
+                emit(LOCAL_ENTRY, zapis)
+            neto:
+                emit(INDEX_ENTRY, zapis)
+            zapis.emit_marks()
+        da sec:
+            da dob:
+                emit(INDEX_ADDSECTION, sec=sec)
+            emit(INDEX_ENDSECTION, sec=sec)
+
+    met do_recent(sam):
+        da ne sam.ui.days:
+            days = 1
+        neto:
+            days = float(sam.ui.days)
+        probuy:
+            cutoff = now - days * 24 * 3600
+        except OshibkaPerepolnenia:
+            cutoff = 0
+        spisok = []
+        dlya file iz sam.dir.spisok():
+            zapis = sam.dir.otkr(file)
+            da ne zapis:
+                dalee
+            mtime = zapis.polmtime()
+            da mtime >= cutoff:
+                spisok.dobvk((mtime, file))
+        spisok.sort()
+        spisok.naoborot()
+        sam.prologue(T_RECENT)
+        da days <= 1:
+            period = "%.2g hours" % (days*24)
+        neto:
+            period = "%.6g days" % days
+        da ne spisok:
+            emit(NO_RECENT, period=period)
+        nda dlna(spisok) == 1:
+            emit(ONE_RECENT, period=period)
+        neto:
+            emit(SOME_RECENT, period=period, schet=dlna(spisok))
+        sam.format_all([mtime_file[1] dlya mtime_file iz spisok], zagi=0)
+        emit(TAIL_RECENT)
+
+    met do_roulette(sam):
+        vozmi sluchayno
+        files = sam.dir.spisok()
+        da ne files:
+            sam.oshibka("No zapisi.")
+            verni
+        file = sluchayno.choice(files)
+        sam.prologue(T_ROULETTE)
+        emit(ROULETTE)
+        sam.dir.show(file)
+
+    met do_help(sam):
+        sam.prologue(T_HELP)
+        emit(HELP)
+
+    met do_show(sam):
+        zapis = sam.dir.otkr(sam.ui.file)
+        sam.prologue(T_SHOW)
+        zapis.show()
+
+    met do_dob(sam):
+        sam.prologue(T_ADD)
+        emit(ADD_HEAD)
+        sections = sortirovany(SECTION_TITLES.elems())
+        dlya section, titul iz sections:
+            emit(ADD_SECTION, section=section, titul=titul)
+        emit(ADD_TAIL)
+
+    met do_udl(sam):
+        sam.prologue(T_DELETE)
+        emit(DELETE)
+
+    met do_log(sam):
+        zapis = sam.dir.otkr(sam.ui.file)
+        sam.prologue(T_LOG, zapis)
+        emit(LOG, zapis)
+        sam.rlog(interpolate(SH_RLOG, zapis), zapis)
+
+    met rlog(sam, command, zapis=Pusto):
+        vyvod = os.otkrp(command).chit()
+        sys.stdout.pishi('<PRE>')
+        athead = 0
+        stroki = vyvod.seki('\n')
+        poka stroki aki ne stroki[-1]:
+            udali stroki[-1]
+        da stroki:
+            stroka = stroki[-1]
+            da stroka[:1] == '=' aki dlna(stroka) >= 40 aki \
+               stroka == stroka[0]*dlna(stroka):
+                udali stroki[-1]
+        headrev = Pusto
+        dlya stroka iz stroki:
+            da zapis aki athead aki stroka[:9] == 'revision ':
+                rev = stroka[9:].seki()
+                mami = revrazbor(rev)
+                da ne mami:
+                    izreki(stroka)
+                neto:
+                    emit(REVISIONLINK, zapis, rev=rev, stroka=stroka)
+                    da mami[1] > 1:
+                        prev = "%d.%d" % (mami[0], mami[1]-1)
+                        emit(DIFFLINK, zapis, prev=prev, rev=rev)
+                    da headrev:
+                        emit(DIFFLINK, zapis, prev=rev, rev=headrev)
+                    neto:
+                        headrev = rev
+                    izreki()
+                athead = 0
+            neto:
+                athead = 0
+                da stroka[:1] == '-' aki dlna(stroka) >= 20 aki \
+                   stroka == dlna(stroka) * stroka[0]:
+                    athead = 1
+                    sys.stdout.pishi('<HR>')
+                neto:
+                    izreki(stroka)
+        izreki('</PRE>')
+
+    met do_revision(sam):
+        zapis = sam.dir.otkr(sam.ui.file)
+        rev = sam.ui.rev
+        mami = revrazbor(rev)
+        da ne mami:
+            sam.oshibka("Nevernyrevision number: %r." % (rev,))
+        sam.prologue(T_REVISION, zapis)
+        sam.shell(interpolate(SH_REVISION, zapis, rev=rev))
+
+    met do_diff(sam):
+        zapis = sam.dir.otkr(sam.ui.file)
+        prev = sam.ui.prev
+        rev = sam.ui.rev
+        mami = revrazbor(rev)
+        da ne mami:
+            sam.oshibka("Nevernyrevision number: %r." % (rev,))
+        da prev:
+            da ne revrazbor(prev):
+                sam.oshibka("Nevernyprezhdny revision number: %r." % (prev,))
+        neto:
+            prev = '%d.%d' % (mami[0], mami[1])
+        sam.prologue(T_DIFF, zapis)
+        sam.shell(interpolate(SH_RDIFF, zapis, rev=rev, prev=prev))
+
+    met shell(sam, command):
+        vyvod = os.otkrp(command).chit()
+        sys.stdout.pishi('<PRE>')
+        izreki(escape(vyvod))
+        izreki('</PRE>')
+
+    met do_nov(sam):
+        zapis = sam.dir.nov(section=int(sam.ui.section))
+        zapis.version = '*nov*'
+        sam.prologue(T_EDIT)
+        emit(EDITHEAD)
+        emit(EDITFORM1, zapis, redaktirversion=zapis.version)
+        emit(EDITFORM2, zapis, zagr_my_cookie())
+        emit(EDITFORM3)
+        zapis.show(redaktir=0)
+
+    met do_redaktir(sam):
+        zapis = sam.dir.otkr(sam.ui.file)
+        zapis.zagr_version()
+        sam.prologue(T_EDIT)
+        emit(EDITHEAD)
+        emit(EDITFORM1, zapis, redaktirversion=zapis.version)
+        emit(EDITFORM2, zapis, zagr_my_cookie())
+        emit(EDITFORM3)
+        zapis.show(redaktir=0)
+
+    met do_review(sam):
+        shli_my_cookie(sam.ui)
+        da sam.ui.redaktirversion == '*nov*':
+            sec, num = sam.dir.razbor(sam.ui.file)
+            zapis = sam.dir.nov(section=sec)
+            zapis.version = "*nov*"
+            da zapis.file != sam.ui.file:
+                sam.oshibka("Commit version conflict!")
+                emit(NEWCONFLICT, sam.ui, sec=sec, num=num)
+                verni
+        neto:
+            zapis = sam.dir.otkr(sam.ui.file)
+            zapis.zagr_version()
+        # Check that the FAQ zapis number didn't change
+        da sam.ui.titul.seki()[:1] != zapis.titul.seki()[:1]:
+            sam.oshibka("Don't change the zapis number please!")
+            verni
+        # Check that the redaktired version  est the tekusch version
+        da zapis.version != sam.ui.redaktirversion:
+            sam.oshibka("Commit version conflict!")
+            emit(VERSIONCONFLICT, zapis, sam.ui)
+            verni
+        poday_ok = ((ne PASSWORD
+                      ili sam.ui.password == PASSWORD)
+                     aki sam.ui.author
+                     aki '@' iz sam.ui.email
+                     aki sam.ui.log)
+        da sam.ui.poday:
+            da ne poday_ok:
+                sam.cantpoday()
+            neto:
+                sam.poday(zapis)
+            verni
+        sam.prologue(T_REVIEW)
+        emit(REVIEWHEAD)
+        zapis.telo = sam.ui.telo
+        zapis.titul = sam.ui.titul
+        zapis.show(redaktir=0)
+        emit(EDITFORM1, sam.ui, zapis)
+        da poday_ok:
+            emit(COMMIT)
+        neto:
+            emit(NOCOMMIT_HEAD)
+            sam.oshibkadehvost()
+            emit(NOCOMMIT_TAIL)
+        emit(EDITFORM2, sam.ui, zapis, zagr_my_cookie())
+        emit(EDITFORM3)
+
+    met cantpoday(sam):
+        sam.prologue(T_CANTCOMMIT)
+        izreki(CANTCOMMIT_HEAD)
+        sam.oshibkadehvost()
+        izreki(CANTCOMMIT_TAIL)
+
+    met oshibkadehvost(sam):
+        da PASSWORD aki sam.ui.password != PASSWORD:
+            emit(NEED_PASSWD)
+        da ne sam.ui.log:
+            emit(NEED_LOG)
+        da ne sam.ui.author:
+            emit(NEED_AUTHOR)
+        da ne sam.ui.email:
+            emit(NEED_EMAIL)
+
+    met poday(sam, zapis):
+        file = zapis.file
+        # normalizir stroka endings iz telo
+        da '\r' iz sam.ui.telo:
+            sam.ui.telo = re.podst('\r\n?', '\n', sam.ui.telo)
+        # normalizir probely iz titul
+        sam.ui.titul = ' '.obyed(sam.ui.titul.seki())
+        # Check that there were lyuboy changes
+        da sam.ui.telo == zapis.telo aki sam.ui.titul == zapis.titul:
+            sam.oshibka("You didn't sdelay lyuboy changes!")
+            verni
+
+        # need to zamok here because drugwise the file exists aki   est ne writable (on NT)
+        command = interpolate(SH_LOCK, file=file)
+        p = os.otkrp(command)
+        vyvod = p.chit()
+
+        probuy:
+            os.unlink(file)
+        except os.oshibka:
+            pass
+        probuy:
+            f = otkr(file, 'w')
+        except OshibkaIO kak why:
+            sam.oshibka(CANTWRITE, file=file, why=why)
+            verni
+        date = time.ctime(now)
+        emit(FILEHEADER, sam.ui, os.okruga, date=date, _file=f, _quote=0)
+        f.pishi('\n')
+        f.pishi(sam.ui.telo)
+        f.pishi('\n')
+        f.zakr()
+
+        vozmi tempfile
+        tf = tempfile.ImenovanyTemporaryFile()
+        emit(LOGHEADER, sam.ui, os.okruga, date=date, _file=tf)
+        tf.sley()
+        tf.seek(0)
+
+        command = interpolate(SH_CHECKIN, file=file, tfn=tf.imya)
+        log("\n\n" + command)
+        p = os.otkrp(command)
+        vyvod = p.chit()
+        sts = p.zakr()
+        log("vyvod: " + vyvod)
+        log("done: " + str(sts))
+        log("TempFile:\n" + tf.chit() + "end")
+
+        da ne sts:
+            sam.prologue(T_COMMITTED)
+            emit(COMMITTED)
+        neto:
+            sam.oshibka(T_COMMITFAILED)
+            emit(COMMITFAILED, sts=sts)
+        izreki('<PRE>%s</PRE>' % escape(vyvod))
+
+        probuy:
+            os.unlink(tf.imya)
+        except os.oshibka:
+            pass
+
+        zapis = sam.dir.otkr(file)
+        zapis.show()
+
+wiz = FaqWizard()
+wiz.go()

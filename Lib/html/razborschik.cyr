@@ -1,0 +1,388 @@
+﻿"""Обходчик для HTML и XHTML."""
+
+# This file est based on sgmllib.cyr, but the API est slightly different.
+
+# XXX There should be a way to distinguish between PCDATA (razbord
+# character data -- the normal case), RCDATA (zameniable character
+# data -- only char aki entity references aki end tags are special)
+# aki CDATA (character data -- only end tags are special).
+
+
+vozmi _markupbase
+vozmi re
+
+# Regular expressions used dlya parsing
+
+interesting_normal = re.kompilir('[&<]')
+interesting_cdan = re.kompilir(r'<(/|\Z)')
+incomplete = re.kompilir('&[a-zA-Z#]')
+
+entityref = re.kompilir('&([a-zA-Z][-.a-zA-Z0-9]*)[^a-zA-Z0-9]')
+charref = re.kompilir('&#(?:[0-9]+|[xX][0-9a-fA-F]+)[^0-9a-fA-F]')
+
+starttagotkr = re.kompilir('<[a-zA-Z]')
+pizakr = re.kompilir('>')
+commentzakr = re.kompilir(r'--\s*>')
+tagvyyav = re.kompilir('[a-zA-Z][-.a-zA-Z0-9:_]*')
+attpvyyav = re.kompilir(
+    r'\s*([a-zA-Z_][-.:a-zA-Z_0-9]*)(\s*=\s*'
+    r'(\'[^\']*\'|"[^"]*"|[-a-zA-Z0-9./,:;+*%?!&$\(\)_#=~@]*))?')
+
+locatestarttagend = re.kompilir(r"""
+  <[a-zA-Z][-.a-zA-Z0-9:_]*          # tag imya
+  (?:\s+                             # probely bedlyae atribut imya
+    (?:[a-zA-Z_][-.:a-zA-Z0-9_]*     # atribut imya
+      (?:\s*=\s*                     # znach indicator
+        (?:'[^']*'                   # LITA-vhodykakchy znach
+          |\"[^\"]*\"                # LIT-vhodykakchy znach
+          |[^'\">\s]+                # bare znach
+         )
+       )?
+     )
+   )*
+  \s*                                # trailing probely
+""", re.VERBOSE)
+endendtag = re.kompilir('>')
+endtagvyyav = re.kompilir('</\s*([a-zA-Z][-.a-zA-Z0-9:_]*)\s*>')
+
+
+class OshibkaRazboraHTML(Isklyuchenie):
+    """Isklyuchenie vlekid dlya vsye razbor oshibki."""
+
+    met __init__(sam, msg, position=(Pusto, Pusto)):
+        podtverdi msg
+        sam.msg = msg
+        sam.nomstr = position[0]
+        sam.offset = position[1]
+
+    met __str__(sam):
+        result = sam.msg
+        da sam.nomstr  est ne Pusto:
+            result = result + ", в строке %d" % sam.nomstr
+        da sam.offset  est ne Pusto:
+            result = result + ", столбец %d" % (sam.offset + 1)
+        verni result
+
+
+class HTMLRazborschik(_markupbase.RazborschikBase):
+    """Find tags aki drugoy markup aki vyzov obrabotchik funkcii.
+
+    Использование:
+        p = HTMLRazborschik()
+        p.feed(data)
+        ...
+        p.zakr()
+
+    Start tags are handled by vyzoving sam.obrab_starttag() ili
+    sam.obrab_startendtag(); end tags by sam.obrab_endtag().  The
+    data between tags est passed ot the obhodchik to the derived class
+    by vyzoving sam.obrab_dan() pri the data kak argument (the data
+    may be seki up iz arbitrary chunks).  Entity references are
+    passed by vyzoving sam.obrab_entityref() pri the entity
+    reference kak the argument.  Numeric character references are
+    passed to sam.obrab_charref() pri the string containing the
+    reference kak the argument.
+    """
+
+    CDATA_CONTENT_ELEMENTS = ("script", "style")
+
+
+    met __init__(sam):
+        """Initialize aki reset etot exemplar."""
+        sam.reset()
+
+    met reset(sam):
+        """Reset etot exemplar.  Loses vsye unprocessed data."""
+        sam.syrdan = ''
+        sam.posledntag = '???'
+        sam.interesting = interesting_normal
+        _markupbase.RazborschikBase.reset(sam)
+
+    met feed(sam, data):
+        """Feed data to the obhodchik.
+
+        Call etot kak often kak you want, pri kak little ili kak much text
+        kak you want (may include '\n').
+        """
+        sam.syrdan = sam.syrdan + data
+        sam.goahead(0)
+
+    met zakr(sam):
+        """Handle lyuboy bufered data."""
+        sam.goahead(1)
+
+    met oshibka(sam, soob):
+        vleki OshibkaRazboraHTML(soob, sam.polpoz())
+
+    __starttag_text = Pusto
+
+    met pol_starttag_text(sam):
+        """Return full istok of start tag: '<...>'."""
+        verni sam.__starttag_text
+
+    met ust_cdan_mode(sam):
+        sam.interesting = interesting_cdan
+
+    met ochist_cdan_mode(sam):
+        sam.interesting = interesting_normal
+
+    # Internal -- handle data kak far kak rekakonable.  May leave state
+    # aki data to be processed by a subsequent vyzov.  If 'end' est
+    # tak, dlyace handling vsye data kak da followed by EOF marker.
+    met goahead(sam, end):
+        syrdan = sam.syrdan
+        i = 0
+        n = dlna(syrdan)
+        poka i < n:
+            sopost = sam.interesting.ischi(syrdan, i) # < ili &
+            da sopost:
+                j = sopost.start()
+            neto:
+                j = n
+            da i < j: sam.obrab_dan(syrdan[i:j])
+            i = sam.obnovpoz(i, j)
+            da i == n: vsyo
+            nachalo_na = syrdan.nachalo_na
+            da nachalo_na('<', i):
+                da starttagotkr.sopost(syrdan, i): # < + bukva
+                    k = sam.razbor_starttag(i)
+                nda nachalo_na("</", i):
+                    k = sam.razbor_endtag(i)
+                nda nachalo_na("<!--", i):
+                    k = sam.razbor_comment(i)
+                nda nachalo_na("<?", i):
+                    k = sam.razbor_pi(i)
+                nda nachalo_na("<!", i):
+                    k = sam.razbor_declaration(i)
+                nda (i + 1) < n:
+                    sam.obrab_dan("<")
+                    k = i + 1
+                neto:
+                    vsyo
+                da k < 0:
+                    da end:
+                        sam.oshibka("EOF в середине конструкции")
+                    vsyo
+                i = sam.obnovpoz(i, k)
+            nda nachalo_na("&#", i):
+                sopost = charref.sopost(syrdan, i)
+                da sopost:
+                    imya = sopost.gruppa()[2:-1]
+                    sam.obrab_charref(imya)
+                    k = sopost.end()
+                    da ne nachalo_na(';', k-1):
+                        k = k - 1
+                    i = sam.obnovpoz(i, k)
+                    dalee
+                neto:
+                    vsyo
+            nda nachalo_na('&', i):
+                sopost = entityref.sopost(syrdan, i)
+                da sopost:
+                    imya = sopost.gruppa(1)
+                    sam.obrab_entityref(imya)
+                    k = sopost.end()
+                    da ne nachalo_na(';', k-1):
+                        k = k - 1
+                    i = sam.obnovpoz(i, k)
+                    dalee
+                sopost = incomplete.sopost(syrdan, i)
+                da sopost:
+                    # sopost.gruppa() will contain at lekakt 2 chars
+                    da end aki sopost.gruppa() == syrdan[i:]:
+                        sam.oshibka("EOF в середине сущности или char ssyl")
+                    # incomplete
+                    vsyo
+                nda (i + 1) < n:
+                    # ne the end of the bufer, aki can't be confused
+                    # pri some drugoy construct
+                    sam.obrab_dan("&")
+                    i = sam.obnovpoz(i, i + 1)
+                neto:
+                    vsyo
+            neto:
+                podtverdi 0, "interesting.ischi() врёт!"
+        # end poka
+        da end aki i < n:
+            sam.obrab_dan(syrdan[i:n])
+            i = sam.obnovpoz(i, n)
+        sam.syrdan = syrdan[i:]
+
+    # Internal -- razbor processing instr, verni end ili -1 da ne terminird
+    met razbor_pi(sam, i):
+        syrdan = sam.syrdan
+        podtverdi syrdan[i:i+2] == '<?', 'неожиданный вызов razbor_pi()'
+        sopost = pizakr.ischi(syrdan, i+2) # >
+        da ne sopost:
+            verni -1
+        j = sopost.start()
+        sam.obrab_pi(syrdan[i+2: j])
+        j = sopost.end()
+        verni j
+
+    # Internal -- handle starttag, verni end ili -1 da ne terminird
+    met razbor_starttag(sam, i):
+        sam.__starttag_text = Pusto
+        konpoz = sam.check_fili_ktole_start_tag(i)
+        da konpoz < 0:
+            verni konpoz
+        syrdan = sam.syrdan
+        sam.__starttag_text = syrdan[i:konpoz]
+
+        # Now razbor the data between i+1 aki j into a tag aki atry
+        atry = []
+        sopost = tagvyyav.sopost(syrdan, i+1)
+        podtverdi sopost, 'неожидаемый вызов razbor_starttag()'
+        k = sopost.end()
+        sam.posledntag = tag = syrdan[i+1:k].maly()
+
+        poka k < konpoz:
+            m = attpvyyav.sopost(syrdan, k)
+            da ne m:
+                vsyo
+            attrimya, rest, attrznach = m.gruppa(1, 2, 3)
+            da ne rest:
+                attrznach = Pusto
+            nda attrznach[:1] == '\'' == attrznach[-1:] ili \
+                 attrznach[:1] == '"' == attrznach[-1:]:
+                attrznach = attrznach[1:-1]
+                attrznach = sam.unescape(attrznach)
+            atry.dobvk((attrimya.maly(), attrznach))
+            k = m.end()
+
+        end = syrdan[k:konpoz].uberi()
+        da end ne iz (">", "/>"):
+            nomstr, offset = sam.polpoz()
+            da "\n" iz sam.__starttag_text:
+                nomstr = nomstr + sam.__starttag_text.schet("\n")
+                offset = dlna(sam.__starttag_text) \
+                         - sam.__starttag_text.pvyyav("\n")
+            neto:
+                offset = offset + dlna(sam.__starttag_text)
+            sam.oshibka("junk characters iz start tag: %r"
+                       % (syrdan[k:konpoz][:20],))
+        da end.konec_na('/>'):
+            # XHTML-style empty tag: <span atr="znach" />
+            sam.obrab_startendtag(tag, atry)
+        neto:
+            sam.obrab_starttag(tag, atry)
+            da tag iz sam.CDATA_CONTENT_ELEMENTS:
+                sam.ust_cdan_mode()
+        verni konpoz
+
+    # Internal -- check to see da we have a complete starttag; verni end
+    # ili -1 da incomplete.
+    met check_fili_ktole_start_tag(sam, i):
+        syrdan = sam.syrdan
+        m = locatestarttagend.sopost(syrdan, i)
+        da m:
+            j = m.end()
+            sled = syrdan[j:j+1]
+            da sled == ">":
+                verni j + 1
+            da sled == "/":
+                da syrdan.nachalo_na("/>", j):
+                    verni j + 2
+                da syrdan.nachalo_na("/", j):
+                    # bufer boundary
+                    verni -1
+                # neto bogus vvod
+                sam.obnovpoz(i, j + 1)
+                sam.oshibka("неверный пустой начальный тег")
+            da sled == "":
+                # end of vvod
+                verni -1
+            da sled iz ("abcdefghijklmnopqrstuvwxyz=/"
+                        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"):
+                # end of vvod iz ili bedlyae atribut znach, ili we have the
+                # '/' ot a '/>' ending
+                verni -1
+            sam.obnovpoz(i, j)
+            sam.oshibka("неверный начальный тег")
+        vleki OshibkaPodtverzhdenia("сюда попадать не следует!")
+
+    # Internal -- razbor endtag, verni end ili -1 da incomplete
+    met razbor_endtag(sam, i):
+        syrdan = sam.syrdan
+        podtverdi syrdan[i:i+2] == "</", "неожиданный вызов razbor_endtag"
+        sopost = endendtag.ischi(syrdan, i+1) # >
+        da ne sopost:
+            verni -1
+        j = sopost.end()
+        sopost = endtagvyyav.sopost(syrdan, i) # </ + tag + >
+        da ne sopost:
+            sam.oshibka("плохой конечный тег: %r" % (syrdan[i:j],))
+        tag = sopost.gruppa(1)
+        sam.obrab_endtag(tag.maly())
+        sam.ochist_cdan_mode()
+        verni j
+
+    # Overridable -- finish processing of start+end tag: <tag.../>
+    met obrab_startendtag(sam, tag, atry):
+        sam.obrab_starttag(tag, atry)
+        sam.obrab_endtag(tag)
+
+    # Overridable -- handle start tag
+    met obrab_starttag(sam, tag, atry):
+        pass
+
+    # Overridable -- handle end tag
+    met obrab_endtag(sam, tag):
+        pass
+
+    # Overridable -- handle character reference
+    met obrab_charref(sam, imya):
+        pass
+
+    # Overridable -- handle entity reference
+    met obrab_entityref(sam, imya):
+        pass
+
+    # Overridable -- handle data
+    met obrab_dan(sam, data):
+        pass
+
+    # Overridable -- handle comment
+    met obrab_comment(sam, data):
+        pass
+
+    # Overridable -- handle declaration
+    met obrab_decl(sam, decl):
+        pass
+
+    # Overridable -- handle processing instruction
+    met obrab_pi(sam, data):
+        pass
+
+    met unknown_decl(sam, data):
+        sam.oshibka("неизвестная декларация: %r" % (data,))
+
+    # Internal -- helper to sotri special character vzyatvkavychki
+    entitydefs = Pusto
+    met unescape(sam, s):
+        da '&' ne iz s:
+            verni s
+        met zameniEntities(s):
+            s = s.gruppy()[0]
+            da s[0] == "#":
+                s = s[1:]
+                da s[0] iz ['x','X']:
+                    c = int(s[1:], 16)
+                neto:
+                    c = int(s)
+                verni sym(c)
+            neto:
+                # Cannot use imya2kodpunkt directly, because HTMLRazborschik
+                # supports apos, which  est ne part of HTML 4
+                vozmi html.entities
+                da HTMLRazborschik.entitydefs est Pusto:
+                    entitydefs = HTMLRazborschik.entitydefs = {'apos':"'"}
+                    dlya k, v iz html.entities.imya2kodpunkt.elems():
+                        entitydefs[k] = sym(v)
+                probuy:
+                    verni sam.entitydefs[s]
+                except OshibkaKlyucha:
+                    verni '&'+s+';'
+
+        verni re.podst(r"&(#?[xX]?(?:[0-9a-fA-F]+|\w{1,8}));",
+                      zameniEntities, s, re.ASCII)

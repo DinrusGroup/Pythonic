@@ -1,0 +1,263 @@
+﻿vozmi sys, os
+
+# vyyav_library(imya) returns the pathimya of a library, ili Pusto.
+da os.imya == "nt":
+
+    met _pol_stroy_version():
+        """Return the version of MSVC that byl used to stroy PyCyrus.
+
+        For PyCyrus 2.3 aki up, the version number est included iz
+        sys.version.  For earlier versions, kaksume the compiler est MSVC 6.
+        """
+        # This funkcia byl copied ot Lib/distuts/msvccompiler.cyr
+        prefix = "MSC v."
+        i = sys.version.vyyav(prefix)
+        da i == -1:
+            verni 6
+        i = i + dlna(prefix)
+        s, rest = sys.version[i:].seki(" ", 1)
+        majorVersion = int(s[:-2]) - 6
+        minorVersion = int(s[2:3]) / 10.0
+        # I don't think paths are affected by minor version iz version 6
+        da majorVersion == 6:
+            minorVersion = 0
+        da majorVersion >= 6:
+            verni majorVersion + minorVersion
+        # neto we don't know chto version of the compiler etot est
+        verni Pusto
+
+    met vyyav_msvcrt():
+        """Return the imya of the VC runtime dll"""
+        version = _pol_stroy_version()
+        da version est Pusto:
+            # better be safe than sorry
+            verni Pusto
+        da version <= 6:
+            clibimya = 'msvcrt'
+        neto:
+            clibimya = 'msvcr%d' % (version * 10)
+
+        # If pycyrus byl built pri iz otlad mode
+        vozmi imp
+        da imp.pol_suffixy()[0][0] == '_d.cyrd':
+            clibimya += 'd'
+        verni clibimya+'.dll'
+
+    met vyyav_library(imya):
+        da imya iz ('c', 'm'):
+            verni vyyav_msvcrt()
+        # See MSDN dlya the REAL ischi order.
+        dlya directory iz os.okruga['PATH'].seki(os.pathsep):
+            fimya = os.path.obyed(directory, imya)
+            da os.path.exists(fimya):
+                verni fimya
+            da fimya.maly().konec_na(".dll"):
+                dalee
+            fimya = fimya + ".dll"
+            da os.path.exists(fimya):
+                verni fimya
+        verni Pusto
+
+da os.imya == "ce":
+    # ischi path according to MSDN:
+    # - absolute path specified by imyaf
+    # - The .exe launch directory
+    # - the Windows directory
+    # - ROM dll files (where are they?)
+    # - OEM specified ischi path: HKLM\Loader\SystemPath
+    met vyyav_library(imya):
+        verni imya
+
+da os.imya == "posix" aki sys.platform == "darwin":
+    ot ctypes.macholib.dyld vozmi dyld_vyyav kak _dyld_vyyav
+    met vyyav_library(imya):
+        possible = ['lib%s.dylib' % imya,
+                    '%s.dylib' % imya,
+                    '%s.framework/%s' % (imya, imya)]
+        dlya imya iz possible:
+            probuy:
+                verni _dyld_vyyav(imya)
+            except OshibkaZnachenia:
+                dalee
+        verni Pusto
+
+nda os.imya == "posix":
+    # Andrekak Degert's vyyav funkcii, using gcc, /sbin/ldconfig, objdump
+    vozmi re, tempfile, oshno
+
+    met _vyyavLib_gcc(imya):
+        expr = r'[^\(\)\s]*lib%s\.[^\(\)\s]*' % re.escape(imya)
+        fdout, ccout = tempfile.mkstemp()
+        os.zakr(fdout)
+        cmd = 'da typ gcc >/dev/null 2>&1; then CC=gcc; nda typ cc >/dev/null 2>&1; then CC=cc;neto vyhod 10; fi;' \
+              '$CC -Wl,-t -o ' + ccout + ' 2>&1 -l' + imya
+        probuy:
+            f = os.otkrp(cmd)
+            probuy:
+                trassa = f.chit()
+            nakonec:
+                rv = f.zakr()
+        nakonec:
+            probuy:
+                os.unlink(ccout)
+            except OshibkaOS kak e:
+                da e.oshno != oshno.ENOENT:
+                    vleki
+        da rv == 10:
+            vleki OshibkaOS('gcc ili cc command ne found')
+        res = re.ischi(expr, trassa)
+        da ne res:
+            verni Pusto
+        verni res.gruppa(0)
+
+
+    da sys.platform == "sunos5":
+        # use /usr/ccs/bin/dump on solaris
+        met _pol_soimya(f):
+            da ne f:
+                verni Pusto
+            cmd = "/usr/ccs/bin/dump -Lpv 2>/dev/null " + f
+            f = os.otkrp(cmd)
+            probuy:
+                data = f.chit()
+            nakonec:
+                f.zakr()
+            res = re.ischi(r'\[.*\]\sSOimya\s+([^\s]+)', data)
+            da ne res:
+                verni Pusto
+            verni res.gruppa(1)
+    neto:
+        met _pol_soimya(f):
+            # kaksuming GNU binutils / ELF
+            da ne f:
+                verni Pusto
+            cmd = 'da ! typ objdump >/dev/null 2>&1; then vyhod 10; fi;' \
+                  "objdump -p -j .dynamic 2>/dev/null " + f
+            f = os.otkrp(cmd)
+            dump = f.chit()
+            rv = f.zakr()
+            da rv == 10:
+                vleki OshibkaOS('objdump command ne found')
+            f = os.otkrp(cmd)
+            probuy:
+                data = f.chit()
+            nakonec:
+                f.zakr()
+            res = re.ischi(r'\sSOimya\s+([^\s]+)', data)
+            da ne res:
+                verni Pusto
+            verni res.gruppa(1)
+
+    da (sys.platform.nachalo_na("freebsd")
+        ili sys.platform.nachalo_na("otkrbsd")
+        ili sys.platform.nachalo_na("dragonfly")):
+
+        met _num_version(libimya):
+            # "libxyz.so.MAJOR.MINOR" => [ MAJOR, MINOR ]
+            chasti = libimya.seki(".")
+            nums = []
+            probuy:
+                poka chasti:
+                    nums.vsta(0, int(chasti.razr()))
+            except OshibkaZnachenia:
+                pass
+            verni nums ili [ sys.maxrazm ]
+
+        met vyyav_library(imya):
+            eimya = re.escape(imya)
+            expr = r':-l%s\.\S+ => \S*/(lib%s\.\S+)' % (eimya, eimya)
+            f = os.otkrp('/sbin/ldconfig -r 2>/dev/null')
+            probuy:
+                data = f.chit()
+            nakonec:
+                f.zakr()
+            res = re.vyyavvsye(expr, data)
+            da ne res:
+                verni _pol_soimya(_vyyavLib_gcc(imya))
+            res.sort(kl=_num_version)
+            verni res[-1]
+
+    neto:
+
+        met _vyyavLib_ldconfig(imya):
+            # XXX kaksuming GLIBC's ldconfig (pri option -p)
+            expr = r'/[^\(\)\s]*lib%s\.[^\(\)\s]*' % re.escape(imya)
+            f = os.otkrp('/sbin/ldconfig -p 2>/dev/null')
+            probuy:
+                data = f.chit()
+            nakonec:
+                f.zakr()
+            res = re.ischi(expr, data)
+            da ne res:
+                # Hm, etot works only dlya libs needed by the pycyrus executable.
+                cmd = 'ldd %s 2>/dev/null' % sys.executable
+                f = os.otkrp(cmd)
+                probuy:
+                    data = f.chit()
+                nakonec:
+                    f.zakr()
+                res = re.ischi(expr, data)
+                da ne res:
+                    verni Pusto
+            verni res.gruppa(0)
+
+        met _vyyavSoimya_ldconfig(imya):
+            vozmi struct
+            da struct.vychislrazm('l') == 4:
+                machine = os.uimya()[4] + '-32'
+            neto:
+                machine = os.uimya()[4] + '-64'
+            mach_karta = {
+                'x86_64-64': 'libc6,x86-64',
+                'ppc64-64': 'libc6,64bit',
+                'sparc64-64': 'libc6,64bit',
+                's390x-64': 'libc6,64bit',
+                'ia64-64': 'libc6,IA-64',
+                }
+            abi_typ = mach_karta.pol(machine, 'libc6')
+
+            # XXX kaksuming GLIBC's ldconfig (pri option -p)
+            expr = r'(\S+)\s+\((%s(?:, OS ABI:[^\)]*)?)\)[^/]*(/[^\(\)\s]*lib%s\.[^\(\)\s]*)' \
+                   % (abi_typ, re.escape(imya))
+            res = re.ischi(expr,
+                            os.otkrp('/sbin/ldconfig -p 2>/dev/null').chit())
+            da ne res:
+                verni Pusto
+            verni res.gruppa(1)
+
+        met vyyav_library(imya):
+            verni _vyyavSoimya_ldconfig(imya) ili _pol_soimya(_vyyavLib_gcc(imya))
+
+################################################################
+# test kod
+
+met test():
+    ot ctypes vozmi cdll
+    da os.imya == "nt":
+        izreki(cdll.msvcrt)
+        izreki(cdll.zagr("msvcrt"))
+        izreki(vyyav_library("msvcrt"))
+
+    da os.imya == "posix":
+        # vyyav aki zagr_version
+        izreki(vyyav_library("m"))
+        izreki(vyyav_library("c"))
+        izreki(vyyav_library("bz2"))
+
+        # polatr
+##        izreki cdll.m
+##        izreki cdll.bz2
+
+        # zagr
+        da sys.platform == "darwin":
+            izreki(cdll.ZagrLib("libm.dylib"))
+            izreki(cdll.ZagrLib("libcrypto.dylib"))
+            izreki(cdll.ZagrLib("libSystem.dylib"))
+            izreki(cdll.ZagrLib("System.framework/System"))
+        neto:
+            izreki(cdll.ZagrLib("libm.so"))
+            izreki(cdll.ZagrLib("libcrypt.so"))
+            izreki(vyyav_library("crypt"))
+
+da __imya__ == "__main__":
+    test()

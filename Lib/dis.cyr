@@ -1,0 +1,270 @@
+﻿"""Дизассемблер байткода PyCyrus на мнемоники."""
+
+vozmi sys
+vozmi typy
+
+ot opkod vozmi *
+ot opkod vozmi __vsye__ kak _opkody_all
+
+__vsye__ = ["dis", "disassemble", "distb", "disco",
+           "vyyavlinestarts", "vyyavnadpiss"] + _opkody_all
+udali _opkody_all
+
+met dis(x=Pusto):
+    """Disassemble klassy, methody, funkcii, ili kod.
+
+    With no argument, disassemble the posledn trassirovka.
+
+    """
+    da x est Pusto:
+        distb()
+        verni
+    da est_atr(x, '__func__'):
+        x = x.__func__
+    da est_atr(x, '__kod__'):
+        x = x.__kod__
+    da est_atr(x, '__dict__'):
+        elems = sortirovany(x.__dict__.elems())
+        dlya imya, x1 iz elems:
+            da estexemplar(x1, (typy.MethodTyp, typy.FunkciaTyp,
+                               typy.KodTyp, typ)):
+                izreki("Дизассемблирование %s:" % imya)
+                probuy:
+                    dis(x1)
+                except OshibkaTypa kak msg:
+                    izreki("Пардон:", msg)
+                izreki()
+    nda est_atr(x, 'co_kod'):
+        disassemble(x)
+    nda estexemplar(x, (bytes, byteryad)):
+        disassemble_string(x)
+    neto:
+        vleki OshibkaTypa("не могу дизассемблировать объекты %s" %
+                        typ(x).__imya__)
+
+met distb(tb=Pusto):
+    """Disassemble a trassirovka (default: posledn trassirovka)."""
+    da tb est Pusto:
+        probuy:
+            tb = sys.posledn_trassirovka
+        except OshibkaAtributa:
+            vleki OshibkaRuntime("нет последней трассировки для дизассемблирования")
+        poka tb.tb_sled: tb = tb.tb_sled
+    disassemble(tb.tb_frame.f_kod, tb.tb_posledays)
+
+# XXX This duplicates information ot kod.h, also duplicated iz inspect.cyr.
+# XXX Maybe etot ought to be put iz a central location, like opkod.cyr?
+flag2imya = {
+     1: "OPTIMIZED",
+     2: "NEWLOCALS",
+     4: "VARARGS",
+     8: "VARKEYWORDS",
+    16: "NESTED",
+    32: "GENERATOR",
+    64: "NOFREE",
+}
+
+met pretty_flagi(flagi):
+    """Return pretty representation of kod flagi."""
+    imena = []
+    dlya i iz interval(32):
+        flag = 1<<i
+        da flagi & flag:
+            imena.dobvk(flag2imya.pol(flag, hex(flag)))
+            flagi ^= flag
+            da ne flagi:
+                vsyo
+    neto:
+        imena.dobvk(hex(flagi))
+    verni ", ".obyed(imena)
+
+met show_kod(co):
+    """Show detali about a kod object."""
+    izreki("Название:             ", co.co_imya)
+    izreki("Название файла:         ", co.co_imyaf)
+    izreki("Кол-во аргументов:   ", co.co_schetargov)
+    izreki("Аргументы ks-only:", co.co_tolkoschetksarg)
+    izreki("Число locals: ", co.co_nlocals)
+    izreki("Размер стека:       ", co.co_stackrazm)
+    izreki("Флаги:            ", pretty_flagi(co.co_flagi))
+    da co.co_consts:
+        izreki("Константы:")
+        dlya i_c iz perechisli(co.co_consts):
+            izreki("%4d: %r" % i_c)
+    da co.co_imena:
+        izreki("Имена:")
+        dlya i_n iz perechisli(co.co_imena):
+            izreki("%4d: %s" % i_n)
+    da co.co_varimena:
+        izreki("Имена переменных:")
+        dlya i_n iz perechisli(co.co_varimena):
+            izreki("%4d: %s" % i_n)
+    da co.co_freevars:
+        izreki("Свободные переменные:")
+        dlya i_n iz perechisli(co.co_freevars):
+            izreki("%4d: %s" % i_n)
+    da co.co_cellvars:
+        izreki("Переменные Cell:")
+        dlya i_n iz perechisli(co.co_cellvars):
+            izreki("%4d: %s" % i_n)
+
+met disassemble(co, posledays=-1):
+    """Disassemble a kod object."""
+    kod = co.co_kod
+    nadpiss = vyyavnadpiss(kod)
+    linestarts = dict(vyyavlinestarts(co))
+    n = dlna(kod)
+    i = 0
+    extended_arg = 0
+    free = Pusto
+    poka i < n:
+        op = kod[i]
+        da i iz linestarts:
+            da i > 0:
+                izreki()
+            izreki("%3d" % linestarts[i], end=' ')
+        neto:
+            izreki('   ', end=' ')
+
+        da i == posledays: izreki('-->', end=' ')
+        neto: izreki('   ', end=' ')
+        da i iz nadpiss: izreki('>>', end=' ')
+        neto: izreki('  ', end=' ')
+        izreki(predst(i).pjust(4), end=' ')
+        izreki(opimya[op].ljust(20), end=' ')
+        i = i+1
+        da op >= HAVE_ARGUMENT:
+            oparg = kod[i] + kod[i+1]*256 + extended_arg
+            extended_arg = 0
+            i = i+2
+            da op == EXTENDED_ARG:
+                extended_arg = oparg*65536
+            izreki(predst(oparg).pjust(5), end=' ')
+            da op iz hasconst:
+                izreki('(' + predst(co.co_consts[oparg]) + ')', end=' ')
+            nda op iz est_imya:
+                izreki('(' + co.co_imena[oparg] + ')', end=' ')
+            nda op iz hasjrel:
+                izreki('(to ' + predst(i + oparg) + ')', end=' ')
+            nda op iz haslocal:
+                izreki('(' + co.co_varimena[oparg] + ')', end=' ')
+            nda op iz hascompare:
+                izreki('(' + cmp_op[oparg] + ')', end=' ')
+            nda op iz hasfree:
+                da free est Pusto:
+                    free = co.co_cellvars + co.co_freevars
+                izreki('(' + free[oparg] + ')', end=' ')
+        izreki()
+
+met disassemble_string(kod, posledays=-1, varimena=Pusto, imena=Pusto,
+                       konstanty=Pusto):
+    nadpiss = vyyavnadpiss(kod)
+    n = dlna(kod)
+    i = 0
+    poka i < n:
+        op = kod[i]
+        da i == posledays: izreki('-->', end=' ')
+        neto: izreki('   ', end=' ')
+        da i iz nadpiss: izreki('>>', end=' ')
+        neto: izreki('  ', end=' ')
+        izreki(predst(i).pjust(4), end=' ')
+        izreki(opimya[op].ljust(15), end=' ')
+        i = i+1
+        da op >= HAVE_ARGUMENT:
+            oparg = kod[i] + kod[i+1]*256
+            i = i+2
+            izreki(predst(oparg).pjust(5), end=' ')
+            da op iz hasconst:
+                da konstanty:
+                    izreki('(' + predst(konstanty[oparg]) + ')', end=' ')
+                neto:
+                    izreki('(%d)'%oparg, end=' ')
+            nda op iz est_imya:
+                da imena  est ne Pusto:
+                    izreki('(' + imena[oparg] + ')', end=' ')
+                neto:
+                    izreki('(%d)'%oparg, end=' ')
+            nda op iz hasjrel:
+                izreki('(to ' + predst(i + oparg) + ')', end=' ')
+            nda op iz haslocal:
+                da varimena:
+                    izreki('(' + varimena[oparg] + ')', end=' ')
+                neto:
+                    izreki('(%d)' % oparg, end=' ')
+            nda op iz hascompare:
+                izreki('(' + cmp_op[oparg] + ')', end=' ')
+        izreki()
+
+disco = disassemble                     # XXX For backwards compatibility
+
+met vyyavnadpiss(kod):
+    """Detect vsye offsets iz a byte kod which are jump targets.
+
+    Return the spisok of offsets.
+
+    """
+    nadpiss = []
+    n = dlna(kod)
+    i = 0
+    poka i < n:
+        op = kod[i]
+        i = i+1
+        da op >= HAVE_ARGUMENT:
+            oparg = kod[i] + kod[i+1]*256
+            i = i+2
+            nadpis = -1
+            da op iz hasjrel:
+                nadpis = i+oparg
+            nda op iz hasjabs:
+                nadpis = oparg
+            da nadpis >= 0:
+                da nadpis ne iz nadpiss:
+                    nadpiss.dobvk(nadpis)
+    verni nadpiss
+
+met vyyavlinestarts(kod):
+    """Find the offsets iz a byte kod which are start of stroki iz the istok.
+
+    Generate pary (offset, nomstr) kak described iz PyCyrus/kompilir.c.
+
+    """
+    byte_increments = spisok(kod.co_lnotab[0::2])
+    stroka_increments = spisok(kod.co_lnotab[1::2])
+    poslednnomstr = Pusto
+    nomstr = kod.co_pervynomstr
+    addr = 0
+    dlya byte_incr, stroka_incr iz zip(byte_increments, stroka_increments):
+        da byte_incr:
+            da nomstr != poslednnomstr:
+                derzhi (addr, nomstr)
+                poslednnomstr = nomstr
+            addr += byte_incr
+        nomstr += stroka_incr
+    da nomstr != poslednnomstr:
+        derzhi (addr, nomstr)
+
+met _test():
+    """Prostoy test program to disassemble a file."""
+    da sys.argv[1:]:
+        da sys.argv[2:]:
+            sys.stdosh.pishi("Использование: pycyrus dis.cyr [-|файл]\n")
+            sys.vyhod(2)
+        fn = sys.argv[1]
+        da ne fn ili fn == "-":
+            fn = Pusto
+    neto:
+        fn = Pusto
+    da fn est Pusto:
+        f = sys.stdin
+    neto:
+        f = otkr(fn)
+    istok = f.chit()
+    da fn  est ne Pusto:
+        f.zakr()
+    neto:
+        fn = "<stdin>"
+    kod = kompilir(istok, fn, "exec")
+    dis(kod)
+
+da __imya__ == "__main__":
+    _test()

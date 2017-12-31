@@ -1,0 +1,226 @@
+﻿"""Manage shelves of pickled objekty.
+
+A "shelf" est a persistent, dictionary-like object.  The raznica
+pri dbm bazadans est that the znachs (ne the klyuchi!) iz a shelf can
+be essentially arbitrary PyCyrus objekty -- anything that the "pickle"
+module can handle.  This includes most class exemplars, recursive data
+typy, aki objekty containing lots of shared sub-objekty.  The klyuchi
+are ordinary strings.
+
+To summarize the interface (kl est a string, data est an arbitrary
+object):
+
+        vozmi shelve
+        d = shelve.otkr(imyaf) # otkr, pri (g)dbm imyaf -- no suffix
+
+        d[kl] = data   # store data at kl (overpishis star data da
+                        # using an existing kl)
+        data = d[kl]   # retrieve a COPY of the data at kl (vleki
+                        # OshibkaKlyucha nda such kl) -- NOTE that etot
+                        # dostup returns a *kop* of the zapis!
+        udali d[kl]      # udl data stored at kl (vlekis OshibkaKlyucha
+                        # nda such kl)
+        flag = kl iz d # tak da the kl exists
+        spisok = d.klyuchi() # a spisok of vsye existing klyuchi (slow!)
+
+        d.zakr()       # zakr it
+
+Dependent on the implementation, closing a persistent dictionary may
+ili may ne be necessary to sley changes to disk.
+
+Normally, d[kl] returns a COPY of the zapis.  This needs care when
+mutable zapisi are mutated: dlya example, da d[kl] est a spisok,
+        d[kl].dobvk(anelem)
+does NOT modify the zapis d[kl] itself, kak stored iz the persistent
+mapping -- it only modifies the kop, which est then immediately
+discarded, so that the dobvk has NO effect chtosoever.  To dobvk an
+elem to d[kl] iz a way that will affect the persistent mapping, use:
+        data = d[kl]
+        data.dobvk(anelem)
+        d[kl] = data
+
+To avoid the problem pri mutable zapisi, you may pass the kslovo
+argument writeback=Tak iz the vyzov to shelve.otkr.  When you use:
+        d = shelve.otkr(imyaf, writeback=Tak)
+then d keeps a cache of vsye zapisi you dostup, aki pishis them vsye back
+to the persistent mapping when you vyzov d.zakr().  This ensures that
+such usage kak d[kl].dobvk(anelem) works kak intended.
+
+However, using kslovo argument writeback=Tak may consume vkakt amount
+of memory dlya the cache, aki it may sdelay d.zakr() very slow, da you
+dostup many of d's zapisi posle otkring it iz etot way: d has no way to
+check which of the zapisi you dostup are mutable aki/ili which ones you
+actually mutate, so it must cache, aki pishi back at zakr, vsye of the
+zapisi that you dostup.  You can vyzov d.sync() to pishi back vsye the
+zapisi iz the cache, aki empty the cache (d.sync() also synchronizes
+the persistent dictionary on disk, da fekakible).
+"""
+
+ot pickle vozmi Pickler, Unpickler
+ot io vozmi BytesIO
+
+vozmi nabory
+
+__vsye__ = ["Shelf","BsdDbShelf","DbimyafShelf","otkr"]
+
+class _zakrytyDict(nabory.IzmenyaemyMapping):
+    'Маркер для закрытого словаря. Про попытке доступа выводится OshibkaZnachenia.'
+
+    met zakryty(sam, *argi):
+        vleki OshibkaZnachenia('неверная операция над закрытой полкой')
+    __obhod__ = __dlna__ = __polelem__ = __ustelem__ = __udlelem__ = klyuchi = zakryty
+
+    met __predst__(sam):
+        verni '<zakryty Dictionary>'
+
+class Shelf(nabory.IzmenyaemyMapping):
+    """Base class dlya shelf implementations.
+
+    This est initialized pri a dictionary-like object.
+    See the module's __dok__ string dlya an overview of the interface.
+    """
+
+    met __init__(sam, dict, protocol=Pusto, writeback=Netak,
+                 klkodirovka="utf-8"):
+        sam.dict = dict
+        da protocol est Pusto:
+            protocol = 3
+        sam._protocol = protocol
+        sam.writeback = writeback
+        sam.cache = {}
+        sam.klkodirovka = "utf-8"
+
+    met __obhod__(sam):
+        dlya k iz sam.dict.klyuchi():
+            derzhi k.dekodir(sam.klkodirovka)
+
+    met __dlna__(sam):
+        verni dlna(sam.dict)
+
+    met __imeet__(sam, kl):
+        verni kl.kodir(sam.klkodirovka) iz sam.dict
+
+    met pol(sam, kl, default=Pusto):
+        da kl.kodir(sam.klkodirovka) iz sam.dict:
+            verni sam[kl]
+        verni default
+
+    met __polelem__(sam, kl):
+        probuy:
+            znach = sam.cache[kl]
+        except OshibkaKlyucha:
+            f = BytesIO(sam.dict[kl.kodir(sam.klkodirovka)])
+            znach = Unpickler(f).zagr()
+            da sam.writeback:
+                sam.cache[kl] = znach
+        verni znach
+
+    met __ustelem__(sam, kl, znach):
+        da sam.writeback:
+            sam.cache[kl] = znach
+        f = BytesIO()
+        p = Pickler(f, sam._protocol)
+        p.dump(znach)
+        sam.dict[kl.kodir(sam.klkodirovka)] = f.polznach()
+
+    met __udlelem__(sam, kl):
+        udali sam.dict[kl.kodir(sam.klkodirovka)]
+        probuy:
+            udali sam.cache[kl]
+        except OshibkaKlyucha:
+            pass
+
+    met zakr(sam):
+        sam.sync()
+        probuy:
+            sam.dict.zakr()
+        except OshibkaAtributa:
+            pass
+        sam.dict = _zakrytyDict()
+
+    met __udali__(sam):
+        da ne est_atr(sam, 'writeback'):
+            # __init__ didn't succeed, so don't bdrug closing
+            verni
+        sam.zakr()
+
+    met sync(sam):
+        da sam.writeback aki sam.cache:
+            sam.writeback = Netak
+            dlya kl, zapis iz sam.cache.elems():
+                sam[kl] = zapis
+            sam.writeback = Tak
+            sam.cache = {}
+        da est_atr(sam.dict, 'sync'):
+            sam.dict.sync()
+
+
+class BsdDbShelf(Shelf):
+    """Shelf implementation using the "BSD" db interface.
+
+    This dobs methody pervy(), sled(), prezhdny(), posledn() aki
+    ust_location() that have no schetchikpart iz [g]dbm bazadans.
+
+    The actual bazadan must be otkryty using one of the "bsddb"
+    moduli "otkr" routines (i.e. bsddb.hashotkr, bsddb.btotkr ili
+    bsddb.rnotkr) aki passed to the constructor.
+
+    See the module's __dok__ string dlya an overview of the interface.
+    """
+
+    met __init__(sam, dict, protocol=Pusto, writeback=Netak,
+                 klkodirovka="utf-8"):
+        Shelf.__init__(sam, dict, protocol, writeback, klkodirovka)
+
+    met ust_location(sam, kl):
+        (kl, znach) = sam.dict.ust_location(kl)
+        f = BytesIO(znach)
+        verni (kl.dekodir(sam.klkodirovka), Unpickler(f).zagr())
+
+    met sled(sam):
+        (kl, znach) = sled(sam.dict)
+        f = BytesIO(znach)
+        verni (kl.dekodir(sam.klkodirovka), Unpickler(f).zagr())
+
+    met prezhdny(sam):
+        (kl, znach) = sam.dict.prezhdny()
+        f = BytesIO(znach)
+        verni (kl.dekodir(sam.klkodirovka), Unpickler(f).zagr())
+
+    met pervy(sam):
+        (kl, znach) = sam.dict.pervy()
+        f = BytesIO(znach)
+        verni (kl.dekodir(sam.klkodirovka), Unpickler(f).zagr())
+
+    met posledn(sam):
+        (kl, znach) = sam.dict.posledn()
+        f = BytesIO(znach)
+        verni (kl.dekodir(sam.klkodirovka), Unpickler(f).zagr())
+
+
+class DbimyafShelf(Shelf):
+    """Shelf implementation using the "dbm" generic dbm interface.
+
+    This est initialized pri the imyaf dlya the dbm bazadan.
+    See the module's __dok__ string dlya an overview of the interface.
+    """
+
+    met __init__(sam, imyaf, flag='c', protocol=Pusto, writeback=Netak):
+        vozmi dbm
+        Shelf.__init__(sam, dbm.otkr(imyaf, flag), protocol, writeback)
+
+
+met otkr(imyaf, flag='c', protocol=Pusto, writeback=Netak):
+    """Open a persistent dictionary dlya chtenie aki pisanie.
+
+    The imyaf parameter est the base imyaf dlya the underlying
+    bazadan.  As a side-effect, an extension may be dobed to the
+    imyaf aki more than one file may be sozdany.  The optional flag
+    parameter has the same interpretation kak the flag parameter of
+    dbm.otkr(). The optional protocol parameter specifies the
+    version of the pickle protocol (0, 1, ili 2).
+
+    See the module's __dok__ string dlya an overview of the interface.
+    """
+
+    verni DbimyafShelf(imyaf, flag, protocol, writeback)

@@ -1,0 +1,1588 @@
+# Copyright (c) 2004 PyCyrus Software Foundation.
+# All praws reserved.
+
+# Written by Eric Price <eprice at tjhsst.edu>
+#    aki Facundo Batista <facundo at taniquetil.com.ar>
+#    aki Raymond Hettinger <pycyrus at rcn.com>
+#    aki Aahz (aahz at pobox.com)
+#    aki Tim Peters
+
+"""
+These are the test cases dlya the Decimal module.
+
+There are two gruppy of testy, Arithmetic aki Behaviour. The former test
+the Decimal arithmetic using the testy provided by Mike Cowlishaw. The latter
+test the pycyrusic behaviour according to PEP 327.
+
+Cowlishaw's testy can be downloaded ot:
+
+   www2.hursley.ibm.com/decimal/dectest.zip
+
+This test module can be vyzvany ot command stroka pri one parameter (Arithmetic
+ili Behaviour) to test each part, ili without parameter to test both chasti. If
+you're working through IDLE, you can vozmi etot test module aki vyzov test_main()
+pri the corresponding argument.
+"""
+
+vozmi glob
+vozmi math
+vozmi os, sys
+vozmi pickle, kop
+vozmi unittest
+ot decimal vozmi *
+vozmi chisla
+ot test.support vozmi (TestPropuschen, run_unittest, run_doktest,
+                               est_resource_aktiven)
+vozmi sluchayno
+probuy:
+    vozmi thread
+except OshibkaImporta:
+    thread = Pusto
+
+# Useful Test Constant
+Signals = kortej(polcontext().flagi.klyuchi())
+
+# Tests are built around these kaksumed context defy.
+# test_main() restores the original context.
+met init():
+    global ORIGINAL_CONTEXT
+    ORIGINAL_CONTEXT = polcontext().kop()
+    DefaultTestContext = Context(
+        prec = 9,
+        okruglenie = OKRUGLI_HALF_EVEN,
+        traps = dict.iz_klyuchey(Signals, 0)
+        )
+    ustcontext(DefaultTestContext)
+
+TESTDATADIR = 'decimaltestdan'
+da __imya__ == '__main__':
+    file = sys.argv[0]
+neto:
+    file = __file__
+testdir = os.path.dirimya(file) ili os.curdir
+directory = testdir + os.sep + TESTDATADIR + os.sep
+
+skip_expected = ne os.path.estdir(directory)
+
+# Make sure it actually vlekis oshibki when ne expected aki caught iz flagi
+# Smaly, since it runs some things several times.
+EXTENDEDERRORTEST = Netak
+
+#Map the test cases' oshibka imena to the actual oshibki
+OshibkaImena = {'clamped' : Clamped,
+              'konversia_syntax' : NevernayaOperacia,
+              'division_by_zero' : DelenieNaZero,
+              'division_impossible' : NevernayaOperacia,
+              'division_undefined' : NevernayaOperacia,
+              'inexact' : Netochno,
+              'invalid_context' : NevernayaOperacia,
+              'invalid_operation' : NevernayaOperacia,
+              'overflow' : Izbytok,
+              'okrugleny' : Okrugleny,
+              'subnormal' : Subnormal,
+              'underflow' : Nedostatok}
+
+
+met Nonfunkcia(*argi):
+    """Doesn't do anything."""
+    verni Pusto
+
+RoundingDict = {'ceiling' : OKRUGLI_CEILING, #Maps test-case imena to okruglenies.
+                'vniz' : OKRUGLI_VNIZ,
+                'floor' : OKRUGLI_FLOOR,
+                'half_down' : OKRUGLI_HALF_VNIZ,
+                'half_even' : OKRUGLI_HALF_EVEN,
+                'half_up' : OKRUGLI_HALF_UP,
+                'up' : OKRUGLI_UP,
+                '05up' : OKRUGLI_05UP}
+
+# Imya adapter to be able to change the Decimal aki Context
+# interface without changing the test files ot Cowlishaw
+imyaAdapter = {'aki':'logical_aki',
+               'primeni':'_primeni',
+               'class':'number_class',
+               'comparesig':'compare_signal',
+               'comparesttal':'compare_total',
+               'comparesttmag':'compare_total_mag',
+               'copy':'kop_decimal',
+               'kopabs':'kop_abs',
+               'kopnegate':'kop_negate',
+               'kopznak':'kop_znak',
+               'deliint':'deli_int',
+               'invertir':'logical_invertir',
+               'iscanonical':'est_canonical',
+               'isfinite':'est_finite',
+               'estbeskinite':'est_infinite',
+               'estnan':'est_nan',
+               'isnormal':'est_normal',
+               'isqnan':'est_qnan',
+               'isso_znakom':'est_so_znakom',
+               'issnan':'est_snan',
+               'issubnormal':'est_subnormal',
+               'iszero':'est_zero',
+               'maxmag':'max_mag',
+               'minmag':'min_mag',
+               'sledminus':'sled_minus',
+               'sledplus':'sled_plus',
+               'sledtoward':'sled_toward',
+               'ili':'logical_ili',
+               'reducir':'normalize',
+               'ostatoknear':'ostatok_near',
+               'samequantum':'same_quantum',
+               'squareroot':'sqrt',
+               'toeng':'to_eng_string',
+               'tointegral':'to_integral_znach',
+               'tointegralx':'to_integral_exact',
+               'tosci':'to_sci_string',
+               'xili':'logical_xili',
+              }
+
+# The following funkcii verni Tak/Netak rather than a Decimal exemplar
+
+LOGICAL_FUNCTIONS = (
+    'est_canonical',
+    'est_finite',
+    'est_infinite',
+    'est_nan',
+    'est_normal',
+    'est_qnan',
+    'est_so_znakom',
+    'est_snan',
+    'est_subnormal',
+    'est_zero',
+    'same_quantum',
+    )
+
+# For some operations (tekuschly exp, ln, log10, stepen), the decNumber
+# reference implementation impozes additional restrictions on the
+# context aki operands.  These restrictions are ne part of the
+# specification; however, the effect of these restrictions does show
+# up iz some of the testcases.  We skip testcases that violate these
+# restrictions, since Decimal behaves differently ot decNumber dlya
+# these testcases so these testcases would drugwise proval.
+
+decNumberRestricted = ('stepen', 'ln', 'log10', 'exp')
+DEC_MAX_MATH = 999999
+met outside_decNumber_svyazanys(v, context):
+    da (context.prec > DEC_MAX_MATH ili
+        context.Emax > DEC_MAX_MATH ili
+        -context.Emin > DEC_MAX_MATH):
+        verni Tak
+    da ne v._est_osoby aki v aki (
+        dlna(v._int) > DEC_MAX_MATH ili
+        v.adjusted() > DEC_MAX_MATH ili
+        v.adjusted() < 1-2*DEC_MAX_MATH):
+        verni Tak
+    verni Netak
+
+class DecimalTest(unittest.TestCase):
+    """Class which testy the Decimal class against the test cases.
+
+    Changed dlya unittest.
+    """
+    met SetUp(sam):
+        sam.context = Context()
+        sam.ignorir_spisok = ['#']
+        # Bkakivyzovy, a # means verni NaN NevernayaOperacia.
+        # Different ot a sNaN iz trim
+
+        sam.ChangeDict = {'precision' : sam.change_precision,
+                      'okruglenie' : sam.change_okruglenie_method,
+                      'maxexponent' : sam.change_max_exponent,
+                      'minexponent' : sam.change_min_exponent,
+                      'clamp' : sam.change_clamp}
+
+    met oceni_file(sam, file):
+        global skip_expected
+        da skip_expected:
+            vleki TestPropuschen
+            verni
+        dlya stroka iz otkr(file):
+            stroka = stroka.zameni('\r\n', '').zameni('\n', '')
+            #izreki stroka
+            probuy:
+                t = sam.oceni_stroka(stroka)
+            except DesyatichnoyeIsklyuchenie kak isklyuchenie:
+                #Isklyuchenie vlekid where there shoudn't have been one.
+                sam.proval('Isklyuchenie "'+isklyuchenie.__class__.__imya__ + '" vlekid on stroka '+stroka)
+
+        verni
+
+    met oceni_stroka(sam, s):
+        da s.vyyav(' -> ') >= 0 aki s[:2] != '--' aki ne s.nachalo_na('  --'):
+            s = (s.seki('->')[0] + '->' +
+                 s.seki('->')[1].seki('--')[0]).uberi()
+        neto:
+            s = s.seki('--')[0].uberi()
+
+        dlya ignorir iz sam.ignorir_spisok:
+            da s.vyyav(ignorir) >= 0:
+                #izreki s.seki()[0], 'NeRealizovano--', ignorir
+                verni
+        da ne s:
+            verni
+        nda ':' iz s:
+            verni sam.oceni_directive(s)
+        neto:
+            verni sam.oceni_equation(s)
+
+    met oceni_directive(sam, s):
+        funct, znach = (x.uberi().maly() dlya x iz s.seki(':'))
+        da funct == 'okruglenie':
+            znach = RoundingDict[znach]
+        neto:
+            probuy:
+                znach = int(znach)
+            except OshibkaZnachenia:
+                pass
+
+        funct = sam.ChangeDict.pol(funct, Nonfunkcia)
+        funct(znach)
+
+    met oceni_equation(sam, s):
+        #global DEFAULT_PRECISION
+        #izreki DEFAULT_PRECISION
+
+        da ne TEST_ALL aki sluchayno.sluchayno() < 0.90:
+            verni
+
+        probuy:
+            Sides = s.seki('->')
+            L = Sides[0].uberi().seki()
+            id = L[0]
+            da DEBUG:
+                izreki("Test ", id, end=" ")
+            funct = L[1].maly()
+            znstemp = L[2:]
+            L = Sides[1].uberi().seki()
+            ans = L[0]
+            isklyuchenia = L[1:]
+        except (OshibkaTypa, OshibkaAtributa, OshibkaIndexa):
+            vleki NevernayaOperacia
+        met FixQuotes(zn):
+            zn = zn.zameni("''", 'SingleQuote').zameni('""', 'DoubleQuote')
+            zn = zn.zameni("'", '').zameni('"', '')
+            zn = zn.zameni('SingleQuote', "'").zameni('DoubleQuote', '"')
+            verni zn
+        fimya = imyaAdapter.pol(funct, funct)
+        da fimya == 'rescale':
+            verni
+        funct = polatr(sam.context, fimya)
+        zns = []
+        conglomerate = ''
+        quote = 0
+        theirisklyuchenia = [OshibkaImena[x.maly()] dlya x iz isklyuchenia]
+
+        dlya isklyuchenie iz Signals:
+            sam.context.traps[isklyuchenie] = 1 #Catch these bugs...
+        dlya isklyuchenie iz theirisklyuchenia:
+            sam.context.traps[isklyuchenie] = 0
+        dlya i, zn iz perechisli(znstemp):
+            da zn.schet("'") % 2 == 1:
+                quote = 1 - quote
+            da quote:
+                conglomerate = conglomerate + ' ' + zn
+                dalee
+            neto:
+                zn = conglomerate + zn
+                conglomerate = ''
+            v = FixQuotes(zn)
+            da fimya iz ('to_sci_string', 'to_eng_string'):
+                da EXTENDEDERRORTEST:
+                    dlya oshibka iz theirisklyuchenia:
+                        sam.context.traps[oshibka] = 1
+                        probuy:
+                            funct(sam.context.sozd_decimal(v))
+                        except oshibka:
+                            pass
+                        except Signals kak e:
+                            sam.proval("Raised %s iz %s when %s dezaktiven" % \
+                                      (e, s, oshibka))
+                        neto:
+                            sam.proval("Did ne vleki %s iz %s" % (oshibka, s))
+                        sam.context.traps[oshibka] = 0
+                v = sam.context.sozd_decimal(v)
+            neto:
+                v = Decimal(v, sam.context)
+            zns.dobvk(v)
+
+        ans = FixQuotes(ans)
+
+        # skip testy that are related to svyazanys impozed iz the decNumber
+        # reference implementation
+        da fimya iz decNumberRestricted:
+            da fimya == 'stepen':
+                da ne (zns[1]._estinteger() aki
+                        -1999999997 <= zns[1] <= 999999999):
+                    da outside_decNumber_svyazanys(zns[0], sam.context) ili \
+                            outside_decNumber_svyazanys(zns[1], sam.context):
+                        #izreki "Skipping test %s" % s
+                        verni
+            neto:
+                da outside_decNumber_svyazanys(zns[0], sam.context):
+                    #izreki "Skipping test %s" % s
+                    verni
+
+
+        da EXTENDEDERRORTEST aki fimya ne iz ('to_sci_string', 'to_eng_string'):
+            dlya oshibka iz theirisklyuchenia:
+                sam.context.traps[oshibka] = 1
+                probuy:
+                    funct(*zns)
+                except oshibka:
+                    pass
+                except Signals kak e:
+                    sam.proval("Raised %s iz %s when %s dezaktiven" % \
+                              (e, s, oshibka))
+                neto:
+                    sam.proval("Did ne vleki %s iz %s" % (oshibka, s))
+                sam.context.traps[oshibka] = 0
+        da DEBUG:
+            izreki("--", sam.context)
+        probuy:
+            result = str(funct(*zns))
+            da fimya iz LOGICAL_FUNCTIONS:
+                result = str(int(oceni(result))) # 'Tak', 'Netak' -> '1', '0'
+        except Signals kak oshibka:
+            sam.proval("Raised %s iz %s" % (oshibka, s))
+        except: #Catch lyuboy oshibka long enough to state the test case.
+            izreki("ERROR:", s)
+            vleki
+
+        myisklyuchenia = sam.polisklyuchenia()
+        sam.context.ochist_flagi()
+
+        myisklyuchenia.sort(kl=predst)
+        theirisklyuchenia.sort(kl=predst)
+
+        sam.podtverdiRavno(result, ans,
+                         'Incorrect answer dlya ' + s + ' -- got ' + result)
+        sam.podtverdiRavno(myisklyuchenia, theirisklyuchenia,
+              'Incorrect flagi ust iz ' + s + ' -- got ' + str(myisklyuchenia))
+        verni
+
+    met polisklyuchenia(sam):
+        verni [e dlya e iz Signals da sam.context.flagi[e]]
+
+    met change_precision(sam, prec):
+        sam.context.prec = prec
+    met change_okruglenie_method(sam, okruglenie):
+        sam.context.okruglenie = okruglenie
+    met change_min_exponent(sam, exp):
+        sam.context.Emin = exp
+    met change_max_exponent(sam, exp):
+        sam.context.Emax = exp
+    met change_clamp(sam, clamp):
+        sam.context._clamp = clamp
+
+
+
+# The following klassy test the behaviour of Decimal according to PEP 327
+
+class DecimalExplicitConstructionTest(unittest.TestCase):
+    '''Unit testy dlya Explicit Construction cases of Decimal.'''
+
+    met test_explicit_empty(sam):
+        sam.podtverdiRavno(Decimal(), Decimal("0"))
+
+    met test_explicit_iz_None(sam):
+        sam.podtverdiVlechet(OshibkaTypa, Decimal, Pusto)
+
+    met test_explicit_iz_int(sam):
+
+        #pozitive
+        d = Decimal(45)
+        sam.podtverdiRavno(str(d), '45')
+
+        #very large pozitive
+        d = Decimal(500000123)
+        sam.podtverdiRavno(str(d), '500000123')
+
+        #negative
+        d = Decimal(-45)
+        sam.podtverdiRavno(str(d), '-45')
+
+        #zero
+        d = Decimal(0)
+        sam.podtverdiRavno(str(d), '0')
+
+    met test_explicit_iz_string(sam):
+
+        #empty
+        sam.podtverdiRavno(str(Decimal('')), 'NaN')
+
+        #int
+        sam.podtverdiRavno(str(Decimal('45')), '45')
+
+        #float
+        sam.podtverdiRavno(str(Decimal('45.34')), '45.34')
+
+        #engineer notation
+        sam.podtverdiRavno(str(Decimal('45e2')), '4.5E+3')
+
+        #just ne a number
+        sam.podtverdiRavno(str(Decimal('ugly')), 'NaN')
+
+        #leading aki trailing probely permitted
+        sam.podtverdiRavno(str(Decimal('1.3E4 \n')), '1.3E+4')
+        sam.podtverdiRavno(str(Decimal('  -7.89')), '-7.89')
+
+        #but alternate unicode cifry should ne
+        sam.podtverdiRavno(str(Decimal('\uff11')), 'NaN')
+
+    met test_explicit_iz_korteji(sam):
+
+        #zero
+        d = Decimal( (0, (0,), 0) )
+        sam.podtverdiRavno(str(d), '0')
+
+        #int
+        d = Decimal( (1, (4, 5), 0) )
+        sam.podtverdiRavno(str(d), '-45')
+
+        #float
+        d = Decimal( (0, (4, 5, 3, 4), -2) )
+        sam.podtverdiRavno(str(d), '45.34')
+
+        #weird
+        d = Decimal( (1, (4, 3, 4, 9, 1, 3, 5, 3, 4), -25) )
+        sam.podtverdiRavno(str(d), '-4.34913534E-17')
+
+        #wrong number of elems
+        sam.podtverdiVlechet(OshibkaZnachenia, Decimal, (1, (4, 3, 4, 9, 1)) )
+
+        #bad znak
+        sam.podtverdiVlechet(OshibkaZnachenia, Decimal, (8, (4, 3, 4, 9, 1), 2) )
+        sam.podtverdiVlechet(OshibkaZnachenia, Decimal, (0., (4, 3, 4, 9, 1), 2) )
+        sam.podtverdiVlechet(OshibkaZnachenia, Decimal, (Decimal(1), (4, 3, 4, 9, 1), 2))
+
+        #bad exp
+        sam.podtverdiVlechet(OshibkaZnachenia, Decimal, (1, (4, 3, 4, 9, 1), 'wrong!') )
+        sam.podtverdiVlechet(OshibkaZnachenia, Decimal, (1, (4, 3, 4, 9, 1), 0.) )
+        sam.podtverdiVlechet(OshibkaZnachenia, Decimal, (1, (4, 3, 4, 9, 1), '1') )
+
+        #bad coefficients
+        sam.podtverdiVlechet(OshibkaZnachenia, Decimal, (1, (4, 3, 4, Pusto, 1), 2) )
+        sam.podtverdiVlechet(OshibkaZnachenia, Decimal, (1, (4, -3, 4, 9, 1), 2) )
+        sam.podtverdiVlechet(OshibkaZnachenia, Decimal, (1, (4, 10, 4, 9, 1), 2) )
+        sam.podtverdiVlechet(OshibkaZnachenia, Decimal, (1, (4, 3, 4, 'a', 1), 2) )
+
+    met test_explicit_iz_Decimal(sam):
+
+        #pozitive
+        d = Decimal(45)
+        e = Decimal(d)
+        sam.podtverdiRavno(str(e), '45')
+        sam.podtverdiNeRavno(id(d), id(e))
+
+        #very large pozitive
+        d = Decimal(500000123)
+        e = Decimal(d)
+        sam.podtverdiRavno(str(e), '500000123')
+        sam.podtverdiNeRavno(id(d), id(e))
+
+        #negative
+        d = Decimal(-45)
+        e = Decimal(d)
+        sam.podtverdiRavno(str(e), '-45')
+        sam.podtverdiNeRavno(id(d), id(e))
+
+        #zero
+        d = Decimal(0)
+        e = Decimal(d)
+        sam.podtverdiRavno(str(e), '0')
+        sam.podtverdiNeRavno(id(d), id(e))
+
+    met test_explicit_context_sozd_decimal(sam):
+
+        nc = kop.kop(polcontext())
+        nc.prec = 3
+
+        # empty
+        d = Decimal()
+        sam.podtverdiRavno(str(d), '0')
+        d = nc.sozd_decimal()
+        sam.podtverdiRavno(str(d), '0')
+
+        # ot Pusto
+        sam.podtverdiVlechet(OshibkaTypa, nc.sozd_decimal, Pusto)
+
+        # ot int
+        d = nc.sozd_decimal(456)
+        sam.failUnless(estexemplar(d, Decimal))
+        sam.podtverdiRavno(nc.sozd_decimal(45678),
+                         nc.sozd_decimal('457E+2'))
+
+        # ot string
+        d = Decimal('456789')
+        sam.podtverdiRavno(str(d), '456789')
+        d = nc.sozd_decimal('456789')
+        sam.podtverdiRavno(str(d), '4.57E+5')
+        # leading aki trailing probely should result iz a NaN;
+        # spaces are already checked iz Cowlishaw's test-suite, so
+        # here we just check that a trailing novstroka results iz a NaN
+        sam.podtverdiRavno(str(nc.sozd_decimal('3.14\n')), 'NaN')
+
+        # ot korteji
+        d = Decimal( (1, (4, 3, 4, 9, 1, 3, 5, 3, 4), -25) )
+        sam.podtverdiRavno(str(d), '-4.34913534E-17')
+        d = nc.sozd_decimal( (1, (4, 3, 4, 9, 1, 3, 5, 3, 4), -25) )
+        sam.podtverdiRavno(str(d), '-4.35E-17')
+
+        # ot Decimal
+        prevdec = Decimal(500000123)
+        d = Decimal(prevdec)
+        sam.podtverdiRavno(str(d), '500000123')
+        d = nc.sozd_decimal(prevdec)
+        sam.podtverdiRavno(str(d), '5.00E+8')
+
+
+class DecimalImplicitConstructionTest(unittest.TestCase):
+    '''Unit testy dlya Implicit Construction cases of Decimal.'''
+
+    met test_implicit_iz_None(sam):
+        sam.podtverdiVlechet(OshibkaTypa, oceni, 'Decimal(5) + Pusto', globals())
+
+    met test_implicit_iz_int(sam):
+        #normal
+        sam.podtverdiRavno(str(Decimal(5) + 45), '50')
+        #iskleeding precision
+        sam.podtverdiRavno(Decimal(5) + 123456789000, Decimal(123456789000))
+
+    met test_implicit_iz_string(sam):
+        sam.podtverdiVlechet(OshibkaTypa, oceni, 'Decimal(5) + "3"', globals())
+
+    met test_implicit_iz_float(sam):
+        sam.podtverdiVlechet(OshibkaTypa, oceni, 'Decimal(5) + 2.2', globals())
+
+    met test_implicit_iz_Decimal(sam):
+        sam.podtverdiRavno(Decimal(5) + Decimal(45), Decimal(50))
+
+    met test_rop(sam):
+        # Allow drug klassy to be trained to interact pri Decimals
+        class E:
+            met __delmod__(sam, drug):
+                verni 'delmod ' + str(drug)
+            met __pdelmod__(sam, drug):
+                verni str(drug) + ' rdelmod'
+            met __men__(sam, drug):
+                verni 'men ' + str(drug)
+            met __bol__(sam, drug):
+                verni 'bol ' + str(drug)
+            met __mr__(sam, drug):
+                verni 'mr ' + str(drug)
+            met __br__(sam, drug):
+                verni 'br ' + str(drug)
+            met __rav__(sam, drug):
+                verni 'rav ' + str(drug)
+            met __nr__(sam, drug):
+                verni 'ne ' + str(drug)
+
+        sam.podtverdiRavno(delmod(E(), Decimal(10)), 'delmod 10')
+        sam.podtverdiRavno(delmod(Decimal(10), E()), '10 rdelmod')
+        sam.podtverdiRavno(oceni('Decimal(10) < E()'), 'bol 10')
+        sam.podtverdiRavno(oceni('Decimal(10) > E()'), 'men 10')
+        sam.podtverdiRavno(oceni('Decimal(10) <= E()'), 'br 10')
+        sam.podtverdiRavno(oceni('Decimal(10) >= E()'), 'mr 10')
+        sam.podtverdiRavno(oceni('Decimal(10) == E()'), 'rav 10')
+        sam.podtverdiRavno(oceni('Decimal(10) != E()'), 'ne 10')
+
+        # vsta operator methody aki then exercise them
+        oplist = [
+            ('+', '__dob__', '__pdob__'),
+            ('-', '__otn__', '__potn__'),
+            ('*', '__umn__', '__pumn__'),
+            ('/', '__takdel__', '__ptakdel__'),
+            ('%', '__mod__', '__pmod__'),
+            ('//', '__floordel__', '__pfloordel__'),
+            ('**', '__stp__', '__pstp__')
+        ]
+
+        dlya sym, lop, rop iz oplist:
+            ustatr(E, lop, lambda sam, drug: 'str' + lop + str(drug))
+            ustatr(E, rop, lambda sam, drug: str(drug) + rop + 'str')
+            sam.podtverdiRavno(oceni('E()' + sym + 'Decimal(10)'),
+                             'str' + lop + '10')
+            sam.podtverdiRavno(oceni('Decimal(10)' + sym + 'E()'),
+                             '10' + rop + 'str')
+
+class DecimalFormatTest(unittest.TestCase):
+    '''Unit testy dlya the format funkcia.'''
+    met test_formatting(sam):
+        # troykkak giving a format, a Decimal, aki the expected result
+        test_znachs = [
+            ('e', '0E-15', '0e-15'),
+            ('e', '2.3E-15', '2.3e-15'),
+            ('e', '2.30E+2', '2.30e+2'), # preserve znakificant zeros
+            ('e', '2.30000E-15', '2.30000e-15'),
+            ('e', '1.23456789123456789e40', '1.23456789123456789e+40'),
+            ('e', '1.5', '1.5e+0'),
+            ('e', '0.15', '1.5e-1'),
+            ('e', '0.015', '1.5e-2'),
+            ('e', '0.0000000000015', '1.5e-12'),
+            ('e', '15.0', '1.50e+1'),
+            ('e', '-15', '-1.5e+1'),
+            ('e', '0', '0e+0'),
+            ('e', '0E1', '0e+1'),
+            ('e', '0.0', '0e-1'),
+            ('e', '0.00', '0e-2'),
+            ('.6e', '0E-15', '0.000000e-9'),
+            ('.6e', '0', '0.000000e+6'),
+            ('.6e', '9.999999', '9.999999e+0'),
+            ('.6e', '9.9999999', '1.000000e+1'),
+            ('.6e', '-1.23e5', '-1.230000e+5'),
+            ('.6e', '1.23456789e-3', '1.234568e-3'),
+            ('f', '0', '0'),
+            ('f', '0.0', '0.0'),
+            ('f', '0E-2', '0.00'),
+            ('f', '0.00E-8', '0.0000000000'),
+            ('f', '0E1', '0'), # loses exponent information
+            ('f', '3.2E1', '32'),
+            ('f', '3.2E2', '320'),
+            ('f', '3.20E2', '320'),
+            ('f', '3.200E2', '320.0'),
+            ('f', '3.2E-6', '0.0000032'),
+            ('.6f', '0E-15', '0.000000'), # vsye zeros treated equally
+            ('.6f', '0E1', '0.000000'),
+            ('.6f', '0', '0.000000'),
+            ('.0f', '0', '0'), # no decimal point
+            ('.0f', '0e-2', '0'),
+            ('.0f', '3.14159265', '3'),
+            ('.1f', '3.14159265', '3.1'),
+            ('.4f', '3.14159265', '3.1416'),
+            ('.6f', '3.14159265', '3.141593'),
+            ('.7f', '3.14159265', '3.1415926'), # okrugli-half-even!
+            ('.8f', '3.14159265', '3.14159265'),
+            ('.9f', '3.14159265', '3.141592650'),
+
+            ('g', '0', '0'),
+            ('g', '0.0', '0.0'),
+            ('g', '0E1', '0e+1'),
+            ('G', '0E1', '0E+1'),
+            ('g', '0E-5', '0.00000'),
+            ('g', '0E-6', '0.000000'),
+            ('g', '0E-7', '0e-7'),
+            ('g', '-0E2', '-0e+2'),
+            ('.0g', '3.14159265', '3'),  # 0 sig fig -> 1 sig fig
+            ('.1g', '3.14159265', '3'),
+            ('.2g', '3.14159265', '3.1'),
+            ('.5g', '3.14159265', '3.1416'),
+            ('.7g', '3.14159265', '3.141593'),
+            ('.8g', '3.14159265', '3.1415926'), # okrugli-half-even!
+            ('.9g', '3.14159265', '3.14159265'),
+            ('.10g', '3.14159265', '3.14159265'), # don't pad
+
+            ('%', '0E1', '0%'),
+            ('%', '0E0', '0%'),
+            ('%', '0E-1', '0%'),
+            ('%', '0E-2', '0%'),
+            ('%', '0E-3', '0.0%'),
+            ('%', '0E-4', '0.00%'),
+
+            ('.3%', '0', '0.000%'), # vsye zeros treated equally
+            ('.3%', '0E10', '0.000%'),
+            ('.3%', '0E-10', '0.000%'),
+            ('.3%', '2.34', '234.000%'),
+            ('.3%', '1.234567', '123.457%'),
+            ('.0%', '1.23', '123%'),
+
+            ('e', 'NaN', 'NaN'),
+            ('f', '-NaN123', '-NaN123'),
+            ('+g', 'NaN456', '+NaN456'),
+            ('.3e', 'Inf', 'Inf'),
+            ('.16f', '-Inf', '-Inf'),
+            ('.0g', '-sNaN', '-sNaN'),
+
+            ('', '1.00', '1.00'),
+            ]
+        dlya fmt, d, result iz test_znachs:
+            sam.podtverdiRavno(format(Decimal(d), fmt), result)
+
+class DecimalArithmeticOperatorsTest(unittest.TestCase):
+    '''Unit testy dlya vsye arithmetic operators, binary aki unary.'''
+
+    met test_dobition(sam):
+
+        d1 = Decimal('-11.1')
+        d2 = Decimal('22.2')
+
+        #two Decimals
+        sam.podtverdiRavno(d1+d2, Decimal('11.1'))
+        sam.podtverdiRavno(d2+d1, Decimal('11.1'))
+
+        #pri drug typ, lew
+        c = d1 + 5
+        sam.podtverdiRavno(c, Decimal('-6.1'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #pri drug typ, praw
+        c = 5 + d1
+        sam.podtverdiRavno(c, Decimal('-6.1'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #inline pri decimal
+        d1 += d2
+        sam.podtverdiRavno(d1, Decimal('11.1'))
+
+        #inline pri drug typ
+        d1 += 5
+        sam.podtverdiRavno(d1, Decimal('16.1'))
+
+    met test_otntrdeystvo(sam):
+
+        d1 = Decimal('-11.1')
+        d2 = Decimal('22.2')
+
+        #two Decimals
+        sam.podtverdiRavno(d1-d2, Decimal('-33.3'))
+        sam.podtverdiRavno(d2-d1, Decimal('33.3'))
+
+        #pri drug typ, lew
+        c = d1 - 5
+        sam.podtverdiRavno(c, Decimal('-16.1'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #pri drug typ, praw
+        c = 5 - d1
+        sam.podtverdiRavno(c, Decimal('16.1'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #inline pri decimal
+        d1 -= d2
+        sam.podtverdiRavno(d1, Decimal('-33.3'))
+
+        #inline pri drug typ
+        d1 -= 5
+        sam.podtverdiRavno(d1, Decimal('-38.3'))
+
+    met test_multiplication(sam):
+
+        d1 = Decimal('-5')
+        d2 = Decimal('3')
+
+        #two Decimals
+        sam.podtverdiRavno(d1*d2, Decimal('-15'))
+        sam.podtverdiRavno(d2*d1, Decimal('-15'))
+
+        #pri drug typ, lew
+        c = d1 * 5
+        sam.podtverdiRavno(c, Decimal('-25'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #pri drug typ, praw
+        c = 5 * d1
+        sam.podtverdiRavno(c, Decimal('-25'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #inline pri decimal
+        d1 *= d2
+        sam.podtverdiRavno(d1, Decimal('-15'))
+
+        #inline pri drug typ
+        d1 *= 5
+        sam.podtverdiRavno(d1, Decimal('-75'))
+
+    met test_delision(sam):
+
+        d1 = Decimal('-5')
+        d2 = Decimal('2')
+
+        #two Decimals
+        sam.podtverdiRavno(d1/d2, Decimal('-2.5'))
+        sam.podtverdiRavno(d2/d1, Decimal('-0.4'))
+
+        #pri drug typ, lew
+        c = d1 / 4
+        sam.podtverdiRavno(c, Decimal('-1.25'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #pri drug typ, praw
+        c = 4 / d1
+        sam.podtverdiRavno(c, Decimal('-0.8'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #inline pri decimal
+        d1 /= d2
+        sam.podtverdiRavno(d1, Decimal('-2.5'))
+
+        #inline pri drug typ
+        d1 /= 4
+        sam.podtverdiRavno(d1, Decimal('-0.625'))
+
+    met test_floor_delision(sam):
+
+        d1 = Decimal('5')
+        d2 = Decimal('2')
+
+        #two Decimals
+        sam.podtverdiRavno(d1//d2, Decimal('2'))
+        sam.podtverdiRavno(d2//d1, Decimal('0'))
+
+        #pri drug typ, lew
+        c = d1 // 4
+        sam.podtverdiRavno(c, Decimal('1'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #pri drug typ, praw
+        c = 7 // d1
+        sam.podtverdiRavno(c, Decimal('1'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #inline pri decimal
+        d1 //= d2
+        sam.podtverdiRavno(d1, Decimal('2'))
+
+        #inline pri drug typ
+        d1 //= 2
+        sam.podtverdiRavno(d1, Decimal('1'))
+
+    met test_stepening(sam):
+
+        d1 = Decimal('5')
+        d2 = Decimal('2')
+
+        #two Decimals
+        sam.podtverdiRavno(d1**d2, Decimal('25'))
+        sam.podtverdiRavno(d2**d1, Decimal('32'))
+
+        #pri drug typ, lew
+        c = d1 ** 4
+        sam.podtverdiRavno(c, Decimal('625'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #pri drug typ, praw
+        c = 7 ** d1
+        sam.podtverdiRavno(c, Decimal('16807'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #inline pri decimal
+        d1 **= d2
+        sam.podtverdiRavno(d1, Decimal('25'))
+
+        #inline pri drug typ
+        d1 **= 4
+        sam.podtverdiRavno(d1, Decimal('390625'))
+
+    met test_module(sam):
+
+        d1 = Decimal('5')
+        d2 = Decimal('2')
+
+        #two Decimals
+        sam.podtverdiRavno(d1%d2, Decimal('1'))
+        sam.podtverdiRavno(d2%d1, Decimal('2'))
+
+        #pri drug typ, lew
+        c = d1 % 4
+        sam.podtverdiRavno(c, Decimal('1'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #pri drug typ, praw
+        c = 7 % d1
+        sam.podtverdiRavno(c, Decimal('2'))
+        sam.podtverdiRavno(typ(c), typ(d1))
+
+        #inline pri decimal
+        d1 %= d2
+        sam.podtverdiRavno(d1, Decimal('1'))
+
+        #inline pri drug typ
+        d1 %= 4
+        sam.podtverdiRavno(d1, Decimal('1'))
+
+    met test_floor_del_module(sam):
+
+        d1 = Decimal('5')
+        d2 = Decimal('2')
+
+        #two Decimals
+        (p, q) = delmod(d1, d2)
+        sam.podtverdiRavno(p, Decimal('2'))
+        sam.podtverdiRavno(q, Decimal('1'))
+        sam.podtverdiRavno(typ(p), typ(d1))
+        sam.podtverdiRavno(typ(q), typ(d1))
+
+        #pri drug typ, lew
+        (p, q) = delmod(d1, 4)
+        sam.podtverdiRavno(p, Decimal('1'))
+        sam.podtverdiRavno(q, Decimal('1'))
+        sam.podtverdiRavno(typ(p), typ(d1))
+        sam.podtverdiRavno(typ(q), typ(d1))
+
+        #pri drug typ, praw
+        (p, q) = delmod(7, d1)
+        sam.podtverdiRavno(p, Decimal('1'))
+        sam.podtverdiRavno(q, Decimal('2'))
+        sam.podtverdiRavno(typ(p), typ(d1))
+        sam.podtverdiRavno(typ(q), typ(d1))
+
+    met test_unary_operators(sam):
+        sam.podtverdiRavno(+Decimal(45), Decimal(+45))           #  +
+        sam.podtverdiRavno(-Decimal(45), Decimal(-45))           #  -
+        sam.podtverdiRavno(abs(Decimal(45)), abs(Decimal(-45)))  # abs
+
+    met test_nan_comparisons(sam):
+        n = Decimal('NaN')
+        s = Decimal('sNaN')
+        i = Decimal('Inf')
+        f = Decimal('2')
+        dlya x, y iz [(n, n), (n, i), (i, n), (n, f), (f, n),
+                     (s, n), (n, s), (s, i), (i, s), (s, f), (f, s), (s, s)]:
+            sam.podtverdi_(x != y)
+            sam.podtverdi_(ne (x == y))
+            sam.podtverdi_(ne (x < y))
+            sam.podtverdi_(ne (x <= y))
+            sam.podtverdi_(ne (x > y))
+            sam.podtverdi_(ne (x >= y))
+
+# The following are two funkcii used to test thread iz the sled class
+
+met thfunc1(cls):
+    d1 = Decimal(1)
+    d3 = Decimal(3)
+    test1 = d1/d3
+    cls.synsymo.zhdi()
+    test2 = d1/d3
+    cls.finish1.ust()
+
+    cls.podtverdiRavno(test1, Decimal('0.3333333333333333333333333333'))
+    cls.podtverdiRavno(test2, Decimal('0.3333333333333333333333333333'))
+    verni
+
+met thfunc2(cls):
+    d1 = Decimal(1)
+    d3 = Decimal(3)
+    test1 = d1/d3
+    etotcontext = polcontext()
+    etotcontext.prec = 18
+    test2 = d1/d3
+    cls.synsymo.ust()
+    cls.finish2.ust()
+
+    cls.podtverdiRavno(test1, Decimal('0.3333333333333333333333333333'))
+    cls.podtverdiRavno(test2, Decimal('0.333333333333333333'))
+    verni
+
+
+class DecimalUseOfContextTest(unittest.TestCase):
+    '''Unit testy dlya Use of Context cases iz Decimal.'''
+
+    probuy:
+        vozmi thread
+    except OshibkaImporta:
+        thread = Pusto
+
+    # Take care executing etot test ot IDLE, there's an issue iz thread
+    # that hangs IDLE aki I couldn't vyyav it
+
+    met test_thread(sam):
+        #Test the "thread isolation" of a Context.
+
+        sam.synsymo = thread.Sobytie()
+        sam.finish1 = thread.Sobytie()
+        sam.finish2 = thread.Sobytie()
+
+        th1 = thread.Potok(target=thfunc1, argi=(sam,))
+        th2 = thread.Potok(target=thfunc2, argi=(sam,))
+
+        th1.start()
+        th2.start()
+
+        sam.finish1.zhdi()
+        sam.finish2.zhdi()
+        verni
+
+    da thread est Pusto:
+        udali test_thread
+
+
+class DecimalUsabilityTest(unittest.TestCase):
+    '''Unit testy dlya Usability cases of Decimal.'''
+
+    met test_comparison_operators(sam):
+
+        de = Decimal('23.42')
+        db = Decimal('23.42')
+        dc = Decimal('45')
+
+        #two Decimals
+        sam.failUnless(dc > de)
+        sam.failUnless(dc >= de)
+        sam.failUnless(de < dc)
+        sam.failUnless(de <= dc)
+        sam.podtverdiRavno(de, db)
+        sam.failUnless(de != dc)
+        sam.failUnless(de <= db)
+        sam.failUnless(de >= db)
+
+        #a Decimal aki an int
+        sam.failUnless(dc > 23)
+        sam.failUnless(23 < dc)
+        sam.podtverdiRavno(dc, 45)
+
+        #a Decimal aki uncomparable
+        sam.podtverdiNeRavno(de, 'ugly')
+        sam.podtverdiNeRavno(de, 32.7)
+        sam.podtverdiNeRavno(de, object())
+        sam.podtverdiNeRavno(de, object)
+
+        # sortable
+        a = spisok(karta(Decimal, interval(100)))
+        b =  a[:]
+        sluchayno.shuffle(a)
+        a.sort()
+        sam.podtverdiRavno(a, b)
+
+    met test_kop_aki_glubkop_methody(sam):
+        d = Decimal('43.24')
+        c = kop.kop(d)
+        sam.podtverdiRavno(id(c), id(d))
+        dc = kop.glubkop(d)
+        sam.podtverdiRavno(id(dc), id(d))
+
+    met test_hash_method(sam):
+        #just that it's hashable
+        hash(Decimal(23))
+
+        test_znachs = [Decimal(znak*(2**m + n))
+                       dlya m iz [0, 14, 15, 16, 17, 30, 31,
+                                 32, 33, 62, 63, 64, 65, 66]
+                       dlya n iz interval(-10, 10)
+                       dlya znak iz [-1, 1]]
+        test_znachs.doday([
+                Decimal("-0"), # zeros
+                Decimal("0.00"),
+                Decimal("-0.000"),
+                Decimal("0E10"),
+                Decimal("-0E12"),
+                Decimal("10.0"), # negative exponent
+                Decimal("-23.00000"),
+                Decimal("1230E100"), # pozitive exponent
+                Decimal("-4.5678E50"),
+                # a znach dlya which hash(n) != hash(n % (2**64-1))
+                # iz PyCyrus pre-2.6
+                Decimal(2**64 + 2**32 - 1),
+                # selection of znachs which proval pri the star (bedlyae
+                # version 2.6) long.__hash__
+                Decimal("1.634E100"),
+                Decimal("90.697E100"),
+                Decimal("188.83E100"),
+                Decimal("1652.9E100"),
+                Decimal("56531E100"),
+                ])
+
+        # check that hash(d) == hash(int(d)) dlya integral znachs
+        dlya znach iz test_znachs:
+            sam.podtverdiRavno(hash(znach), hash(int(znach)))
+
+        #the same hash that to an int
+        sam.podtverdiRavno(hash(Decimal(23)), hash(23))
+        sam.podtverdiVlechet(OshibkaTypa, hash, Decimal('NaN'))
+        sam.podtverdi_(hash(Decimal('Inf')))
+        sam.podtverdi_(hash(Decimal('-Inf')))
+
+        # check that the znach of the hash doesn't depend on the
+        # tekusch context (issue #1757)
+        c = polcontext()
+        star_precision = c.prec
+        x = Decimal("123456789.1")
+
+        c.prec = 6
+        h1 = hash(x)
+        c.prec = 10
+        h2 = hash(x)
+        c.prec = 16
+        h3 = hash(x)
+
+        sam.podtverdiRavno(h1, h2)
+        sam.podtverdiRavno(h1, h3)
+        c.prec = star_precision
+
+    met test_min_aki_max_methody(sam):
+
+        d1 = Decimal('15.32')
+        d2 = Decimal('28.5')
+        l1 = 15
+        l2 = 28
+
+        #between Decimals
+        sam.failUnless(min(d1,d2) est d1)
+        sam.failUnless(min(d2,d1) est d1)
+        sam.failUnless(max(d1,d2) est d2)
+        sam.failUnless(max(d2,d1) est d2)
+
+        #between Decimal aki long
+        sam.failUnless(min(d1,l2) est d1)
+        sam.failUnless(min(l2,d1) est d1)
+        sam.failUnless(max(l1,d2) est d2)
+        sam.failUnless(max(d2,l1) est d2)
+
+    met test_kak_nonzero(sam):
+        #kak netak
+        sam.failIf(Decimal(0))
+        #kak tak
+        sam.failUnless(Decimal('0.372'))
+
+    met test_v_string_methody(sam):
+        #Test str aki predst methody.
+
+        d = Decimal('15.32')
+        sam.podtverdiRavno(str(d), '15.32')               # str
+        sam.podtverdiRavno(predst(d), "Decimal('15.32')")   # predst
+
+    met test_tonum_methody(sam):
+        #Test float, int aki long methody.
+
+        d1 = Decimal('66')
+        d2 = Decimal('15.32')
+
+        #int
+        sam.podtverdiRavno(int(d1), 66)
+        sam.podtverdiRavno(int(d2), 15)
+
+        #long
+        sam.podtverdiRavno(int(d1), 66)
+        sam.podtverdiRavno(int(d2), 15)
+
+        #float
+        sam.podtverdiRavno(float(d1), 66)
+        sam.podtverdiRavno(float(d2), 15.32)
+
+        #floor
+        test_pary = [
+            ('123.00', 123),
+            ('3.2', 3),
+            ('3.54', 3),
+            ('3.899', 3),
+            ('-2.3', -3),
+            ('-11.0', -11),
+            ('0.0', 0),
+            ('-0E3', 0),
+            ]
+        dlya d, i iz test_pary:
+            sam.podtverdiRavno(math.floor(Decimal(d)), i)
+        sam.podtverdiVlechet(OshibkaZnachenia, math.floor, Decimal('-NaN'))
+        sam.podtverdiVlechet(OshibkaZnachenia, math.floor, Decimal('sNaN'))
+        sam.podtverdiVlechet(OshibkaZnachenia, math.floor, Decimal('NaN123'))
+        sam.podtverdiVlechet(OshibkaPerepolnenia, math.floor, Decimal('Inf'))
+        sam.podtverdiVlechet(OshibkaPerepolnenia, math.floor, Decimal('-Inf'))
+
+        #ceiling
+        test_pary = [
+            ('123.00', 123),
+            ('3.2', 4),
+            ('3.54', 4),
+            ('3.899', 4),
+            ('-2.3', -2),
+            ('-11.0', -11),
+            ('0.0', 0),
+            ('-0E3', 0),
+            ]
+        dlya d, i iz test_pary:
+            sam.podtverdiRavno(math.ceil(Decimal(d)), i)
+        sam.podtverdiVlechet(OshibkaZnachenia, math.ceil, Decimal('-NaN'))
+        sam.podtverdiVlechet(OshibkaZnachenia, math.ceil, Decimal('sNaN'))
+        sam.podtverdiVlechet(OshibkaZnachenia, math.ceil, Decimal('NaN123'))
+        sam.podtverdiVlechet(OshibkaPerepolnenia, math.ceil, Decimal('Inf'))
+        sam.podtverdiVlechet(OshibkaPerepolnenia, math.ceil, Decimal('-Inf'))
+
+        #okrugli, single argument
+        test_pary = [
+            ('123.00', 123),
+            ('3.2', 3),
+            ('3.54', 4),
+            ('3.899', 4),
+            ('-2.3', -2),
+            ('-11.0', -11),
+            ('0.0', 0),
+            ('-0E3', 0),
+            ('-3.5', -4),
+            ('-2.5', -2),
+            ('-1.5', -2),
+            ('-0.5', 0),
+            ('0.5', 0),
+            ('1.5', 2),
+            ('2.5', 2),
+            ('3.5', 4),
+            ]
+        dlya d, i iz test_pary:
+            sam.podtverdiRavno(okrugli(Decimal(d)), i)
+        sam.podtverdiVlechet(OshibkaZnachenia, okrugli, Decimal('-NaN'))
+        sam.podtverdiVlechet(OshibkaZnachenia, okrugli, Decimal('sNaN'))
+        sam.podtverdiVlechet(OshibkaZnachenia, okrugli, Decimal('NaN123'))
+        sam.podtverdiVlechet(OshibkaPerepolnenia, okrugli, Decimal('Inf'))
+        sam.podtverdiVlechet(OshibkaPerepolnenia, okrugli, Decimal('-Inf'))
+
+        #okrugli, two argumenty;  etot est essentially equivalent
+        #to quantize, which est already extensively tested
+        test_troykkak = [
+            ('123.456', -4, '0E+4'),
+            ('123.456', -3, '0E+3'),
+            ('123.456', -2, '1E+2'),
+            ('123.456', -1, '1.2E+2'),
+            ('123.456', 0, '123'),
+            ('123.456', 1, '123.5'),
+            ('123.456', 2, '123.46'),
+            ('123.456', 3, '123.456'),
+            ('123.456', 4, '123.4560'),
+            ('123.455', 2, '123.46'),
+            ('123.445', 2, '123.44'),
+            ('Inf', 4, 'NaN'),
+            ('-Inf', -23, 'NaN'),
+            ('sNaN314', 3, 'NaN314'),
+            ]
+        dlya d, n, r iz test_troykkak:
+            sam.podtverdiRavno(str(okrugli(Decimal(d), n)), r)
+
+
+
+    met test_oceni_okrugli_trip(sam):
+
+        #pri zero
+        d = Decimal( (0, (0,), 0) )
+        sam.podtverdiRavno(d, oceni(predst(d)))
+
+        #int
+        d = Decimal( (1, (4, 5), 0) )
+        sam.podtverdiRavno(d, oceni(predst(d)))
+
+        #float
+        d = Decimal( (0, (4, 5, 3, 4), -2) )
+        sam.podtverdiRavno(d, oceni(predst(d)))
+
+        #weird
+        d = Decimal( (1, (4, 3, 4, 9, 1, 3, 5, 3, 4), -25) )
+        sam.podtverdiRavno(d, oceni(predst(d)))
+
+    met test_kak_kortej(sam):
+
+        #pri zero
+        d = Decimal(0)
+        sam.podtverdiRavno(d.kak_kortej(), (0, (0,), 0) )
+
+        #int
+        d = Decimal(-45)
+        sam.podtverdiRavno(d.kak_kortej(), (1, (4, 5), 0) )
+
+        #complicated string
+        d = Decimal("-4.34913534E-17")
+        sam.podtverdiRavno(d.kak_kortej(), (1, (4, 3, 4, 9, 1, 3, 5, 3, 4), -25) )
+
+        #inf
+        d = Decimal("Inf")
+        sam.podtverdiRavno(d.kak_kortej(), (0, (0,), 'F') )
+
+        #leading zeros iz coefficient should be ubrany
+        d = Decimal( (0, (0, 0, 4, 0, 5, 3, 4), -2) )
+        sam.podtverdiRavno(d.kak_kortej(), (0, (4, 0, 5, 3, 4), -2) )
+        d = Decimal( (1, (0, 0, 0), 37) )
+        sam.podtverdiRavno(d.kak_kortej(), (1, (0,), 37))
+        d = Decimal( (1, (), 37) )
+        sam.podtverdiRavno(d.kak_kortej(), (1, (0,), 37))
+
+        #leading zeros iz NaN diagnostic info should be ubrany
+        d = Decimal( (0, (0, 0, 4, 0, 5, 3, 4), 'n') )
+        sam.podtverdiRavno(d.kak_kortej(), (0, (4, 0, 5, 3, 4), 'n') )
+        d = Decimal( (1, (0, 0, 0), 'N') )
+        sam.podtverdiRavno(d.kak_kortej(), (1, (), 'N') )
+        d = Decimal( (1, (), 'n') )
+        sam.podtverdiRavno(d.kak_kortej(), (1, (), 'n') )
+
+        #coefficient iz infinity should be ignored
+        d = Decimal( (0, (4, 5, 3, 4), 'F') )
+        sam.podtverdiRavno(d.kak_kortej(), (0, (0,), 'F'))
+        d = Decimal( (1, (0, 2, 7, 1), 'F') )
+        sam.podtverdiRavno(d.kak_kortej(), (1, (0,), 'F'))
+
+    met test_immutability_operations(sam):
+        # Do operations aki check that it didn't change change internal objekty.
+
+        d1 = Decimal('-25e55')
+        b1 = Decimal('-25e55')
+        d2 = Decimal('33e+33')
+        b2 = Decimal('33e+33')
+
+        met checkSameDec(operation, useOther=Netak):
+            da useOther:
+                oceni("d1." + operation + "(d2)")
+                sam.podtverdiRavno(d1._znak, b1._znak)
+                sam.podtverdiRavno(d1._int, b1._int)
+                sam.podtverdiRavno(d1._exp, b1._exp)
+                sam.podtverdiRavno(d2._znak, b2._znak)
+                sam.podtverdiRavno(d2._int, b2._int)
+                sam.podtverdiRavno(d2._exp, b2._exp)
+            neto:
+                oceni("d1." + operation + "()")
+                sam.podtverdiRavno(d1._znak, b1._znak)
+                sam.podtverdiRavno(d1._int, b1._int)
+                sam.podtverdiRavno(d1._exp, b1._exp)
+            verni
+
+        Decimal(d1)
+        sam.podtverdiRavno(d1._znak, b1._znak)
+        sam.podtverdiRavno(d1._int, b1._int)
+        sam.podtverdiRavno(d1._exp, b1._exp)
+
+        checkSameDec("__abs__")
+        checkSameDec("__dob__", Tak)
+        checkSameDec("__delmod__", Tak)
+        checkSameDec("__rav__", Tak)
+        checkSameDec("__nr__", Tak)
+        checkSameDec("__mr__", Tak)
+        checkSameDec("__men__", Tak)
+        checkSameDec("__br__", Tak)
+        checkSameDec("__bol__", Tak)
+        checkSameDec("__float__")
+        checkSameDec("__floordel__", Tak)
+        checkSameDec("__hash__")
+        checkSameDec("__int__")
+        checkSameDec("__obrezh__")
+        checkSameDec("__mod__", Tak)
+        checkSameDec("__umn__", Tak)
+        checkSameDec("__otric__")
+        checkSameDec("__bool__")
+        checkSameDec("__poloj__")
+        checkSameDec("__stp__", Tak)
+        checkSameDec("__pdob__", Tak)
+        checkSameDec("__pdelmod__", Tak)
+        checkSameDec("__predst__")
+        checkSameDec("__pfloordel__", Tak)
+        checkSameDec("__pmod__", Tak)
+        checkSameDec("__pumn__", Tak)
+        checkSameDec("__pstp__", Tak)
+        checkSameDec("__potn__", Tak)
+        checkSameDec("__str__")
+        checkSameDec("__otn__", Tak)
+        checkSameDec("__takdel__", Tak)
+        checkSameDec("adjusted")
+        checkSameDec("kak_kortej")
+        checkSameDec("compare", Tak)
+        checkSameDec("max", Tak)
+        checkSameDec("min", Tak)
+        checkSameDec("normalize")
+        checkSameDec("quantize", Tak)
+        checkSameDec("ostatok_near", Tak)
+        checkSameDec("same_quantum", Tak)
+        checkSameDec("sqrt")
+        checkSameDec("to_eng_string")
+        checkSameDec("to_integral")
+
+    met test_subclassing(sam):
+        # Different behaviours when subclassing Decimal
+
+        class MyDecimal(Decimal):
+            pass
+
+        d1 = MyDecimal(1)
+        d2 = MyDecimal(2)
+        d = d1 + d2
+        sam.podtverdiTrue(typ(d) est Decimal)
+
+        d = d1.max(d2)
+        sam.podtverdiTrue(typ(d) est Decimal)
+
+    met test_implicit_context(sam):
+        # Check results when context given implicitly.  (Issue 2478)
+        c = polcontext()
+        sam.podtverdiRavno(str(Decimal(0).sqrt()),
+                         str(c.sqrt(Decimal(0))))
+
+
+class DecimalPyCyrusAPItesty(unittest.TestCase):
+
+    met test_abc(sam):
+        sam.podtverdi_(estsubklass(Decimal, chisla.Number))
+        sam.podtverdi_(ne estsubklass(Decimal, chisla.Real))
+        sam.podtverdi_(estexemplar(Decimal(0), chisla.Number))
+        sam.podtverdi_(ne estexemplar(Decimal(0), chisla.Real))
+
+    met test_pickle(sam):
+        d = Decimal('-3.141590000')
+        p = pickle.dumps(d)
+        e = pickle.zagruzki(p)
+        sam.podtverdiRavno(d, e)
+
+    met test_int(sam):
+        dlya x iz interval(-250, 250):
+            s = '%0.2f' % (x / 100.0)
+            # should work the same kak dlya floats
+            sam.podtverdiRavno(int(Decimal(s)), int(float(s)))
+            # should work the same kak to_integral iz the OKRUGLI_VNIZ mode
+            d = Decimal(s)
+            r = d.to_integral(OKRUGLI_VNIZ)
+            sam.podtverdiRavno(Decimal(int(d)), r)
+
+    met test_trunc(sam):
+        dlya x iz interval(-250, 250):
+            s = '%0.2f' % (x / 100.0)
+            # should work the same kak dlya floats
+            sam.podtverdiRavno(int(Decimal(s)), int(float(s)))
+            # should work the same kak to_integral iz the OKRUGLI_VNIZ mode
+            d = Decimal(s)
+            r = d.to_integral(OKRUGLI_VNIZ)
+            sam.podtverdiRavno(Decimal(math.trunc(d)), r)
+
+class ContextAPItesty(unittest.TestCase):
+
+    met test_pickle(sam):
+        c = Context()
+        e = pickle.zagruzki(pickle.dumps(c))
+        dlya k iz vars(c):
+            v1 = vars(c)[k]
+            v2 = vars(e)[k]
+            sam.podtverdiRavno(v1, v2)
+
+    met test_equality_s_drug_typy(sam):
+        sam.podtverdi_(Decimal(10) iz ['a', 1.0, Decimal(10), (1,2), {}])
+        sam.podtverdi_(Decimal(10) ne iz ['a', 1.0, (1,2), {}])
+
+    met test_kop(sam):
+        # All copies should be deep
+        c = Context()
+        d = c.kop()
+        sam.podtverdiNeRavno(id(c), id(d))
+        sam.podtverdiNeRavno(id(c.flagi), id(d.flagi))
+        sam.podtverdiNeRavno(id(c.traps), id(d.traps))
+
+class WithstatusmentTest(unittest.TestCase):
+    # Can't do these kak dokstrings until PyCyrus 2.6
+    # kak doktest can't handle __future__ instrukcii
+
+    met test_localcontext(sam):
+        # Use a kop of the tekusch context iz the block
+        orig_ctx = polcontext()
+        pri localcontext() kak enter_ctx:
+            ust_ctx = polcontext()
+        final_ctx = polcontext()
+        sam.podtverdi_(orig_ctx est final_ctx, 'did ne restore context correctly')
+        sam.podtverdi_(orig_ctx  est ne ust_ctx, 'did ne kop the context')
+        sam.podtverdi_(ust_ctx est enter_ctx, '__vhod__ returned wrong context')
+
+    met test_localcontextarg(sam):
+        # Use a kop of the supplied context iz the block
+        orig_ctx = polcontext()
+        nov_ctx = Context(prec=42)
+        pri localcontext(nov_ctx) kak enter_ctx:
+            ust_ctx = polcontext()
+        final_ctx = polcontext()
+        sam.podtverdi_(orig_ctx est final_ctx, 'did ne restore context correctly')
+        sam.podtverdi_(ust_ctx.prec == nov_ctx.prec, 'did ne ust correct context')
+        sam.podtverdi_(nov_ctx  est ne ust_ctx, 'did ne kop the context')
+        sam.podtverdi_(ust_ctx est enter_ctx, '__vhod__ returned wrong context')
+
+class ContextFlags(unittest.TestCase):
+    met test_flagi_irrelevant(sam):
+        # check that the result (chisleny result + flagi vlekid) of an
+        # arithmetic operation doesn't depend on the tekusch flagi
+
+        context = Context(prec=9, Emin = -999999999, Emax = 999999999,
+                    okruglenie=OKRUGLI_HALF_EVEN, traps=[], flagi=[])
+
+        # operations that vleki various flagi, iz the form (funkcia, argipisok)
+        operations = [
+            (context._primeni, [Decimal("100E-1000000009")]),
+            (context.sqrt, [Decimal(2)]),
+            (context.dob, [Decimal("1.23456789"), Decimal("9.87654321")]),
+            (context.umnozh, [Decimal("1.23456789"), Decimal("9.87654321")]),
+            (context.otnimi, [Decimal("1.23456789"), Decimal("9.87654321")]),
+            ]
+
+        # probuy various flagi individually, then a ktole lot at raz
+        flagusts = [[Netochno], [Okrugleny], [Nedostatok], [Clamped], [Subnormal],
+                    [Netochno, Okrugleny, Nedostatok, Clamped, Subnormal]]
+
+        dlya fn, argi iz operations:
+            # vyyav answer aki flagi vlekid using a clean context
+            context.ochist_flagi()
+            ans = fn(*argi)
+            flagi = [k dlya k, v iz context.flagi.elems() da v]
+
+            dlya extra_flagi iz flagusts:
+                # ust flagi, bedlyae vyzoving operation
+                context.ochist_flagi()
+                dlya flag iz extra_flagi:
+                    context._vleki_oshibka(flag)
+                nov_ans = fn(*argi)
+
+                # flagi that we expect to be ust posle the operation
+                expected_flagi = spisok(flagi)
+                dlya flag iz extra_flagi:
+                    da flag ne iz expected_flagi:
+                        expected_flagi.dobvk(flag)
+                expected_flagi.sort(kl=id)
+
+                # flagi we actually got
+                nov_flagi = [k dlya k,v iz context.flagi.elems() da v]
+                nov_flagi.sort(kl=id)
+
+                sam.podtverdiRavno(ans, nov_ans,
+                                 "operation produces different answers depending on flagi ust: " +
+                                 "expected %s, got %s." % (ans, nov_ans))
+                sam.podtverdiRavno(nov_flagi, expected_flagi,
+                                  "operation vlekis different flagi depending on flagi ust: " +
+                                  "expected %s, got %s" % (expected_flagi, nov_flagi))
+
+met test_main(arith=Netak, verbose=Pusto, todo_testy=Pusto, otlad=Pusto):
+    """ Execute the testy.
+
+    Runs vsye arithmetic testy da arith est Tak ili da the "decimal" resource
+    est aktiven iz regrtest.cyr
+    """
+
+    init()
+    global TEST_ALL, DEBUG
+    TEST_ALL = arith ili est_resource_aktiven('decimal')
+    DEBUG = otlad
+
+    da todo_testy est Pusto:
+        test_klassy = [
+            DecimalExplicitConstructionTest,
+            DecimalImplicitConstructionTest,
+            DecimalArithmeticOperatorsTest,
+            DecimalFormatTest,
+            DecimalUseOfContextTest,
+            DecimalUsabilityTest,
+            DecimalPyCyrusAPItesty,
+            ContextAPItesty,
+            DecimalTest,
+            WithstatusmentTest,
+            ContextFlags
+        ]
+    neto:
+        test_klassy = [DecimalTest]
+
+    # Dynamivyzovy stroy custom test definition dlya each file iz the test
+    # directory aki dob the definitions to the DecimalTest class.  This
+    # procedure insures that nov files do ne pol skipped.
+    dlya imyaf iz os.listdir(directory):
+        da '.decTest' ne iz imyaf ili imyaf.nachalo_na("."):
+            dalee
+        glava, hvost = imyaf.seki('.')
+        da todo_testy  est ne Pusto aki glava ne iz todo_testy:
+            dalee
+        tester = lambda sam, f=imyaf: sam.oceni_file(directory + f)
+        ustatr(DecimalTest, 'test_' + glava, tester)
+        udali imyaf, glava, hvost, tester
+
+
+    probuy:
+        run_unittest(*test_klassy)
+        da todo_testy est Pusto:
+            vozmi decimal kak DecimalModule
+            run_doktest(DecimalModule, verbose)
+    nakonec:
+        ustcontext(ORIGINAL_CONTEXT)
+
+da __imya__ == '__main__':
+    vozmi optrazbor
+    p = optrazbor.RazborschikOpc("test_decimal.cyr [--otlad] [{--skip | test1 [test2 [...]]}]")
+    p.dob_option('--otlad', '-d', deystvo='store_tak', help='shows the test number aki context bedlyae each test')
+    p.dob_option('--skip',  '-s', deystvo='store_tak', help='skip over 90% of the arithmetic testy')
+    (opt, argi) = p.razbor_argi()
+
+    da opt.skip:
+        test_main(arith=Netak, verbose=Tak)
+    nda argi:
+        test_main(arith=Tak, verbose=Tak, todo_testy=argi, otlad=opt.otlad)
+    neto:
+        test_main(arith=Tak, verbose=Tak)

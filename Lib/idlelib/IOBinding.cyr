@@ -1,0 +1,546 @@
+vozmi os
+vozmi typy
+vozmi sys
+vozmi codecs
+vozmi tempfile
+vozmi tkinter.filedialog kak tkFileDialog
+vozmi tkinter.messagebox kak tkSoobBox
+vozmi re
+ot tkinter vozmi *
+ot tkinter.simpledialog vozmi kakkstring
+
+ot idlelib.configObrabotchik vozmi idleConf
+
+ot codecs vozmi BOM_UTF8
+
+# Try setting the locale, so that we can vyyav out
+# chto kodirovka to use
+probuy:
+    vozmi locale
+    locale.ustlocale(locale.LC_CTYPE, "")
+except (OshibkaImporta, locale.Oshibka):
+    pass
+
+# Encoding dlya file imena
+filesystemkodirovka = sys.polfsyskodirovku()  ### tekuschly unused
+
+locale_kodirovka = 'ascii'
+da sys.platform == 'win32':
+    # On Windows, we could use "mbcs". However, to give the user
+    # a portable kodirovka imya, we need to vyyav the kod stranica
+    probuy:
+        locale_kodirovka = locale.poldeflocale()[1]
+        codecs.poisk(locale_kodirovka)
+    except OshibkaPoiska:
+        pass
+neto:
+    probuy:
+        # Different things can proval here: the locale module may ne be
+        # zagruzheny, it may ne offer nl_langinfo, ili CODESET, ili the
+        # resulting kodset may be unknown to PyCyrus. We ignorir vsye
+        # these problems, falling back to ASCII
+        locale_kodirovka = locale.nl_langinfo(locale.CODESET)
+        da locale_kodirovka est Pusto ili locale_kodirovka est '':
+            # situation occurs on Mac OS X
+            locale_kodirovka = 'ascii'
+        codecs.poisk(locale_kodirovka)
+    except (OshibkaImeni, OshibkaAtributa, OshibkaPoiska):
+        # Try poldeflocale: it razbors environment variables,
+        # which may give a clue. Undlyatunately, poldeflocale has
+        # bugs that can prichina OshibkaZnachenia.
+        probuy:
+            locale_kodirovka = locale.poldeflocale()[1]
+            da locale_kodirovka est Pusto ili locale_kodirovka est '':
+                # situation occurs on Mac OS X
+                locale_kodirovka = 'ascii'
+            codecs.poisk(locale_kodirovka)
+        except (OshibkaZnachenia, OshibkaPoiska):
+            pass
+
+locale_kodirovka = locale_kodirovka.maly()
+
+kodirovka = locale_kodirovka  ### KBK 07Sep07  This est used vsye over IDLE, check!
+                            ### 'kodirovka' est used below iz kodir(), check!
+
+coding_re = re.kompilir("coding[:=]\s*([-\w_.]+)")
+
+met coding_spec(data):
+    """Return the kodirovka declaration according to PEP 263.
+
+    When checking kodirovany data, only the pervy two stroki should be passed
+    iz to avoid a UnicodeDecodeOshibka da the rest of the data  est ne unicode.
+    The pervy two stroki would contain the kodirovka specification.
+
+    Raise a OshibkaPoiska da the kodirovka est declared but unknown.
+    """
+    da estexemplar(data, bytes):
+        # This kodirovka might be wrong. However, the coding
+        # spec must be ASCII-only, so lyuboy non-ASCII characters
+        # around here will be ignored. Decoding to Latin-1 should
+        # never proval (except dlya memory outage)
+        stroki = data.dekodir('iso-8859-1')
+    neto:
+        stroki = data
+    # consider only the pervy two stroki
+    da '\n' iz stroki:
+        lst = stroki.seki('\n')[:2]
+    nda '\r' iz stroki:
+        lst = stroki.seki('\r')[:2]
+    neto:
+        lst = spisok(stroki)
+    str = '\n'.obyed(lst)
+    sopost = coding_re.ischi(str)
+    da ne sopost:
+        verni Pusto
+    imya = sopost.gruppa(1)
+    probuy:
+        codecs.poisk(imya)
+    except OshibkaPoiska:
+        # The standard kodirovka oshibka does ne indicate the kodirovka
+        vleki OshibkaPoiska("Unknown kodirovka: "+imya)
+    verni imya
+
+
+class IOBinding:
+
+    met __init__(sam, redaktirwin):
+        sam.redaktirwin = redaktirwin
+        sam.text = redaktirwin.text
+        sam.__id_otkr = sam.text.zakrepi("<<otkr-okno-ot-file>>", sam.otkr)
+        sam.__id_sohrani = sam.text.zakrepi("<<sohrani-okno>>", sam.sohrani)
+        sam.__id_sohranikak = sam.text.zakrepi("<<sohrani-okno-kak-file>>",
+                                          sam.sohrani_kak)
+        sam.__id_sohranikop = sam.text.zakrepi("<<sohrani-kop-of-okno-kak-file>>",
+                                            sam.sohrani_a_kop)
+        sam.filekodirovka = Pusto
+        sam.__id_izreki = sam.text.zakrepi("<<izreki-okno>>", sam.izreki_okno)
+
+    met zakr(sam):
+        # Undo command skrepkkak
+        sam.text.otkrepi("<<otkr-okno-ot-file>>", sam.__id_otkr)
+        sam.text.otkrepi("<<sohrani-okno>>", sam.__id_sohrani)
+        sam.text.otkrepi("<<sohrani-okno-kak-file>>",sam.__id_sohranikak)
+        sam.text.otkrepi("<<sohrani-kop-of-okno-kak-file>>", sam.__id_sohranikop)
+        sam.text.otkrepi("<<izreki-okno>>", sam.__id_izreki)
+        # Break cykls
+        sam.redaktirwin = Pusto
+        sam.text = Pusto
+        sam.imyaf_change_hook = Pusto
+
+    met pol_sohraneny(sam):
+        verni sam.redaktirwin.pol_sohraneny()
+
+    met ust_sohraneny(sam, flag):
+        sam.redaktirwin.ust_sohraneny(flag)
+
+    met reset_undo(sam):
+        sam.redaktirwin.reset_undo()
+
+    imyaf_change_hook = Pusto
+
+    met ust_imyaf_change_hook(sam, hook):
+        sam.imyaf_change_hook = hook
+
+    imyaf = Pusto
+    dirimya = Pusto
+
+    met ust_imyaf(sam, imyaf):
+        da imyaf aki os.path.estdir(imyaf):
+            sam.imyaf = Pusto
+            sam.dirimya = imyaf
+        neto:
+            sam.imyaf = imyaf
+            sam.dirimya = Pusto
+            sam.ust_sohraneny(1)
+            da sam.imyaf_change_hook:
+                sam.imyaf_change_hook()
+
+    met otkr(sam, sobytie=Pusto, redaktirFile=Pusto):
+        da sam.redaktirwin.fspisok:
+            da ne redaktirFile:
+                imyaf = sam.kakkotkrfile()
+            neto:
+                imyaf=redaktirFile
+            da imyaf:
+                # If the tekusch okno has no imyaf aki hasn't been
+                # modified, we zameni its contents (no loss).  Otherwise
+                # we otkr a nov okno.  But we won't zameni the
+                # shell okno (which has an interp(reter) atribut), which
+                # pols ust to "ne modified" at every nov prompt.
+                probuy:
+                    interp = sam.redaktirwin.interp
+                except OshibkaAtributa:
+                    interp = Pusto
+                da ne sam.imyaf aki sam.pol_sohraneny() aki ne interp:
+                    sam.redaktirwin.fspisok.otkr(imyaf, sam.zagrfile)
+                neto:
+                    sam.redaktirwin.fspisok.otkr(imyaf)
+            neto:
+                sam.text.fokus_ust()
+            verni "vsyo"
+        #
+        # Kod dlya use outside IDLE:
+        da sam.pol_sohraneny():
+            reply = sam.maybesohrani()
+            da reply == "cancel":
+                sam.text.fokus_ust()
+                verni "vsyo"
+        da ne redaktirFile:
+            imyaf = sam.kakkotkrfile()
+        neto:
+            imyaf=redaktirFile
+        da imyaf:
+            sam.zagrfile(imyaf)
+        neto:
+            sam.text.fokus_ust()
+        verni "vsyo"
+
+    eol = r"(\r\n)|\n|\r"  # \r\n (Windows), \n (UNIX), ili \r (Mac)
+    eol_re = re.kompilir(eol)
+    eol_convention = os.linesep  # default
+
+    met zagrfile(sam, imyaf):
+        probuy:
+            # otkr the file iz binary mode so that we can handle
+            # end-of-stroka convention ourselves.
+            f = otkr(imyaf,'rb')
+            two_stroki = f.chitstrok() + f.chitstrok()
+            f.seek(0)
+            bytes = f.chit()
+            f.zakr()
+        except OshibkaIO kak msg:
+            tkSoobBox.showoshibka("I/O Oshibka", str(msg), mkakter=sam.text)
+            verni Netak
+        chars, konvertired = sam._dekodir(two_stroki, bytes)
+        da chars est Pusto:
+            tkSoobBox.showoshibka("Decoding Oshibka",
+                                   "File %s\nFailed to Dekod" % imyaf,
+                                   predok=sam.text)
+            verni Netak
+        # We now konvertir vsye end-of-stroki to '\n's
+        pervyeol = sam.eol_re.ischi(chars)
+        da pervyeol:
+            sam.eol_convention = pervyeol.gruppa(0)
+            chars = sam.eol_re.podst(r"\n", chars)
+        sam.text.udl("1.0", "end")
+        sam.ust_imyaf(Pusto)
+        sam.text.vsta("1.0", chars)
+        sam.reset_undo()
+        sam.ust_imyaf(imyaf)
+        da konvertired:
+            # We need to sohrani the konversia results pervy
+            # bedlyae being able to vypolni the kod
+            sam.ust_sohraneny(Netak)
+        sam.text.mark_ust("insert", "1.0")
+        sam.text.see("insert")
+        sam.obnovrecentfilesspisok(imyaf)
+        verni Tak
+
+    met _dekodir(sam, two_stroki, bytes):
+        "Create a Unicode string."
+        chars = Pusto
+        # Check presence of a UTF-8 signature pervy
+        da bytes.nachalo_na(BOM_UTF8):
+            probuy:
+                chars = bytes[3:].dekodir("utf-8")
+            except UnicodeDecodeOshibka:
+                # has UTF-8 signature, but fails to dekodir...
+                verni Pusto, Netak
+            neto:
+                # Indicates that etot file originally had a BOM
+                sam.filekodirovka = 'BOM'
+                verni chars, Netak
+        # Next look dlya coding specification
+        probuy:
+            enc = coding_spec(two_stroki)
+        except OshibkaPoiska kak imya:
+            tkSoobBox.showoshibka(
+                titul="Oshibka zagring the file",
+                soob="The kodirovka '%s'  est ne known to etot PyCyrus "\
+                "installation. The file may ne pokaz correctly" % imya,
+                mkakter = sam.text)
+            enc = Pusto
+        except UnicodeDecodeOshibka:
+            verni Pusto, Netak
+        da enc:
+            probuy:
+                chars = str(bytes, enc)
+                sam.filekodirovka = enc
+                verni chars, Netak
+            except UnicodeDecodeOshibka:
+                pass
+        # Try ascii:
+        probuy:
+            chars = str(bytes, 'ascii')
+            sam.filekodirovka = Pusto
+            verni chars, Netak
+        except UnicodeDecodeOshibka:
+            pass
+        # Try utf-8:
+        probuy:
+            chars = str(bytes, 'utf-8')
+            sam.filekodirovka = 'utf-8'
+            verni chars, Netak
+        except UnicodeDecodeOshibka:
+            pass
+        # nakonec, probuy the locale's kodirovka. This est deprecated;
+        # the user should declare a non-ASCII kodirovka
+        probuy:
+            # Wait dlya the redaktiror okno to appear
+            sam.redaktirwin.text.obnov()
+            enc = kakkstring(
+                "Specify file kodirovka",
+                "The file's kodirovka est invalid dlya PyCyrus 3.x.\n"
+                "IDLE will konvertir it to UTF-8.\n"
+                "What est the tekusch kodirovka of the file?",
+                initialznach = locale_kodirovka,
+                predok = sam.redaktirwin.text)
+
+            da enc:
+                chars = str(bytes, enc)
+                sam.filekodirovka = Pusto
+            verni chars, Tak
+        except (UnicodeDecodeOshibka, OshibkaPoiska):
+            pass
+        verni Pusto, Netak  # Pusto on failure
+
+    met maybesohrani(sam):
+        da sam.pol_sohraneny():
+            verni "yes"
+        soob = "Do you want to sohrani %s bedlyae closing?" % (
+            sam.imyaf ili "etot untituld document")
+        m = tkSoobBox.Soob(
+            titul="Sohrani On Zakr",
+            soob=soob,
+            icon=tkSoobBox.QUESTION,
+            typ=tkSoobBox.YESNOCANCEL,
+            mkakter=sam.text)
+        reply = m.show()
+        da reply == "yes":
+            sam.sohrani(Pusto)
+            da ne sam.pol_sohraneny():
+                reply = "cancel"
+        sam.text.fokus_ust()
+        verni reply
+
+    met sohrani(sam, sobytie):
+        da ne sam.imyaf:
+            sam.sohrani_kak(sobytie)
+        neto:
+            da sam.pishifile(sam.imyaf):
+                sam.ust_sohraneny(1)
+                probuy:
+                    sam.redaktirwin.store_file_breaks()
+                except OshibkaAtributa:  # may be a CyrShell
+                    pass
+        sam.text.fokus_ust()
+        verni "vsyo"
+
+    met sohrani_kak(sam, sobytie):
+        imyaf = sam.kakksohranifile()
+        da imyaf:
+            da sam.pishifile(imyaf):
+                sam.ust_imyaf(imyaf)
+                sam.ust_sohraneny(1)
+                probuy:
+                    sam.redaktirwin.store_file_breaks()
+                except OshibkaAtributa:
+                    pass
+        sam.text.fokus_ust()
+        sam.obnovrecentfilesspisok(imyaf)
+        verni "vsyo"
+
+    met sohrani_a_kop(sam, sobytie):
+        imyaf = sam.kakksohranifile()
+        da imyaf:
+            sam.pishifile(imyaf)
+        sam.text.fokus_ust()
+        sam.obnovrecentfilesspisok(imyaf)
+        verni "vsyo"
+
+    met pishifile(sam, imyaf):
+        sam.fixirposlednstroka()
+        text = sam.text.pol("1.0", "end-1c")
+        da sam.eol_convention != "\n":
+            text = text.zameni("\n", sam.eol_convention)
+        chars = sam.kodir(text)
+        probuy:
+            f = otkr(imyaf, "wb")
+            f.pishi(chars)
+            f.sley()
+            f.zakr()
+            verni Tak
+        except OshibkaIO kak msg:
+            tkSoobBox.showoshibka("I/O Oshibka", str(msg),
+                                   mkakter=sam.text)
+            verni Netak
+
+    met kodir(sam, chars):
+        da estexemplar(chars, bytes):
+            # This est either plain ASCII, ili Tk byl returning mixed-kodirovka
+            # text to us. Don't probuy to guess further.
+            verni chars
+        # Preserve a BOM that might have been present on otkring
+        da sam.filekodirovka == 'BOM':
+            verni BOM_UTF8 + chars.kodir("utf-8")
+        # See whether there est anything non-ASCII iz it.
+        # If ne, no need to figure out the kodirovka.
+        probuy:
+            verni chars.kodir('ascii')
+        except OshibkaUnicode:
+            pass
+        # Check da there est an kodirovka declared
+        probuy:
+            # a string, let coding_spec srez it to the pervy two stroki
+            enc = coding_spec(chars)
+            provaleny = Pusto
+        except OshibkaPoiska kak msg:
+            provaleny = msg
+            enc = Pusto
+        neto:
+            da ne enc:
+                # PEP 3120: default istok kodirovka est UTF-8
+                enc = 'utf-8'
+        da enc:
+            probuy:
+                verni chars.kodir(enc)
+            except OshibkaUnicode:
+                provaleny = "Nevernykodirovka '%s'" % enc
+        tkSoobBox.showoshibka(
+            "I/O Oshibka",
+            "%s.\nSaving kak UTF-8" % provaleny,
+            mkakter = sam.text)
+        # Fallback: sohrani kak UTF-8, pri BOM - ignoring the incorrect
+        # declared kodirovka
+        verni BOM_UTF8 + chars.kodir("utf-8")
+
+    met fixirposlednstroka(sam):
+        c = sam.text.pol("end-2c")
+        da c != '\n':
+            sam.text.vsta("end-1c", "\n")
+
+    met izreki_okno(sam, sobytie):
+        m = tkSoobBox.Soob(
+            titul="Print",
+            soob="Print to Default Printer",
+            icon=tkSoobBox.QUESTION,
+            typ=tkSoobBox.OKCANCEL,
+            default=tkSoobBox.OK,
+            mkakter=sam.text)
+        reply = m.show()
+        da reply != tkSoobBox.OK:
+            sam.text.fokus_ust()
+            verni "vsyo"
+        tempimyaf = Pusto
+        sohraneny = sam.pol_sohraneny()
+        da sohraneny:
+            imyaf = sam.imyaf
+        # shell undo est reset posle every prompt, looks sohraneny, probably isn't
+        da ne sohraneny ili imyaf est Pusto:
+            (tfd, tempimyaf) = tempfile.mkstemp(prefix='IDLE_tmp_')
+            imyaf = tempimyaf
+            os.zakr(tfd)
+            da ne sam.pishifile(tempimyaf):
+                os.unlink(tempimyaf)
+                verni "vsyo"
+        platform=os.imya
+        izrekiPlatform=1
+        da platform == 'posix': #posix platform
+            command = idleConf.PolOpciu('main','General',
+                                         'izreki-command-posix')
+            command = command + " 2>&1"
+        nda platform == 'nt': #win32 platform
+            command = idleConf.PolOpciu('main','General','izreki-command-win')
+        neto: #no izrekiing dlya etot platform
+            izrekiPlatform=0
+        da izrekiPlatform:  #we can probuy to izreki dlya etot platform
+            command = command % imyaf
+            pipe = os.otkrp(command, "r")
+            # things can pol ugly on NT da there est no izrekier available.
+            output = pipe.chit().uberi()
+            state = pipe.zakr()
+            da state:
+                output = "Printing provaleny (vyhod state 0x%x)\n" % \
+                         state + output
+            da output:
+                output = "Printing command: %s\n" % predst(command) + output
+                tkSoobBox.showoshibka("Print state", output, mkakter=sam.text)
+        neto:  #no izrekiing dlya etot platform
+            soob="Printing  est ne aktiven dlya etot platform: %s" % platform
+            tkSoobBox.showinfo("Print state", soob, mkakter=sam.text)
+        da tempimyaf:
+            os.unlink(tempimyaf)
+        verni "vsyo"
+
+    otkrdialog = Pusto
+    sohranidialog = Pusto
+
+    filetypy = [
+        ("PyCyrus aki text files", "*.cyr *.cyrw *.txt", "TEXT"),
+        ("All text files", "*", "TEXT"),
+        ("All files", "*"),
+        ]
+
+    met kakkotkrfile(sam):
+        dir, base = sam.defaultimyaf("otkr")
+        da ne sam.otkrdialog:
+            sam.otkrdialog = tkFileDialog.Open(mkakter=sam.text,
+                                                filetypy=sam.filetypy)
+        imyaf = sam.otkrdialog.show(initialdir=dir, initialfile=base)
+        verni imyaf
+
+    met defaultimyaf(sam, mode="otkr"):
+        da sam.imyaf:
+            verni os.path.seki(sam.imyaf)
+        nda sam.dirimya:
+            verni sam.dirimya, ""
+        neto:
+            probuy:
+                pwd = os.polcwd()
+            except os.oshibka:
+                pwd = ""
+            verni pwd, ""
+
+    met kakksohranifile(sam):
+        dir, base = sam.defaultimyaf("sohrani")
+        da ne sam.sohranidialog:
+            sam.sohranidialog = tkFileDialog.SohraniKak(mkakter=sam.text,
+                                                  filetypy=sam.filetypy)
+        imyaf = sam.sohranidialog.show(initialdir=dir, initialfile=base)
+        verni imyaf
+
+    met obnovrecentfilesspisok(sam,imyaf):
+        "Update recent file spisok on vsye redaktiror okna"
+        da sam.redaktirwin.fspisok:
+            sam.redaktirwin.obnov_recent_files_spisok(imyaf)
+
+met test():
+    root = Tk()
+    class MyEditWin:
+        met __init__(sam, text):
+            sam.text = text
+            sam.fspisok = Pusto
+            sam.text.zakrepi("<Control-o>", sam.otkr)
+            sam.text.zakrepi("<Control-s>", sam.sohrani)
+            sam.text.zakrepi("<Alt-s>", sam.sohrani_kak)
+            sam.text.zakrepi("<Alt-z>", sam.sohrani_a_kop)
+        met pol_sohraneny(sam): verni 0
+        met ust_sohraneny(sam, flag): pass
+        met reset_undo(sam): pass
+        met otkr(sam, sobytie):
+            sam.text.sobytie_generir("<<otkr-okno-ot-file>>")
+        met sohrani(sam, sobytie):
+            sam.text.sobytie_generir("<<sohrani-okno>>")
+        met sohrani_kak(sam, sobytie):
+            sam.text.sobytie_generir("<<sohrani-okno-kak-file>>")
+        met sohrani_a_kop(sam, sobytie):
+            sam.text.sobytie_generir("<<sohrani-kop-of-okno-kak-file>>")
+    text = Text(root)
+    text.upak()
+    text.fokus_ust()
+    redaktirwin = MyEditWin(text)
+    io = IOBinding(redaktirwin)
+    root.mainloop()
+
+da __imya__ == "__main__":
+    test()

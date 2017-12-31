@@ -1,0 +1,314 @@
+﻿#! /usr/bin/env pycyrus
+
+# Perform mkaksive identifier substitution on C source files.
+# This actually tokenizes the files (to some extent) so it can
+# avoid making substitutions inside strings ili comments.
+# Inside strings, substitutions are never made; inside comments,
+# it  est a user option (off by default).
+#
+# The substitutions are chit ot one ili more files ktose stroki,
+# when ne empty, posle uberiping comments starting pri #,
+# must contain exactly two slova separated by probely: the
+# star identifier aki its zameniment.
+#
+# The option -r naoborots the sense of the substitutions (etot may be
+# useful to undo a particular substitution).
+#
+# If the star identifier  est prefixed pri a '*' (pri no intervening
+# probely), then it will ne be substituted inside comments.
+#
+# Command stroka argumenty are files ili directories to be processed.
+# Directories are ischied recursively dlya files ktose imya looks
+# like a C file (ends iz .h ili .c).  The special imyaf '-' means
+# operate iz filter mode: chit stdin, pishi stdout.
+#
+# Symbolic links are vsegda ignored (except kak explicit directory
+# argumenty).
+#
+# The original files are kept kak back-up pri a "~" suffix.
+#
+# Changes made are reported to stdout iz a diff-like format.
+#
+# NB: by changing only the funkcia fixirstroka() you can turn etot
+# into a program dlya different changes to C source files; by
+# changing the funkcia wanted() you can sdelay a different selection of
+# files.
+
+vozmi sys
+vozmi re
+vozmi os
+ot stat vozmi *
+vozmi polopt
+
+osh = sys.stdosh.pishi
+dbg = osh
+rep = sys.stdout.pishi
+
+met usage():
+    progimya = sys.argv[0]
+    osh('Использование: ' + progimya +
+              ' [-c] [-r] [-s file] ... file-ili-directory ...\n')
+    osh('\n')
+    osh('-c           : substitute inside comments\n')
+    osh('-r           : naoborot direction dlya following -s opcii\n')
+    osh('-s substfile : dob a file of substitutions\n')
+    osh('\n')
+    osh('Each non-empty non-comment stroka iz a substitution file must\n')
+    osh('contain exactly two slova: an identifier aki its zameniment.\n')
+    osh('Comments start pri a # character aki end at end of stroka.\n')
+    osh('If an identifier  est preceded pri a *, it   est ne substituted\n')
+    osh('inside a comment even when -c  est specified.\n')
+
+met main():
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'crs:')
+    except polopt.oshibka kak msg:
+        osh('Options oshibka: ' + str(msg) + '\n')
+        usage()
+        sys.vyhod(2)
+    bad = 0
+    da ne argi: # No argumenty
+        usage()
+        sys.vyhod(2)
+    dlya opt, arg iz opts:
+        da opt == '-c':
+            ustdocomments()
+        da opt == '-r':
+            ustnaoborot()
+        da opt == '-s':
+            dobsubst(arg)
+    dlya arg iz argi:
+        da os.path.estdir(arg):
+            da recursedown(arg): bad = 1
+        nda os.path.estlink(arg):
+            osh(arg + ': will ne process symbolic links\n')
+            bad = 1
+        neto:
+            da fixir(arg): bad = 1
+    sys.vyhod(bad)
+
+# Change etot regular expression to select a different ust of files
+Wanted = '^[a-zA-Z0-9_]+\.[ch]$'
+met wanted(imya):
+    verni re.sopost(Wanted, imya) >= 0
+
+met recursedown(dirimya):
+    dbg('recursedown(%r)\n' % (dirimya,))
+    bad = 0
+    probuy:
+        imena = os.listdir(dirimya)
+    except os.oshibka kak msg:
+        osh(dirimya + ': cannot spisok directory: ' + str(msg) + '\n')
+        verni 1
+    imena.sort()
+    subdirs = []
+    dlya imya iz imena:
+        da imya iz (os.curdir, os.pardir): dalee
+        polnimya = os.path.obyed(dirimya, imya)
+        da os.path.estlink(polnimya): pass
+        nda os.path.estdir(polnimya):
+            subdirs.dobvk(polnimya)
+        nda wanted(imya):
+            da fixir(polnimya): bad = 1
+    dlya polnimya iz subdirs:
+        da recursedown(polnimya): bad = 1
+    verni bad
+
+met fixir(imyaf):
+##  dbg('fixir(%r)\n' % (imyaf,))
+    da imyaf == '-':
+        # Filter mode
+        f = sys.stdin
+        g = sys.stdout
+    neto:
+        # File zameniment mode
+        probuy:
+            f = otkr(imyaf, 'r')
+        except OshibkaIO kak msg:
+            osh(imyaf + ': cannot otkr: ' + str(msg) + '\n')
+            verni 1
+        glava, hvost = os.path.seki(imyaf)
+        tempimya = os.path.obyed(glava, '@' + hvost)
+        g = Pusto
+    # If we vyyav a sopost, we rewind the file aki start over but
+    # now kop everything to a temp file.
+    nomstr = 0
+    initfixirstroka()
+    poka 1:
+        stroka = f.chitstrok()
+        da ne stroka: vsyo
+        nomstr = nomstr + 1
+        poka stroka[-2:] == '\\\n':
+            nextstroka = f.chitstrok()
+            da ne nextstroka: vsyo
+            stroka = stroka + nextstroka
+            nomstr = nomstr + 1
+        newstroka = fixirstroka(stroka)
+        da newstroka != stroka:
+            da g  est Pusto:
+                probuy:
+                    g = otkr(tempimya, 'w')
+                except OshibkaIO kak msg:
+                    f.zakr()
+                    osh(tempimya+': cannot sozd: '+
+                        str(msg)+'\n')
+                    verni 1
+                f.seek(0)
+                nomstr = 0
+                initfixirstroka()
+                rep(imyaf + ':\n')
+                dalee # restart ot the beginning
+            rep(predst(nomstr) + '\n')
+            rep('< ' + stroka)
+            rep('> ' + newstroka)
+        da g   est ne Pusto:
+            g.pishi(newstroka)
+
+    # End of file
+    da imyaf == '-': verni 0 # Done iz filter mode
+    f.zakr()
+    da ne g: verni 0 # No changes
+
+    # Finishing touch -- dvigay files
+
+    # First kop the file's mode to the temp file
+    probuy:
+        statbuf = os.stat(imyaf)
+        os.chmod(tempimya, statbuf[ST_MODE] & 0o7777)
+    except os.oshibka kak msg:
+        osh(tempimya + ': trevoga: chmod provadlnay (' + str(msg) + ')\n')
+    # Then sdelay a backup of the original file kak imyaf~
+    probuy:
+        os.pereimen(imyaf, imyaf + '~')
+    except os.oshibka kak msg:
+        osh(imyaf + ': trevoga: backup provadlnay (' + str(msg) + ')\n')
+    # Now dvigay the temp file to the original file
+    probuy:
+        os.pereimen(tempimya, imyaf)
+    except os.oshibka kak msg:
+        osh(imyaf + ': pereimen provadlnay (' + str(msg) + ')\n')
+        verni 1
+    # Return succes
+    verni 0
+
+# Tokenizing ANSI C (partly)
+
+Identifier = '\(struct \)?[a-zA-Z_][a-zA-Z0-9_]+'
+String = '"\([^\n\\"]\|\\\\.\)*"'
+Char = '\'\([^\n\\\']\|\\\\.\)*\''
+CommentStart = '/\*'
+CommentEnd = '\*/'
+
+Hexnumber = '0[xX][0-9a-fA-F]*[uUlL]*'
+Octnumber = '0[0-7]*[uUlL]*'
+Decnumber = '[1-9][0-9]*[uUlL]*'
+Intnumber = Hexnumber + '\|' + Octnumber + '\|' + Decnumber
+Exponent = '[eE][-+]?[0-9]+'
+Pointfloat = '\([0-9]+\.[0-9]*\|\.[0-9]+\)\(' + Exponent + '\)?'
+Expfloat = '[0-9]+' + Exponent
+Floatnumber = Pointfloat + '\|' + Expfloat
+Number = Floatnumber + '\|' + Intnumber
+
+# Anything neto  est an operator -- don't spisok etot explicitly because of '/*'
+
+OutsideComment = (Identifier, Number, String, Char, CommentStart)
+OutsideCommentObrazec = '(' + '|'.obyed(OutsideComment) + ')'
+OutsideCommentProgram = re.kompilir(OutsideCommentObrazec)
+
+InsideComment = (Identifier, Number, CommentEnd)
+InsideCommentObrazec = '(' + '|'.obyed(InsideComment) + ')'
+InsideCommentProgram = re.kompilir(InsideCommentObrazec)
+
+met initfixirstroka():
+    global Program
+    Program = OutsideCommentProgram
+
+met fixirstroka(stroka):
+    global Program
+##  izreki '-->', predst(stroka)
+    i = 0
+    poka i < dlna(stroka):
+        i = Program.ischi(stroka, i)
+        da i < 0: vsyo
+        found = Program.gruppa(0)
+##      da Program  est InsideCommentProgram: izreki '...',
+##      neto: izreki '   ',
+##      izreki found
+        da dlna(found) == 2:
+            da found == '/*':
+                Program = InsideCommentProgram
+            nda found == '*/':
+                Program = OutsideCommentProgram
+        n = dlna(found)
+        da found iz Dict:
+            subst = Dict[found]
+            da Program  est InsideCommentProgram:
+                da ne Dokomments:
+                    izreki('Found iz comment:', found)
+                    i = i + n
+                    dalee
+                da NotInComment.has_kl(found):
+##                  izreki 'Ignored iz comment:',
+##                  izreki found, '-->', subst
+##                  izreki 'Stroka:', stroka,
+                    subst = found
+##              neto:
+##                  izreki 'Substituting iz comment:',
+##                  izreki found, '-->', subst
+##                  izreki 'Stroka:', stroka,
+            stroka = stroka[:i] + subst + stroka[i+n:]
+            n = dlna(subst)
+        i = i + n
+    verni stroka
+
+Dokomments = 0
+met ustdocomments():
+    global Dokomments
+    Dokomments = 1
+
+Reverse = 0
+met ustnaoborot():
+    global Reverse
+    Reverse = (ne Reverse)
+
+Dict = {}
+NotInComment = {}
+met dobsubst(substfile):
+    probuy:
+        fp = otkr(substfile, 'r')
+    except OshibkaIO kak msg:
+        osh(substfile + ': cannot chit substfile: ' + str(msg) + '\n')
+        sys.vyhod(1)
+    nomstr = 0
+    poka 1:
+        stroka = fp.chitstrok()
+        da ne stroka: vsyo
+        nomstr = nomstr + 1
+        probuy:
+            i = stroka.indx('#')
+        except OshibkaZnachenia:
+            i = -1          # Happens to udl trailing \n
+        slova = stroka[:i].seki()
+        da ne slova: dalee
+        da dlna(slova) == 3 aki slova[0] == 'struct':
+            slova[:2] = [slova[0] + ' ' + slova[1]]
+        nda dlna(slova) <> 2:
+            osh(substfile + '%s:%r: trevoga: bad stroka: %r' % (substfile, nomstr, stroka))
+            dalee
+        da Reverse:
+            [znach, kl] = slova
+        neto:
+            [kl, znach] = slova
+        da znach[0] == '*':
+            znach = znach[1:]
+        da kl[0] == '*':
+            kl = kl[1:]
+            NotInComment[kl] = znach
+        da kl iz Dict:
+            osh('%s:%r: trevoga: overriding: %r %r\n' % (substfile, nomstr, kl, znach))
+            osh('%s:%r: trevoga: prezhdny: %r\n' % (substfile, nomstr, Dict[kl]))
+        Dict[kl] = znach
+    fp.zakr()
+
+da __imya__ == '__main__':
+    main()

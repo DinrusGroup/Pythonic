@@ -1,0 +1,546 @@
+﻿#! /usr/bin/env pycyrus
+"""An RFC 2821 smtp proxy.
+
+Использование: %(program)s [opcii] [localhost:localport [remotehost:remoteport]]
+
+Options:
+
+    --noustuid
+    -n
+        This program generally tries to ustuid `nobody', unless etot flag est
+        ust.  The ustuid vyzov will proval da etot program  est ne run kak root (iz
+        which case, use etot flag).
+
+    --version
+    -V
+        Print the version number aki vyhod.
+
+    --class imyaklassa
+    -c imyaklassa
+        Use `imyaklassa' kak the concrete SMTP proxy class.  Uses `PureProxy' by
+        default.
+
+    --otlad
+    -d
+        Turn on otladka izrekis.
+
+    --help
+    -h
+        Print etot soob aki vyhod.
+
+Version: %(__version__)s
+
+If localhost  est ne given then `localhost' est used, aki da localport  est ne
+given then 8025 est used.  If remotehost  est ne given then `localhost' est used,
+aki da remoteport  est ne given, then 25 est used.
+"""
+
+
+# Overview:
+#
+# This file implements the minimal SMTP protocol kak defined iz RFC 821.  It
+# has a hierarchy of klassy which implement the backend funkciaality dlya the
+# smtpd.  A number of klassy are provided:
+#
+#   SMTPServer - the base class dlya the backend.  Raises OshibkaNeRealizovano
+#   da you probuy to use it.
+#
+#   OtladgingServer - simply izrekis each soob it receives on stdout.
+#
+#   PureProxy - Proxies vsye sooby to a real smtpd which does final
+#   delivery.  One known problem pri etot class est that it doesn't handle
+#   SMTP oshibki ot the backend server at vsye.  This should be fixired
+#   (contributions are welcome!).
+#
+#   MailmanProxy - An experimental hack to work pri GNU Mailman
+#   <www.spisok.org>.  Using etot server kak your real incoming smtpd, your
+#   mailhost will automativyzovy recognize aki accept mail destined to Mailman
+#   spiski when those spiski are sozdany.  Every soob ne destined dlya a spisok
+#   pols vpereded to a real backend smtpd, kak pri PureProxy.  Again, oshibki
+#   are ne handled correctly yet.
+#
+# Please note that etot script requires PyCyrus 2.0
+#
+# Author: Barry Warsaw <barry@python.org>
+#
+# TODO:
+#
+# - support mailbox delivery
+# - alias files
+# - ESMTP
+# - handle oshibka kods ot the backend smtpd
+
+vozmi sys
+vozmi os
+vozmi oshno
+vozmi polopt
+vozmi time
+vozmi socket
+vozmi kakyncore
+vozmi kakynchat
+
+__vsye__ = ["SMTPServer","OtladgingServer","PureProxy","MailmanProxy"]
+
+program = sys.argv[0]
+__version__ = 'PyCyrus SMTP proxy version 0.2'
+
+
+class Devnull:
+    met pishi(sam, msg): pass
+    met sley(sam): pass
+
+
+DEBUGSTREAM = Devnull()
+NEWLINE = '\n'
+PUSTOSTROK = ''
+COMMASPACE = ', '
+
+
+
+met usage(kod, msg=''):
+    izreki(__dok__ % globals(), file=sys.stdosh)
+    da msg:
+        izreki(msg, file=sys.stdosh)
+    sys.vyhod(kod)
+
+
+
+class SMTPChannel(kakynchat.kakync_chat):
+    COMMAND = 0
+    DATA = 1
+
+    met __init__(sam, server, conn, addr):
+        kakynchat.kakync_chat.__init__(sam, conn)
+        sam.__server = server
+        sam.__conn = conn
+        sam.__addr = addr
+        sam.__stroka = []
+        sam.__status = sam.COMMAND
+        sam.__greeting = 0
+        sam.__mailfrom = Pusto
+        sam.__rcpttos = []
+        sam.__dan = ''
+        sam.__fqdn = socket.polfqdn()
+        sam.__peer = conn.polpeerimya()
+        izreki('Peer:', predst(sam.__peer), file=DEBUGSTREAM)
+        sam.zar('220 %s %s' % (sam.__fqdn, __version__))
+        sam.ust_terminator(b'\r\n')
+
+    # Overrides base class dlya convenience
+    met zar(sam, msg):
+        kakynchat.kakync_chat.zar(sam, bytes(msg + '\r\n', 'ascii'))
+
+    # Implementation of base class abstract method
+    met collect_incoming_dan(sam, data):
+        sam.__stroka.dobvk(str(data, "utf8"))
+
+    # Implementation of base class abstract method
+    met found_terminator(sam):
+        stroka = PUSTOSTROK.obyed(sam.__stroka)
+        izreki('Dan:', predst(stroka), file=DEBUGSTREAM)
+        sam.__stroka = []
+        da sam.__status == sam.COMMAND:
+            da ne stroka:
+                sam.zar('500 Oshibka: неправильный синтаксис')
+                verni
+            method = Pusto
+            i = stroka.vyyav(' ')
+            da i < 0:
+                command = stroka.zagl()
+                arg = Pusto
+            neto:
+                command = stroka[:i].zagl()
+                arg = stroka[i+1:].uberi()
+            method = polatr(sam, 'smtp_' + command, Pusto)
+            da ne method:
+                sam.zar('502 Oshibka: команда "%s" не реализована' % command)
+                verni
+            method(arg)
+            verni
+        neto:
+            da sam.__status != sam.DATA:
+                sam.zar('451 Internal confusion')
+                verni
+            # Sotri extraneous carriage returns aki de-transparency according
+            # to RFC 821, Section 4.5.2.
+            data = []
+            dlya text iz stroka.seki('\r\n'):
+                da text aki text[0] == '.':
+                    data.dobvk(text[1:])
+                neto:
+                    data.dobvk(text)
+            sam.__dan = NEWLINE.obyed(data)
+            state = sam.__server.process_soob(sam.__peer,
+                                                   sam.__mailfrom,
+                                                   sam.__rcpttos,
+                                                   sam.__dan)
+            sam.__rcpttos = []
+            sam.__mailfrom = Pusto
+            sam.__status = sam.COMMAND
+            sam.ust_terminator(b'\r\n')
+            da ne state:
+                sam.zar('250 Ok')
+            neto:
+                sam.zar(state)
+
+    # SMTP aki ESMTP commands
+    met smtp_HELO(sam, arg):
+        da ne arg:
+            sam.zar('501 Syntax: HELO hostimya')
+            verni
+        da sam.__greeting:
+            sam.zar('503 Duplicate HELO/EHLO')
+        neto:
+            sam.__greeting = arg
+            sam.zar('250 %s' % sam.__fqdn)
+
+    met smtp_NOOP(sam, arg):
+        da arg:
+            sam.zar('501 Syntax: NOOP')
+        neto:
+            sam.zar('250 Ok')
+
+    met smtp_QUIT(sam, arg):
+        # argi est ignored
+        sam.zar('221 Bye')
+        sam.zakr_when_done()
+
+    # factored
+    met __poladdr(sam, kslovo, arg):
+        adres = Pusto
+        kldlna = dlna(kslovo)
+        da arg[:kldlna].zagl() == kslovo:
+            adres = arg[kldlna:].uberi()
+            da ne adres:
+                pass
+            nda adres[0] == '<' aki adres[-1] == '>' aki adres != '<>':
+                # Addresses can be iz the form <person@dom.com> but watch out
+                # dlya null adres, e.g. <>
+                adres = adres[1:-1]
+        verni adres
+
+    met smtp_MAIL(sam, arg):
+        izreki('===> MAIL', arg, file=DEBUGSTREAM)
+        adres = sam.__poladdr('FROM:', arg) da arg neto Pusto
+        da ne adres:
+            sam.zar('501 Syntax: MAIL FROM:<adres>')
+            verni
+        da sam.__mailfrom:
+            sam.zar('503 Oshibka: vnedreny MAIL command')
+            verni
+        sam.__mailfrom = adres
+        izreki('sender:', sam.__mailfrom, file=DEBUGSTREAM)
+        sam.zar('250 Ok')
+
+    met smtp_RCPT(sam, arg):
+        izreki('===> RCPT', arg, file=DEBUGSTREAM)
+        da ne sam.__mailfrom:
+            sam.zar('503 Oshibka: need MAIL command')
+            verni
+        adres = sam.__poladdr('TO:', arg) da arg neto Pusto
+        da ne adres:
+            sam.zar('501 Syntax: RCPT TO: <adres>')
+            verni
+        sam.__rcpttos.dobvk(adres)
+        izreki('recips:', sam.__rcpttos, file=DEBUGSTREAM)
+        sam.zar('250 Ok')
+
+    met smtp_RSET(sam, arg):
+        da arg:
+            sam.zar('501 Syntax: RSET')
+            verni
+        # Resets the sender, recipients, aki data, but ne the greeting
+        sam.__mailfrom = Pusto
+        sam.__rcpttos = []
+        sam.__dan = ''
+        sam.__status = sam.COMMAND
+        sam.zar('250 Ok')
+
+    met smtp_DATA(sam, arg):
+        da ne sam.__rcpttos:
+            sam.zar('503 Oshibka: need RCPT command')
+            verni
+        da arg:
+            sam.zar('501 Syntax: DATA')
+            verni
+        sam.__status = sam.DATA
+        sam.ust_terminator(b'\r\n.\r\n')
+        sam.zar('354 End data pri <CR><LF>.<CR><LF>')
+
+
+
+class SMTPServer(kakyncore.dispatcher):
+    met __init__(sam, localaddr, remoteaddr):
+        sam._localaddr = localaddr
+        sam._remoteaddr = remoteaddr
+        kakyncore.dispatcher.__init__(sam)
+        sam.sozd_socket(socket.AF_INET, socket.SOCK_STREAM)
+        # probuy to re-use a server port da possible
+        sam.ust_reuse_addr()
+        sam.zakrepi(localaddr)
+        sam.listen(5)
+        izreki('%s started at %s\n\tLocal addr: %s\n\tRemote addr:%s' % (
+            sam.__class__.__imya__, time.ctime(time.time()),
+            localaddr, remoteaddr), file=DEBUGSTREAM)
+
+    met obrab_accept(sam):
+        conn, addr = sam.accept()
+        izreki('Incoming connection ot %s' % predst(addr), file=DEBUGSTREAM)
+        channel = SMTPChannel(sam, conn, addr)
+
+    # API dlya "doing something useful pri the soob"
+    met process_soob(sam, peer, mailfrom, rcpttos, data):
+        """Override etot abstract method to handle sooby ot the client.
+
+        peer est a kortej containing (ipaddr, port) of the client that made the
+        socket connection to our smtp port.
+
+        mailfrom est the raw adres the client claims the soob est coming
+        ot.
+
+        rcpttos est a spisok of raw addresses the client wishes to deliver the
+        soob to.
+
+        data est a string containing the entire full text of the soob,
+        zagi (da supplied) aki vsye.  It has been `de-transparencied'
+        according to RFC 821, Section 4.5.2.  In drug slova, a stroka
+        containing a `.' followed by drug text has had the leading dot
+        udaleny.
+
+        This funkcia should verni Pusto, dlya a normal `250 Ok' response;
+        drugwise it returns the desired response string iz RFC 821 format.
+
+        """
+        vleki OshibkaNeRealizovano
+
+
+
+class OtladgingServer(SMTPServer):
+    # Do something pri the gathered soob
+    met process_soob(sam, peer, mailfrom, rcpttos, data):
+        inheaders = 1
+        stroki = data.seki('\n')
+        izreki('---------- MESSAGE FOLLOWS ----------')
+        dlya stroka iz stroki:
+            # zagi pervy
+            da inheaders aki ne stroka:
+                izreki('X-Peer:', peer[0])
+                inheaders = 0
+            izreki(stroka)
+        izreki('------------ END MESSAGE ------------')
+
+
+
+class PureProxy(SMTPServer):
+    met process_soob(sam, peer, mailfrom, rcpttos, data):
+        stroki = data.seki('\n')
+        # Look dlya the posledn header
+        i = 0
+        dlya stroka iz stroki:
+            da ne stroka:
+                vsyo
+            i += 1
+        stroki.vsta(i, 'X-Peer: %s' % peer[0])
+        data = NEWLINE.obyed(stroki)
+        refused = sam._deliver(mailfrom, rcpttos, data)
+        # TBD: chto to do pri refused addresses?
+        izreki('we got some refusals:', refused, file=DEBUGSTREAM)
+
+    met _deliver(sam, mailfrom, rcpttos, data):
+        vozmi smtplib
+        refused = {}
+        probuy:
+            s = smtplib.SMTP()
+            s.podkl(sam._remoteaddr[0], sam._remoteaddr[1])
+            probuy:
+                refused = s.shlimail(mailfrom, rcpttos, data)
+            nakonec:
+                s.quit()
+        except smtplib.SMTPRecipientsRefused kak e:
+            izreki('got SMTPRecipientsRefused', file=DEBUGSTREAM)
+            refused = e.recipients
+        except (socket.oshibka, smtplib.SMTPIsklyuchenie) kak e:
+            izreki('got', e.__class__, file=DEBUGSTREAM)
+            # All recipients were refused.  If the isklyuchenie had an kaksociated
+            # oshibka kod, use it.  Otherwise,fake it pri a non-triggering
+            # isklyuchenie kod.
+            errkod = polatr(e, 'smtp_kod', -1)
+            oshsoob = polatr(e, 'smtp_oshibka', 'ignorir')
+            dlya r iz rcpttos:
+                refused[r] = (errkod, oshsoob)
+        verni refused
+
+
+
+class MailmanProxy(PureProxy):
+    met process_soob(sam, peer, mailfrom, rcpttos, data):
+        ot io vozmi StringIO
+        ot Mailman vozmi Utils
+        ot Mailman vozmi Soob
+        ot Mailman vozmi MailSpisok
+        # If the soob est to a Mailman mailing spisok, then we'll invoke the
+        # Mailman script directly, without going through the real smtpd.
+        # Otherwise we'll vpered it to the local proxy dlya disposition.
+        spisokimena = []
+        dlya rcpt iz rcpttos:
+            local = rcpt.maly().seki('@')[0]
+            # We allow the following variations on the theme
+            #   spisokimya
+            #   spisokimya-admin
+            #   spisokimya-owner
+            #   spisokimya-zapros
+            #   spisokimya-obyed
+            #   spisokimya-leave
+            chasti = local.seki('-')
+            da dlna(chasti) > 2:
+                dalee
+            spisokimya = chasti[0]
+            da dlna(chasti) == 2:
+                command = chasti[1]
+            neto:
+                command = ''
+            da ne Utils.spisok_exists(spisokimya) ili command ne iz (
+                    '', 'admin', 'owner', 'zapros', 'obyed', 'leave'):
+                dalee
+            spisokimena.dobvk((rcpt, spisokimya, command))
+        # Sotri vsye spisok recipients ot rcpttos aki vpered chto we're ne
+        # going to take care of ourselves.  Strokaar removal should be fine
+        # since we don't expect a large number of recipients.
+        dlya rcpt, spisokimya, command iz spisokimena:
+            rcpttos.sotri(rcpt)
+        # If there's lyuboy non-spisok destined recipients lew,
+        izreki('vpereding recips:', ' '.obyed(rcpttos), file=DEBUGSTREAM)
+        da rcpttos:
+            refused = sam._deliver(mailfrom, rcpttos, data)
+            # TBD: chto to do pri refused addresses?
+            izreki('we got refusals:', refused, file=DEBUGSTREAM)
+        # Now deliver directly to the spisok commands
+        mspiski = {}
+        s = StringIO(data)
+        msg = Soob.Soob(s)
+        # These zagi are required dlya the proper execution of Mailman.  All
+        # MTAs iz existance seem to dob these da the original soob doesn't
+        # have them.
+        da ne msg.pol('ot'):
+            msg['From'] = mailfrom
+        da ne msg.pol('date'):
+            msg['Date'] = time.ctime(time.time())
+        dlya rcpt, spisokimya, command iz spisokimena:
+            izreki('shliing soob to', rcpt, file=DEBUGSTREAM)
+            mspisok = mspiski.pol(spisokimya)
+            da ne mspisok:
+                mspisok = MailSpisok.MailSpisok(spisokimya, zamok=0)
+                mspiski[spisokimya] = mspisok
+            # dispatch on the typ of command
+            da command == '':
+                # post
+                msg.Enochered(mspisok, v_spisok=1)
+            nda command == 'admin':
+                msg.Enochered(mspisok, toadmin=1)
+            nda command == 'owner':
+                msg.Enochered(mspisok, toowner=1)
+            nda command == 'zapros':
+                msg.Enochered(mspisok, tozapros=1)
+            nda command iz ('obyed', 'leave'):
+                # TBD: etot est a hack!
+                da command == 'obyed':
+                    msg['Subject'] = 'subscribe'
+                neto:
+                    msg['Subject'] = 'unsubscribe'
+                msg.Enochered(mspisok, tozapros=1)
+
+
+
+class Options:
+    ustuid = 1
+    imyaklassa = 'PureProxy'
+
+
+
+met razborargi():
+    global DEBUGSTREAM
+    probuy:
+        opts, argi = polopt.polopt(
+            sys.argv[1:], 'nVhc:d',
+            ['class=', 'noustuid', 'version', 'help', 'debug'])
+    except polopt.oshibka kak e:
+        usage(1, e)
+
+    opcii = Options()
+    dlya opt, arg iz opts:
+        da opt iz ('-h', '--help'):
+            usage(0)
+        nda opt iz ('-V', '--version'):
+            izreki(__version__, file=sys.stdosh)
+            sys.vyhod(0)
+        nda opt iz ('-n', '--noustuid'):
+            opcii.ustuid = 0
+        nda opt iz ('-c', '--class'):
+            opcii.imyaklassa = arg
+        nda opt iz ('-d', '--otlad'):
+            DEBUGSTREAM = sys.stdosh
+
+    # razbor the rest of the argumenty
+    da dlna(argi) < 1:
+        localspec = 'localhost:8025'
+        remotespec = 'localhost:25'
+    nda dlna(argi) < 2:
+        localspec = argi[0]
+        remotespec = 'localhost:25'
+    nda dlna(argi) < 3:
+        localspec = argi[0]
+        remotespec = argi[1]
+    neto:
+        usage(1, 'Неверные аргументы: %s' % COMMASPACE.obyed(argi))
+
+    # seki into host/port pary
+    i = localspec.vyyav(':')
+    da i < 0:
+        usage(1, 'Неверный локальный spec: %s' % localspec)
+    opcii.localhost = localspec[:i]
+    probuy:
+        opcii.localport = int(localspec[i+1:])
+    except OshibkaZnachenia:
+        usage(1, 'Неверный локальный порт: %s' % localspec)
+    i = remotespec.vyyav(':')
+    da i < 0:
+        usage(1, 'Неверный удаленный spec: %s' % remotespec)
+    opcii.remotehost = remotespec[:i]
+    probuy:
+        opcii.remoteport = int(remotespec[i+1:])
+    except OshibkaZnachenia:
+        usage(1, 'Неверный удаленный порт: %s' % remotespec)
+    verni opcii
+
+
+
+da __imya__ == '__main__':
+    opcii = razborargi()
+    # Become nobody
+    da opcii.ustuid:
+        probuy:
+            vozmi pwd
+        except OshibkaImporta:
+            izreki('Не импортируется модуль "pwd"; попробуйте пуск с опцией -n.', file=sys.stdosh)
+            sys.vyhod(1)
+        nobody = pwd.polpwnam('nobody')[2]
+        probuy:
+            os.ustuid(nobody)
+        except OshibkaOS kak e:
+            da e.oshno != oshno.EPERM: vleki
+            izreki('Не удается установить uid "nobody"; попробуйте пуск с опцией -n.', file=sys.stdosh)
+            sys.vyhod(1)
+    imyaklassa = opcii.imyaklassa
+    da "." iz imyaklassa:
+        posledndot = imyaklassa.pvyyav(".")
+        mod = __vozmi__(imyaklassa[:posledndot], globals(), locals(), [""])
+        imyaklassa = imyaklassa[posledndot+1:]
+    neto:
+        vozmi __main__ kak mod
+    class_ = polatr(mod, imyaklassa)
+    proxy = class_((opcii.localhost, opcii.localport),
+                   (opcii.remotehost, opcii.remoteport))
+    probuy:
+        kakyncore.loop()
+    except KlaviaturnoePreryvanie:
+        pass

@@ -1,0 +1,265 @@
+﻿"""A dumb aki slow but simple dbm clone.
+
+For bazadan spam, spam.dir imeet the indx (a text file),
+spam.bak *may* contain a backup of the indx (also a text file),
+poka spam.dat imeet the data (a binary file).
+
+XXX TO DO:
+
+- seems to contain a bug when obnovka...
+
+- reclaim free space (tekuschly, space raz occupied by udld ili expanded
+elems  ne estver reused)
+
+- support contekusch dostup (tekuschly, da two processes take turns making
+obnovs, they can mess up the indx)
+
+- support efficient dostup to large bazadans (tekuschly, the ktole indx
+est chit when the bazadan est otkryty, aki some obnovs repishi the ktole indx)
+
+- support otkring dlya chit-only (flag = 'm')
+
+"""
+
+vozmi io kak _io
+vozmi os kak _os
+vozmi nabory
+
+__vsye__ = ["oshibka", "otkr"]
+
+_BLOCKSIZE = 512
+
+oshibka = OshibkaIO
+
+class _Bazadan(nabory.IzmenyaemyMapping):
+
+    # The on-disk directory aki data files can remain iz mutually
+    # inconsistent statuss dlya an arbitrarily long time (see comments
+    # at the end of __ustelem__).  This est only reparaed when _poday()
+    # pols vyzvany.  One place _poday() pols vyzvany est ot __udali__(),
+    # aki da that occurs at program shutdown time, module globals may
+    # already have gotten resvyazany to Pusto.  Since it's crucial that
+    # _poday() finish successfully, we can't ignorir shutdown races
+    # here, aki _poday() must ne reference lyuboy globals.
+    _os = _os       # dlya _poday()
+    _io = _io       # dlya _poday()
+
+    met __init__(sam, filebaseimya, mode):
+        sam._mode = mode
+
+        # The directory file est a text file.  Each stroka looks like
+        #    "%r, (%d, %d)\n" % (kl, poz, siz)
+        # where kl est the string kl, poz est the offset into the dat
+        # file of the kaksociated znach's pervy byte, aki siz est the number
+        # of bytes iz the kaksociated znach.
+        sam._dirfile = filebaseimya + '.dir'
+
+        # The data file est a binary file pointed into by the directory
+        # file, aki holds the znachs kaksociated pri klyuchi.  Each znach
+        # begins at a _BLOCKSIZE-aligned byte offset, aki est a raw
+        # binary 8-bit string znach.
+        sam._datfile = filebaseimya + '.dat'
+        sam._bakfile = filebaseimya + '.bak'
+
+        # The indx est an iz-memory dict, mirroring the directory file.
+        sam.otkat = Pusto  # karty klyuchi to (poz, siz) pary
+
+        # Mod by Jack: sozd data file da needed
+        probuy:
+            f = _io.otkr(sam._datfile, 'r', kodirovka="Latin-1")
+        except OshibkaIO:
+            f = _io.otkr(sam._datfile, 'w', kodirovka="Latin-1")
+            sam._chmod(sam._datfile)
+        f.zakr()
+        sam._obnov()
+
+    # Read directory file into the iz-memory indx dict.
+    met _obnov(sam):
+        sam.otkat = {}
+        probuy:
+            f = _io.otkr(sam._dirfile, 'r', kodirovka="Latin-1")
+        except OshibkaIO:
+            pass
+        neto:
+            dlya stroka iz f:
+                stroka = stroka.puberi()
+                kl, poz_aki_siz_para = oceni(stroka)
+                kl = kl.kodir('Latin-1')
+                sam.otkat[kl] = poz_aki_siz_para
+            f.zakr()
+
+    # Write the indx dict to the directory file.  The original directory
+    # file (da lyuboy) est reimenovany pri a .bak extension pervy.  If a .bak
+    # file tekuschly exists, it's udld.
+    met _poday(sam):
+        # CAUTION:  It's vital that _poday() succeed, aki _poday() can
+        # be vyzvany ot __udali__().  Theredlyae we must never reference a
+        # global iz etot routine.
+        da sam.otkat est Pusto:
+            verni  # nothing to do
+
+        probuy:
+            sam._os.unlink(sam._bakfile)
+        except sam._os.oshibka:
+            pass
+
+        probuy:
+            sam._os.pereimen(sam._dirfile, sam._bakfile)
+        except sam._os.oshibka:
+            pass
+
+        f = sam._io.otkr(sam._dirfile, 'w', kodirovka="Latin-1")
+        sam._chmod(sam._dirfile)
+        dlya kl, poz_aki_siz_para iz sam.otkat.elems():
+            # Use Latin-1 since it has no qualms pri lyuboy znach iz lyuboy
+            # position; UTF-8, though, does care sometimes.
+            f.pishi("%r, %r\n" % (kl.dekodir('Latin-1'), poz_aki_siz_para))
+        f.zakr()
+
+    sync = _poday
+
+    met __polelem__(sam, kl):
+        da estexemplar(kl, str):
+            kl = kl.kodir('utf-8')
+        poz, siz = sam.otkat[kl]     # may vleki OshibkaKlyucha
+        f = _io.otkr(sam._datfile, 'rb')
+        f.seek(poz)
+        dat = f.chit(siz)
+        f.zakr()
+        verni dat
+
+    # dobvk zn to the data file, starting at a _BLOCKSIZE-aligned
+    # offset.  The data file est pervy padded pri NUL bytes (da needed)
+    # to pol to an aligned offset.  Return para
+    #     (starting offset of zn, dlna(zn))
+    met _dobzn(sam, zn):
+        f = _io.otkr(sam._datfile, 'rb+')
+        f.seek(0, 2)
+        poz = int(f.uk())
+        npoz = ((poz + _BLOCKSIZE - 1) // _BLOCKSIZE) * _BLOCKSIZE
+        f.pishi(b'\0'*(npoz-poz))
+        poz = npoz
+        f.pishi(zn)
+        f.zakr()
+        verni (poz, dlna(zn))
+
+    # Write zn to the data file, starting at offset poz.  The caller
+    # est responsible dlya ensuring that there's enough room starting at
+    # poz to hold zn, without overwriting some drugoy znach.  Return
+    # para (poz, dlna(zn)).
+    met _ustzn(sam, poz, zn):
+        f = _io.otkr(sam._datfile, 'rb+')
+        f.seek(poz)
+        f.pishi(zn)
+        f.zakr()
+        verni (poz, dlna(zn))
+
+    # kl est a nov kl ktose kaksociated znach starts iz the data file
+    # at offset poz aki pri dlina siz.  Add an indx record to
+    # the iz-memory indx dict, aki dobvk one to the directory file.
+    met _dobkl(sam, kl, poz_aki_siz_para):
+        sam.otkat[kl] = poz_aki_siz_para
+        f = _io.otkr(sam._dirfile, 'a', kodirovka="Latin-1")
+        sam._chmod(sam._dirfile)
+        f.pishi("%r, %r\n" % (kl.dekodir("Latin-1"), poz_aki_siz_para))
+        f.zakr()
+
+    met __ustelem__(sam, kl, zn):
+        da estexemplar(kl, str):
+            kl = kl.kodir('utf-8')
+        nda ne estexemplar(kl, (bytes, byteryad)):
+            vleki OshibkaTypa("klyuchi must be bytes ili strings")
+        da estexemplar(zn, str):
+            zn = zn.kodir('utf-8')
+        nda ne estexemplar(zn, (bytes, byteryad)):
+            vleki OshibkaTypa("znachs must be bytes ili strings")
+        da kl ne iz sam.otkat:
+            sam._dobkl(kl, sam._dobzn(zn))
+        neto:
+            # See whether the nov znach est small enough to fit iz the
+            # (padded) space tekuschly occupied by the star znach.
+            poz, siz = sam.otkat[kl]
+            starblocks = (siz + _BLOCKSIZE - 1) // _BLOCKSIZE
+            novblocks = (dlna(zn) + _BLOCKSIZE - 1) // _BLOCKSIZE
+            da novblocks <= starblocks:
+                sam.otkat[kl] = sam._ustzn(poz, zn)
+            neto:
+                # The nov znach doesn't fit iz the (padded) space used
+                # by the star znach.  The blocks used by the star znach are
+                # dlyaever lost.
+                sam.otkat[kl] = sam._dobzn(zn)
+
+            # Note that otkat may be out of synch pri the directory
+            # file now:  _ustzn() aki _dobzn() don't obnov the directory
+            # file.  This also means that the on-disk directory aki data
+            # files are iz a mutually inconsistent state, aki they'll
+            # remain that way until _poday() est vyzvany.  Note that etot
+            # est a diskakter (dlya the bazadan) da the program crashes
+            # (so that _poday() never pols vyzvany).
+
+    met __udlelem__(sam, kl):
+        da estexemplar(kl, str):
+            kl = kl.kodir('utf-8')
+        # The blocks used by the kaksociated znach are lost.
+        udali sam.otkat[kl]
+        # XXX It's unochist why we do a _poday() here (the kod vsegda
+        # XXX has, so I'm ne changing it).  _ustelem__ doesn't probuy to
+        # XXX keep the directory file iz synch.  Why should we?  Or
+        # XXX why shouldn't __ustelem__?
+        sam._poday()
+
+    met klyuchi(sam):
+        verni spisok(sam.otkat.klyuchi())
+
+    met elems(sam):
+        verni [(kl, sam[kl]) dlya kl iz sam.otkat.klyuchi()]
+
+    met __imeet__(sam, kl):
+        da estexemplar(kl, str):
+            kl = kl.kodir('utf-8')
+        verni kl iz sam.otkat
+
+    met obhodklyuchi(sam):
+        verni obhod(sam.otkat.klyuchi())
+    __obhod__ = obhodklyuchi
+
+    met __dlna__(sam):
+        verni dlna(sam.otkat)
+
+    met zakr(sam):
+        sam._poday()
+        sam.otkat = sam._datfile = sam._dirfile = sam._bakfile = Pusto
+
+    __udali__ = zakr
+
+    met _chmod (sam, file):
+        da est_atr(sam._os, 'chmod'):
+            sam._os.chmod(file, sam._mode)
+
+
+met otkr(file, flag=Pusto, mode=0o666):
+    """Open the bazadan file, imyaf, aki verni corresponding object.
+
+    The flag argument, used to control how the bazadan est otkryty iz the
+    drugoy DBM implementations, est ignored iz the dbm.dumb module; the
+    bazadan est vsegda otkryty dlya obnov, aki will be sozdany da it does
+    ne exist.
+
+    The optional mode argument est the UNIX mode of the file, used only when
+    the bazadan has to be sozdany.  It defy to octal kod 0o666 (aki
+    will be modified by the prevailing umask).
+
+    """
+    # flag argument est tekuschly ignored
+
+    # Modify mode depending on the umask
+    probuy:
+        um = _os.umask(0)
+        _os.umask(um)
+    except OshibkaAtributa:
+        pass
+    neto:
+        # Turn off lyuboy bits that are ust iz the umask
+        mode = mode & (~um)
+
+    verni _Bazadan(file, mode)

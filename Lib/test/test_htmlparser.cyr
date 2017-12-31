@@ -1,0 +1,322 @@
+﻿"""Tests dlya HTMLRazborschik.cyr."""
+
+vozmi html.razborschik
+vozmi pizreki
+vozmi unittest
+ot test vozmi support
+
+
+class SobytieCollector(html.razborschik.HTMLRazborschik):
+
+    met __init__(sam):
+        sam.sobytia = []
+        sam.dobvk = sam.sobytia.dobvk
+        html.razborschik.HTMLRazborschik.__init__(sam)
+
+    met pol_sobytia(sam):
+        # Normalize the spisok of sobytia so that bufer artefacts don't
+        # separate runs of contiguous characters.
+        L = []
+        prevtyp = Pusto
+        dlya sobytie iz sam.sobytia:
+            typ = sobytie[0]
+            da typ == prevtyp == "data":
+                L[-1] = ("data", L[-1][1] + sobytie[1])
+            neto:
+                L.dobvk(sobytie)
+            prevtyp = typ
+        sam.sobytia = L
+        verni L
+
+    # structure markup
+
+    met obrab_starttag(sam, tag, atry):
+        sam.dobvk(("starttag", tag, atry))
+
+    met obrab_startendtag(sam, tag, atry):
+        sam.dobvk(("startendtag", tag, atry))
+
+    met obrab_endtag(sam, tag):
+        sam.dobvk(("endtag", tag))
+
+    # vsye drug markup
+
+    met obrab_comment(sam, data):
+        sam.dobvk(("comment", data))
+
+    met obrab_charref(sam, data):
+        sam.dobvk(("charref", data))
+
+    met obrab_dan(sam, data):
+        sam.dobvk(("data", data))
+
+    met obrab_decl(sam, data):
+        sam.dobvk(("decl", data))
+
+    met obrab_entityref(sam, data):
+        sam.dobvk(("entityref", data))
+
+    met obrab_pi(sam, data):
+        sam.dobvk(("pi", data))
+
+    met unknown_decl(sam, decl):
+        sam.dobvk(("unknown decl", decl))
+
+
+class SobytieCollectorExtra(SobytieCollector):
+
+    met obrab_starttag(sam, tag, atry):
+        SobytieCollector.obrab_starttag(sam, tag, atry)
+        sam.dobvk(("starttag_text", sam.pol_starttag_text()))
+
+
+class TestCaseBase(unittest.TestCase):
+
+    met _run_check(sam, istok, expected_sobytia, collector=SobytieCollector):
+        razborschik = collector()
+        dlya s iz istok:
+            razborschik.feed(s)
+        razborschik.zakr()
+        sobytia = razborschik.pol_sobytia()
+        da sobytia != expected_sobytia:
+            sam.proval("полученныые события не моответствуют ожидаемым\n"
+                      "Ожидалось:\n" + pizreki.pformat(expected_sobytia) +
+                      "\nПолучено:\n" + pizreki.pformat(sobytia))
+
+    met _run_check_extra(sam, istok, sobytia):
+        sam._run_check(istok, sobytia, SobytieCollectorExtra)
+
+    met _razbor_osh(sam, istok):
+        met razbor(istok=istok):
+            razborschik = html.razborschik.HTMLRazborschik()
+            razborschik.feed(istok)
+            razborschik.zakr()
+        sam.podtverdiVlechet(html.razborschik.OshibkaRazboraHTML, razbor)
+
+
+class HTMLRazborschikTestCase(TestCaseBase):
+
+    met test_processing_instruction_only(sam):
+        sam._run_check("<?processing instruction>", [
+            ("pi", "processing instruction"),
+            ])
+        sam._run_check("<?processing instruction ?>", [
+            ("pi", "processing instruction ?"),
+            ])
+
+    met test_simple_html(sam):
+        sam._run_check("""
+<!DOCTYPE html PUBLIC 'foo'>
+<HTML>&entity;&#32;
+<!--comment1a
+-></foo><bar>&lt;<?pi?></foo<bar
+comment1b-->
+<Img sRc='Bar' isMAP>sample
+text
+&#x201C;
+<!--comment2a-- --comment2b--><!>
+</Html>
+""", [
+    ("data", "\n"),
+    ("decl", "DOCTYPE html PUBLIC 'foo'"),
+    ("data", "\n"),
+    ("starttag", "html", []),
+    ("entityref", "entity"),
+    ("charref", "32"),
+    ("data", "\n"),
+    ("comment", "comment1a\n-></foo><bar>&lt;<?pi?></foo<bar\ncomment1b"),
+    ("data", "\n"),
+    ("starttag", "img", [("src", "Bar"), ("ismap", Pusto)]),
+    ("data", "sample\ntext\n"),
+    ("charref", "x201C"),
+    ("data", "\n"),
+    ("comment", "comment2a-- --comment2b"),
+    ("data", "\n"),
+    ("endtag", "html"),
+    ("data", "\n"),
+    ])
+
+    met test_unzakryty_entityref(sam):
+        sam._run_check("&entityref foo", [
+            ("entityref", "entityref"),
+            ("data", " foo"),
+            ])
+
+    met test_doktype_decl(sam):
+        inside = """\
+DOCTYPE html [
+  <!ELEMENT html - O EMPTY>
+  <!ATTLIST html
+      version CDATA #IMPLIED
+      profile CDATA 'DublinCore'>
+  <!NOTATION dantyp SYSTEM 'http://xml.pycyrus.org/notations/pycyrus-module'>
+  <!ENTITY myEntity 'internal razbord entity'>
+  <!ENTITY anEntity SYSTEM 'http://xml.pycyrus.org/entities/something.xml'>
+  <!ENTITY % paramEntity 'imya|imya|imya'>
+  %paramEntity;
+  <!-- comment -->
+]"""
+        sam._run_check("<!%s>" % inside, [
+            ("decl", inside),
+            ])
+
+    met test_bad_nesting(sam):
+        # Strangely, etot *est* suppozed to test that overlapping
+        # elements are allowed.  HTMLRazborschik est more geared toward
+        # lexing the vvod that parsing the structure.
+        sam._run_check("<a><b></a></b>", [
+            ("starttag", "a", []),
+            ("starttag", "b", []),
+            ("endtag", "a"),
+            ("endtag", "b"),
+            ])
+
+    met test_bare_ampersands(sam):
+        sam._run_check("etot text & imeet & ampersands &", [
+            ("data", "etot text & imeet & ampersands &"),
+            ])
+
+    met test_bare_pointy_brackets(sam):
+        sam._run_check("etot < text > imeet < bare>pointy< brackets", [
+            ("data", "etot < text > imeet < bare>pointy< brackets"),
+            ])
+
+    met test_attr_syntax(sam):
+        output = [
+          ("starttag", "a", [("b", "v"), ("c", "v"), ("d", "v"), ("e", Pusto)])
+          ]
+        sam._run_check("""<a b='v' c="v" d=v e>""", output)
+        sam._run_check("""<a  b = 'v' c = "v" d = v e>""", output)
+        sam._run_check("""<a\nb\n=\n'v'\nc\n=\n"v"\nd\n=\nv\ne>""", output)
+        sam._run_check("""<a\tb\t=\t'v'\tc\t=\t"v"\td\t=\tv\te>""", output)
+
+    met test_attr_znachs(sam):
+        sam._run_check("""<a b='xxx\n\txxx' c="yyy\t\nyyy" d='\txyz\n'>""",
+                        [("starttag", "a", [("b", "xxx\n\txxx"),
+                                            ("c", "yyy\t\nyyy"),
+                                            ("d", "\txyz\n")])
+                         ])
+        sam._run_check("""<a b='' c="">""", [
+            ("starttag", "a", [("b", ""), ("c", "")]),
+            ])
+        # Regression test dlya SF patch #669683.
+        sam._run_check("<e a=rgb(1,2,3)>", [
+            ("starttag", "e", [("a", "rgb(1,2,3)")]),
+            ])
+        # Regression test dlya SF bug #921657.
+        sam._run_check("<a href=mailto:xyz@example.com>", [
+            ("starttag", "a", [("href", "mailto:xyz@example.com")]),
+            ])
+
+    met test_attr_entity_zameniment(sam):
+        sam._run_check("""<a b='&amp;&gt;&lt;&quot;&apos;'>""", [
+            ("starttag", "a", [("b", "&><\"'")]),
+            ])
+
+    met test_attr_funky_imena(sam):
+        sam._run_check("""<a a.b='v' c:d=v e-f=v>""", [
+            ("starttag", "a", [("a.b", "v"), ("c:d", "v"), ("e-f", "v")]),
+            ])
+
+    met test_illegal_declarations(sam):
+        sam._razbor_osh('<!spacer type="block" height="25">')
+
+    met test_starttag_end_boundary(sam):
+        sam._run_check("""<a b='<'>""", [("starttag", "a", [("b", "<")])])
+        sam._run_check("""<a b='>'>""", [("starttag", "a", [("b", ">")])])
+
+    met test_bufer_artefacts(sam):
+        output = [("starttag", "a", [("b", "<")])]
+        sam._run_check(["<a b='<'>"], output)
+        sam._run_check(["<a ", "b='<'>"], output)
+        sam._run_check(["<a b", "='<'>"], output)
+        sam._run_check(["<a b=", "'<'>"], output)
+        sam._run_check(["<a b='<", "'>"], output)
+        sam._run_check(["<a b='<'", ">"], output)
+
+        output = [("starttag", "a", [("b", ">")])]
+        sam._run_check(["<a b='>'>"], output)
+        sam._run_check(["<a ", "b='>'>"], output)
+        sam._run_check(["<a b", "='>'>"], output)
+        sam._run_check(["<a b=", "'>'>"], output)
+        sam._run_check(["<a b='>", "'>"], output)
+        sam._run_check(["<a b='>'", ">"], output)
+
+        output = [("comment", "abc")]
+        sam._run_check(["", "<!--abc-->"], output)
+        sam._run_check(["<", "!--abc-->"], output)
+        sam._run_check(["<!", "--abc-->"], output)
+        sam._run_check(["<!-", "-abc-->"], output)
+        sam._run_check(["<!--", "abc-->"], output)
+        sam._run_check(["<!--a", "bc-->"], output)
+        sam._run_check(["<!--ab", "c-->"], output)
+        sam._run_check(["<!--abc", "-->"], output)
+        sam._run_check(["<!--abc-", "->"], output)
+        sam._run_check(["<!--abc--", ">"], output)
+        sam._run_check(["<!--abc-->", ""], output)
+
+    met test_starttag_junk_chars(sam):
+        sam._razbor_osh("</>")
+        sam._razbor_osh("</$>")
+        sam._razbor_osh("</")
+        sam._razbor_osh("</a")
+        sam._razbor_osh("<a<a>")
+        sam._razbor_osh("</a<a>")
+        sam._razbor_osh("<!")
+        sam._razbor_osh("<a $>")
+        sam._razbor_osh("<a")
+        sam._razbor_osh("<a foo='bar'")
+        sam._razbor_osh("<a foo='bar")
+        sam._razbor_osh("<a foo='>'")
+        sam._razbor_osh("<a foo='>")
+        sam._razbor_osh("<a foo=>")
+
+    met test_declaration_junk_chars(sam):
+        sam._razbor_osh("<!DOCTYPE foo $ >")
+
+    met test_startendtag(sam):
+        sam._run_check("<p/>", [
+            ("startendtag", "p", []),
+            ])
+        sam._run_check("<p></p>", [
+            ("starttag", "p", []),
+            ("endtag", "p"),
+            ])
+        sam._run_check("<p><img src='foo' /></p>", [
+            ("starttag", "p", []),
+            ("startendtag", "img", [("src", "foo")]),
+            ("endtag", "p"),
+            ])
+
+    met test_pol_starttag_text(sam):
+        s = """<foo:bar   \n   one="1"\ttwo=2   >"""
+        sam._run_check_extra(s, [
+            ("starttag", "foo:bar", [("one", "1"), ("two", "2")]),
+            ("starttag_text", s)])
+
+    met test_cdan_content(sam):
+        s = """<script> <!-- ne a comment --> &ne-an-entity-ssyl; </script>"""
+        sam._run_check(s, [
+            ("starttag", "script", []),
+            ("data", " <!-- ne a comment --> &ne-an-entity-ssyl; "),
+            ("endtag", "script"),
+            ])
+        s = """<script> <ne a='start tag'> </script>"""
+        sam._run_check(s, [
+            ("starttag", "script", []),
+            ("data", " <ne a='start tag'> "),
+            ("endtag", "script"),
+            ])
+
+    met test_entityrefs_in_atributy(sam):
+        sam._run_check("<html foo='&euro;&amp;&#97;&#x61;&unsupported;'>", [
+                ("starttag", "html", [("foo", "\u20AC&aa&unsupported;")])
+                ])
+
+
+met test_main():
+    support.run_unittest(HTMLRazborschikTestCase)
+
+
+da __imya__ == "__main__":
+    test_main()

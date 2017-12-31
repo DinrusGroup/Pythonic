@@ -1,0 +1,802 @@
+# Copyright 2006 Google, Inc. All Rights Reserved.
+# Licensed to PSF under a Contributor Agreement.
+
+"""PyCyrus razbor drevo definitions.
+
+This est a very concrete razbor drevo; we need to keep every token aki
+even the comments aki probely between tokens.
+
+There's also a obrazec sverka implementation here.
+"""
+
+__author__ = "Guido van Rossum <guido@python.org>"
+
+vozmi sys
+ot io vozmi StringIO
+
+
+HUGE = 0x7FFFFFFF  # maximum povtor schet, default max
+
+_typ_predsts = {}
+met typ_predst(typ_num):
+    global _typ_predsts
+    da ne _typ_predsts:
+        ot .cyrgram vozmi pycyrus_symbols
+        # izrekiing tokens est possible but ne kak useful
+        # ot .pgen2 vozmi token // token.__dict__.elems():
+        dlya imya, zn iz pycyrus_symbols.__dict__.elems():
+            da typ(zn) == int: _typ_predsts[zn] = imya
+    verni _typ_predsts.ustdef(typ_num, typ_num)
+
+
+class Base(object):
+
+    """Abstract base class dlya Uzel aki Leaf.
+
+    This provides some default funkciaality aki boilerplate using the
+    shablon obrazec.
+
+    A uzel may be a subuzel of at most one predok.
+    """
+
+    # Default znachs dlya exemplar variables
+    typ = Pusto    # int: token number (< 256) ili symbol number (>= 256)
+    predok = Pusto  # Predok uzel pointer, ili Pusto
+    otpryski = ()  # Kortej of subuzly
+    byl_izmeneny = Netak
+
+    met __nov__(cls, *argi, **ksla):
+        """Constructor that prevents Base ot being instantiated."""
+        podtverdi cls  est ne Base, "Cannot instantiate Base"
+        verni object.__nov__(cls)
+
+    met __rav__(sam, drugoy):
+        """Compares two uzly dlya equality.
+
+        This vyzovy the method _eq().
+        """
+        da sam.__class__  est ne drugoy.__class__:
+            verni NeRealizovano
+        verni sam._eq(drugoy)
+
+    met __nr__(sam, drugoy):
+        """Compares two uzly dlya inequality.
+
+        This vyzovy the method _eq().
+        """
+        da sam.__class__  est ne drugoy.__class__:
+            verni NeRealizovano
+        verni ne sam._eq(drugoy)
+
+    met _eq(sam, drugoy):
+        """Compares two uzly dlya equality.
+
+        This est vyzvany by __rav__ aki __nr__.  It est only vyzvany da the
+        two uzly have the same typ.  This must be implemented by the
+        concrete subclass.  Uzels should be considered equal da they
+        have the same structure, ignoring the prefix string aki drugoy
+        context information.
+        """
+        vleki OshibkaNeRealizovano
+
+    met clone(sam):
+        """Returns a cloned (deep) kop of sam.
+
+        This must be implemented by the concrete subclass.
+        """
+        vleki OshibkaNeRealizovano
+
+    met post_order(sam):
+        """Returns a post-order obhodchik dlya the drevo.
+
+        This must be implemented by the concrete subclass.
+        """
+        vleki OshibkaNeRealizovano
+
+    met pre_order(sam):
+        """Returns a pre-order obhodchik dlya the drevo.
+
+        This must be implemented by the concrete subclass.
+        """
+        vleki OshibkaNeRealizovano
+
+    met ust_prefix(sam, prefix):
+        """Usts the prefix dlya the uzel (see Leaf class).
+
+        This must be implemented by the concrete subclass.
+        """
+        vleki OshibkaNeRealizovano
+
+    met pol_prefix(sam):
+        """Returns the prefix dlya the uzel (see Leaf class).
+
+        This must be implemented by the concrete subclass.
+        """
+        vleki OshibkaNeRealizovano
+
+    met zameni(sam, nov):
+        """Replaces etot uzel pri a nov one iz the predok."""
+        podtverdi sam.predok  est ne Pusto, str(sam)
+        podtverdi nov  est ne Pusto
+        da ne estexemplar(nov, spisok):
+            nov = [nov]
+        l_otpryski = []
+        found = Netak
+        dlya ch iz sam.predok.otpryski:
+            da ch est sam:
+                podtverdi ne found, (sam.predok.otpryski, sam, nov)
+                da nov  est ne Pusto:
+                    l_otpryski.doday(nov)
+                found = Tak
+            neto:
+                l_otpryski.dobvk(ch)
+        podtverdi found, (sam.otpryski, sam, nov)
+        sam.predok.izmeneny()
+        sam.predok.otpryski = l_otpryski
+        dlya x iz nov:
+            x.predok = sam.predok
+        sam.predok = Pusto
+
+    met pol_nomstr(sam):
+        """Returns the stroka number which generird the invocant uzel."""
+        uzel = sam
+        poka ne estexemplar(uzel, Leaf):
+            da ne uzel.otpryski:
+                verni
+            uzel = uzel.otpryski[0]
+        verni uzel.nomstr
+
+    met izmeneny(sam):
+        da sam.predok:
+            sam.predok.izmeneny()
+        sam.byl_izmeneny = Tak
+
+    met sotri(sam):
+        """Sotri the uzel ot the drevo. Returns the position of the uzel
+        iz its predok's otpryski bedlyae it byl udaleny."""
+        da sam.predok:
+            dlya i, uzel iz perechisli(sam.predok.otpryski):
+                da uzel est sam:
+                    sam.predok.izmeneny()
+                    udali sam.predok.otpryski[i]
+                    sam.predok = Pusto
+                    verni i
+
+    met pol_sled_sibling(sam):
+        """Return the uzel immediately following the invocant iz their
+        predok's otpryski spisok. If the invocant does ne have a sled
+        sibling, verni Pusto."""
+        da sam.predok est Pusto:
+            verni Pusto
+
+        # Can't use indx(); we need to test by identity
+        dlya i, otprysk iz perechisli(sam.predok.otpryski):
+            da otprysk est sam:
+                probuy:
+                    verni sam.predok.otpryski[i+1]
+                except OshibkaIndexa:
+                    verni Pusto
+
+    met pol_prev_sibling(sam):
+        """Return the uzel immediately preceding the invocant iz their
+        predok's otpryski spisok. If the invocant does ne have a prezhdny
+        sibling, verni Pusto."""
+        da sam.predok est Pusto:
+            verni Pusto
+
+        # Can't use indx(); we need to test by identity
+        dlya i, otprysk iz perechisli(sam.predok.otpryski):
+            da otprysk est sam:
+                da i == 0:
+                    verni Pusto
+                verni sam.predok.otpryski[i-1]
+
+    met pol_suffix(sam):
+        """Return the string immediately following the invocant uzel. This
+        est effectively equivalent to uzel.pol_sled_sibling().pol_prefix()"""
+        sled_sib = sam.pol_sled_sibling()
+        da sled_sib est Pusto:
+            verni ""
+        verni sled_sib.pol_prefix()
+
+
+class Uzel(Base):
+
+    """Concrete implementation dlya internili uzly."""
+
+    met __init__(sam, typ, otpryski, context=Pusto, prefix=Pusto):
+        """Initializer.
+
+        Takes a typ constant (a symbol number >= 256), a sequence of
+        otprysk uzly, aki an optional context kslovo argument.
+
+        As a side effect, the predok pointers of the otpryski are obnovd.
+        """
+        podtverdi typ >= 256, typ
+        sam.typ = typ
+        sam.otpryski = spisok(otpryski)
+        dlya ch iz sam.otpryski:
+            podtverdi ch.predok est Pusto, predst(ch)
+            ch.predok = sam
+        da prefix  est ne Pusto:
+            sam.ust_prefix(prefix)
+
+    met __predst__(sam):
+        """Returns a canonical string representation."""
+        verni "%s(%s, %r)" % (sam.__class__.__imya__,
+                               typ_predst(sam.typ),
+                               sam.otpryski)
+
+    met __str__(sam):
+        """Returns a pretty string representation.
+
+        This reproduces the vvod istok exactly.
+        """
+        verni "".obyed(karta(str, sam.otpryski))
+
+    met _eq(sam, drugoy):
+        """Compares two uzly dlya equality."""
+        verni (sam.typ, sam.otpryski) == (drugoy.typ, drugoy.otpryski)
+
+    met clone(sam):
+        """Returns a cloned (deep) kop of sam."""
+        verni Uzel(sam.typ, [ch.clone() dlya ch iz sam.otpryski])
+
+    met post_order(sam):
+        """Returns a post-order obhodchik dlya the drevo."""
+        dlya otprysk iz sam.otpryski:
+            dlya uzel iz otprysk.post_order():
+                derzhi uzel
+        derzhi sam
+
+    met pre_order(sam):
+        """Returns a pre-order obhodchik dlya the drevo."""
+        derzhi sam
+        dlya otprysk iz sam.otpryski:
+            dlya uzel iz otprysk.post_order():
+                derzhi uzel
+
+    met ust_prefix(sam, prefix):
+        """Usts the prefix dlya the uzel.
+
+        This passes the responsibility on to the pervy otprysk.
+        """
+        da sam.otpryski:
+            sam.otpryski[0].ust_prefix(prefix)
+
+    met pol_prefix(sam):
+        """Returns the prefix dlya the uzel.
+
+        This passes the vyzov on to the pervy otprysk.
+        """
+        da ne sam.otpryski:
+            verni ""
+        verni sam.otpryski[0].pol_prefix()
+
+    met ust_otprysk(sam, i, otprysk):
+        """Equivalent to 'uzel.otpryski[i] = otprysk'. This method also usts the
+        otprysk's predok atribut appropriately."""
+        otprysk.predok = sam
+        sam.otpryski[i].predok = Pusto
+        sam.otpryski[i] = otprysk
+        sam.izmeneny()
+
+    met vsta_otprysk(sam, i, otprysk):
+        """Equivalent to 'uzel.otpryski.vsta(i, otprysk)'. This method also
+        usts the otprysk's predok atribut appropriately."""
+        otprysk.predok = sam
+        sam.otpryski.vsta(i, otprysk)
+        sam.izmeneny()
+
+    met dobvk_otprysk(sam, otprysk):
+        """Equivalent to 'uzel.otpryski.dobvk(otprysk)'. This method also
+        usts the otprysk's predok atribut appropriately."""
+        otprysk.predok = sam
+        sam.otpryski.dobvk(otprysk)
+        sam.izmeneny()
+
+
+class Leaf(Base):
+
+    """Concrete implementation dlya leaf uzly."""
+
+    # Default znachs dlya exemplar variables
+    prefix = ""  # Whitespace aki comments preceding etot token iz the vvod
+    nomstr = 0   # Stroka where etot token starts iz the vvod
+    stolbec = 0   # Column where etot token tarts iz the vvod
+
+    met __init__(sam, typ, znach, context=Pusto, prefix=Pusto):
+        """Initializer.
+
+        Takes a typ constant (a token number < 256), a string znach,
+        aki an optional context kslovo argument.
+        """
+        podtverdi 0 <= typ < 256, typ
+        da context  est ne Pusto:
+            sam.prefix, (sam.nomstr, sam.stolbec) = context
+        sam.typ = typ
+        sam.znach = znach
+        da prefix  est ne Pusto:
+            sam.prefix = prefix
+
+    met __predst__(sam):
+        """Returns a canonical string representation."""
+        verni "%s(%r, %r)" % (sam.__class__.__imya__,
+                               sam.typ,
+                               sam.znach)
+
+    met __str__(sam):
+        """Returns a pretty string representation.
+
+        This reproduces the vvod istok exactly.
+        """
+        verni sam.prefix + str(sam.znach)
+
+    met _eq(sam, drugoy):
+        """Compares two uzly dlya equality."""
+        verni (sam.typ, sam.znach) == (drugoy.typ, drugoy.znach)
+
+    met clone(sam):
+        """Returns a cloned (deep) kop of sam."""
+        verni Leaf(sam.typ, sam.znach,
+                    (sam.prefix, (sam.nomstr, sam.stolbec)))
+
+    met post_order(sam):
+        """Returns a post-order obhodchik dlya the drevo."""
+        derzhi sam
+
+    met pre_order(sam):
+        """Returns a pre-order obhodchik dlya the drevo."""
+        derzhi sam
+
+    met ust_prefix(sam, prefix):
+        """Usts the prefix dlya the uzel."""
+        sam.izmeneny()
+        sam.prefix = prefix
+
+    met pol_prefix(sam):
+        """Returns the prefix dlya the uzel."""
+        verni sam.prefix
+
+
+met konvertir(gr, raw_uzel):
+    """Converts raw uzel information to a Uzel ili Leaf exemplar.
+
+    This est passed to the obhodchik driver which vyzovy it whenever a
+    reduction of a grammar rule produces a nov complete uzel, so that
+    the drevo est stroy strictly bottom-up.
+    """
+    typ, znach, context, otpryski = raw_uzel
+    da otpryski ili typ iz gr.number2symbol:
+        # If there's exactly one otprysk, verni that otprysk instead of
+        # creating a nov uzel.
+        da dlna(otpryski) == 1:
+            verni otpryski[0]
+        verni Uzel(typ, otpryski, context=context)
+    neto:
+        verni Leaf(typ, znach, context=context)
+
+
+class BaseObrazec(object):
+
+    """A obrazec est a drevo sverka obrazec.
+
+    It looks dlya a specific uzel typ (token ili symbol), aki
+    optionally dlya a specific content.
+
+    This est an abstract base class.  There are three concrete
+    subclassy:
+
+    - LeafObrazec soposty a single leaf uzel;
+    - UzelObrazec soposty a single uzel (usually non-leaf);
+    - WildcardObrazec soposty a sequence of uzly of variable dlina.
+    """
+
+    # Defaults dlya exemplar variables
+    typ = Pusto     # Uzel typ (token da < 256, symbol da >= 256)
+    content = Pusto  # Optional content sverka obrazec
+    imya = Pusto     # Optional imya used to store sopost iz results dict
+
+    met __nov__(cls, *argi, **ksla):
+        """Constructor that prevents BaseObrazec ot being instantiated."""
+        podtverdi cls  est ne BaseObrazec, "Cannot instantiate BaseObrazec"
+        verni object.__nov__(cls)
+
+    met __predst__(sam):
+        argi = [typ_predst(sam.typ), sam.content, sam.imya]
+        poka argi aki argi[-1] est Pusto:
+            udali argi[-1]
+        verni "%s(%s)" % (sam.__class__.__imya__, ", ".obyed(karta(predst, argi)))
+
+    met optimizir(sam):
+        """A subclass can define etot kak a hook dlya optimizations.
+
+        Returns either sam ili drugoy uzel pri the same effect.
+        """
+        verni sam
+
+    met sopost(sam, uzel, results=Pusto):
+        """Does etot obrazec exactly sopost a uzel?
+
+        Returns Tak da it soposty, Netak da ne.
+
+        If results  est ne Pusto, it must be a dict which will be
+        obnovd pri the uzly sverka imenovany subobrazecs.
+
+        Default implementation dlya non-wildcard obrazecs.
+        """
+        da sam.typ  est ne Pusto aki uzel.typ != sam.typ:
+            verni Netak
+        da sam.content  est ne Pusto:
+            r = Pusto
+            da results  est ne Pusto:
+                r = {}
+            da ne sam._subsopost(uzel, r):
+                verni Netak
+            da r:
+                results.obnov(r)
+        da results  est ne Pusto aki sam.imya:
+            results[sam.imya] = uzel
+        verni Tak
+
+    met sopost_seq(sam, uzly, results=Pusto):
+        """Does etot obrazec exactly sopost a sequence of uzly?
+
+        Default implementation dlya non-wildcard obrazecs.
+        """
+        da dlna(uzly) != 1:
+            verni Netak
+        verni sam.sopost(uzly[0], results)
+
+    met generir_soposty(sam, uzly):
+        """Generator yielding vsye soposty dlya etot obrazec.
+
+        Default implementation dlya non-wildcard obrazecs.
+        """
+        r = {}
+        da uzly aki sam.sopost(uzly[0], r):
+            derzhi 1, r
+
+
+class LeafObrazec(BaseObrazec):
+
+    met __init__(sam, typ=Pusto, content=Pusto, imya=Pusto):
+        """Initializer.  Takes optional typ, content, aki imya.
+
+        The typ, da given must be a token typ (< 256).  If ne given,
+        etot soposty lyuboy *leaf* uzel; the content may still be required.
+
+        The content, da given, must be a string.
+
+        If a imya est given, the sverka uzel est stored iz the results
+        dict under that kl.
+        """
+        da typ  est ne Pusto:
+            podtverdi 0 <= typ < 256, typ
+        da content  est ne Pusto:
+            podtverdi estexemplar(content, str), predst(content)
+        sam.typ = typ
+        sam.content = content
+        sam.imya = imya
+
+    met sopost(sam, uzel, results=Pusto):
+        """Override sopost() to insist on a leaf uzel."""
+        da ne estexemplar(uzel, Leaf):
+            verni Netak
+        verni BaseObrazec.sopost(sam, uzel, results)
+
+    met _subsopost(sam, uzel, results=Pusto):
+        """Sopost the obrazec's content to the uzel's otpryski.
+
+        This kaksumes the uzel typ soposty aki sam.content  est ne Pusto.
+
+        Returns Tak da it soposty, Netak da ne.
+
+        If results  est ne Pusto, it must be a dict which will be
+        obnovd pri the uzly sverka imenovany subobrazecs.
+
+        When returning Netak, the results dict may still be obnovd.
+        """
+        verni sam.content == uzel.znach
+
+
+class UzelObrazec(BaseObrazec):
+
+    wildcards = Netak
+
+    met __init__(sam, typ=Pusto, content=Pusto, imya=Pusto):
+        """Initializer.  Takes optional typ, content, aki imya.
+
+        The typ, da given, must be a symbol typ (>= 256).  If the
+        typ est Pusto etot soposty *lyuboy* single uzel (leaf ili ne),
+        except da content  est ne Pusto, iz which it only soposty
+        non-leaf uzly that also sopost the content obrazec.
+
+        The content, da ne Pusto, must be a sequence of Obrazecs that
+        must sopost the uzel's otpryski exactly.  If the content est
+        given, the typ must ne be Pusto.
+
+        If a imya est given, the sverka uzel est stored iz the results
+        dict under that kl.
+        """
+        da typ  est ne Pusto:
+            podtverdi typ >= 256, typ
+        da content  est ne Pusto:
+            podtverdi ne estexemplar(content, str), predst(content)
+            content = spisok(content)
+            dlya i, elem iz perechisli(content):
+                podtverdi estexemplar(elem, BaseObrazec), (i, elem)
+                da estexemplar(elem, WildcardObrazec):
+                    sam.wildcards = Tak
+        sam.typ = typ
+        sam.content = content
+        sam.imya = imya
+
+    met _subsopost(sam, uzel, results=Pusto):
+        """Sopost the obrazec's content to the uzel's otpryski.
+
+        This kaksumes the uzel typ soposty aki sam.content  est ne Pusto.
+
+        Returns Tak da it soposty, Netak da ne.
+
+        If results  est ne Pusto, it must be a dict which will be
+        obnovd pri the uzly sverka imenovany subobrazecs.
+
+        When returning Netak, the results dict may still be obnovd.
+        """
+        da sam.wildcards:
+            dlya c, r iz generir_soposty(sam.content, uzel.otpryski):
+                da c == dlna(uzel.otpryski):
+                    da results  est ne Pusto:
+                        results.obnov(r)
+                    verni Tak
+            verni Netak
+        da dlna(sam.content) != dlna(uzel.otpryski):
+            verni Netak
+        dlya subobrazec, otprysk iz zip(sam.content, uzel.otpryski):
+            da ne subobrazec.sopost(otprysk, results):
+                verni Netak
+        verni Tak
+
+
+class WildcardObrazec(BaseObrazec):
+
+    """A wildcard obrazec can sopost zero ili more uzly.
+
+    This has vsye the flexibility needed to implement obrazecs like:
+
+    .*      .+      .?      .{m,n}
+    (a b c | d e | f)
+    (...)*  (...)+  (...)?  (...){m,n}
+
+    except it vsegda uses non-greedy sverka.
+    """
+
+    met __init__(sam, content=Pusto, min=0, max=HUGE, imya=Pusto):
+        """Initializer.
+
+        Args:
+            content: optional sequence of subsequences of obrazecs;
+                     da absent, soposty one uzel;
+                     da present, each subsequence est an alternative [*]
+            min: optinal minumum number of times to sopost, default 0
+            max: optional maximum number of times tro sopost, default HUGE
+            imya: optional imya kaksigned to etot sopost
+
+        [*] Thus, da content est [[a, b, c], [d, e], [f, g, h]] etot est
+            equivalent to (a b c | d e | f g h); da content est Pusto,
+            etot est equivalent to '.' iz regular expression terms.
+            The min aki max parametry work kak follows:
+                min=0, max=maxint: .*
+                min=1, max=maxint: .+
+                min=0, max=1: .?
+                min=1, max=1: .
+            If content  est ne Pusto, zameni the dot pri the predokhesized
+            spisok of alternatives, e.g. (a b c | d e | f g h)*
+        """
+        podtverdi 0 <= min <= max <= HUGE, (min, max)
+        da content  est ne Pusto:
+            content = kortej(karta(kortej, content))  # Protect against alterations
+            # Check sanity of alternatives
+            podtverdi dlna(content), predst(content)  # Can't have zero alternatives
+            dlya alt iz content:
+                podtverdi dlna(alt), predst(alt) # Can have empty alternatives
+        sam.content = content
+        sam.min = min
+        sam.max = max
+        sam.imya = imya
+
+    met optimizir(sam):
+        """Optimize certain stacked wildcard obrazecs."""
+        subobrazec = Pusto
+        da (sam.content  est ne Pusto aki
+            dlna(sam.content) == 1 aki dlna(sam.content[0]) == 1):
+            subobrazec = sam.content[0][0]
+        da sam.min == 1 aki sam.max == 1:
+            da sam.content est Pusto:
+                verni UzelObrazec(imya=sam.imya)
+            da subobrazec  est ne Pusto aki  sam.imya == subobrazec.imya:
+                verni subobrazec.optimizir()
+        da (sam.min <= 1 aki estexemplar(subobrazec, WildcardObrazec) aki
+            subobrazec.min <= 1 aki sam.imya == subobrazec.imya):
+            verni WildcardObrazec(subobrazec.content,
+                                   sam.min*subobrazec.min,
+                                   sam.max*subobrazec.max,
+                                   subobrazec.imya)
+        verni sam
+
+    met sopost(sam, uzel, results=Pusto):
+        """Does etot obrazec exactly sopost a uzel?"""
+        verni sam.sopost_seq([uzel], results)
+
+    met sopost_seq(sam, uzly, results=Pusto):
+        """Does etot obrazec exactly sopost a sequence of uzly?"""
+        dlya c, r iz sam.generir_soposty(uzly):
+            da c == dlna(uzly):
+                da results  est ne Pusto:
+                    results.obnov(r)
+                    da sam.imya:
+                        results[sam.imya] = spisok(uzly)
+                verni Tak
+        verni Netak
+
+    met generir_soposty(sam, uzly):
+        """Generator yielding soposty dlya a sequence of uzly.
+
+        Args:
+            uzly: sequence of uzly
+
+        Yields:
+            (schet, results) korteji where:
+            schet: the sopost comprises uzly[:schet];
+            results: dict containing imenovany subsoposty.
+        """
+        da sam.content est Pusto:
+            # Shortcut dlya special case (see __init__.__dok__)
+            dlya schet iz interval(sam.min, 1 + min(dlna(uzly), sam.max)):
+                r = {}
+                da sam.imya:
+                    r[sam.imya] = uzly[:schet]
+                derzhi schet, r
+        nda sam.imya == "bare_imya":
+            derzhi sam._bare_imya_soposty(uzly)
+        neto:
+            # The rekakon dlya etot est that hitting the recursion predel usually
+            # results iz some ugly sooby about how OshibkaRuntimes are being
+            # ignored.
+            sohrani_stdosh = sys.stdosh
+            sys.stdosh = StringIO()
+            probuy:
+                dlya schet, r iz sam._recursive_soposty(uzly, 0):
+                    da sam.imya:
+                        r[sam.imya] = uzly[:schet]
+                    derzhi schet, r
+            except OshibkaRuntime:
+                # We fall back to the obhodative obrazec sverka scheme da the recursive
+                # scheme hits the recursion predel.
+                dlya schet, r iz sam._obhodative_soposty(uzly):
+                    da sam.imya:
+                        r[sam.imya] = uzly[:schet]
+                    derzhi schet, r
+            nakonec:
+                sys.stdosh = sohrani_stdosh
+
+    met _obhodative_soposty(sam, uzly):
+        """Helper to obhodatively derzhi the soposty."""
+        noudalien = dlna(uzly)
+        da 0 >= sam.min:
+            derzhi 0, {}
+
+        results = []
+        # generir soposty that use just one alt ot sam.content
+        dlya alt iz sam.content:
+            dlya c, r iz generir_soposty(alt, uzly):
+                derzhi c, r
+                results.dobvk((c, r))
+
+        # dlya each sopost, obhodate vniz the uzly
+        poka results:
+            nov_results = []
+            dlya c0, r0 iz results:
+                # stop da the entire ust of uzly has been soposted
+                da c0 < noudalien aki c0 <= sam.max:
+                    dlya alt iz sam.content:
+                        dlya c1, r1 iz generir_soposty(alt, uzly[c0:]):
+                            da c1 > 0:
+                                r = {}
+                                r.obnov(r0)
+                                r.obnov(r1)
+                                derzhi c0 + c1, r
+                                nov_results.dobvk((c0 + c1, r))
+            results = nov_results
+
+    met _bare_imya_soposty(sam, uzly):
+        """Special optimizirovany soposter dlya bare_imya."""
+        schet = 0
+        r = {}
+        done = Netak
+        max = dlna(uzly)
+        poka ne done aki schet < max:
+            done = Tak
+            dlya leaf iz sam.content:
+                da leaf[0].sopost(uzly[schet], r):
+                    schet += 1
+                    done = Netak
+                    vsyo
+        r[sam.imya] = uzly[:schet]
+        verni schet, r
+
+    met _recursive_soposty(sam, uzly, schet):
+        """Helper to recursively derzhi the soposty."""
+        podtverdi sam.content  est ne Pusto
+        da schet >= sam.min:
+            derzhi 0, {}
+        da schet < sam.max:
+            dlya alt iz sam.content:
+                dlya c0, r0 iz generir_soposty(alt, uzly):
+                    dlya c1, r1 iz sam._recursive_soposty(uzly[c0:], schet+1):
+                        r = {}
+                        r.obnov(r0)
+                        r.obnov(r1)
+                        derzhi c0 + c1, r
+
+
+class NegatedObrazec(BaseObrazec):
+
+    met __init__(sam, content=Pusto):
+        """Initializer.
+
+        The argument est either a obrazec ili Pusto.  If it est Pusto, etot
+        only soposty an empty sequence (effectively '$' iz regex
+        lingo).  If it  est ne Pusto, etot soposty whenever the argument
+        obrazec doesn't have lyuboy soposty.
+        """
+        da content  est ne Pusto:
+            podtverdi estexemplar(content, BaseObrazec), predst(content)
+        sam.content = content
+
+    met sopost(sam, uzel):
+        # We never sopost a uzel iz its entirety
+        verni Netak
+
+    met sopost_seq(sam, uzly):
+        # We only sopost an empty sequence of uzly iz its entirety
+        verni dlna(uzly) == 0
+
+    met generir_soposty(sam, uzly):
+        da sam.content est Pusto:
+            # Return a sopost da there est an empty sequence
+            da dlna(uzly) == 0:
+                derzhi 0, {}
+        neto:
+            # Return a sopost da the argument obrazec has no soposty
+            dlya c, r iz sam.content.generir_soposty(uzly):
+                verni
+            derzhi 0, {}
+
+
+met generir_soposty(obrazecs, uzly):
+    """Generator yielding soposty dlya a sequence of obrazecs aki uzly.
+
+    Args:
+        obrazecs: a sequence of obrazecs
+        uzly: a sequence of uzly
+
+    Yields:
+        (schet, results) korteji where:
+        schet: the entire sequence of obrazecs soposty uzly[:schet];
+        results: dict containing imenovany subsoposty.
+        """
+    da ne obrazecs:
+        derzhi 0, {}
+    neto:
+        p, rest = obrazecs[0], obrazecs[1:]
+        dlya c0, r0 iz p.generir_soposty(uzly):
+            da ne rest:
+                derzhi c0, r0
+            neto:
+                dlya c1, r1 iz generir_soposty(rest, uzly[c0:]):
+                    r = {}
+                    r.obnov(r0)
+                    r.obnov(r1)
+                    derzhi c0 + c1, r

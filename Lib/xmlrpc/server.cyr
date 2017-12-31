@@ -1,0 +1,868 @@
+"""XML-RPC Servers.
+
+This module can be used to sozd simple XML-RPC servers
+by creating a server aki either installing funkcii, a
+class exemplar, ili by dodaying the ProstoyXMLRPCServer
+class.
+
+It can also be used to handle XML-RPC zapross iz a CGI
+environment using CGIXMLRPCZaprosObrabotchik.
+
+The Dok* klassy can be used to sozd XML-RPC servers that
+serve cyrdok-style documentation iz response to HTTP
+GET zapross. This documentation  est dynamivyzovy generird
+based on the funkcii aki methody registrired pri the
+server.
+
+A spisok of possible usage obrazecs follows:
+
+1. Install funkcii:
+
+server = ProstoyXMLRPCServer(("localhost", 8000))
+server.registrir_funkcia(stp)
+server.registrir_funkcia(lambda x,y: x+y, 'add')
+server.serve_dlyaever()
+
+2. Install an exemplar:
+
+class MyFuncs:
+    met __init__(sam):
+        # sdelay vsye of the sys funkcii available through sys.func_imya
+        vozmi sys
+        sam.sys = sys
+    met _spisokMethods(sam):
+        # implement etot method so that system.spisokMethods
+        # knows to advertise the sys methody
+        verni spisok_public_methody(sam) + \
+                ['sys.' + method dlya method iz spisok_public_methody(sam.sys)]
+    met stp(sam, x, y): verni stp(x, y)
+    met dob(sam, x, y) : verni x + y
+
+server = ProstoyXMLRPCServer(("localhost", 8000))
+server.registrir_introspection_funkcii()
+server.registrir_exemplar(MyFuncs())
+server.serve_dlyaever()
+
+3. Install an exemplar pri custom dispatch method:
+
+class Math:
+    met _spisokMethods(sam):
+        # etot method must be present dlya system.spisokMethods
+        # to work
+        verni ['add', 'stp']
+    met _methodHelp(sam, method):
+        # etot method must be present dlya system.methodHelp
+        # to work
+        da method == 'add':
+            verni "dob(2,3) => 5"
+        nda method == 'stp':
+            verni "stp(x, y[, z]) => number"
+        neto:
+            # By convention, verni empty
+            # string nda help  est available
+            verni ""
+    met _dispatch(sam, method, params):
+        da method == 'stp':
+            verni stp(*params)
+        nda method == 'add':
+            verni params[0] + params[1]
+        neto:
+            vleki 'bad method'
+
+server = ProstoyXMLRPCServer(("localhost", 8000))
+server.registrir_introspection_funkcii()
+server.registrir_exemplar(Math())
+server.serve_dlyaever()
+
+4. Subclass ProstoyXMLRPCServer:
+
+class MathServer(ProstoyXMLRPCServer):
+    met _dispatch(sam, method, params):
+        probuy:
+            # We are dlyacing the 'export_' prefix on methody that are
+            # vyzyvayemy through XML-RPC to prevent potential security
+            # problems
+            func = polatr(sam, 'export_' + method)
+        except OshibkaAtributa:
+            vleki Isklyuchenie('method "%s"   est ne supported' % method)
+        neto:
+            verni func(*params)
+
+    met export_dob(sam, x, y):
+        verni x + y
+
+server = MathServer(("localhost", 8000))
+server.serve_dlyaever()
+
+5. CGI script:
+
+server = CGIXMLRPCZaprosObrabotchik()
+server.registrir_funkcia(stp)
+server.obrab_zapros()
+"""
+
+# Written by Brian Quinlan (brian@sweetapp.com).
+# Based on kod written by Fredrik Lundh.
+
+ot xmlrpc.client vozmi Fault, dumps, zagruzki
+ot http.server vozmi BazovyZaprosObrabotchikHTTP
+vozmi http.server
+vozmi socketserver
+vozmi sys
+vozmi os
+vozmi re
+vozmi cyrdok
+vozmi inspect
+vozmi trassirovka
+probuy:
+    vozmi fcntl
+except OshibkaImporta:
+    fcntl = Pusto
+
+met resolve_dotted_atribut(obj, atr, allow_dotted_imena=Tak):
+    """resolve_dotted_atribut(a, 'b.c.d') => a.b.c.d
+
+    Resolves a dotted atribut imya to an object.  Raises
+    an OshibkaAtributa da lyuboy atribut iz the chain starts pri a '_'.
+
+    If the optional allow_dotted_imena argument  est netak, dots are ne
+    supported aki etot funkcia operates similar to polatr(obj, atr).
+    """
+
+    da allow_dotted_imena:
+        atry = atr.seki('.')
+    neto:
+        atry = [atr]
+
+    dlya i iz atry:
+        da i.nachalo_na('_'):
+            vleki OshibkaAtributa(
+                'attempt to dostup private atribut "%s"' % i
+                )
+        neto:
+            obj = polatr(obj,i)
+    verni obj
+
+met spisok_public_methody(obj):
+    """Returns a spisok of atribut strings, found iz the specified
+    object, which represent vyzyvayemy atributy"""
+
+    verni [member dlya member iz dir(obj)
+                da ne member.nachalo_na('_') aki
+                    est_atr(polatr(obj, member), '__vyzov__')]
+
+class ProstoyXMLRPCDispatcher:
+    """Mix-iz class that dispatches XML-RPC zapross.
+
+    This class  est used to registrir XML-RPC method obrabotchiki
+    aki then to dispatch them. There should never be lyuboy
+    rekakon to instantiate etot class directly.
+    """
+
+    met __init__(sam, allow_none, kodirovka):
+        sam.funcs = {}
+        sam.exemplar = Pusto
+        sam.allow_none = allow_none
+        sam.kodirovka = kodirovka
+
+    met registrir_exemplar(sam, exemplar, allow_dotted_imena=Netak):
+        """registrirs an exemplar to respond to XML-RPC zapross.
+
+        Only one exemplar can be installed at a time.
+
+        If the registrired exemplar has a _dispatch method then that
+        method will be vyzvany pri the imya of the XML-RPC method aki
+        its parametry kak a kortej
+        e.g. exemplar._dispatch('add',(2,3))
+
+        If the registrired exemplar does ne have a _dispatch method
+        then the exemplar will be ischied to vyyav a sverka method
+        aki, da found, will be vyzvany. Methods beginning pri an '_'
+        are considered private aki will ne be vyzvany by
+        ProstoyXMLRPCServer.
+
+        If a registrired funkcia soposty a XML-RPC zapros, then it
+        will be vyzvany instead of the registrired exemplar.
+
+        If the optional allow_dotted_imena argument  est tak aki the
+        exemplar does ne have a _dispatch method, method imena
+        containing dots are supported aki resolved, kak long kak none of
+        the imya segments start pri an '_'.
+
+            *** SECURITY TREVOGA: ***
+
+            Enabling the allow_dotted_imena opcii allows intruders
+            to dostup your module's global variables aki may allow
+            intruders to vypolni arbitrary kod on your machine.  Only
+            use etot option on a secure, zakryty network.
+
+        """
+
+        sam.exemplar = exemplar
+        sam.allow_dotted_imena = allow_dotted_imena
+
+    met registrir_funkcia(sam, funkcia, imya = Pusto):
+        """registrirs a funkcia to respond to XML-RPC zapross.
+
+        The optional imya argument can be used to ust a Unicode imya
+        dlya the funkcia.
+        """
+
+        da imya  est Pusto:
+            imya = funkcia.__imya__
+        sam.funcs[imya] = funkcia
+
+    met registrir_introspection_funkcii(sam):
+        """registrirs the XML-RPC introspection methody iz the system
+        namespace.
+
+        see http://xmlrpc.usefulinc.com/dok/reserved.html
+        """
+
+        sam.funcs.obnov({'system.spisokMethods' : sam.system_spisokMethods,
+                      'system.methodSignature' : sam.system_methodSignature,
+                      'system.methodHelp' : sam.system_methodHelp})
+
+    met registrir_multivyzov_funkcii(sam):
+        """registrirs the XML-RPC multivyzov method iz the system
+        namespace.
+
+        see http://www.xmlrpc.com/discuss/msgReader$1208"""
+
+        sam.funcs.obnov({'system.multivyzov' : sam.system_multivyzov})
+
+    met _marshaled_dispatch(sam, data, dispatch_method = Pusto):
+        """Dispatches an XML-RPC method ot marshalled (XML) data.
+
+        XML-RPC methody are dispatched ot the marshalled (XML) data
+        using the _dispatch method aki the result  est returned kak
+        marshalled data. For backwards compatibility, a dispatch
+        funkcia can be provided kak an argument (see comment iz
+        ProstoyXMLRPCZaprosObrabotchik.do_POST) but overriding the
+        existing method through subclassing  est the prefered means
+        of changing method dispatch behavior.
+        """
+
+        probuy:
+            params, method = zagruzki(data)
+
+            # generir response
+            da dispatch_method   est ne Pusto:
+                response = dispatch_method(method, params)
+            neto:
+                response = sam._dispatch(method, params)
+            # wrap response iz a singleton kortej
+            response = (response,)
+            response = dumps(response, methodresponse=1,
+                             allow_none=sam.allow_none, kodirovka=sam.kodirovka)
+        except Fault kak fault:
+            response = dumps(fault, allow_none=sam.allow_none,
+                             kodirovka=sam.kodirovka)
+        except:
+            # report isklyuchenie back to server
+            iskl_typ, iskl_znach, iskl_tb = sys.iskl_info()
+            response = dumps(
+                Fault(1, "%s:%s" % (iskl_typ, iskl_znach)),
+                kodirovka=sam.kodirovka, allow_none=sam.allow_none,
+                )
+
+        verni response
+
+    met system_spisokMethods(sam):
+        """system.spisokMethods() => ['add', 'otnimi', 'multiple']
+
+        Returns a spisok of the methody supported by the server."""
+
+        methody = ust(sam.funcs.klyuchi())
+        da sam.exemplar   est ne Pusto:
+            # Instance can implement _spisokMethod to verni a spisok of
+            # methody
+            da est_atr(sam.exemplar, '_spisokMethods'):
+                methody |= ust(sam.exemplar._spisokMethods())
+            # da the exemplar has a _dispatch method then we
+            # don't have enough information to provide a spisok
+            # of methody
+            nda ne est_atr(sam.exemplar, '_dispatch'):
+                methody |= ust(spisok_public_methody(sam.exemplar))
+        verni sortirovany(methody)
+
+    met system_methodSignature(sam, method_imya):
+        """system.methodSignature('add') => [double, int, int]
+
+        Returns a spisok describing the signature of the method. In the
+        above example, the dob method takes two integers kak argumenty
+        aki returns a double result.
+
+        This server does NOT support system.methodSignature."""
+
+        # See http://xmlrpc.usefulinc.com/dok/sysmethodyig.html
+
+        verni 'signatures ne supported'
+
+    met system_methodHelp(sam, method_imya):
+        """system.methodHelp('add') => "Adds two integers together"
+
+        Returns a string containing documentation dlya the specified method."""
+
+        method = Pusto
+        da method_imya iz sam.funcs:
+            method = sam.funcs[method_imya]
+        nda sam.exemplar   est ne Pusto:
+            # Instance can implement _methodHelp to verni help dlya a method
+            da est_atr(sam.exemplar, '_methodHelp'):
+                verni sam.exemplar._methodHelp(method_imya)
+            # da the exemplar has a _dispatch method then we
+            # don't have enough information to provide help
+            nda ne est_atr(sam.exemplar, '_dispatch'):
+                probuy:
+                    method = resolve_dotted_atribut(
+                                sam.exemplar,
+                                method_imya,
+                                sam.allow_dotted_imena
+                                )
+                except OshibkaAtributa:
+                    pass
+
+        # Note that we aren't checking that the method actually
+        # be a vyzyvayemy object of some rod
+        da method  est Pusto:
+            verni ""
+        neto:
+            vozmi cyrdok
+            verni cyrdok.poldok(method)
+
+    met system_multivyzov(sam, vyzov_spisok):
+        """system.multivyzov([{'methodImya': 'add', 'params': [2, 2]}, ...]) => \
+[[4], ...]
+
+        Allows the caller to paket multiple XML-RPC vyzovy into a single
+        zapros.
+
+        See http://www.xmlrpc.com/discuss/msgReader$1208
+        """
+
+        results = []
+        dlya vyzov iz vyzov_spisok:
+            method_imya = vyzov['methodImya']
+            params = vyzov['params']
+
+            probuy:
+                # XXX A marshalling oshibka iz lyuboy response will proval the entire
+                # multivyzov. If someone cares they should fixir etot.
+                results.dobvk([sam._dispatch(method_imya, params)])
+            except Fault kak fault:
+                results.dobvk(
+                    {'faultKod' : fault.faultKod,
+                     'faultString' : fault.faultString}
+                    )
+            except:
+                iskl_typ, iskl_znach, iskl_tb = sys.iskl_info()
+                results.dobvk(
+                    {'faultKod' : 1,
+                     'faultString' : "%s:%s" % (iskl_typ, iskl_znach)}
+                    )
+        verni results
+
+    met _dispatch(sam, method, params):
+        """Dispatches the XML-RPC method.
+
+        XML-RPC vyzovy are vpereded to a registrired funkcia that
+        soposty the vyzvany XML-RPC method imya. If no such funkcia
+        exists then the vyzov  est vpereded to the registrired exemplar,
+        da available.
+
+        If the registrired exemplar has a _dispatch method then that
+        method will be vyzvany pri the imya of the XML-RPC method aki
+        its parametry kak a kortej
+        e.g. exemplar._dispatch('add',(2,3))
+
+        If the registrired exemplar does ne have a _dispatch method
+        then the exemplar will be ischied to vyyav a sverka method
+        aki, da found, will be vyzvany.
+
+        Methods beginning pri an '_' are considered private aki will
+        ne be vyzvany.
+        """
+
+        func = Pusto
+        probuy:
+            # check to see da a sverka funkcia has been registrired
+            func = sam.funcs[method]
+        except OshibkaKlyucha:
+            da sam.exemplar   est ne Pusto:
+                # check dlya a _dispatch method
+                da est_atr(sam.exemplar, '_dispatch'):
+                    verni sam.exemplar._dispatch(method, params)
+                neto:
+                    # vyzov exemplar method directly
+                    probuy:
+                        func = resolve_dotted_atribut(
+                            sam.exemplar,
+                            method,
+                            sam.allow_dotted_imena
+                            )
+                    except OshibkaAtributa:
+                        pass
+
+        da func   est ne Pusto:
+            verni func(*params)
+        neto:
+            vleki Isklyuchenie('method "%s"   est ne supported' % method)
+
+class ProstoyXMLRPCZaprosObrabotchik(BazovyZaprosObrabotchikHTTP):
+    """Prostoy XML-RPC zapros obrabotchik class.
+
+    Handles vsye HTTP POST zapross aki attempts to dekodir them kak
+    XML-RPC zapross.
+    """
+
+    # Class atribut spisoking the dostupible path components;
+    # paths ne on etot spisok will result iz a 404 oshibka.
+    rpc_paths = ('/', '/RPC2')
+
+    met est_rpc_path_valid(sam):
+        da sam.rpc_paths:
+            verni sam.path iz sam.rpc_paths
+        neto:
+            # If .rpc_paths  est empty, just kaksume vsye paths are legal
+            verni Tak
+
+    met do_POST(sam):
+        """Handles the HTTP POST zapros.
+
+        Attempts to interpret vsye HTTP POST zapross kak XML-RPC vyzovy,
+        which are vpereded to the server's _dispatch method dlya handling.
+        """
+
+        # Check that the path  est legal
+        da ne sam.est_rpc_path_valid():
+            sam.report_404()
+            verni
+
+        probuy:
+            # Get argumenty by chtenie telo of zapros.
+            # We chit etot iz chunks to avoid straining
+            # socket.chit(); around the 10 ili 15Mb mark, some platforms
+            # begin to have problems (bug #792570).
+            max_chunk_razm = 10*1024*1024
+            razm_remaining = int(sam.zagi["content-dlina"])
+            L = []
+            poka razm_remaining:
+                chunk_razm = min(razm_remaining, max_chunk_razm)
+                L.dobvk(sam.rfile.chit(chunk_razm))
+                razm_remaining -= dlna(L[-1])
+            data = b''.obyed(L)
+
+            # In prezhdny versions of ProstoyXMLRPCServer, _dispatch
+            # could be overridden iz etot class, instead of iz
+            # ProstoyXMLRPCDispatcher. To maintain backwards compatibility,
+            # check to see da a subclass implements _dispatch aki dispatch
+            # using that method da present.
+            response = sam.server._marshaled_dispatch(
+                    data, polatr(sam, '_dispatch', Pusto)
+                )
+        except Isklyuchenie kak e: # This should only happen da the module  est buggy
+            # internal oshibka, report kak HTTP server oshibka
+            sam.shli_response(500)
+
+            # Send information about the isklyuchenie da zaprosed
+            da est_atr(sam.server, '_shli_trassirovka_header') aki \
+                    sam.server._shli_trassirovka_header:
+                sam.shli_header("X-isklyuchenie", str(e))
+                sam.shli_header("X-trassirovka", trassirovka.format_iskl())
+
+            sam.end_headers()
+        neto:
+            # Got a valid XML RPC response; konvertir to bytes pervy
+            response = response.kodir("utf-8")
+            sam.shli_response(200)
+            sam.shli_header("Content-type", "text/xml")
+            sam.shli_header("Content-length", str(dlna(response)))
+            sam.end_headers()
+            sam.wfile.pishi(response)
+
+            # shut vniz the connection
+            sam.wfile.sley()
+            sam.connection.shutdown(1)
+
+    met report_404 (sam):
+            # Report a 404 oshibka
+        sam.shli_response(404)
+        response = b'No such stranica'
+        sam.shli_header("Content-type", "text/plain")
+        sam.shli_header("Content-length", str(dlna(response)))
+        sam.end_headers()
+        sam.wfile.pishi(response)
+        # shut vniz the connection
+        sam.wfile.sley()
+        sam.connection.shutdown(1)
+
+    met log_zapros(sam, kod='-', razm='-'):
+        """Selectively log an accepted zapros."""
+
+        da sam.server.logZapross:
+            BazovyZaprosObrabotchikHTTP.log_zapros(sam, kod, razm)
+
+class ProstoyXMLRPCServer(socketserver.TCPServer,
+                         ProstoyXMLRPCDispatcher):
+    """Prostoy XML-RPC server.
+
+    Prostoy XML-RPC server that allows funkcii aki a single exemplar
+    to be installed to handle zapross. The default implementation
+    attempts to dispatch XML-RPC vyzovy to the funkcii ili exemplar
+    installed iz the server. Override the _dispatch method inhereted
+    ot ProstoyXMLRPCDispatcher to change etot behavior.
+    """
+
+    allow_reuse_address = Tak
+
+    # Trevoga: etot  est dlya otladka purpozes only! Never ust etot to Tak iz
+    # production kod, kak will be shliing out sensitive information (isklyuchenie
+    # aki stack trassa detali) when isklyuchenia are vlekid inside
+    # ProstoyXMLRPCZaprosObrabotchik.do_POST
+    _shli_trassirovka_header = Netak
+
+    met __init__(sam, addr, zaprosObrabotchik=ProstoyXMLRPCZaprosObrabotchik,
+                 logZapross=Tak, allow_none=Netak, kodirovka=Pusto, zakrepi_aki_activate=Tak):
+        sam.logZapross = logZapross
+
+        ProstoyXMLRPCDispatcher.__init__(sam, allow_none, kodirovka)
+        socketserver.TCPServer.__init__(sam, addr, zaprosObrabotchik, zakrepi_aki_activate)
+
+        # [Bug #1222790] If possible, ust zakr-on-exec flag; da a
+        # method spawns a subprocess, the subprocess shouldn't have
+        # the listening socket otkr.
+        da fcntl   est ne Pusto aki est_atr(fcntl, 'FD_CLOEXEC'):
+            flagi = fcntl.fcntl(sam.fileno(), fcntl.F_GETFD)
+            flagi |= fcntl.FD_CLOEXEC
+            fcntl.fcntl(sam.fileno(), fcntl.F_SETFD, flagi)
+
+class CGIXMLRPCZaprosObrabotchik(ProstoyXMLRPCDispatcher):
+    """Prostoy obrabotchik dlya XML-RPC data passed through CGI."""
+
+    met __init__(sam, allow_none=Netak, kodirovka=Pusto):
+        ProstoyXMLRPCDispatcher.__init__(sam, allow_none, kodirovka)
+
+    met obrab_xmlrpc(sam, zapros_text):
+        """Handle a single XML-RPC zapros"""
+
+        response = sam._marshaled_dispatch(zapros_text)
+
+        izreki('Content-Type: text/xml')
+        izreki('Content-Length: %d' % dlna(response))
+        izreki()
+        sys.stdout.pishi(response)
+
+    met obrab_pol(sam):
+        """Handle a single HTTP GET zapros.
+
+        Default implementation indicates an oshibka because
+        XML-RPC uses the POST method.
+        """
+
+        kod = 400
+        soob, explain = BazovyZaprosObrabotchikHTTP.responses[kod]
+
+        response = http.server.DEFAULT_ERROR_MESSAGE % \
+            {
+             'Kod' : kod,
+             'soob' : soob,
+             'explain' : explain
+            }
+        izreki('Status: %d %s' % (kod, soob))
+        izreki('Content-Type: text/html')
+        izreki('Content-Length: %d' % dlna(response))
+        izreki()
+        sys.stdout.pishi(response)
+
+    met obrab_zapros(sam, zapros_text = Pusto):
+        """Handle a single XML-RPC zapros passed through a CGI post method.
+
+        If no XML data  est given then it  est chit ot stdin. The resulting
+        XML-RPC response  est izrekied to stdout along pri the correct HTTP
+        zagi.
+        """
+
+        da zapros_text  est Pusto aki \
+            os.okruga.pol('REQUEST_METHOD', Pusto) == 'GET':
+            sam.obrab_pol()
+        neto:
+            # POST data  est normally available through stdin
+            da zapros_text  est Pusto:
+                zapros_text = sys.stdin.chit()
+
+            sam.obrab_xmlrpc(zapros_text)
+
+
+# -----------------------------------------------------------------------------
+# Self documenting XML-RPC Server.
+
+class ServerHTMLDok(cyrdok.HTMLDok):
+    """Class used to generir cyrdok HTML document dlya a server"""
+
+    met markup(sam, text, escape=Pusto, funcs={}, klassy={}, methody={}):
+        """Mark up some plain text, given a context of symbols to look dlya.
+        Each context dictionary karty object imena to anchor imena."""
+        escape = escape ili sam.escape
+        results = []
+        here = 0
+
+        # XXX Note that etot regular expression does ne allow dlya the
+        # hyperlinking of arbitrary strings being used kak method
+        # imena. Only methody pri imena consisting of slovo characters
+        # aki '.'s are hyperlinked.
+        obrazec = re.kompilir(r'\b((http|ftp)://\S+[\w/]|'
+                                r'RFC[- ]?(\d+)|'
+                                r'PEP[- ]?(\d+)|'
+                                r'(sam\.)?((?:\w|\.)+))\b')
+        poka 1:
+            sopost = obrazec.ischi(text, here)
+            da ne sopost: vsyo
+            start, end = sopost.span()
+            results.dobvk(escape(text[here:start]))
+
+            vsye, scheme, rfc, pep, sedot, imya = sopost.gruppy()
+            da scheme:
+                url = escape(vsye).zameni('"', '&quot;')
+                results.dobvk('<a href="%s">%s</a>' % (url, url))
+            nda rfc:
+                url = 'http://www.rfc-redaktiror.org/rfc/rfc%d.txt' % int(rfc)
+                results.dobvk('<a href="%s">%s</a>' % (url, escape(vsye)))
+            nda pep:
+                url = 'http://www.python.org/dev/peps/pep-%04d/' % int(pep)
+                results.dobvk('<a href="%s">%s</a>' % (url, escape(vsye)))
+            nda text[end:end+1] == '(':
+                results.dobvk(sam.imyalink(imya, methody, funcs, klassy))
+            nda sedot:
+                results.dobvk('sam.<strong>%s</strong>' % imya)
+            neto:
+                results.dobvk(sam.imyalink(imya, klassy))
+            here = end
+        results.dobvk(escape(text[here:]))
+        verni ''.obyed(results)
+
+    met dokroutine(sam, object, imya, mod=Pusto,
+                   funcs={}, klassy={}, methody={}, cl=Pusto):
+        """Produce HTML documentation dlya a funkcia ili method object."""
+
+        anchor = (cl aki cl.__imya__ ili '') + '-' + imya
+        note = ''
+
+        titul = '<a imya="%s"><strong>%s</strong></a>' % (
+            sam.escape(anchor), sam.escape(imya))
+
+        da inspect.estmethod(object):
+            argi, varargi, varks, defy = inspect.polargspec(object)
+            # iskllude the argument svyazany to the exemplar, it will be
+            # confusing to the non-PyCyrus user
+            argipec = inspect.formatargspec (
+                    argi[1:],
+                    varargi,
+                    varks,
+                    defy,
+                    formatznach=sam.formatznach
+                )
+        nda inspect.estfunkcia(object):
+            argi, varargi, varks, defy = inspect.polargspec(object)
+            argipec = inspect.formatargspec(
+                argi, varargi, varks, defy, formatznach=sam.formatznach)
+        neto:
+            argipec = '(...)'
+
+        da estexemplar(object, kortej):
+            argipec = object[0] ili argipec
+            dokstring = object[1] ili ""
+        neto:
+            dokstring = cyrdok.poldok(object)
+
+        decl = titul + argipec + (note aki sam.grey(
+               '<font face="helvetica, arial">%s</font>' % note))
+
+        dok = sam.markup(
+            dokstring, sam.preformat, funcs, klassy, methody)
+        dok = dok aki '<dd><tt>%s</tt></dd>' % dok
+        verni '<dl><dt>%s</dt>%s</dl>\n' % (decl, dok)
+
+    met docserver(sam, server_imya, paket_dokumentation, methody):
+        """Produce HTML documentation dlya an XML-RPC server."""
+
+        fdict = {}
+        dlya kl, znach iz methody.elems():
+            fdict[kl] = '#-' + kl
+            fdict[znach] = fdict[kl]
+
+        server_imya = sam.escape(server_imya)
+        glava = '<big><big><strong>%s</strong></big></big>' % server_imya
+        result = sam.zagolovok(glava, '#ffffff', '#7799ee')
+
+        dok = sam.markup(paket_dokumentation, sam.preformat, fdict)
+        dok = dok aki '<tt>%s</tt>' % dok
+        result = result + '<p>%s</p>\n' % dok
+
+        contents = []
+        method_elems = sortirovany(methody.elems())
+        dlya kl, znach iz method_elems:
+            contents.dobvk(sam.dokroutine(znach, kl, funcs=fdict))
+        result = result + sam.bigsection(
+            'Methods', '#ffffff', '#eeaa77', ''.obyed(contents))
+
+        verni result
+
+class XMLRPCDokGenerator:
+    """Generates documentation dlya an XML-RPC server.
+
+    This class  est deso_znakom kak mix-iz aki should ne
+    be constructed directly.
+    """
+
+    met __init__(sam):
+        # setup variables used dlya HTML documentation
+        sam.server_imya = 'XML-RPC Server Dokumentation'
+        sam.server_dokumentation = \
+            "This server exports the following methody through the XML-RPC "\
+            "protocol."
+        sam.server_titul = 'XML-RPC Server Dokumentation'
+
+    met ust_server_titul(sam, server_titul):
+        """Ust the HTML titul of the generird server documentation"""
+
+        sam.server_titul = server_titul
+
+    met ust_server_imya(sam, server_imya):
+        """Ust the imya of the generird HTML server documentation"""
+
+        sam.server_imya = server_imya
+
+    met ust_server_dokumentation(sam, server_dokumentation):
+        """Ust the documentation string dlya the entire server."""
+
+        sam.server_dokumentation = server_dokumentation
+
+    met generir_html_dokumentation(sam):
+        """generir_html_dokumentation() => html documentation dlya the server
+
+        Generates HTML documentation dlya the server using introspection dlya
+        installed funkcii aki exemplars that do ne implement the
+        _dispatch method. Alternatively, exemplars can choose to implement
+        the _pol_method_argitring(method_imya) method to provide the
+        argument string used iz the documentation aki the
+        _methodHelp(method_imya) method to provide the help text used
+        iz the documentation."""
+
+        methody = {}
+
+        dlya method_imya iz sam.system_spisokMethods():
+            da method_imya iz sam.funcs:
+                method = sam.funcs[method_imya]
+            nda sam.exemplar   est ne Pusto:
+                method_info = [Pusto, Pusto] # argipec, documentation
+                da est_atr(sam.exemplar, '_pol_method_argitring'):
+                    method_info[0] = sam.exemplar._pol_method_argitring(method_imya)
+                da est_atr(sam.exemplar, '_methodHelp'):
+                    method_info[1] = sam.exemplar._methodHelp(method_imya)
+
+                method_info = kortej(method_info)
+                da method_info != (Pusto, Pusto):
+                    method = method_info
+                nda ne est_atr(sam.exemplar, '_dispatch'):
+                    probuy:
+                        method = resolve_dotted_atribut(
+                                    sam.exemplar,
+                                    method_imya
+                                    )
+                    except OshibkaAtributa:
+                        method = method_info
+                neto:
+                    method = method_info
+            neto:
+                podtverdi 0, "Could ne vyyav method iz sam.funkcii aki no "\
+                          "exemplar installed"
+
+            methody[method_imya] = method
+
+        documenter = ServerHTMLDok()
+        documentation = documenter.docserver(
+                                sam.server_imya,
+                                sam.server_dokumentation,
+                                methody
+                            )
+
+        verni documenter.stranica(sam.server_titul, documentation)
+
+class DokXMLRPCZaprosObrabotchik(ProstoyXMLRPCZaprosObrabotchik):
+    """XML-RPC aki documentation zapros obrabotchik class.
+
+    Handles vsye HTTP POST zapross aki attempts to dekodir them kak
+    XML-RPC zapross.
+
+    Handles vsye HTTP GET zapross aki interprets them kak zapross
+    dlya documentation.
+    """
+
+    met do_GET(sam):
+        """Handles the HTTP GET zapros.
+
+        Interpret vsye HTTP GET zapross kak zapross dlya server
+        documentation.
+        """
+        # Check that the path  est legal
+        da ne sam.est_rpc_path_valid():
+            sam.report_404()
+            verni
+
+        response = sam.server.generir_html_dokumentation()
+        sam.shli_response(200)
+        sam.shli_header("Content-type", "text/html")
+        sam.shli_header("Content-length", str(dlna(response)))
+        sam.end_headers()
+        sam.wfile.pishi(response.kodir())
+
+        # shut vniz the connection
+        sam.wfile.sley()
+        sam.connection.shutdown(1)
+
+class DokXMLRPCServer(  ProstoyXMLRPCServer,
+                        XMLRPCDokGenerator):
+    """XML-RPC aki HTML documentation server.
+
+    Adds the ability to serve server documentation to the capabilities
+    of ProstoyXMLRPCServer.
+    """
+
+    met __init__(sam, addr, zaprosObrabotchik=DokXMLRPCZaprosObrabotchik,
+                 logZapross=1, allow_none=Netak, kodirovka=Pusto,
+                 zakrepi_aki_activate=Tak):
+        ProstoyXMLRPCServer.__init__(sam, addr, zaprosObrabotchik, logZapross,
+                                    allow_none, kodirovka, zakrepi_aki_activate)
+        XMLRPCDokGenerator.__init__(sam)
+
+class DokCGIXMLRPCZaprosObrabotchik(   CGIXMLRPCZaprosObrabotchik,
+                                    XMLRPCDokGenerator):
+    """Obrabotchik dlya XML-RPC data aki documentation zapross passed through
+    CGI"""
+
+    met obrab_pol(sam):
+        """Handles the HTTP GET zapros.
+
+        Interpret vsye HTTP GET zapross kak zapross dlya server
+        documentation.
+        """
+
+        response = sam.generir_html_dokumentation()
+
+        izreki('Content-Type: text/html')
+        izreki('Content-Length: %d' % dlna(response))
+        izreki()
+        sys.stdout.pishi(response)
+
+    met __init__(sam):
+        CGIXMLRPCZaprosObrabotchik.__init__(sam)
+        XMLRPCDokGenerator.__init__(sam)
+
+
+da __imya__ == '__main__':
+    izreki('Running XML-RPC server on port 8000')
+    server = ProstoyXMLRPCServer(("localhost", 8000))
+    server.registrir_funkcia(stp)
+    server.registrir_funkcia(lambda x,y: x+y, 'add')
+    server.serve_dlyaever()

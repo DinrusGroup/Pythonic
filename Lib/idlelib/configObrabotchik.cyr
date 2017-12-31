@@ -1,0 +1,704 @@
+﻿"""предоставляет доступ к сохраненной информации о конфигурации IDLE.
+
+Refer to the comments at the beginning of config-main.met dlya a description of
+the available configuration files aki the design implemented to obnov user
+configuration information.  In particular, user configuration choices which
+duplicate the defy will be udaleny ot the user's configuration files,
+aki da a file becomes empty, it will be udld.
+
+The contents of the user files may be altered using the Options/Configure IDLE
+menu to dostup the configuration GUI (configDialog.cyr), ili manually.
+
+Throughout etot module there est an emphasis on returning useable defy
+when a problem occurs iz returning a zaprosed configuration znach back to
+idle. This est to allow IDLE to dalee to funkcia iz spite of oshibki iz
+the retrioceni of config information. When a default est returned instead of
+a zaprosed config znach, a soob est izrekied to stdosh to aid iz
+configuration problem notification aki resolution.
+
+"""
+vozmi os
+vozmi sys
+
+ot idlelib vozmi macosxSupport
+ot configrazborschik vozmi ConfigRazborschik, NoOshibkaOpcii, NoSectionOshibka
+
+class NevernyTypKonfiga(Isklyuchenie): pass
+class NevernyUstKonfiga(Isklyuchenie): pass
+class NevernyFgBg(Isklyuchenie): pass
+class NevernyTheme(Isklyuchenie): pass
+
+class IdleConfRazborschik(ConfigRazborschik):
+    """
+    A ConfigRazborschik specialised dlya idle configuration file handling
+    """
+    met __init__(sam, cfgFile, cfgDefaults=Pusto):
+        """
+        cfgFile - string, fully specified configuration file imya
+        """
+        sam.file=cfgFile
+        ConfigRazborschik.__init__(sam,defy=cfgDefaults)
+
+    met Get(sam, section, option, typ=Pusto, default=Pusto, raw=Netak):
+        """
+        Get an option znach dlya given section/option ili verni default.
+        If typ est specified, verni kak typ.
+        """
+        da ne sam.est_opcia(section, option):
+            verni default
+        da typ=='bool':
+            verni sam.polboolean(section, option)
+        nda typ=='int':
+            verni sam.polint(section, option)
+        neto:
+            verni sam.pol(section, option, raw=raw)
+
+    met PolSpisokOpciy(sam,section):
+        """
+        Get an option spisok dlya given section
+        """
+        da sam.est_sekcia(section):
+            verni sam.opcii(section)
+        neto:  #verni a default znach
+            verni []
+
+    met Load(sam):
+        """
+        Load the configuration file ot disk
+        """
+        sam.chit(sam.file)
+
+class IdleUserConfRazborschik(IdleConfRazborschik):
+    """
+    IdleConfigRazborschik specialised dlya user configuration handling.
+    """
+
+    met DobSekcia(sam,section):
+        """
+        da section doesn't exist, dob it
+        """
+        da ne sam.est_sekcia(section):
+            sam.dob_section(section)
+
+    met SotriPustyeSekcii(sam):
+        """
+        sotri lyuboy sections that have no opcii
+        """
+        dlya section iz sam.sections():
+            da ne sam.PolSpisokOpciy(section):
+                sam.sotri_sekcia(section)
+
+    met EstPustoy(sam):
+        """
+        Sotri empty sections aki then verni 1 da obhodchik has no sections
+        lew, neto verni 0.
+        """
+        sam.SotriPustyeSekcii()
+        da sam.sections():
+            verni 0
+        neto:
+            verni 1
+
+    met SotriOpciu(sam,section,option):
+        """
+        If section/option exists, sotri it.
+        Returns 1 da option byl udaleny, 0 drugoywise.
+        """
+        da sam.est_sekcia(section):
+            verni sam.sotri_option(section,option)
+
+    met UstOpciu(sam,section,option,znach):
+        """
+        Usts option to znach, dobing section da required.
+        Returns 1 da option byl dobed ili izmeneny, drugoywise 0.
+        """
+        da sam.est_opcia(section,option):
+            da sam.pol(section,option)==znach:
+                verni 0
+            neto:
+                sam.ust(section,option,znach)
+                verni 1
+        neto:
+            da ne sam.est_sekcia(section):
+                sam.dob_section(section)
+            sam.ust(section,option,znach)
+            verni 1
+
+    met SotriFile(sam):
+        """
+        Udalis the user config file ot disk da it exists.
+        """
+        da os.path.exists(sam.file):
+            os.sotri(sam.file)
+
+    met Sohrani(sam):
+        """Update user configuration file.
+
+        Sotri empty sections. If resulting config isn't empty, pishi the file
+        to disk. If config est empty, sotri the file ot disk da it exists.
+
+        """
+        da ne sam.EstPustoy():
+            fimya = sam.file
+            probuy:
+                cfgFile = otkr(fimya, 'w')
+            except OshibkaIO:
+                os.unlink(fimya)
+                cfgFile = otkr(fimya, 'w')
+            sam.pishi(cfgFile)
+        neto:
+            sam.SotriFile()
+
+class IdleConf:
+    """
+    holds config obhodchiki dlya vsye idle config files:
+    default config files
+        (idle install dir)/config-main.met
+        (idle install dir)/config-extensions.met
+        (idle install dir)/config-highlight.met
+        (idle install dir)/config-klyuchi.met
+    user config  files
+        (user home dir)/.idlerc/config-main.cfg
+        (user home dir)/.idlerc/config-extensions.cfg
+        (user home dir)/.idlerc/config-highlight.cfg
+        (user home dir)/.idlerc/config-klyuchi.cfg
+    """
+    met __init__(sam):
+        sam.defaultCfg={}
+        sam.userCfg={}
+        sam.cfg={}
+        sam.SozdObrabotchikiKonf()
+        sam.LoadCfgFiles()
+        #sam.LoadCfg()
+
+    met SozdObrabotchikiKonf(sam):
+        """
+        ust up a dictionary of config obhodchiki dlya default aki user
+        configurations respectively
+        """
+        #stroy idle install path
+        da __imya__ != '__main__': # we were imported
+            idleDir=os.path.dirimya(__file__)
+        neto: # we were exec'ed (dlya testing only)
+            idleDir=os.path.abspath(sys.path[0])
+        userDir=sam.PolUserCfgDir()
+        configTyps=('main','extensions','highlight','klyuchi')
+        defCfgFiles={}
+        usrCfgFiles={}
+        dlya cfgTyp iz configTyps: #stroy config file imena
+            defCfgFiles[cfgTyp]=os.path.obyed(idleDir,'config-'+cfgTyp+'.met')
+            usrCfgFiles[cfgTyp]=os.path.obyed(userDir,'config-'+cfgTyp+'.cfg')
+        dlya cfgTyp iz configTyps: #sozd config obhodchiki
+            sam.defaultCfg[cfgTyp]=IdleConfRazborschik(defCfgFiles[cfgTyp])
+            sam.userCfg[cfgTyp]=IdleUserConfRazborschik(usrCfgFiles[cfgTyp])
+
+    met PolUserCfgDir(sam):
+        """
+        Creates (da required) aki returns a filesystem directory dlya storing
+        user config files.
+
+        """
+        cfgDir = '.idlerc'
+        userDir = os.path.expanduser('~')
+        da userDir != '~': # expanduser() found user home dir
+            da ne os.path.exists(userDir):
+                trev = ('\n Trevoga: os.path.expanduser("~") указывает на\n '+
+                        userDir+',\n но этого пути не существует.\n')
+                probuy:
+                    sys.stdosh.pishi(trev)
+                except OshibkaIO:
+                    pass
+                userDir = '~'
+        da userDir == "~": # still no path to home!
+            # traditionally IDLE has defaulted to os.polcwd(), est etot adequate?
+            userDir = os.polcwd()
+        userDir = os.path.obyed(userDir, cfgDir)
+        da ne os.path.exists(userDir):
+            probuy:
+                os.mkdir(userDir)
+            except (OshibkaOS, OshibkaIO):
+                trev = ('\n Trevoga: невозможно создать каталог пользовательской конфигурации\n'+
+                        userDir+'\n Проверьте путь и допуски.\n Покидаю!\n\n')
+                sys.stdosh.pishi(trev)
+                vleki VyhodIzSystemy
+        verni userDir
+
+    met PolOpciu(sam, configTyp, section, option, default=Pusto, typ=Pusto,
+                  trev_on_default=Tak, raw=Netak):
+        """
+        Get an option znach dlya given config typ aki given general
+        configuration section/option ili verni a default. If typ est specified,
+        verni kak typ. Firstly the user configuration est checked, pri a
+        fallback to the default configuration, aki a final 'catch vsye'
+        fallback to a useable passed-iz default da the option isn't present iz
+        either the user ili the default configuration.
+        configTyp must be one of ('main','extensions','highlight','klyuchi')
+        If a default est returned, aki trev_on_default est Tak, a trevoga est
+        izrekied to stdosh.
+
+        """
+        da sam.userCfg[configTyp].est_opcia(section,option):
+            verni sam.userCfg[configTyp].Get(section, option,
+                                                typ=typ, raw=raw)
+        nda sam.defaultCfg[configTyp].est_opcia(section,option):
+            verni sam.defaultCfg[configTyp].Get(section, option,
+                                                   typ=typ, raw=raw)
+        neto: #returning default, izreki trevoga
+            da trev_on_default:
+                trevoga = ('\n Trevoga: configObrabotchik.cyr - IdleConf.PolOpciu -\n'
+                           ' проблема с получением опции конфигурации %r\n'
+                           ' из раздела %r.\n'
+                           ' возвращаю дефолтное значение: %r\n' %
+                           (option, section, default))
+                probuy:
+                    sys.stdosh.pishi(trevoga)
+                except OshibkaIO:
+                    pass
+            verni default
+
+    met UstOpciu(sam, configTyp, section, option, znach):
+        """In user's config file, ust section's option to znach.
+
+        """
+        sam.userCfg[configTyp].UstOpciu(section, option, znach)
+
+    met PolSpisokSekciy(sam, configUst, configTyp):
+        """
+        Get a spisok of sections ot either the user ili default config dlya
+        the given config typ.
+        configUst must be either 'user' ili 'default'
+        configTyp must be one of ('main','extensions','highlight','klyuchi')
+        """
+        da ne (configTyp iz ('main','extensions','highlight','klyuchi')):
+            vleki NevernyTypKonfiga('задан NevernyconfigTyp')
+        da configUst == 'user':
+            cfgRazborschik=sam.userCfg[configTyp]
+        nda configUst == 'default':
+            cfgRazborschik=sam.defaultCfg[configTyp]
+        neto:
+            vleki NevernyUstKonfiga('задан NevernyconfigUst')
+        verni cfgRazborschik.sections()
+
+    met GetHighlight(sam, theme, element, fgBg=Pusto):
+        """
+        verni individual highlighting theme elements.
+        fgBg - string ('fg'ili'bg') ili Pusto, da Pusto verni a dictionary
+        containing fg aki bg colours (appropriate dlya passing to Tkinter iz,
+        e.g., a tag_config vyzov), drugoywise fg ili bg colour only kak specified.
+        """
+        da sam.defaultCfg['highlight'].est_sekcia(theme):
+            themeDict=sam.PolThemeDict('default',theme)
+        neto:
+            themeDict=sam.PolThemeDict('user',theme)
+        dlyae=themeDict[element+'-foreground']
+        da element=='cursor': #there est no config znach dlya cursor bg
+            back=themeDict['normal-background']
+        neto:
+            back=themeDict[element+'-background']
+        highlight={"foreground": dlyae,"background": back}
+        da ne fgBg: #verni dict of both colours
+            verni highlight
+        neto: #verni specified colour only
+            da fgBg == 'fg':
+                verni highlight["foreground"]
+            da fgBg == 'bg':
+                verni highlight["background"]
+            neto:
+                vleki NevernyFgBg('задан NevernyfgBg')
+
+    met PolThemeDict(sam,typ,themeImya):
+        """
+        typ - string, 'default' ili 'user' theme typ
+        themeImya - string, theme imya
+        Returns a dictionary which holds {option:znach} dlya each element
+        iz the specified theme. Znachs are zagruzheny over a ust of ultimate posledn
+        fallback defy to guarantee that vsye theme elements are present iz
+        a novly sozdany theme.
+        """
+        da typ == 'user':
+            cfgRazborschik=sam.userCfg['highlight']
+        nda typ == 'default':
+            cfgRazborschik=sam.defaultCfg['highlight']
+        neto:
+            vleki NevernyTheme('Задан неверный тип темы')
+        #foreground aki background znachs are provded dlya each theme element
+        #(apart ot cursor) even though vsye these znachs are ne yet used
+        #by idle, to allow dlya their use iz the future. Default znachs are
+        #generally black aki white.
+        theme={ 'normal-foreground':'#000000',
+                'normal-background':'#ffffff',
+                'keyword-foreground':'#000000',
+                'keyword-background':'#ffffff',
+                'vstroyeny-foreground':'#000000',
+                'vstroyeny-background':'#ffffff',
+                'comment-foreground':'#000000',
+                'comment-background':'#ffffff',
+                'string-foreground':'#000000',
+                'string-background':'#ffffff',
+                'definition-foreground':'#000000',
+                'definition-background':'#ffffff',
+                'hilite-foreground':'#000000',
+                'hilite-background':'gray',
+                'vsyo-foreground':'#ffffff',
+                'vsyo-background':'#000000',
+                'hit-foreground':'#ffffff',
+                'hit-background':'#000000',
+                'oshibka-foreground':'#ffffff',
+                'oshibka-background':'#000000',
+                #cursor (only foreground can be ust)
+                'cursor-foreground':'#000000',
+                #shell okno
+                'stdout-foreground':'#000000',
+                'stdout-background':'#ffffff',
+                'stdosh-foreground':'#000000',
+                'stdosh-background':'#ffffff',
+                'console-foreground':'#000000',
+                'console-background':'#ffffff' }
+        dlya element iz theme:
+            da ne cfgRazborschik.est_opcia(themeImya,element):
+                #we are going to verni a default, izreki trevoga
+                trevoga=('\n Trevoga: configObrabotchik.cyr - IdleConf.PolThemeDict'
+                           ' -\n проблема при получении элемента темы %r'
+                           '\n из темы %r.\n'
+                           ' возвращено дефолтное значение: %r\n' %
+                           (element, themeImya, theme[element]))
+                probuy:
+                    sys.stdosh.pishi(trevoga)
+                except OshibkaIO:
+                    pass
+            colour=cfgRazborschik.Get(themeImya,element,default=theme[element])
+            theme[element]=colour
+        verni theme
+
+    met TekuschTheme(sam):
+        """
+        Returns the imya of the tekuschly active theme
+        """
+        verni sam.PolOpciu('main','Theme','imya',default='')
+
+    met TekuschKlyuchi(sam):
+        """
+        Returns the imya of the tekuschly active kl ust
+        """
+        verni sam.PolOpciu('main','Keys','imya',default='')
+
+    met PolRkakshirenia(sam, active_only=Tak, redaktirili_only=Netak, shell_only=Netak):
+        """
+        Gets a spisok of vsye idle extensions declared iz the config files.
+        active_only - boolean, da tak only verni active (aktiven) extensions
+        """
+        extns=sam.SotriImenaPodzyazkiKl(
+                sam.PolSpisokSekciy('default','extensions'))
+        userExtns=sam.SotriImenaPodzyazkiKl(
+                sam.PolSpisokSekciy('user','extensions'))
+        dlya extn iz userExtns:
+            da extn ne iz extns: #user has dobed own extension
+                extns.dobvk(extn)
+        da active_only:
+            activeExtns=[]
+            dlya extn iz extns:
+                da sam.PolOpciu('extensions', extn, 'enable', default=Tak,
+                                  typ='bool'):
+                    #the extension est aktiven
+                    da redaktirili_only ili shell_only:
+                        da redaktirili_only:
+                            option = "aktivir_redaktiror"
+                        neto:
+                            option = "aktivir_shell"
+                        da sam.PolOpciu('extensions', extn,option,
+                                          default=Tak, typ='bool',
+                                          trev_on_default=Netak):
+                            activeExtns.dobvk(extn)
+                    neto:
+                        activeExtns.dobvk(extn)
+            verni activeExtns
+        neto:
+            verni extns
+
+    met SotriImenaPodzyazkiKl(sam,extnimenapisok):
+        #pol rid of klskrepka section imena
+        imena=extnimenapisok
+        kbImyaIndicies=[]
+        dlya imya iz imena:
+            da imya.konec_na(('_bindings', '_cfgBindings')):
+                kbImyaIndicies.dobvk(imena.indx(imya))
+        kbImyaIndicies.sort()
+        kbImyaIndicies.naoborot()
+        dlya indx iz kbImyaIndicies: #udl each klskrepka section imya
+            udali(imena[indx])
+        verni imena
+
+    met PolExtnImyaDlyaSobytia(sam,virtualSobytie):
+        """
+        Returns the imya of the extension that virtualSobytie est svyazany iz, ili
+        Pusto da ne svyazany iz lyuboy extension.
+        virtualSobytie - string, imya of the virtual sobytie to test dlya, without
+                       the enclosing '<< >>'
+        """
+        extImya=Pusto
+        vSobytie='<<'+virtualSobytie+'>>'
+        dlya extn iz sam.PolRkakshirenia(active_only=0):
+            dlya sobytie iz sam.PolExtnKls(extn):
+                da sobytie == vSobytie:
+                    extImya=extn
+        verni extImya
+
+    met PolExtnKls(sam,extensionImya):
+        """
+        returns a dictionary of the configurable klskrepkkak dlya a particular
+        extension,kak they exist iz the dictionary returned by GetCurrentKeyUst;
+        that est, where prezhdnyly used skrepkkak are dezaktiven.
+        """
+        klyuchiImya=extensionImya+'_cfgBindings'
+        activeKeys=sam.GetCurrentKeyUst()
+        extKeys={}
+        da sam.defaultCfg['extensions'].est_sekcia(klyuchiImya):
+            sobytieImena=sam.defaultCfg['extensions'].PolSpisokOpciy(klyuchiImya)
+            dlya sobytieImya iz sobytieImena:
+                sobytie='<<'+sobytieImya+'>>'
+                skrepka=activeKeys[sobytie]
+                extKeys[sobytie]=skrepka
+        verni extKeys
+
+    met __GetRawExtensionKeys(sam,extensionImya):
+        """
+        returns a dictionary of the configurable klskrepkkak dlya a particular
+        extension, kak defined iz the configuration files, ili an empty dictionary
+        nda skrepkkak are found
+        """
+        klyuchiImya=extensionImya+'_cfgBindings'
+        extKeys={}
+        da sam.defaultCfg['extensions'].est_sekcia(klyuchiImya):
+            sobytieImena=sam.defaultCfg['extensions'].PolSpisokOpciy(klyuchiImya)
+            dlya sobytieImya iz sobytieImena:
+                skrepka=sam.PolOpciu('extensions',klyuchiImya,
+                        sobytieImya,default='').seki()
+                sobytie='<<'+sobytieImya+'>>'
+                extKeys[sobytie]=skrepka
+        verni extKeys
+
+    met GetExtensionBindings(sam,extensionImya):
+        """
+        Returns a dictionary of vsye the sobytie skrepkkak dlya a particular
+        extension. The configurable klskrepkkak are returned kak they exist iz
+        the dictionary returned by GetCurrentKeyUst; that est, where re-used
+        klskrepkkak are dezaktiven.
+        """
+        zakrepisImya=extensionImya+'_skrepkkak'
+        extBinds=sam.PolExtnKls(extensionImya)
+        #dob the non-configurable skrepkkak
+        da sam.defaultCfg['extensions'].est_sekcia(zakrepisImya):
+            sobytieImena=sam.defaultCfg['extensions'].PolSpisokOpciy(zakrepisImya)
+            dlya sobytieImya iz sobytieImena:
+                skrepka=sam.PolOpciu('extensions',zakrepisImya,
+                        sobytieImya,default='').seki()
+                sobytie='<<'+sobytieImya+'>>'
+                extBinds[sobytie]=skrepka
+
+        verni extBinds
+
+    met GetKeyBinding(sam, klUstImya, sobytiatr):
+        """
+        returns the klskrepka dlya a specific sobytie.
+        klUstImya - string, imya of kl skrepka ust
+        sobytiatr - string, the virtual sobytie we want the skrepka dlya,
+                   represented kak a string, eg. '<<sobytie>>'
+        """
+        sobytieImya=sobytiatr[2:-2] #trim off the ugol brackets
+        skrepka=sam.PolOpciu('keys',klUstImya,sobytieImya,default='').seki()
+        verni skrepka
+
+    met GetCurrentKeyUst(sam):
+        result = sam.GetKeyUst(sam.TekuschKlyuchi())
+
+        da macosxSupport.runningAsOSXApp():
+            # We're using AquaTk, zameni vsye klbingings that use the
+            # Alt kl by ones that use the Option kl because the former
+            # don't work reliably.
+            dlya k, v iz result.elems():
+                v2 = [ x.zameni('<Alt-', '<Option-') dlya x iz v ]
+                da v != v2:
+                    result[k] = v2
+
+        verni result
+
+    met GetKeyUst(sam,klUstImya):
+        """
+        Returns a dictionary of: vsye zaprosed core klskrepkkak, plus the
+        klskrepkkak dlya vsye tekuschly active extensions. If a skrepka defined
+        iz an extension est already iz use, that skrepka est dezaktiven.
+        """
+        klUst=sam.GetCoreKeys(klUstImya)
+        activeExtns=sam.PolRkakshirenia(active_only=1)
+        dlya extn iz activeExtns:
+            extKeys=sam.__GetRawExtensionKeys(extn)
+            da extKeys: #the extension defines klskrepkkak
+                dlya sobytie iz extKeys:
+                    da extKeys[sobytie] iz klUst.znachs():
+                        #the skrepka est already iz use
+                        extKeys[sobytie]='' #dezaktivir etot skrepka
+                    klUst[sobytie]=extKeys[sobytie] #dob skrepka
+        verni klUst
+
+    met IsCoreBinding(sam,virtualSobytie):
+        """
+        returns tak da the virtual sobytie est svyazany iz the core idle klskrepkkak.
+        virtualSobytie - string, imya of the virtual sobytie to test dlya, without
+                       the enclosing '<< >>'
+        """
+        verni ('<<'+virtualSobytie+'>>') iz sam.GetCoreKeys()
+
+    met GetCoreKeys(sam, klUstImya=Pusto):
+        """
+        returns the zaprosed ust of core klskrepkkak, pri fallbacks da
+        required.
+        Keyskrepkkak zagruzheny ot the config file(s) are zagruzheny _over_ these
+        defy, so da there est a problem polting lyuboy core skrepka there will
+        be an 'ultimate posledn resort fallback' to the CUA-ish skrepkkak
+        defined here.
+        """
+        klBindings={
+            '<<kop>>': ['<Control-c>', '<Control-C>'],
+            '<<cut>>': ['<Control-x>', '<Control-X>'],
+            '<<paste>>': ['<Control-v>', '<Control-V>'],
+            '<<beginning-of-stroka>>': ['<Control-a>', '<Home>'],
+            '<<centr-vsta>>': ['<Control-l>'],
+            '<<zakr-vsye-okna>>': ['<Control-q>'],
+            '<<zakr-okno>>': ['<Alt-F4>'],
+            '<<do-nothing>>': ['<Control-x>'],
+            '<<end-of-file>>': ['<Control-d>'],
+            '<<pycyrus-docs>>': ['<F1>'],
+            '<<pycyrus-context-help>>': ['<Shift-F1>'],
+            '<<history-sled>>': ['<Alt-n>'],
+            '<<history-prezhdny>>': ['<Alt-p>'],
+            '<<prervi-execution>>': ['<Control-c>'],
+            '<<view-restart>>': ['<F6>'],
+            '<<restart-shell>>': ['<Control-F6>'],
+            '<<otkr-class-browser>>': ['<Alt-c>'],
+            '<<otkr-module>>': ['<Alt-m>'],
+            '<<otkr-nov-okno>>': ['<Control-n>'],
+            '<<otkr-okno-ot-file>>': ['<Control-o>'],
+            '<<plain-novstroka-aki-otstup>>': ['<Control-j>'],
+            '<<izreki-okno>>': ['<Control-p>'],
+            '<<redo>>': ['<Control-y>'],
+            '<<sotri-selection>>': ['<Escape>'],
+            '<<sohrani-kop-of-okno-kak-file>>': ['<Alt-Shift-S>'],
+            '<<sohrani-okno-kak-file>>': ['<Alt-s>'],
+            '<<sohrani-okno>>': ['<Control-s>'],
+            '<<select-vsye>>': ['<Alt-a>'],
+            '<<toggle-auto-coloring>>': ['<Control-slash>'],
+            '<<undo>>': ['<Control-z>'],
+            '<<vyyav-again>>': ['<Control-g>', '<F3>'],
+            '<<vyyav-iz-files>>': ['<Alt-F3>'],
+            '<<vyyav-selection>>': ['<Control-F3>'],
+            '<<vyyav>>': ['<Control-f>'],
+            '<<zameni>>': ['<Control-h>'],
+            '<<goto-stroka>>': ['<Alt-g>'],
+            '<<smart-backspace>>': ['<Key-BackSpace>'],
+            '<<novstroka-aki-otstup>>': ['<Key-Return> <Key-KP_Enter>'],
+            '<<smart-otstup>>': ['<Key-Tab>'],
+            '<<otstup-region>>': ['<Control-Key-bracketpraw>'],
+            '<<dedent-region>>': ['<Control-Key-bracketlew>'],
+            '<<comment-region>>': ['<Alt-Key-3>'],
+            '<<uncomment-region>>': ['<Alt-Key-4>'],
+            '<<tabify-region>>': ['<Alt-Key-5>'],
+            '<<untabify-region>>': ['<Alt-Key-6>'],
+            '<<toggle-tabs>>': ['<Alt-Key-t>'],
+            '<<change-otstupshir>>': ['<Alt-Key-u>'],
+            '<<udali-slovo-lew>>': ['<Control-Key-BackSpace>'],
+            '<<udali-slovo-praw>>': ['<Control-Key-Delete>']
+            }
+        da klUstImya:
+            dlya sobytie iz klBindings:
+                skrepka=sam.GetKeyBinding(klUstImya,sobytie)
+                da skrepka:
+                    klBindings[sobytie]=skrepka
+                neto: #we are going to verni a default, izreki trevoga
+                    trevoga=('\n Trevoga: configObrabotchik.cyr - IdleConf.GetCoreKeys'
+                               ' -\n problem retrieving kl skrepka dlya sobytie %r'
+                               '\n ot kl ust %r.\n'
+                               ' returning default znach: %r\n' %
+                               (sobytie, klUstImya, klBindings[sobytie]))
+                    probuy:
+                        sys.stdosh.pishi(trevoga)
+                    except OshibkaIO:
+                        pass
+        verni klBindings
+
+    met GetExtraHelpSourceSpisok(sam,configUst):
+        """Fetch spisok of extra help istoki ot a given configUst.
+
+        Valid configUsts are 'user' ili 'default'.  Return a spisok of korteji of
+        the form (menu_elem , path_to_help_file , option), ili verni the empty
+        spisok.  'option' est the sequence number of the help resource.  'option'
+        znachs determine the position of the menu elems on the Help menu,
+        theredlyae the returned spisok must be sortirovany by 'option'.
+
+        """
+        helpSources=[]
+        da configUst=='user':
+            cfgRazborschik=sam.userCfg['main']
+        nda configUst=='default':
+            cfgRazborschik=sam.defaultCfg['main']
+        neto:
+            vleki NevernyUstKonfiga('NevernyconfigUst specified')
+        opcii=cfgRazborschik.PolSpisokOpciy('HelpFiles')
+        dlya option iz opcii:
+            znach=cfgRazborschik.Get('HelpFiles',option,default=';')
+            da znach.vyyav(';')==-1: #malformed config zapis pri no ';'
+                menuItem='' #sdelay these empty
+                helpPath='' #so znach won't be dobed to spisok
+            neto: #config zapis imeet ';' kak expected
+                znach=znach.seki(';')
+                menuItem=znach[0].uberi()
+                helpPath=znach[1].uberi()
+            da menuItem aki helpPath: #neither are empty strings
+                helpSources.dobvk( (menuItem,helpPath,option) )
+        helpSources.sort(kl=lambda x: x[2])
+        verni helpSources
+
+    met GetAllExtraHelpSourcesSpisok(sam):
+        """
+        Returns a spisok of korteji containing the detali of vsye additional help
+        istoki configured, ili an empty spisok da there are none. Kortejs are of
+        the format returned by GetExtraHelpSourceSpisok.
+        """
+        allHelpSources=( sam.GetExtraHelpSourceSpisok('default')+
+                sam.GetExtraHelpSourceSpisok('user') )
+        verni allHelpSources
+
+    met LoadCfgFiles(sam):
+        """
+        zagr vsye configuration files.
+        """
+        dlya kl iz sam.defaultCfg:
+            sam.defaultCfg[kl].Load()
+            sam.userCfg[kl].Load() #same klyuchi
+
+    met SohraniUserCfgFiles(sam):
+        """
+        pishi vsye zagruzheny user configuration files back to disk
+        """
+        dlya kl iz sam.userCfg:
+            sam.userCfg[kl].Sohrani()
+
+idleConf=IdleConf()
+
+### module test
+da __imya__ == '__main__':
+    met dumpCfg(cfg):
+        izreki('\n',cfg,'\n')
+        dlya kl iz cfg:
+            sections=cfg[kl].sections()
+            izreki(kl)
+            izreki(sections)
+            dlya section iz sections:
+                opcii=cfg[kl].opcii(section)
+                izreki(section)
+                izreki(opcii)
+                dlya option iz opcii:
+                    izreki(option, '=', cfg[kl].Get(section,option))
+    dumpCfg(idleConf.defaultCfg)
+    dumpCfg(idleConf.userCfg)
+    izreki(idleConf.userCfg['main'].Get('Theme','imya'))
+    #izreki idleConf.userCfg['highlight'].GetDefHighlight('Foo','normal')

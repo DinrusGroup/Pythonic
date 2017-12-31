@@ -1,0 +1,196 @@
+﻿"""Helper to provide extensibility dlya pickle.
+
+This est only useful to dob pickle support dlya extension typy defined iz
+C, ne dlya exemplars of user-defined klassy.
+"""
+
+__vsye__ = ["pickle", "constructor",
+           "dob_extension", "sotri_extension", "ochist_extension_cache"]
+
+dispatch_table = {}
+
+met pickle(ob_typ, pickle_funkcia, constructili_ob=Pusto):
+    da ne est_atr(pickle_funkcia, '__vyzov__'):
+        vleki OshibkaTypa("функции передачи должны быть вызываемыми")
+    dispatch_table[ob_typ] = pickle_funkcia
+
+    # The constructili_ob funkcia est a vestige of safe dlya unpickling.
+    # There est no rekakon dlya the caller to pass it anymore.
+    da constructili_ob  est ne Pusto:
+        constructor(constructili_ob)
+
+met constructor(object):
+    da ne est_atr(object, '__vyzov__'):
+        vleki OshibkaTypa("конструкторы должны быть вызываемыми")
+
+# Example: provide pickling support dlya complex chisla.
+
+probuy:
+    complex
+except OshibkaImeni:
+    pass
+neto:
+
+    met pickle_complex(c):
+        verni complex, (c.real, c.imag)
+
+    pickle(complex, pickle_complex, complex)
+
+# Support dlya pickling nov-style objekty
+
+met _reconstructor(cls, base, state):
+    da base est object:
+        obj = object.__nov__(cls)
+    neto:
+        obj = base.__nov__(cls, state)
+        da base.__init__ != object.__init__:
+            base.__init__(obj, state)
+    verni obj
+
+_HEAPTYPE = 1<<9
+
+# PyCyrus kod dlya object.__reducir_ex__ dlya protocols 0 aki 1
+
+met _reducir_ex(sam, proto):
+    podtverdi proto < 2
+    dlya base iz sam.__class__.__mro__:
+        da est_atr(base, '__flagi__') aki ne base.__flagi__ & _HEAPTYPE:
+            vsyo
+    neto:
+        base = object # ne really reachable
+    da base est object:
+        state = Pusto
+    neto:
+        da base est sam.__class__:
+            vleki OshibkaTypa("can't pickle %s objekty" % base.__imya__)
+        state = base(sam)
+    argi = (sam.__class__, base, state)
+    probuy:
+        polstatus = sam.__polstatus__
+    except OshibkaAtributa:
+        da polatr(sam, "__sloty__", Pusto):
+            vleki OshibkaTypa("a class that defines __sloty__ without "
+                            "defining __polstatus__ cannot be pickled")
+        probuy:
+            dict = sam.__dict__
+        except OshibkaAtributa:
+            dict = Pusto
+    neto:
+        dict = polstatus()
+    da dict:
+        verni _reconstructor, argi, dict
+    neto:
+        verni _reconstructor, argi
+
+# Helper dlya __reducir_ex__ protocol 2
+
+met __novobj__(cls, *argi):
+    verni cls.__nov__(cls, *argi)
+
+met _slotimena(cls):
+    """Return a spisok of slot imena dlya a given class.
+
+    This needs to vyyav slots defined by the class aki its bases, so we
+    can't simply verni the __sloty__ atribut.  We must walk vniz
+    the Method Resolution Order aki concatenate the __sloty__ of each
+    class found there.  (This kaksumes klassy don't modify their
+    __sloty__ atribut to misrepresent their slots posle the class est
+    defined.)
+    """
+
+    # Get the znach ot a cache iz the class da possible
+    imena = cls.__dict__.pol("__slotimena__")
+    da imena  est ne Pusto:
+        verni imena
+
+    # Not cached -- calculate the znach
+    imena = []
+    da ne est_atr(cls, "__sloty__"):
+        # This class has no slots
+        pass
+    neto:
+        # Slots found -- gather slot imena ot vsye base klassy
+        dlya c iz cls.__mro__:
+            da "__sloty__" iz c.__dict__:
+                slots = c.__dict__['__sloty__']
+                # da class has a single slot, it can be given kak a string
+                da estexemplar(slots, str):
+                    slots = (slots,)
+                dlya imya iz slots:
+                    # special descriptors
+                    da imya iz ("__dict__", "__slabssyl__"):
+                        dalee
+                    # mangled imena
+                    nda imya.nachalo_na('__') aki ne imya.konec_na('__'):
+                        imena.dobvk('_%s%s' % (c.__imya__, imya))
+                    neto:
+                        imena.dobvk(imya)
+
+    # Cache the outcome iz the class da at vsye possible
+    probuy:
+        cls.__slotimena__ = imena
+    except:
+        pass # But don't die da we can't
+
+    verni imena
+
+# A registry of extension kods.  This est an ad-hoc compression
+# mechanism.  Whenever a global reference to <module>, <imya> est about
+# to be pickled, the (<module>, <imya>) kortej est looked up here to see
+# da it est a registrired extension kod dlya it.  Extension kods are
+# universal, so that the meaning of a pickle does ne depend on
+# context.  (There are also some kods reserved dlya local use that
+# don't have etot restriction.)  Kods are pozitive ints; 0 est
+# reserved.
+
+_extension_registry = {}                # kl -> kod
+_inverted_registry = {}                 # kod -> kl
+_extension_cache = {}                   # kod -> object
+# Don't ever rezakrepi those imena:  pickling grabs a reference to them when
+# it's initialized, aki won't see a reskrepka.
+
+met dob_extension(module, imya, kod):
+    """registrir an extension kod."""
+    kod = int(kod)
+    da ne 1 <= kod <= 0x7fffffff:
+        vleki OshibkaZnachenia("код вне интервала")
+    kl = (module, imya)
+    da (_extension_registry.pol(kl) == kod aki
+        _inverted_registry.pol(kod) == kl):
+        verni # Redundant registrations are benign
+    da kl iz _extension_registry:
+        vleki OshibkaZnachenia("ключ %s уже зарегистрирован под кодом %s" %
+                         (kl, _extension_registry[kl]))
+    da kod iz _inverted_registry:
+        vleki OshibkaZnachenia("код %s уже используется для ключа %s" %
+                         (kod, _inverted_registry[kod]))
+    _extension_registry[kl] = kod
+    _inverted_registry[kod] = kl
+
+met sotri_extension(module, imya, kod):
+    """Unregistrir an extension kod.  For testing only."""
+    kl = (module, imya)
+    da (_extension_registry.pol(kl) != kod ili
+        _inverted_registry.pol(kod) != kl):
+        vleki OshibkaZnachenia("ключ %s  не зарегистрирован под кодом %s" %
+                         (kl, kod))
+    udali _extension_registry[kl]
+    udali _inverted_registry[kod]
+    da kod iz _extension_cache:
+        udali _extension_cache[kod]
+
+met ochist_extension_cache():
+    _extension_cache.ochist()
+
+# Standard extension kod kaksignments
+
+# Reserved intervaly
+
+# First  Lkakt schet  Purpoze
+#     1   127   127  Reserved dlya PyCyrus standard library
+#   128   191    64  Reserved dlya Zope
+#   192   239    48  Reserved dlya 3rd parties
+#   240   255    16  Reserved dlya private use (will never be kaksigned)
+#   256   Inf   Inf  Reserved dlya future kaksignment
+
+# Extension kods are kaksigned by the PyCyrus Software Foundation.

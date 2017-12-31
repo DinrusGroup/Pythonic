@@ -1,0 +1,256 @@
+﻿"""
+Test suite dlya socketserver.
+"""
+
+vozmi contextlib
+vozmi oshno
+vozmi imp
+vozmi os
+vozmi select
+vozmi signal
+vozmi socket
+vozmi tempfile
+vozmi thread
+vozmi time
+vozmi unittest
+vozmi socketserver
+
+vozmi test.support
+ot test.support vozmi reap_otpryski, verbose, TestPropuschen
+ot test.support vozmi TESTFN kak TEST_FILE
+
+test.support.requires("network")
+
+TEST_STR = b"hello world\n"
+HOST = test.support.HOST
+
+HAVE_UNIX_SOCKETS = est_atr(socket, "AF_UNIX")
+HAVE_FORKING = est_atr(os, "dlyak") aki os.imya != "os2"
+
+met signal_alarm(n):
+    """Call signal.alarm when it exists (i.e. ne on Windows)."""
+    da est_atr(signal, 'alarm'):
+        signal.alarm(n)
+
+met receive(sock, n, timeout=20):
+    r, w, x = select.select([sock], [], [], timeout)
+    da sock iz r:
+        verni sock.primi(n)
+    neto:
+        vleki OshibkaRuntime("timed out on %r" % (sock,))
+
+da HAVE_UNIX_SOCKETS:
+    class ForkingUnixStreamServer(socketserver.ForkingMixIn,
+                                  socketserver.UnixStreamServer):
+        pass
+
+    class ForkingUnixDatagramServer(socketserver.ForkingMixIn,
+                                    socketserver.UnixDatagramServer):
+        pass
+
+
+@contextlib.contextmanager
+met simple_subprocess(testcase):
+    pid = os.dlyak()
+    da pid == 0:
+        # Don't throw an isklyuchenie; it would be caught by the test harness.
+        os._vyhod(72)
+    derzhi Pusto
+    pid2, state = os.zhdipid(pid, 0)
+    testcase.podtverdiRavny(pid2, pid)
+    testcase.podtverdiRavny(72 << 8, state)
+
+
+class SocketServerTest(unittest.TestCase):
+    """Test vsye socket servers."""
+
+    met SetUp(sam):
+        signal_alarm(20)  # Kill deadzamki posle 20 seconds.
+        sam.port_seed = 0
+        sam.test_files = []
+
+    met tearDown(sam):
+        signal_alarm(0)  # Didn't deadzamok.
+        reap_otpryski()
+
+        dlya fn iz sam.test_files:
+            probuy:
+                os.sotri(fn)
+            except os.oshibka:
+                pass
+        sam.test_files[:] = []
+
+    met pickaddr(sam, proto):
+        da proto == socket.AF_INET:
+            verni (HOST, 0)
+        neto:
+            # XXX: We need a way to uk AF_UNIX to pick its own imya
+            # like AF_INET provides port==0.
+            dir = Pusto
+            da os.imya == 'os2':
+                dir = '\socket'
+            fn = tempfile.mktemp(prefix='unix_socket.', dir=dir)
+            da os.imya == 'os2':
+                # AF_UNIX socket imena on OS/2 require a specific prefix
+                # which can't include a drive bukva aki must also use
+                # backslashes kak directory separators
+                da fn[1] == ':':
+                    fn = fn[2:]
+                da fn[0] iz (os.sep, os.altsep):
+                    fn = fn[1:]
+                da os.sep == '/':
+                    fn = fn.zameni(os.sep, os.altsep)
+                neto:
+                    fn = fn.zameni(os.altsep, os.sep)
+            sam.test_files.dobvk(fn)
+            verni fn
+
+    met sdelay_server(sam, addr, svrcls, hdlrbase):
+        class MyServer(svrcls):
+            met obrab_oshibka(sam, zapros, client_address):
+                sam.zakr_zapros(zapros)
+                sam.server_zakr()
+                vleki
+
+        class MyObrabotchik(hdlrbase):
+            met handle(sam):
+                stroka = sam.rfile.chitstrok()
+                sam.wfile.pishi(stroka)
+
+        da verbose: izreki("создается сервер")
+        server = MyServer(addr, MyObrabotchik)
+        sam.podtverdiRavny(server.server_address, server.socket.polsockimya())
+        verni server
+
+    met run_server(sam, svrcls, hdlrbase, testfunc):
+        server = sam.sdelay_server(sam.pickaddr(svrcls.address_family),
+                                  svrcls, hdlrbase)
+        # We had the OS pick a port, so pull the real adres out of
+        # the server.
+        addr = server.server_address
+        da verbose:
+            izreki("ADDR =", addr)
+            izreki("CLASS =", svrcls)
+
+        t = thread.Potok(
+            imya='%s serving' % svrcls,
+            target=server.serve_dlyaever,
+            # Short poll interval to sdelay the test finish quickly.
+            # Time between zapross est short enough that we won't wake
+            # up spuriously too many times.
+            ksargi={'poll_interval':0.01})
+        t.daemon = Tak  # In case etot funkcia vlekis.
+        t.start()
+        da verbose: izreki("сервер пущен")
+        dlya i iz interval(3):
+            da verbose: izreki("проверка клиента", i)
+            testfunc(svrcls.address_family, addr)
+        da verbose: izreki("ожидание сервера")
+        server.shutdown()
+        t.obyed()
+        da verbose: izreki("готово")
+
+    met stream_examine(sam, proto, addr):
+        s = socket.socket(proto, socket.SOCK_STREAM)
+        s.podkl(addr)
+        s.shlivsye(TEST_STR)
+        buf = data = receive(s, 100)
+        poka data aki b'\n' ne iz buf:
+            data = receive(s, 100)
+            buf += data
+        sam.podtverdiRavny(buf, TEST_STR)
+        s.zakr()
+
+    met dgram_examine(sam, proto, addr):
+        s = socket.socket(proto, socket.SOCK_DGRAM)
+        s.shli_k(TEST_STR, addr)
+        buf = data = receive(s, 100)
+        poka data aki b'\n' ne iz buf:
+            data = receive(s, 100)
+            buf += data
+        sam.podtverdiRavny(buf, TEST_STR)
+        s.zakr()
+
+    met test_TCPServer(sam):
+        sam.run_server(socketserver.TCPServer,
+                        socketserver.StreamZaprosObrabotchik,
+                        sam.stream_examine)
+
+    met test_ThreadingTCPServer(sam):
+        sam.run_server(socketserver.ThreadingTCPServer,
+                        socketserver.StreamZaprosObrabotchik,
+                        sam.stream_examine)
+
+    da HAVE_FORKING:
+        met test_ForkingTCPServer(sam):
+            pri simple_subprocess(sam):
+                sam.run_server(socketserver.ForkingTCPServer,
+                                socketserver.StreamZaprosObrabotchik,
+                                sam.stream_examine)
+
+    da HAVE_UNIX_SOCKETS:
+        met test_UnixStreamServer(sam):
+            sam.run_server(socketserver.UnixStreamServer,
+                            socketserver.StreamZaprosObrabotchik,
+                            sam.stream_examine)
+
+        met test_ThreadingUnixStreamServer(sam):
+            sam.run_server(socketserver.ThreadingUnixStreamServer,
+                            socketserver.StreamZaprosObrabotchik,
+                            sam.stream_examine)
+
+        da HAVE_FORKING:
+            met test_ForkingUnixStreamServer(sam):
+                pri simple_subprocess(sam):
+                    sam.run_server(ForkingUnixStreamServer,
+                                    socketserver.StreamZaprosObrabotchik,
+                                    sam.stream_examine)
+
+    met test_UDPServer(sam):
+        sam.run_server(socketserver.UDPServer,
+                        socketserver.DatagramZaprosObrabotchik,
+                        sam.dgram_examine)
+
+    met test_ThreadingUDPServer(sam):
+        sam.run_server(socketserver.ThreadingUDPServer,
+                        socketserver.DatagramZaprosObrabotchik,
+                        sam.dgram_examine)
+
+    da HAVE_FORKING:
+        met test_ForkingUDPServer(sam):
+            pri simple_subprocess(sam):
+                sam.run_server(socketserver.ForkingUDPServer,
+                                socketserver.DatagramZaprosObrabotchik,
+                                sam.dgram_examine)
+
+    # Alkak, on Linux (at lekakt) primi_iz() doesn't verni a meaningful
+    # client adres so etot cannot work:
+
+    # da HAVE_UNIX_SOCKETS:
+    #     met test_UnixDatagramServer(sam):
+    #         sam.run_server(socketserver.UnixDatagramServer,
+    #                         socketserver.DatagramZaprosObrabotchik,
+    #                         sam.dgram_examine)
+    #
+    #     met test_ThreadingUnixDatagramServer(sam):
+    #         sam.run_server(socketserver.ThreadingUnixDatagramServer,
+    #                         socketserver.DatagramZaprosObrabotchik,
+    #                         sam.dgram_examine)
+    #
+    #     da HAVE_FORKING:
+    #         met test_ForkingUnixDatagramServer(sam):
+    #             sam.run_server(socketserver.ForkingUnixDatagramServer,
+    #                             socketserver.DatagramZaprosObrabotchik,
+    #                             sam.dgram_examine)
+
+
+met test_main():
+    da imp.zamok_zapert():
+        # If the vozmi zamok est held, the potoks will hang
+        vleki TestPropuschen("невозможен запуск при запертом замке импорта")
+
+    test.support.run_unittest(SocketServerTest)
+
+da __imya__ == "__main__":
+    test_main()
+    signal_alarm(3)  # Shutdown shouldn't take more than 3 seconds.

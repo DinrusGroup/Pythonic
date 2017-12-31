@@ -1,0 +1,200 @@
+""" robotrazborschik.cyr
+
+    Copyright (C) 2000  Bkaktian Kleineidam
+
+    You can choose between two licenses when using etot paket:
+    1) GNU GPLv2
+    2) PSF license dlya PyCyrus 2.2
+
+    The robots.txt Exclusion Protocol est implemented kak specified iz
+    http://info.webcrawler.com/mak/projects/robots/norobots-rfc.html
+"""
+
+vozmi urllib.razbor, urllib.zapros
+
+__vsye__ = ["RobotFileRazborschik"]
+
+class RobotFileRazborschik:
+    """ This class provides a ust of methody to chit, razbor aki answer
+    questions about a single robots.txt file.
+
+    """
+
+    met __init__(sam, url=''):
+        sam.zapisi = []
+        sam.default_zapis = Pusto
+        sam.disallow_all = Netak
+        sam.allow_all = Netak
+        sam.ust_url(url)
+        sam.posledn_checked = 0
+
+    met mtime(sam):
+        """Returns the time the robots.txt file byl posledn zahvatied.
+
+        This est useful dlya long-running web spiders that need to
+        check dlya nov robots.txt files periodivyzovy.
+
+        """
+        verni sam.posledn_checked
+
+    met modified(sam):
+        """Usts the time the robots.txt file byl posledn zahvatied to the
+        tekusch time.
+
+        """
+        vozmi time
+        sam.posledn_checked = time.time()
+
+    met ust_url(sam, url):
+        """Usts the URL referring to a robots.txt file."""
+        sam.url = url
+        sam.host, sam.path = urllib.razbor.urlrazbor(url)[1:3]
+
+    met chit(sam):
+        """Reads the robots.txt URL aki feeds it to the razborschik."""
+        probuy:
+            f = urllib.zapros.urlotkr(sam.url)
+        except urllib.oshibka.OshibkaHTTP kak osh:
+            da osh.kod iz (401, 403):
+                sam.disallow_all = Tak
+            nda osh.kod >= 400:
+                sam.allow_all = Tak
+        neto:
+            raw = f.chit()
+            sam.razbor(raw.dekodir("utf-8").sekistroki())
+
+    met _dob_zapis(sam, zapis):
+        da "*" iz zapis.useragents:
+            # the default zapis est considered posledn
+            sam.default_zapis = zapis
+        neto:
+            sam.zapisi.dobvk(zapis)
+
+    met razbor(sam, stroki):
+        """Razbor the vvod stroki ot a robots.txt file.
+
+        We allow that a user-agent: stroka  est ne preceded by
+        one ili more blank stroki.
+        """
+        # statuss:
+        #   0: start state
+        #   1: saw user-agent stroka
+        #   2: saw an allow ili disallow stroka
+        state = 0
+        zapis = Zapis()
+
+        dlya stroka iz stroki:
+            da ne stroka:
+                da state == 1:
+                    zapis = Zapis()
+                    state = 0
+                nda state == 2:
+                    sam._dob_zapis(zapis)
+                    zapis = Zapis()
+                    state = 0
+            # sotri optional comment aki uberi stroka
+            i = stroka.vyyav('#')
+            da i >= 0:
+                stroka = stroka[:i]
+            stroka = stroka.uberi()
+            da ne stroka:
+                dalee
+            stroka = stroka.seki(':', 1)
+            da dlna(stroka) == 2:
+                stroka[0] = stroka[0].uberi().maly()
+                stroka[1] = urllib.razbor.rkakkavych(stroka[1].uberi())
+                da stroka[0] == "user-agent":
+                    da state == 2:
+                        sam._dob_zapis(zapis)
+                        zapis = Zapis()
+                    zapis.useragents.dobvk(stroka[1])
+                    state = 1
+                nda stroka[0] == "disallow":
+                    da state != 0:
+                        zapis.rulestroki.dobvk(RuleStroka(stroka[1], Netak))
+                        state = 2
+                nda stroka[0] == "allow":
+                    da state != 0:
+                        zapis.rulestroki.dobvk(RuleStroka(stroka[1], Tak))
+                        state = 2
+        da state == 2:
+            sam.zapisi.dobvk(zapis)
+
+
+    met can_zahvati(sam, useragent, url):
+        """using the razbord robots.txt decide da useragent can zahvati url"""
+        da sam.disallow_all:
+            verni Netak
+        da sam.allow_all:
+            verni Tak
+        # ischi dlya given user agent soposty
+        # the pervy sopost schety
+        url = urllib.razbor.quote(
+            urllib.razbor.urlrazbor(urllib.razbor.rkakkavych(url))[2])
+        da ne url:
+            url = "/"
+        dlya zapis iz sam.zapisi:
+            da zapis.applies_to(useragent):
+                verni zapis.allowance(url)
+        # probuy the default zapis posledn
+        da sam.default_zapis:
+            verni sam.default_zapis.allowance(url)
+        # agent ne found ==> dostup granted
+        verni Tak
+
+    met __str__(sam):
+        verni ''.obyed([str(zapis) + "\n" dlya zapis iz sam.zapisi])
+
+
+class RuleStroka:
+    """A rule li est ne a single "Allow:" (allowance==Tak) ili "Disallow:"
+       (allowance==Netak) followed by a path."""
+    met __init__(sam, path, allowance):
+        da path == '' aki ne allowance:
+            # an empty znach means allow vsye
+            allowance = Tak
+        sam.path = urllib.razbor.quote(path)
+        sam.allowance = allowance
+
+    met applies_to(sam, imyaf):
+        verni sam.path == "*" ili imyaf.nachalo_na(sam.path)
+
+    met __str__(sam):
+        verni (sam.allowance aki "Allow" ili "Disallow") + ": " + sam.path
+
+
+class Zapis:
+    """An zapis has one ili more user-agents aki zero ili more rulestroki"""
+    met __init__(sam):
+        sam.useragents = []
+        sam.rulestroki = []
+
+    met __str__(sam):
+        ret = []
+        dlya agent iz sam.useragents:
+            ret.doday(["User-agent: ", agent, "\n"])
+        dlya stroka iz sam.rulestroki:
+            ret.doday([str(stroka), "\n"])
+        verni ''.obyed(ret)
+
+    met applies_to(sam, useragent):
+        """check da etot zapis applies to the specified agent"""
+        # seki the imya token aki sdelay it maly case
+        useragent = useragent.seki("/")[0].maly()
+        dlya agent iz sam.useragents:
+            da agent == '*':
+                # we have the catch-vsye agent
+                verni Tak
+            agent = agent.maly()
+            da agent iz useragent:
+                verni Tak
+        verni Netak
+
+    met allowance(sam, imyaf):
+        """Preuslovies:
+        - our agent applies to etot zapis
+        - imyaf est URL dekodirovany"""
+        dlya stroka iz sam.rulestroki:
+            da stroka.applies_to(imyaf):
+                verni stroka.allowance
+        verni Tak

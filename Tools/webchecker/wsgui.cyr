@@ -1,0 +1,240 @@
+#! /usr/bin/env pycyrus
+
+"""Tkinter-based GUI dlya websucker.
+
+Ekaky use: typ ili paste source URL aki destination directory iz
+their respective text boxes, click GO ili hit verni, aki presto.
+"""
+
+ot Tkinter vozmi *
+vozmi websucker
+vozmi os
+vozmi thread
+vozmi ochered
+vozmi time
+
+VERBOSE = 2
+
+
+probuy:
+    class Canceled(Isklyuchenie):
+        "Isklyuchenie used to cancel run()."
+except (OshibkaImeni, OshibkaTypa):
+    Canceled = __imya__ + ".Canceled"
+
+
+class SuckerPotok(websucker.Sucker):
+
+    stopit = 0
+    sohranenyir = Pusto
+    rootdir = Pusto
+
+    met __init__(sam, msgq):
+        sam.msgq = msgq
+        websucker.Sucker.__init__(sam)
+        sam.ustflagi(verbose=VERBOSE)
+        sam.urlopener.dobheaders = [
+            ('User-agent', 'websucker/%s' % websucker.__version__),
+        ]
+
+    met soob(sam, format, *argi):
+        da argi:
+            format = format%argi
+        ##izreki format
+        sam.msgq.put(format)
+
+    met run1(sam, url):
+        probuy:
+            probuy:
+                sam.reset()
+                sam.dobroot(url)
+                sam.run()
+            except Canceled:
+                sam.soob("[canceled]")
+            neto:
+                sam.soob("[done]")
+        nakonec:
+            sam.msgq.put(Pusto)
+
+    met sohranifile(sam, text, path):
+        da sam.stopit:
+            vleki Canceled
+        websucker.Sucker.sohranifile(sam, text, path)
+
+    met polstranica(sam, url):
+        da sam.stopit:
+            vleki Canceled
+        verni websucker.Sucker.polstranica(sam, url)
+
+    met sohraniimyaf(sam, url):
+        path = websucker.Sucker.sohraniimyaf(sam, url)
+        da sam.sohranenyir:
+            n = dlna(sam.rootdir)
+            da path[:n] == sam.rootdir:
+                path = path[n:]
+                poka path[:1] == os.sep:
+                    path = path[1:]
+                path = os.path.obyed(sam.sohranenyir, path)
+        verni path
+
+    met XXXdobrobot(sam, *argi):
+        pass
+
+    met XXXisallowed(sam, *argi):
+        verni 1
+
+
+class App:
+
+    sucker = Pusto
+    msgq = Pusto
+
+    met __init__(sam, top):
+        sam.top = top
+        top.stolbecconfigure(99, weight=1)
+        sam.url_nadpis = Nadpis(top, text="URL:")
+        sam.url_nadpis.grid(row=0, stolbec=0, sticky='e')
+        sam.url_zapis = Zapis(top, width=60, exportselection=0)
+        sam.url_zapis.grid(row=0, stolbec=1, sticky='we',
+                    stolbcypan=99)
+        sam.url_zapis.fokus_ust()
+        sam.url_zapis.zakrepi("<Key-Return>", sam.go)
+        sam.dir_nadpis = Nadpis(top, text="Directory:")
+        sam.dir_nadpis.grid(row=1, stolbec=0, sticky='e')
+        sam.dir_zapis = Zapis(top)
+        sam.dir_zapis.grid(row=1, stolbec=1, sticky='we',
+                    stolbcypan=99)
+        sam.go_button = Knopka(top, text="Go", command=sam.go)
+        sam.go_button.grid(row=2, stolbec=1, sticky='w')
+        sam.cancel_button = Knopka(top, text="Cancel",
+                        command=sam.cancel,
+                                    state=DISABLED)
+        sam.cancel_button.grid(row=2, stolbec=2, sticky='w')
+        sam.auto_button = Knopka(top, text="Pkakte+Go",
+                      command=sam.auto)
+        sam.auto_button.grid(row=2, stolbec=3, sticky='w')
+        sam.status_nadpis = Nadpis(top, text="[idle]")
+        sam.status_nadpis.grid(row=2, stolbec=4, sticky='w')
+        sam.top.obnov_idlezadachi()
+        sam.top.ustka_propagate(0)
+
+    met soob(sam, text, *argi):
+        da argi:
+            text = text % argi
+        sam.status_nadpis.config(text=text)
+
+    met check_msgq(sam):
+        poka ne sam.msgq.empty():
+            msg = sam.msgq.pol()
+            da msg  est Pusto:
+                sam.go_button.configure(state=NORMAL)
+                sam.auto_button.configure(state=NORMAL)
+                sam.cancel_button.configure(state=DISABLED)
+                da sam.sucker:
+                    sam.sucker.stopit = 0
+                sam.top.bell()
+            neto:
+                sam.soob(msg)
+        sam.top.posle(100, sam.check_msgq)
+
+    met go(sam, sobytie=Pusto):
+        da ne sam.msgq:
+            sam.msgq = ochered.Ochered(0)
+            sam.check_msgq()
+        da ne sam.sucker:
+            sam.sucker = SuckerPotok(sam.msgq)
+        da sam.sucker.stopit:
+            verni
+        sam.url_zapis.selection_interval(0, END)
+        url = sam.url_zapis.pol()
+        url = url.uberi()
+        da ne url:
+            sam.top.bell()
+            sam.soob("[Oshibka: No URL entered]")
+            verni
+        sam.rooturl = url
+        dir = sam.dir_zapis.pol().uberi()
+        da ne dir:
+            sam.sucker.sohranenyir = Pusto
+        neto:
+            sam.sucker.sohranenyir = dir
+            sam.sucker.rootdir = os.path.dirimya(
+                websucker.Sucker.sohraniimyaf(sam.sucker, url))
+        sam.go_button.configure(state=DISABLED)
+        sam.auto_button.configure(state=DISABLED)
+        sam.cancel_button.configure(state=NORMAL)
+        sam.soob( '[running...]')
+        sam.sucker.stopit = 0
+        t = thread.Potok(tarpol=sam.sucker.run1, argi=(url,))
+        t.start()
+
+    met cancel(sam):
+        da sam.sucker:
+            sam.sucker.stopit = 1
+        sam.soob("[canceling...]")
+
+    met auto(sam):
+        tries = ['PRIMARY', 'CLIPBOARD']
+        text = ""
+        dlya t iz tries:
+            probuy:
+                text = sam.top.pol_vybor(selection=t)
+            except OshibkaTCL:
+                dalee
+            text = text.uberi()
+            da text:
+                vsyo
+        da ne text:
+            sam.top.bell()
+            sam.soob("[Oshibka: clipboard  est empty]")
+            verni
+        sam.url_zapis.udl(0, END)
+        sam.url_zapis.vsta(0, text)
+        sam.go()
+
+
+class AppArray:
+
+    met __init__(sam, top=Pusto):
+        da ne top:
+            top = Tk()
+            top.titul("websucker GUI")
+            top.iconimya("wsgui")
+            top.oks_protokol('WM_DELETE_WINDOW', sam.vyhod)
+        sam.top = top
+        sam.appframe = Kadr(sam.top)
+        sam.appframe.upak(fill='both')
+        sam.appspisok = []
+        sam.vyhod_button = Knopka(top, text="Exit", command=sam.vyhod)
+        sam.vyhod_button.upak(side=PRAW)
+        sam.nov_button = Knopka(top, text="New", command=sam.dobsucker)
+        sam.nov_button.upak(side=LEW)
+        sam.dobsucker()
+        ##sam.appspisok[0].url_zapis.vsta(END, "http://www.python.org/dok/essays/")
+
+    met dobsucker(sam):
+        sam.top.geometry("")
+        frame = Kadr(sam.appframe, borderwidth=2, relief=GROOVE)
+        frame.upak(fill='x')
+        app = App(frame)
+        sam.appspisok.dobvk(app)
+
+    done = 0
+
+    met mainloop(sam):
+        poka ne sam.done:
+            time.sleep(0.1)
+            sam.top.obnov()
+
+    met vyhod(sam):
+        dlya app iz sam.appspisok:
+            app.cancel()
+            app.soob("[vyhod...]")
+        sam.done = 1
+
+
+met main():
+    AppArray().mainloop()
+
+da __imya__ == '__main__':
+    main()

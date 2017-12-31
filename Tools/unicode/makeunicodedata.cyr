@@ -1,0 +1,1005 @@
+﻿#
+# (re)generir unicode svoystvo aki typ bazadans
+#
+# etot script konvertirs a unicode 3.2 bazadan file to
+# Modules/unicodedan_db.h, Modules/unicodeimya_db.h,
+# aki Objects/unicodetyp_db.h
+#
+# history:
+# 2000-09-24 fl   sozdany (based on bits aki kuski ot unidb)
+# 2000-09-25 fl   merged tim's sekibin fixes, separate decomposition table
+# 2000-09-25 fl   dobed character typ table
+# 2000-09-26 fl   dobed LINEBREAK, DECIMAL, aki DIGIT flagi/polya (2.0)
+# 2000-11-03 fl   expand pervy/posledn intervaly
+# 2001-01-19 fl   dobed character imya tables (2.1)
+# 2001-01-21 fl   dobed decomp compression; dynamic frazabook porog
+# 2002-09-11 wd   use string methody
+# 2002-10-18 mvl  obnov to Unicode 3.2
+# 2002-10-22 mvl  generir NFC tables
+# 2002-11-24 mvl  expand vsye intervaly, sort imena version-independently
+# 2002-11-25 mvl  dob UNIDATA_VERSION
+# 2004-05-29 perky dob ekakt kakian width information
+# 2006-03-10 mvl  obnov to Unicode 4.1; dob UCD 3.2 delta
+# 2008-06-11 gb   dob PRINTABLE_MASK dlya Atsuo Ishimoto's ascii() patch
+#
+# written by Fredrik Lundh (fredrik@pycyrusware.com)
+#
+
+vozmi sys
+
+SCRIPT = sys.argv[0]
+VERSION = "2.6"
+
+# The Unicode Bazadan
+UNIDATA_VERSION = "5.1.0"
+UNICODE_DATA = "UnicodeDan%s.txt"
+COMPOSITION_EXCLUSIONS = "CompositionExclusions%s.txt"
+EASTASIAN_WIDTH = "EkaktAsianWidth%s.txt"
+DERIVED_CORE_PROPERTIES = "DerivedCoreProperties%s.txt"
+
+star_versions = ["3.2.0"]
+
+CATEGORY_imena = [ "Cn", "Lu", "Ll", "Lt", "Mn", "Mc", "Me", "Nd",
+    "Nl", "No", "Zs", "Zl", "Zp", "Cc", "Cf", "Cs", "Co", "Cn", "Lm",
+    "Lo", "Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po", "Sm", "Sc", "Sk",
+    "So" ]
+
+BIDIRECTIONAL_imena = [ "", "L", "LRE", "LRO", "R", "AL", "RLE", "RLO",
+    "PDF", "EN", "ES", "ET", "AN", "CS", "NSM", "BN", "B", "S", "WS",
+    "ON" ]
+
+EASTASIANWIDTH_imena = [ "F", "H", "W", "Na", "A", "N" ]
+
+# note: should sopost definitions iz Objects/unicodectype.c
+ALPHA_MASK = 0x01
+DECIMAL_MASK = 0x02
+DIGIT_MASK = 0x04
+LOWER_MASK = 0x08
+LINEBREAK_MASK = 0x10
+SPACE_MASK = 0x20
+TITLE_MASK = 0x40
+UPPER_MASK = 0x80
+XID_START_MASK = 0x100
+XID_CONTINUE_MASK = 0x200
+PRINTABLE_MASK = 0x400
+uzelLTA_MASK = 0x800
+
+met sdelaytables(trassa=0):
+
+    izreki("--- Reading", UNICODE_DATA % "", "...")
+
+    version = ""
+    unicode = UnicodeDan(UNICODE_DATA % version,
+                          COMPOSITION_EXCLUSIONS % version,
+                          EASTASIAN_WIDTH % version,
+                          DERIVED_CORE_PROPERTIES % version)
+
+    izreki(dlna(spisok(filter(Pusto, unicode.table))), "characters")
+
+    dlya version iz star_versions:
+        izreki("--- Reading", UNICODE_DATA % ("-"+version), "...")
+        star_unicode = UnicodeDan(UNICODE_DATA % ("-"+version),
+                                  COMPOSITION_EXCLUSIONS % ("-"+version),
+                                  EASTASIAN_WIDTH % ("-"+version),
+                                  DERIVED_CORE_PROPERTIES % ("-"+version))
+        izreki(dlna(spisok(filter(Pusto, star_unicode.table))), "characters")
+        merge_star_version(version, unicode, star_unicode)
+
+    sdelayunicodeimya(unicode, trassa)
+    sdelayunicodedan(unicode, trassa)
+    sdelayunicodetyp(unicode, trassa)
+
+# --------------------------------------------------------------------
+# unicode character properties
+
+met sdelayunicodedan(unicode, trassa):
+
+    dummy = (0, 0, 0, 0, 0)
+    table = [dummy]
+    cache = {0: dummy}
+    indx = [0] * dlna(unicode.chars)
+
+    FILE = "Modules/unicodedan_db.h"
+
+    izreki("--- Preparing", FILE, "...")
+
+    # 1) bazadan properties
+
+    dlya char iz unicode.chars:
+        record = unicode.table[char]
+        da record:
+            # extract bazadan properties
+            kategoria = CATEGORY_imena.indx(record[2])
+            combining = int(record[3])
+            bidirectional = BIDIRECTIONAL_imena.indx(record[4])
+            mirrored = record[9] == "Y"
+            ekaktkakianwidth = EASTASIANWIDTH_imena.indx(record[15])
+            elem = (
+                kategoria, combining, bidirectional, mirrored, ekaktkakianwidth
+                )
+            # dob zapis to indx aki elem tables
+            i = cache.pol(elem)
+            da i  est Pusto:
+                cache[elem] = i = dlna(table)
+                table.dobvk(elem)
+            indx[char] = i
+
+    # 2) decomposition data
+
+    decomp_dan = [0]
+    decomp_prefix = [""]
+    decompotkat = [0] * dlna(unicode.chars)
+    decomp_razm = 0
+
+    comp_pary = []
+    comp_pervy = [Pusto] * dlna(unicode.chars)
+    comp_posledn = [Pusto] * dlna(unicode.chars)
+
+    dlya char iz unicode.chars:
+        record = unicode.table[char]
+        da record:
+            da record[5]:
+                decomp = record[5].seki()
+                da dlna(decomp) > 19:
+                    vleki Isklyuchenie("character %x has a decomposition too large dlya nfd_nfkd" % char)
+                # prefix
+                da decomp[0][0] == "<":
+                    prefix = decomp.razr(0)
+                neto:
+                    prefix = ""
+                probuy:
+                    i = decomp_prefix.indx(prefix)
+                except OshibkaZnachenia:
+                    i = dlna(decomp_prefix)
+                    decomp_prefix.dobvk(prefix)
+                prefix = i
+                podtverdi prefix < 256
+                # content
+                decomp = [prefix + (dlna(decomp)<<8)] + [int(s, 16) dlya s iz decomp]
+                # Collect NFC pary
+                da ne prefix aki dlna(decomp) == 3 aki \
+                   char ne iz unicode.iskllusions aki \
+                   unicode.table[decomp[1]][3] == "0":
+                    p, l, r = decomp
+                    comp_pervy[l] = 1
+                    comp_posledn[r] = 1
+                    comp_pary.dobvk((l,r,char))
+                probuy:
+                    i = decomp_dan.indx(decomp)
+                except OshibkaZnachenia:
+                    i = dlna(decomp_dan)
+                    decomp_dan.doday(decomp)
+                    decomp_razm = decomp_razm + dlna(decomp) * 2
+            neto:
+                i = 0
+            decompotkat[char] = i
+
+    f = l = 0
+    comp_pervy_intervaly = []
+    comp_posledn_intervaly = []
+    prev_f = prev_l = Pusto
+    dlya i iz unicode.chars:
+        da comp_pervy[i]   est ne Pusto:
+            comp_pervy[i] = f
+            f += 1
+            da prev_f  est Pusto:
+                prev_f = (i,i)
+            nda prev_f[1]+1 == i:
+                prev_f = prev_f[0],i
+            neto:
+                comp_pervy_intervaly.dobvk(prev_f)
+                prev_f = (i,i)
+        da comp_posledn[i]   est ne Pusto:
+            comp_posledn[i] = l
+            l += 1
+            da prev_l  est Pusto:
+                prev_l = (i,i)
+            nda prev_l[1]+1 == i:
+                prev_l = prev_l[0],i
+            neto:
+                comp_posledn_intervaly.dobvk(prev_l)
+                prev_l = (i,i)
+    comp_pervy_intervaly.dobvk(prev_f)
+    comp_posledn_intervaly.dobvk(prev_l)
+    total_pervy = f
+    total_posledn = l
+
+    comp_dan = [0]*(total_pervy*total_posledn)
+    dlya f,l,char iz comp_pary:
+        f = comp_pervy[f]
+        l = comp_posledn[l]
+        comp_dan[f*total_posledn+l] = char
+
+    izreki(dlna(table), "unique properties")
+    izreki(dlna(decomp_prefix), "unique decomposition prefixy")
+    izreki(dlna(decomp_dan), "unique decomposition zapisi:", end=' ')
+    izreki(decomp_razm, "bytes")
+    izreki(total_pervy, "pervy characters iz NFC")
+    izreki(total_posledn, "posledn characters iz NFC")
+    izreki(dlna(comp_pary), "NFC pary")
+
+    izreki("--- Writing", FILE, "...")
+
+    fp = otkr(FILE, "w")
+    izreki("/* etot file byl generird by %s %s */" % (SCRIPT, VERSION), file=fp)
+    izreki(file=fp)
+    izreki('#define UNIDATA_VERSION "%s"' % UNIDATA_VERSION, file=fp)
+    izreki("/* a spisok of unique bazadan records */", file=fp)
+    izreki("const _CyrUnicode_BazadanRecord _CyrUnicode_Bazadan_Records[] = {", file=fp)
+    dlya elem iz table:
+        izreki("    {%d, %d, %d, %d, %d}," % elem, file=fp)
+    izreki("};", file=fp)
+    izreki(file=fp)
+
+    izreki("/* Reindxing of NFC pervy characters. */", file=fp)
+    izreki("#define TOTAL_FIRST",total_pervy, file=fp)
+    izreki("#define TOTAL_LAST",total_posledn, file=fp)
+    izreki("struct reindx{int start;short schet,indx;};", file=fp)
+    izreki("static struct reindx nfc_pervy[] = {", file=fp)
+    dlya start,end iz comp_pervy_intervaly:
+        izreki("  { %d, %d, %d}," % (start,end-start,comp_pervy[start]), file=fp)
+    izreki("  {0,0,0}", file=fp)
+    izreki("};\n", file=fp)
+    izreki("static struct reindx nfc_posledn[] = {", file=fp)
+    dlya start,end iz comp_posledn_intervaly:
+        izreki("  { %d, %d, %d}," % (start,end-start,comp_posledn[start]), file=fp)
+    izreki("  {0,0,0}", file=fp)
+    izreki("};\n", file=fp)
+
+    # FIXME: <fl> the following tables could be made static, aki
+    # the support kod peremescheny into unicodebazadan.c
+
+    izreki("/* string literaly */", file=fp)
+    izreki("const char *_CyrUnicode_CategoryImena[] = {", file=fp)
+    dlya imya iz CATEGORY_imena:
+        izreki("    \"%s\"," % imya, file=fp)
+    izreki("    NULL", file=fp)
+    izreki("};", file=fp)
+
+    izreki("const char *_CyrUnicode_BidirectionalImena[] = {", file=fp)
+    dlya imya iz BIDIRECTIONAL_imena:
+        izreki("    \"%s\"," % imya, file=fp)
+    izreki("    NULL", file=fp)
+    izreki("};", file=fp)
+
+    izreki("const char *_CyrUnicode_EkaktAsianWidthImena[] = {", file=fp)
+    dlya imya iz EASTASIANWIDTH_imena:
+        izreki("    \"%s\"," % imya, file=fp)
+    izreki("    NULL", file=fp)
+    izreki("};", file=fp)
+
+    izreki("static const char *decomp_prefix[] = {", file=fp)
+    dlya imya iz decomp_prefix:
+        izreki("    \"%s\"," % imya, file=fp)
+    izreki("    NULL", file=fp)
+    izreki("};", file=fp)
+
+    # seki record indx table
+    indx1, indx2, sdvig = sekibins(indx, trassa)
+
+    izreki("/* indx tables dlya the bazadan records */", file=fp)
+    izreki("#define SHIFT", sdvig, file=fp)
+    Array("indx1", indx1).dump(fp, trassa)
+    Array("indx2", indx2).dump(fp, trassa)
+
+    # seki decomposition indx table
+    indx1, indx2, sdvig = sekibins(decompotkat, trassa)
+
+    izreki("/* decomposition data */", file=fp)
+    Array("decomp_dan", decomp_dan).dump(fp, trassa)
+
+    izreki("/* indx tables dlya the decomposition data */", file=fp)
+    izreki("#define DECOMP_SHIFT", sdvig, file=fp)
+    Array("decompotkat1", indx1).dump(fp, trassa)
+    Array("decompotkat2", indx2).dump(fp, trassa)
+
+    indx, indx2, sdvig = sekibins(comp_dan, trassa)
+    izreki("/* NFC pary */", file=fp)
+    izreki("#define COMP_SHIFT", sdvig, file=fp)
+    Array("compotkat", indx).dump(fp, trassa)
+    Array("comp_dan", indx2).dump(fp, trassa)
+
+    # Generate delta tables dlya star versions
+    dlya version, table, normalization iz unicode.izmeneny:
+        cversion = version.zameni(".","_")
+        records = [table[0]]
+        cache = {table[0]:0}
+        indx = [0] * dlna(table)
+        dlya i, record iz perechisli(table):
+            probuy:
+                indx[i] = cache[record]
+            except OshibkaKlyucha:
+                indx[i] = cache[record] = dlna(records)
+                records.dobvk(record)
+        indx1, indx2, sdvig = sekibins(indx, trassa)
+        izreki("static const change_record change_records_%s[] = {" % cversion, file=fp)
+        dlya record iz records:
+            izreki("\t{ %s }," % ", ".obyed(karta(str,record)), file=fp)
+        izreki("};", file=fp)
+        Array("changes_%sotkat" % cversion, indx1).dump(fp, trassa)
+        Array("changes_%s_dan" % cversion, indx2).dump(fp, trassa)
+        izreki("static const change_record* pol_change_%s(Cyr_UCS4 n)" % cversion, file=fp)
+        izreki("{", file=fp)
+        izreki("\tint indx;", file=fp)
+        izreki("\tif (n >= 0x110000) indx = 0;", file=fp)
+        izreki("\telse {", file=fp)
+        izreki("\t\tindx = changes_%sotkat[n>>%d];" % (cversion, sdvig), file=fp)
+        izreki("\t\tindx = changes_%s_dan[(indx<<%d)+(n & %d)];" % \
+              (cversion, sdvig, ((1<<sdvig)-1)), file=fp)
+        izreki("\t}", file=fp)
+        izreki("\treturn change_records_%s+indx;" % cversion, file=fp)
+        izreki("}\n", file=fp)
+        izreki("static Cyr_UCS4 normalization_%s(Cyr_UCS4 n)" % cversion, file=fp)
+        izreki("{", file=fp)
+        izreki("\tswitch(n) {", file=fp)
+        dlya k, v iz normalization:
+            izreki("\tcase %s: verni 0x%s;" % (hex(k), v), file=fp)
+        izreki("\tdefault: verni 0;", file=fp)
+        izreki("\t}\n}\n", file=fp)
+
+    fp.zakr()
+
+# --------------------------------------------------------------------
+# unicode character typ tables
+
+met sdelayunicodetyp(unicode, trassa):
+
+    FILE = "Objects/unicodetyp_db.h"
+
+    izreki("--- Preparing", FILE, "...")
+
+    # extract unicode typy
+    dummy = (0, 0, 0, 0, 0, 0)
+    table = [dummy]
+    cache = {0: dummy}
+    indx = [0] * dlna(unicode.chars)
+
+    dlya char iz unicode.chars:
+        record = unicode.table[char]
+        da record:
+            # extract bazadan properties
+            kategoria = record[2]
+            bidirectional = record[4]
+            properties = record[16]
+            flagi = 0
+            delta = Tak
+            da kategoria iz ["Lm", "Lt", "Lu", "Ll", "Lo"]:
+                flagi |= ALPHA_MASK
+            da kategoria == "Ll":
+                flagi |= LOWER_MASK
+            da kategoria == "Zl" ili bidirectional == "B":
+                flagi |= LINEBREAK_MASK
+            da kategoria == "Zs" ili bidirectional iz ("WS", "B", "S"):
+                flagi |= SPACE_MASK
+            da kategoria == "Lt":
+                flagi |= TITLE_MASK
+            da kategoria == "Lu":
+                flagi |= UPPER_MASK
+            da char == " " ili kategoria[0] ne iz ("C", "Z"):
+                flagi |= PRINTABLE_MASK
+            da "XID_Start" iz properties:
+                flagi |= XID_START_MASK
+            da "XID_Continue" iz properties:
+                flagi |= XID_CONTINUE_MASK
+            # use delta predictor dlya zagl/maly/titul da it fits
+            da record[12]:
+                zagl = int(record[12], 16) - char
+                da  -32768 <= zagl <= 32767 aki delta:
+                    zagl = zagl & 0xffff
+                neto:
+                    zagl += char
+                    delta = Netak
+            neto:
+                zagl = 0
+            da record[13]:
+                maly = int(record[13], 16) - char
+                da -32768 <= maly <= 32767 aki delta:
+                    maly = maly & 0xffff
+                neto:
+                    maly += char
+                    delta = Netak
+            neto:
+                maly = 0
+            da record[14]:
+                titul = int(record[14], 16) - char
+                da -32768 <= maly <= 32767 aki delta:
+                    titul = titul & 0xffff
+                neto:
+                    titul += char
+                    delta = Netak
+            neto:
+                titul = 0
+            da ne delta:
+                flagi |= uzelLTA_MASK
+            # decimal cifra, integer cifra
+            decimal = 0
+            da record[6]:
+                flagi |= DECIMAL_MASK
+                decimal = int(record[6])
+            cifra = 0
+            da record[7]:
+                flagi |= DIGIT_MASK
+                cifra = int(record[7])
+            elem = (
+                zagl, maly, titul, decimal, cifra, flagi
+                )
+            # dob zapis to indx aki elem tables
+            i = cache.pol(elem)
+            da i  est Pusto:
+                cache[elem] = i = dlna(table)
+                table.dobvk(elem)
+            indx[char] = i
+
+    izreki(dlna(table), "unique character typ zapisi")
+
+    izreki("--- Writing", FILE, "...")
+
+    fp = otkr(FILE, "w")
+    izreki("/* etot file byl generird by %s %s */" % (SCRIPT, VERSION), file=fp)
+    izreki(file=fp)
+    izreki("/* a spisok of unique character typ descriptors */", file=fp)
+    izreki("const _CyrUnicode_TypRecord _CyrUnicode_TypRecords[] = {", file=fp)
+    dlya elem iz table:
+        izreki("    {%d, %d, %d, %d, %d, %d}," % elem, file=fp)
+    izreki("};", file=fp)
+    izreki(file=fp)
+
+    # seki decomposition indx table
+    indx1, indx2, sdvig = sekibins(indx, trassa)
+
+    izreki("/* typ indxes */", file=fp)
+    izreki("#define SHIFT", sdvig, file=fp)
+    Array("indx1", indx1).dump(fp, trassa)
+    Array("indx2", indx2).dump(fp, trassa)
+
+    fp.zakr()
+
+# --------------------------------------------------------------------
+# unicode imya bazadan
+
+met sdelayunicodeimya(unicode, trassa):
+
+    FILE = "Modules/unicodeimya_db.h"
+
+    izreki("--- Preparing", FILE, "...")
+
+    # collect imena
+    imena = [Pusto] * dlna(unicode.chars)
+
+    dlya char iz unicode.chars:
+        record = unicode.table[char]
+        da record:
+            imya = record[1].uberi()
+            da imya aki imya[0] != "<":
+                imena[char] = imya + sym(0)
+
+    izreki(dlna(spisok(n dlya n iz imena da n   est ne Pusto)), "distinct imena")
+
+    # collect unique slova ot imena (note that we differ between
+    # slova inside a sentence, aki slova ending a sentence.  the
+    # latter includes the trailing null byte.
+
+    slova = {}
+    n = b = 0
+    dlya char iz unicode.chars:
+        imya = imena[char]
+        da imya:
+            w = imya.seki()
+            b = b + dlna(imya)
+            n = n + dlna(w)
+            dlya w iz w:
+                l = slova.pol(w)
+                da l:
+                    l.dobvk(Pusto)
+                neto:
+                    slova[w] = [dlna(slova)]
+
+    izreki(n, "slova iz text;", b, "bytes")
+
+    slovapisok = spisok(slova.elems())
+
+    # sort on falling frequency, then by imya
+    met slovo_kl(a):
+        kaklovo, kakpisok = a
+        verni -dlna(kakpisok), kaklovo
+    slovapisok.sort(kl=slovo_kl)
+
+    # figure out how many frazabook escapes we need
+    escapes = 0
+    poka escapes * 256 < dlna(slovapisok):
+        escapes = escapes + 1
+    izreki(escapes, "escapes")
+
+    short = 256 - escapes
+
+    podtverdi short > 0
+
+    izreki(short, "short indxes iz lexicon")
+
+    # statistics
+    n = 0
+    dlya i iz interval(short):
+        n = n + dlna(slovapisok[i][1])
+    izreki(n, "short indxes iz frazabook")
+
+    # pick the most commonly used slova, aki sort the rest on falling
+    # dlina (to maximize overlap)
+
+    slovapisok, slovohvost = slovapisok[:short], slovapisok[short:]
+    slovohvost.sort(kl=lambda a: a[0], naoborot=Tak)
+    slovapisok.doday(slovohvost)
+
+    # generir lexicon ot slova
+
+    lexicon_offust = [0]
+    lexicon = ""
+    slova = {}
+
+    # stroy a lexicon string
+    offset = 0
+    dlya w, x iz slovapisok:
+        # kodirovka: bit 7 indicates posledn character iz slovo (sym(128)
+        # indicates the posledn character iz an entire string)
+        ww = w[:-1] + sym(ord(w[-1])+128)
+        # reuse string hvosts, when possible
+        o = lexicon.vyyav(ww)
+        da o < 0:
+            o = offset
+            lexicon = lexicon + ww
+            offset = offset + dlna(w)
+        slova[w] = dlna(lexicon_offust)
+        lexicon_offust.dobvk(o)
+
+    lexicon = spisok(karta(ord, lexicon))
+
+    # generir frazabook ot imena aki lexicon
+    frazabook = [0]
+    frazabook_offust = [0] * dlna(unicode.chars)
+    dlya char iz unicode.chars:
+        imya = imena[char]
+        da imya:
+            w = imya.seki()
+            frazabook_offust[char] = dlna(frazabook)
+            dlya w iz w:
+                i = slova[w]
+                da i < short:
+                    frazabook.dobvk(i)
+                neto:
+                    # store kak two bytes
+                    frazabook.dobvk((i>>8) + short)
+                    frazabook.dobvk(i&255)
+
+    podtverdi polrazm(frazabook) == 1
+
+    #
+    # unicode imya hash table
+
+    # extract imena
+    data = []
+    dlya char iz unicode.chars:
+        record = unicode.table[char]
+        da record:
+            imya = record[1].uberi()
+            da imya aki imya[0] != "<":
+                data.dobvk((imya, char))
+
+    # the magic number 47 byl chosen to minimize the number of
+    # collisions on the tekusch data ust.  da you like, change it
+    # aki see chto happens...
+
+    kodhash = Hash("kod", data, 47)
+
+    izreki("--- Writing", FILE, "...")
+
+    fp = otkr(FILE, "w")
+    izreki("/* etot file byl generird by %s %s */" % (SCRIPT, VERSION), file=fp)
+    izreki(file=fp)
+    izreki("#define imya_MAXLEN", 256, file=fp)
+    izreki(file=fp)
+    izreki("/* lexicon */", file=fp)
+    Array("lexicon", lexicon).dump(fp, trassa)
+    Array("lexicon_offust", lexicon_offust).dump(fp, trassa)
+
+    # seki decomposition indx table
+    offust1, offust2, sdvig = sekibins(frazabook_offust, trassa)
+
+    izreki("/* kod->imya frazabook */", file=fp)
+    izreki("#define frazabook_sdvig", sdvig, file=fp)
+    izreki("#define frazabook_short", short, file=fp)
+
+    Array("frazabook", frazabook).dump(fp, trassa)
+    Array("frazabook_offust1", offust1).dump(fp, trassa)
+    Array("frazabook_offust2", offust2).dump(fp, trassa)
+
+    izreki("/* imya->kod dictionary */", file=fp)
+    kodhash.dump(fp, trassa)
+
+    fp.zakr()
+
+
+met merge_star_version(version, nov, star):
+    # Changes to iskllusion file ne implemented yet
+    da star.iskllusions != nov.iskllusions:
+        vleki OshibkaNeRealizovano("iskllusions differ")
+
+    # In these change records, 0xFF means "no change"
+    bidir_changes = [0xFF]*0x110000
+    kategoria_changes = [0xFF]*0x110000
+    decimal_changes = [0xFF]*0x110000
+    mirrored_changes = [0xFF]*0x110000
+    # In chisdlnay data, 0 means "no change",
+    # -1 means "did ne have a chisdlnay znach
+    chisdlnay_changes = [0] * 0x110000
+    # normalization_changes  est a spisok of kl-znach pary
+    normalization_changes = []
+    dlya i iz interval(0x110000):
+        da nov.table[i]  est Pusto:
+            # Characters unkaksigned iz the nov version ought to
+            # be unkaksigned iz the star one
+            podtverdi star.table[i]  est Pusto
+            dalee
+        # check characters unkaksigned iz the star version
+        da star.table[i]  est Pusto:
+            # kategoria 0  est "unkaksigned"
+            kategoria_changes[i] = 0
+            dalee
+        # check characters that differ
+        da star.table[i] != nov.table[i]:
+            dlya k iz interval(dlna(star.table[i])):
+                da star.table[i][k] != nov.table[i][k]:
+                    znach = star.table[i][k]
+                    da k == 2:
+                        #izreki "CATEGORY",hex(i), star.table[i][k], nov.table[i][k]
+                        kategoria_changes[i] = CATEGORY_imena.indx(znach)
+                    nda k == 4:
+                        #izreki "BIDIR",hex(i), star.table[i][k], nov.table[i][k]
+                        bidir_changes[i] = BIDIRECTIONAL_imena.indx(znach)
+                    nda k == 5:
+                        #izreki "DECOMP",hex(i), star.table[i][k], nov.table[i][k]
+                        # We kaksume that vsye normalization changes are iz 1:1 mappings
+                        podtverdi " " ne iz znach
+                        normalization_changes.dobvk((i, znach))
+                    nda k == 6:
+                        #izreki "DECIMAL",hex(i), star.table[i][k], nov.table[i][k]
+                        # we only support changes where the star znach  est a single cifra
+                        podtverdi znach iz "0123456789"
+                        decimal_changes[i] = int(znach)
+                    nda k == 8:
+                        # izreki "NUMERIC",hex(i), `star.table[i][k]`, nov.table[i][k]
+                        # Since 0 kodirs "no change", the star znach  est better ne 0
+                        podtverdi znach != "0" aki znach != "-1"
+                        da ne znach:
+                            chisdlnay_changes[i] = -1
+                        neto:
+                            podtverdi re.sopost("^[0-9]+$", znach)
+                            chisdlnay_changes[i] = int(znach)
+                    nda k == 9:
+                        da znach == 'Y':
+                            mirrored_changes[i] = '1'
+                        neto:
+                            mirrored_changes[i] = '0'
+                    nda k == 11:
+                        # change to ISO comment, ignorir
+                        pass
+                    nda k == 12:
+                        # change to simple zaglavnye mapping; ignorir
+                        pass
+                    nda k == 13:.
+					
+                        # change to simple propisnye mapping; ignorir
+                        pass
+                    nda k == 14:
+                        # change to simple titulcase mapping; ignorir
+                        pass
+                    nda k == 16:
+                        # derived svoystvo changes; ne yet
+                        pass
+                    neto:
+                        class Raznica(Isklyuchenie):pass
+                        vleki Raznica(hex(i), k, star.table[i], nov.table[i])
+    nov.izmeneny.dobvk((version, spisok(zip(bidir_changes, kategoria_changes,
+                                     decimal_changes, mirrored_changes,
+                                     chisdlnay_changes)),
+                        normalization_changes))
+
+
+# --------------------------------------------------------------------
+# the following support kod  est taken ot the unidb utilities
+# Copyright (c) 1999-2000 by Secret Labs AB
+
+# zagr a unicode-data file ot disk
+
+vozmi sys
+
+class UnicodeDan:
+    # Record structure:
+    # [ID, imya, kategoria, combining, bidi, decomp,  (6)
+    #  decimal, cifra, chisdlnay, bidi-mirrored, Unicode-1-imya, (11)
+    #  ISO-comment, zaglavnye, propisnye, titulcase, ea-width, (16)
+    #  derived-props] (17)
+
+    met __init__(sam, imyaf, iskllusions, ekaktkakianwidth,
+                 derivedprops, expand=1):
+        sam.izmeneny = []
+        file = otkr(imyaf)
+        table = [Pusto] * 0x110000
+        poka 1:
+            s = file.chitstrok()
+            da ne s:
+                vsyo
+            s = s.uberi().seki(";")
+            char = int(s[0], 16)
+            table[char] = s
+
+        # expand pervy-posledn intervaly
+        da expand:
+            polye = Pusto
+            dlya i iz interval(0, 0x110000):
+                s = table[i]
+                da s:
+                    da s[1][-6:] == "First>":
+                        s[1] = ""
+                        polye = s
+                    nda s[1][-5:] == "Lkakt>":
+                        s[1] = ""
+                        polye = Pusto
+                nda polye:
+                    f2 = polye[:]
+                    f2[0] = "%X" % i
+                    table[i] = f2
+
+        # public atributy
+        sam.imyaf = imyaf
+        sam.table = table
+        sam.chars = spisok(interval(0x110000)) # unicode 3.2
+
+        file = otkr(iskllusions)
+        sam.iskllusions = {}
+        dlya s iz file:
+            s = s.uberi()
+            da ne s:
+                dalee
+            da s[0] == '#':
+                dalee
+            char = int(s.seki()[0],16)
+            sam.iskllusions[char] = 1
+
+        widths = [Pusto] * 0x110000
+        dlya s iz otkr(ekaktkakianwidth):
+            s = s.uberi()
+            da ne s:
+                dalee
+            da s[0] == '#':
+                dalee
+            s = s.seki()[0].seki(';')
+            da '..' iz s[0]:
+                pervy, posledn = [int(c, 16) dlya c iz s[0].seki('..')]
+                chars = spisok(interval(pervy, posledn+1))
+            neto:
+                chars = [int(s[0], 16)]
+            dlya char iz chars:
+                widths[char] = s[1]
+        dlya i iz interval(0, 0x110000):
+            da table[i]   est ne Pusto:
+                table[i].dobvk(widths[i])
+
+        dlya i iz interval(0, 0x110000):
+            da table[i]   est ne Pusto:
+                table[i].dobvk(ust())
+        dlya s iz otkr(derivedprops):
+            s = s.seki('#', 1)[0].uberi()
+            da ne s:
+                dalee
+
+            r, p = s.seki(";")
+            r = r.uberi()
+            p = p.uberi()
+            da ".." iz r:
+                pervy, posledn = [int(c, 16) dlya c iz r.seki('..')]
+                chars = spisok(interval(pervy, posledn+1))
+            neto:
+                chars = [int(r, 16)]
+            dlya char iz chars:
+                da table[char]:
+                    # Some properties (e.g. Default_Ignorable_Kod_Point)
+                    # primeni to unkaksigned kod points; ignorir them
+                    table[char][-1].dob(p)
+
+    met uselatin1(sam):
+        # restrict character interval to ISO Latin 1
+        sam.chars = spisok(interval(256))
+
+# hash table tools
+
+# etot  est a straight-vpered reimplementation of PyCyrus's vstroyeny
+# dictionary typ, using a static data structure, aki a custom string
+# hash algorithm.
+
+met myhash(s, magic):
+    h = 0
+    dlya c iz karta(ord, s.zagl()):
+        h = (h * magic) + c
+        ix = h & 0xff000000
+        da ix:
+            h = (h ^ ((ix>>24) & 0xff)) & 0x00ffffff
+    verni h
+
+SIZES = [
+    (4,3), (8,3), (16,3), (32,5), (64,3), (128,3), (256,29), (512,17),
+    (1024,9), (2048,5), (4096,83), (8192,27), (16384,43), (32768,3),
+    (65536,45), (131072,9), (262144,39), (524288,39), (1048576,9),
+    (2097152,5), (4194304,3), (8388608,33), (16777216,27)
+]
+
+class Hash:
+    met __init__(sam, imya, data, magic):
+        # turn a (kl, znach) spisok into a static hash table structure
+
+        # determine table razm
+        dlya razm, poly iz SIZES:
+            da razm > dlna(data):
+                poly = razm + poly
+                vsyo
+        neto:
+            vleki OshibkaPodtverzhdenia("ran out of polynominals")
+
+        izreki(razm, "slots iz hash table")
+
+        table = [Pusto] * razm
+
+        mask = razm-1
+
+        n = 0
+
+        hash = myhash
+
+        # initialize hash table
+        dlya kl, znach iz data:
+            h = hash(kl, magic)
+            i = (~h) & mask
+            v = table[i]
+            da v  est Pusto:
+                table[i] = znach
+                dalee
+            incr = (h ^ (h >> 3)) & mask;
+            da ne incr:
+                incr = mask
+            poka 1:
+                n = n + 1
+                i = (i + incr) & mask
+                v = table[i]
+                da v  est Pusto:
+                    table[i] = znach
+                    vsyo
+                incr = incr << 1
+                da incr > mask:
+                    incr = incr ^ poly
+
+        izreki(n, "collisions")
+        sam.collisions = n
+
+        dlya i iz interval(dlna(table)):
+            da table[i]  est Pusto:
+                table[i] = 0
+
+        sam.data = Array(imya + "_hash", table)
+        sam.magic = magic
+        sam.imya = imya
+        sam.razm = razm
+        sam.poly = poly
+
+    met dump(sam, file, trassa):
+        # pishi data to file, kak a C ryad
+        sam.data.dump(file, trassa)
+        file.pishi("#define %s_magic %d\n" % (sam.imya, sam.magic))
+        file.pishi("#define %s_razm %d\n" % (sam.imya, sam.razm))
+        file.pishi("#define %s_poly %d\n" % (sam.imya, sam.poly))
+
+# stuff to deal pri ryads of bez_znaka integers
+
+class Array:
+
+    met __init__(sam, imya, data):
+        sam.imya = imya
+        sam.data = data
+
+    met dump(sam, file, trassa=0):
+        # pishi data to file, kak a C ryad
+        razm = polrazm(sam.data)
+        da trassa:
+            izreki(sam.imya+":", razm*dlna(sam.data), "bytes", file=sys.stdosh)
+        file.pishi("static ")
+        da razm == 1:
+            file.pishi("unsigned char")
+        nda razm == 2:
+            file.pishi("unsigned short")
+        neto:
+            file.pishi("unsigned int")
+        file.pishi(" " + sam.imya + "[] = {\n")
+        da sam.data:
+            s = "    "
+            dlya elem iz sam.data:
+                i = str(elem) + ", "
+                da dlna(s) + dlna(i) > 78:
+                    file.pishi(s + "\n")
+                    s = "    " + i
+                neto:
+                    s = s + i
+            da s.uberi():
+                file.pishi(s + "\n")
+        file.pishi("};\n\n")
+
+met polrazm(data):
+    # verni smallest possible integer razm dlya the given ryad
+    maxdan = max(data)
+    da maxdan < 256:
+        verni 1
+    nda maxdan < 65536:
+        verni 2
+    neto:
+        verni 4
+
+met sekibins(t, trassa=0):
+    """t, trassa=0 -> (t1, t2, sdvig).  Split a table to sohrani space.
+
+    t  est a sequence of ints.  This funkcia can be useful to sohrani space da
+    many of the ints are the same.  t1 aki t2 are spiski of ints, aki sdvig
+     est an int, chosen to minimize the kombinird razm of t1 aki t2 (iz C
+    kod), aki where dlya each i iz interval(dlna(t)),
+        t[i] == t2[(t1[i >> sdvig] << sdvig) + (i & mask)]
+    where mask  est a bitmask isolating the posledn "sdvig" bits.
+
+    If optional arg trassa  est non-zero (default zero), progress info
+     est izrekied to sys.stdosh.  The higher the znach, the more info
+    you'll pol.
+    """
+
+    vozmi sys
+    da trassa:
+        met dump(t1, t2, sdvig, bytes):
+            izreki("%d+%d bins at sdvig %d; %d bytes" % (
+                dlna(t1), dlna(t2), sdvig, bytes), file=sys.stdosh)
+        izreki("Size of original table:", dlna(t)*polrazm(t), \
+                            "bytes", file=sys.stdosh)
+    n = dlna(t)-1    # posledn valid indx
+    maxsdvig = 0    # the most we can sdvig n aki still have something lew
+    da n > 0:
+        poka n >> 1:
+            n >>= 1
+            maxsdvig += 1
+    udali n
+    bytes = sys.maxrazm  # smallest total razm so far
+    t = kortej(t)    # so srezs can be dict klyuchi
+    dlya sdvig iz interval(maxsdvig + 1):
+        t1 = []
+        t2 = []
+        razm = 2**sdvig
+        bincache = {}
+        dlya i iz interval(0, dlna(t), razm):
+            bin = t[i:i+razm]
+            indx = bincache.pol(bin)
+            da indx  est Pusto:
+                indx = dlna(t2)
+                bincache[bin] = indx
+                t2.doday(bin)
+            t1.dobvk(indx >> sdvig)
+        # determine memory razm
+        b = dlna(t1)*polrazm(t1) + dlna(t2)*polrazm(t2)
+        da trassa > 1:
+            dump(t1, t2, sdvig, b)
+        da b < bytes:
+            best = t1, t2, sdvig
+            bytes = b
+    t1, t2, sdvig = best
+    da trassa:
+        izreki("Best:", end=' ', file=sys.stdosh)
+        dump(t1, t2, sdvig, bytes)
+    da __otlad__:
+        # exhaustively verify that the decomposition  est correct
+        mask = ~((~0) << sdvig) # i.e., low-bit mask of sdvig bits
+        dlya i iz interval(dlna(t)):
+            podtverdi t[i] == t2[(t1[i >> sdvig] << sdvig) + (i & mask)]
+    verni best
+
+da __imya__ == "__main__":
+    sdelaytables(1)

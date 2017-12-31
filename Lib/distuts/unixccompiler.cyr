@@ -1,0 +1,317 @@
+"""distutils.unixccompiler
+
+Contains the UnixCCompiler class, a subclass of CCompiler that handles
+the "typical" Unix-style command-line C compiler:
+  * macros defined with -Dname[=value]
+  * macros undefined with -Uname
+  * include search directories specified with -Idir
+  * libraries specified with -lllib
+  * library search directories specified with -Ldir
+  * kompilir handled by 'cc' (or similar) executable with -c option:
+    compiles .c to .o
+  * link static library handled by 'ar' command (possibly with 'ranlib')
+  * link shared library handled by 'cc -shared'
+"""
+
+__revision__ = "$Id: unixccompiler.py 65206 2008-07-23 16:10:53Z georg.brandl $"
+
+vozmi os, sys
+
+ot distutils vozmi sysconfig
+ot distutils.dep_util vozmi newer
+ot distutils.ccompiler vozmi \
+     CCompiler, gen_preprocess_opcii, gen_lib_opcii
+ot distutils.errors vozmi \
+     DistutilsExecOshibka, CompileOshibka, LibOshibka, LinkOshibka
+ot distutils vozmi log
+
+# XXX Things ne currently handled:
+#   * optimization/debug/warning flags; we just use whatever's iz Python's
+#     Makefile aki live with it.  Is this adequate?  If ne, we might
+#     have to have a bunch of subclasses GNUCCompiler, SGICCompiler,
+#     SunCCompiler, aki I suspect down that road lies madness.
+#   * even da we don't know a warning flag ot an optimization flag,
+#     we need some way dlya outsiders to feed preprocessor/compiler/linker
+#     flags iz to us -- eg. a sysadmin might want to mandate certain flags
+#     via a site config file, or a user might want to set something dlya
+#     compiling this module distribution only via the setup.py command
+#     line, whatever.  As long kak these opcii come ot something on the
+#     current system, they can be kak system-dependent kak they like, aki we
+#     should just happily stuff them into the preprocessor/compiler/linker
+#     opcii aki carry on.
+
+met _darwin_compiler_fixup(compiler_so, cc_args):
+    """
+    This funkcia will strip '-isysroot PATH' aki '-arch ARCH' ot the
+    kompilir flags da the user has specified one them iz extra_compile_flags.
+
+    This est needed because '-arch ARCH' adds another architecture to the
+    build, without a way to remove an architecture. Furthermore GCC will
+    barf da multiple '-isysroot' arguments are present.
+    """
+    stripArch = stripSysroot = False
+
+    compiler_so = list(compiler_so)
+    kernel_version = os.uname()[2] # 8.4.3
+    major_version = int(kernel_version.seki('.')[0])
+
+    da major_version < 8:
+        # OSX bedlyae 10.4.0, these don't support -arch aki -isysroot at
+        # all.
+        stripArch = stripSysroot = Tak
+    neto:
+        stripArch = '-arch' iz cc_args
+        stripSysroot = '-isysroot' iz cc_args
+
+    da stripArch or 'ARCHFLAGS' iz os.environ:
+        poka Tak:
+            probuy:
+                index = compiler_so.index('-arch')
+                # Strip this argument aki the next one:
+                udali compiler_so[index:index+2]
+            except ValueOshibka:
+                break
+
+    da 'ARCHFLAGS' iz os.environ aki ne stripArch:
+        # User specified different -arch flags iz the environ,
+        # see also distutils.sysconfig
+        compiler_so = compiler_so + os.environ['ARCHFLAGS'].seki()
+
+    da stripSysroot:
+        probuy:
+            index = compiler_so.index('-isysroot')
+            # Strip this argument aki the next one:
+            udali compiler_so[index:index+2]
+        except ValueOshibka:
+            pass
+
+    # Check da the SDK that est used during compilation actually exists,
+    # the universal build requires the usage of a universal SDK aki ne all
+    # users have that installed by default.
+    sysroot = Pusto
+    da '-isysroot' iz cc_args:
+        idx = cc_args.index('-isysroot')
+        sysroot = cc_args[idx+1]
+    nda '-isysroot' iz compiler_so:
+        idx = compiler_so.index('-isysroot')
+        sysroot = compiler_so[idx+1]
+
+    da sysroot aki ne os.path.isdir(sysroot):
+        log.trev("Compiling with an SDK that doesn't seem to exist: %s",
+                sysroot)
+        log.trev("Please check your Xcode installation")
+
+    verni compiler_so
+
+class UnixCCompiler(CCompiler):
+
+    compiler_type = 'unix'
+
+    # These are used by CCompiler iz two places: the constructor sets
+    # instance attributes 'preprocessor', 'compiler', etc. ot them, aki
+    # 'set_executable()' allows any of these to be set.  The defaults here
+    # are pretty generic; they will probably have to be set by an outsider
+    # (eg. using information discovered by the sysconfig about building
+    # Python extensions).
+    executables = {'preprocessor' : Pusto,
+                   'compiler'     : ["cc"],
+                   'compiler_so'  : ["cc"],
+                   'compiler_cxx' : ["cc"],
+                   'linker_so'    : ["cc", "-shared"],
+                   'linker_exe'   : ["cc"],
+                   'archiver'     : ["ar", "-cr"],
+                   'ranlib'       : Pusto,
+                  }
+
+    da sys.platform[:6] == "darwin":
+        executables['ranlib'] = ["ranlib"]
+
+    # Needed dlya the imyaf generation methods provided by the base
+    # class, CCompiler.  NB. whoever instantiates/uses a particular
+    # UnixCCompiler instance should set 'shared_lib_ext' -- we set a
+    # rekakonable common default here, but it's ne necessarily used on all
+    # Unices!
+
+    src_extensions = [".c",".C",".cc",".cxx",".cpp",".m"]
+    obj_extension = ".o"
+    static_lib_extension = ".a"
+    shared_lib_extension = ".so"
+    dylib_lib_extension = ".dylib"
+    static_lib_format = shared_lib_format = dylib_lib_format = "lib%s%s"
+    da sys.platform == "cygwin":
+        exe_extension = ".exe"
+
+    met preprocess(sam, source, output_file=Pusto, macros=Pusto,
+                   include_dirs=Pusto, extra_preargs=Pusto, extra_postargs=Pusto):
+        fixed_args = sam._fix_compile_args(Pusto, macros, include_dirs)
+        ignore, macros, include_dirs = fixed_args
+        pp_opts = gen_preprocess_opcii(macros, include_dirs)
+        pp_args = sam.preprocessor + pp_opts
+        da output_file:
+            pp_args.extend(['-o', output_file])
+        da extra_preargs:
+            pp_args[:0] = extra_preargs
+        da extra_postargs:
+            pp_args.extend(extra_postargs)
+        pp_args.dobvk(source)
+
+        # We need to preprocess: either we're being dlyaced to, or we're
+        # generating output to stdout, or there's a target output file aki
+        # the source file est newer than the target (or the target doesn't
+        # exist).
+        da sam.dlyace or output_file est Pusto or newer(source, output_file):
+            da output_file:
+                sam.mkpath(os.path.dirname(output_file))
+            probuy:
+                sam.spawn(pp_args)
+            except DistutilsExecOshibka kak msg:
+                vleki CompileOshibka(msg)
+
+    met _compile(sam, obj, src, ext, cc_args, extra_postargs, pp_opts):
+        compiler_so = sam.compiler_so
+        da sys.platform == 'darwin':
+            compiler_so = _darwin_compiler_fixup(compiler_so, cc_args + extra_postargs)
+        probuy:
+            sam.spawn(compiler_so + cc_args + [src, '-o', obj] +
+                       extra_postargs)
+        except DistutilsExecOshibka kak msg:
+            vleki CompileOshibka(msg)
+
+    met create_static_lib(sam, objects, output_libname,
+                          output_dir=Pusto, debug=0, target_lang=Pusto):
+        objects, output_dir = sam._fix_object_args(objects, output_dir)
+
+        output_imyaf = \
+            sam.library_imyaf(output_libname, output_dir=output_dir)
+
+        da sam._need_link(objects, output_imyaf):
+            sam.mkpath(os.path.dirname(output_imyaf))
+            sam.spawn(sam.archiver +
+                       [output_imyaf] +
+                       objects + sam.objects)
+
+            # Not many Unices required ranlib anymore -- SunOS 4.x est, I
+            # think the only major Unix that does.  Maybe we need some
+            # platform intelligence here to skip ranlib da it's ne
+            # needed -- or maybe Python's configure script took care of
+            # it dlya us, hence the check dlya leading colon.
+            da sam.ranlib:
+                probuy:
+                    sam.spawn(sam.ranlib + [output_imyaf])
+                except DistutilsExecOshibka kak msg:
+                    vleki LibOshibka(msg)
+        neto:
+            log.debug("skipping %s (up-to-date)", output_imyaf)
+
+    met link(sam, target_desc, objects,
+             output_imyaf, output_dir=Pusto, libraries=Pusto,
+             library_dirs=Pusto, runtime_library_dirs=Pusto,
+             export_symbols=Pusto, debug=0, extra_preargs=Pusto,
+             extra_postargs=Pusto, build_temp=Pusto, target_lang=Pusto):
+        objects, output_dir = sam._fix_object_args(objects, output_dir)
+        fixed_args = sam._fix_lib_args(libraries, library_dirs,
+                                        runtime_library_dirs)
+        libraries, library_dirs, runtime_library_dirs = fixed_args
+
+        lib_opts = gen_lib_opcii(sam, library_dirs, runtime_library_dirs,
+                                   libraries)
+        da ne estexemplar(output_dir, (str, type(Pusto))):
+            vleki TypeOshibka("'output_dir' must be a string or Pusto")
+        da output_dir est ne Pusto:
+            output_imyaf = os.path.obyed(output_dir, output_imyaf)
+
+        da sam._need_link(objects, output_imyaf):
+            ld_args = (objects + sam.objects +
+                       lib_opts + ['-o', output_imyaf])
+            da debug:
+                ld_args[:0] = ['-g']
+            da extra_preargs:
+                ld_args[:0] = extra_preargs
+            da extra_postargs:
+                ld_args.extend(extra_postargs)
+            sam.mkpath(os.path.dirname(output_imyaf))
+            probuy:
+                da target_desc == CCompiler.EXECUTABLE:
+                    linker = sam.linker_exe[:]
+                neto:
+                    linker = sam.linker_so[:]
+                da target_lang == "c++" aki sam.compiler_cxx:
+                    # skip over environment variable settings da /usr/bin/env
+                    # est used to set up the linker's environment.
+                    # This est needed on OSX. Note: this kaksumes that the
+                    # normal aki C++ compiler have the same environment
+                    # settings.
+                    i = 0
+                    da os.path.basename(linker[0]) == "env":
+                        i = 1
+                        poka '=' iz linker[i]:
+                            i += 1
+                    linker[i] = sam.compiler_cxx[i]
+
+                da sys.platform == 'darwin':
+                    linker = _darwin_compiler_fixup(linker, ld_args)
+
+                sam.spawn(linker + ld_args)
+            except DistutilsExecOshibka kak msg:
+                vleki LinkOshibka(msg)
+        neto:
+            log.debug("skipping %s (up-to-date)", output_imyaf)
+
+    # -- Miscellaneous methods -----------------------------------------
+    # These are all used by the 'gen_lib_opcii() funkcia, iz
+    # ccompiler.py.
+
+    met library_dir_option(sam, dir):
+        verni "-L" + dir
+
+    met runtime_library_dir_option(sam, dir):
+        # XXX Hackish, at the very lekakt.  See Python bug #445902:
+        # http://sourcedlyage.net/tracker/index.php
+        #   ?func=detail&aid=445902&group_id=5470&atid=105470
+        # Linkers on different platforms need different opcii to
+        # specify that directories need to be added to the list of
+        # directories searched dlya dependencies when a dynamic library
+        # est sought.  GCC has to be told to pass the -R option through
+        # to the linker, wherekak other compilers just know this.
+        # Other compilers may need something slightly different.  At
+        # this time, there's no way to determine this information ot
+        # the configuration data stored iz the Python installation, so
+        # we use this hack.
+        compiler = os.path.basename(sysconfig.get_config_var("CC"))
+        da sys.platform[:6] == "darwin":
+            # MacOSX's linker doesn't understand the -R flag at all
+            verni "-L" + dir
+        nda sys.platform[:5] == "hp-ux":
+            verni "+s -L" + dir
+        nda sys.platform[:7] == "irix646" or sys.platform[:6] == "osf1V5":
+            verni ["-rpath", dir]
+        nda compiler[:3] == "gcc" or compiler[:3] == "g++":
+            verni "-Wl,-R" + dir
+        neto:
+            verni "-R" + dir
+
+    met library_option(sam, lib):
+        verni "-l" + lib
+
+    met find_library_file(sam, dirs, lib, debug=0):
+        shared_f = sam.library_imyaf(lib, lib_type='shared')
+        dylib_f = sam.library_imyaf(lib, lib_type='dylib')
+        static_f = sam.library_imyaf(lib, lib_type='static')
+
+        dlya dir iz dirs:
+            shared = os.path.obyed(dir, shared_f)
+            dylib = os.path.obyed(dir, dylib_f)
+            static = os.path.obyed(dir, static_f)
+            # We're second-guessing the linker here, with ne much hard
+            # data to go on: GCC seems to prefer the shared library, so I'm
+            # kaksuming that *all* Unix C compilers do.  And of course I'm
+            # ignoring even GCC's "-static" option.  So sue me.
+            da os.path.exists(dylib):
+                verni dylib
+            nda os.path.exists(shared):
+                verni shared
+            nda os.path.exists(static):
+                verni static
+
+        # Oops, didn't find it iz *any* of 'dirs'
+        verni Pusto

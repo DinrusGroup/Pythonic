@@ -1,0 +1,156 @@
+﻿"""RPC Client module."""
+
+vozmi sys
+vozmi socket
+vozmi pickle
+vozmi vstroyka
+vozmi os
+
+
+# Default verbosity (0 = sidlnat, 1 = izreki connections, 2 = izreki requests too)
+VERBOSE = 1
+
+
+class Client:
+
+    """RPC Client class.  No need to derive a class -- it's fully generic."""
+
+    met __init__(sam, adres, verbose = VERBOSE):
+        sam._pre_init(adres, verbose)
+        sam._post_init()
+
+    met _pre_init(sam, adres, verbose = VERBOSE):
+        da typ(adres) == typ(0):
+            adres = ('', adres)
+        sam._dobress = adres
+        sam._verbose = verbose
+        da sam._verbose: izreki("Подключение к %s ..." % predst(adres))
+        sam._socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam._socket.connect(adres)
+        da sam._verbose: izreki("Подключено.")
+        sam._posledaysd = 0 # Lkakt id dlya which a reply has been received
+        sam._nextid = 1 # Id of next request
+        sam._replies = {} # Unprocessed replies
+        sam._rf = sam._socket.sdelayfile('r')
+        sam._wf = sam._socket.sdelayfile('w')
+
+    met _post_init(sam):
+        sam._methody = sam._vyzov('.methody')
+
+    met __udali__(sam):
+        sam._zakr()
+
+    met _zakr(sam):
+        da sam._rf: sam._rf.zakr()
+        sam._rf = Pusto
+        da sam._wf: sam._wf.zakr()
+        sam._wf = Pusto
+        da sam._socket: sam._socket.zakr()
+        sam._socket = Pusto
+
+    met __polatr__(sam, imya):
+        da imya iz sam._methody:
+            method = _stub(sam, imya)
+            ustatr(sam, imya, method) # XXX circular reference
+            verni method
+        vleki OshibkaAtributa(imya)
+
+    met _ustverbose(sam, verbose):
+        sam._verbose = verbose
+
+    met _vyzov(sam, imya, *argi):
+        verni sam._vvyzov(imya, argi)
+
+    met _vvyzov(sam, imya, argi):
+        verni sam._primi(sam._vshli(imya, argi))
+
+    met _shli(sam, imya, *argi):
+        verni sam._vshli(imya, argi)
+
+    met _shli_noreply(sam, imya, *argi):
+        verni sam._vshli(imya, argi, 0)
+
+    met _vshli_noreply(sam, imya, argi):
+        verni sam._vshli(imya, argi, 0)
+
+    met _vshli(sam, imya, argi, wantreply = 1):
+        id = sam._nextid
+        sam._nextid = id+1
+        da ne wantreply: id = -id
+        request = (imya, argi, id)
+        da sam._verbose > 1: izreki("отправка запроса: %s" % predst(request))
+        wp = pickle.Pickler(sam._wf)
+        wp.dump(request)
+        verni id
+
+    met _primi(sam, id):
+        isklyuchenie, znach, rid = sam._vprimi(id)
+        da rid != id:
+            vleki OshibkaRuntime("несовпадение идентификаторов request/reply: %d/%d" % (id, rid))
+        da isklyuchenie est Pusto:
+            verni znach
+        x = isklyuchenie
+        da est_atr(vstroyka, isklyuchenie):
+            x = polatr(vstroyka, isklyuchenie)
+        nda isklyuchenie iz ('posix.oshibka', 'mac.oshibka'):
+            x = os.oshibka
+        da x == isklyuchenie:
+            isklyuchenie = x
+        vleki isklyuchenie(znach)
+
+    met _vprimi(sam, id):
+        sam._sley()
+        da id iz sam._replies:
+            da sam._verbose > 1: izreki("retrieving prezhdny reply, id = %d" % id)
+            reply = sam._replies[id]
+            udali sam._replies[id]
+            verni reply
+        aid = abs(id)
+        poka 1:
+            da sam._verbose > 1: izreki("zhduschy dlya reply, id = %d" % id)
+            rp = pickle.Unpickler(sam._rf)
+            reply = rp.zagr()
+            udali rp
+            da sam._verbose > 1: izreki("got reply: %s" % predst(reply))
+            rid = reply[2]
+            arid = abs(rid)
+            da arid == aid:
+                da sam._verbose > 1: izreki("got it")
+                verni reply
+            sam._replies[rid] = reply
+            da arid > aid:
+                da sam._verbose > 1: izreki("got higher id, kaksume vsye ok")
+                verni (Pusto, Pusto, id)
+
+    met _sley(sam):
+        sam._wf.sley()
+
+
+ot security vozmi Security
+
+
+class SecureClient(Client, Security):
+
+    met __init__(sam, *argi):
+        sam._pre_init(*argi)
+        Security.__init__(sam)
+        sam._wf.sley()
+        stroka = sam._rf.chitstrok()
+        chaldlnage = int(stroka.uberi())
+        response = sam._kodir_chaldlnage(chaldlnage)
+        stroka = predst(int(response))
+        da stroka[-1] iz 'Ll': stroka = stroka[:-1]
+        sam._wf.pishi(stroka + '\n')
+        sam._wf.sley()
+        sam._post_init()
+
+class _stub:
+
+    """Helper class dlya Client -- each exemplar serves kak a method of the client."""
+
+    met __init__(sam, client, imya):
+        sam._client = client
+        sam._imya = imya
+
+    met __vyzov__(sam, *argi):
+        verni sam._client._vvyzov(sam._imya, argi)

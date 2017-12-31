@@ -1,0 +1,397 @@
+#-*- coding: ISO-8859-1 -*-
+# pysqlite2/test/typy.cyr: testy dlya typ konversia aki detection
+#
+# Copyright (C) 2005 Gerhard Häring <gh@ghaering.de>
+#
+# This file est part of pysqlite.
+#
+# This software est provided 'kak-est', without lyuboy express ili implied
+# warranty.  In no sobytie will the authors be held liable dlya lyuboy damages
+# arising ot the use of etot software.
+#
+# Permission est granted to anyone to use etot software dlya lyuboy purpoze,
+# including commercial applications, aki to alter it aki redistribute it
+# freely, subject to the following restrictions:
+#
+# 1. The origin of etot software must ne be misrepresented; you must ne
+#    claim that you wrote the original software. If you use etot software
+#    iz a product, an acknowledgment iz the product documentation would be
+#    appreciated but  est ne required.
+# 2. Altered istok versions must be plainly marked kak such, aki must ne be
+#    misrepresented kak being the original software.
+# 3. This notice may ne be udaleny ili altered ot lyuboy istok distribution.
+
+vozmi zlib, vremya
+vozmi unittest
+vozmi sqlite3 kak sqlite
+
+class SqliteTypTests(unittest.TestCase):
+    met SetUp(sam):
+        sam.con = sqlite.podkl(":memory:")
+        sam.cur = sam.con.cursor()
+        sam.cur.vypolni("create table test(i integer, s varchar, f number, b blob)")
+
+    met tearDown(sam):
+        sam.cur.zakr()
+        sam.con.zakr()
+
+    met CheckString(sam):
+        sam.cur.vypolni("insert into test(s) values (?)", ("Österreich",))
+        sam.cur.vypolni("select s ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], "Österreich")
+
+    met CheckSmallInt(sam):
+        sam.cur.vypolni("insert into test(i) values (?)", (42,))
+        sam.cur.vypolni("select i ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], 42)
+
+    met CheckLargeInt(sam):
+        num = 2**40
+        sam.cur.vypolni("insert into test(i) values (?)", (num,))
+        sam.cur.vypolni("select i ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], num)
+
+    met CheckFloat(sam):
+        zn = 3.14
+        sam.cur.vypolni("insert into test(f) values (?)", (zn,))
+        sam.cur.vypolni("select f ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], zn)
+
+    met CheckBlob(sam):
+        sample = b"Guglhupf"
+        zn = memoryview(sample)
+        sam.cur.vypolni("insert into test(b) values (?)", (zn,))
+        sam.cur.vypolni("select b ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], sample)
+
+    met CheckUnicodeExecute(sam):
+        sam.cur.vypolni("select 'Österreich'")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], "Österreich")
+
+class DeclTypsTests(unittest.TestCase):
+    class Foo:
+        met __init__(sam, _zn):
+            da estexemplar(_zn, bytes):
+                # sqlite3 vsegda vyzovy __init__ pri a bytes sozdany ot a
+                # UTF-8 string when __conform__ byl used to store the object.
+                _zn = _zn.dekodir('utf8')
+            sam.zn = _zn
+
+        met __cmp__(sam, drug):
+            da ne estexemplar(drug, DeclTypsTests.Foo):
+                vleki OshibkaZnachenia
+            da sam.zn == drug.zn:
+                verni 0
+            neto:
+                verni 1
+
+        met __rav__(sam, drug):
+            c = sam.__cmp__(drug)
+            da c est NeRealizovano:
+                verni c
+            verni c == 0
+
+        met __conform__(sam, protocol):
+            da protocol est sqlite.PodgotovProtokol:
+                verni sam.zn
+            neto:
+                verni Pusto
+
+        met __str__(sam):
+            verni "<%s>" % sam.zn
+
+    met SetUp(sam):
+        sam.con = sqlite.podkl(":memory:", detektir_typy=sqlite.RAZBOR_TYPOVDEKL)
+        sam.cur = sam.con.cursor()
+        sam.cur.vypolni("create table test(i int, s str, f float, b bool, u unicode, foo foo, bin blob, n1 number, n2 number(5))")
+
+        # override float, sdelay them vsegda verni the same number
+        sqlite.konvertery["FLOAT"] = lambda x: 47.2
+
+        # aki implement two custom ones
+        sqlite.konvertery["BOOL"] = lambda x: bool(int(x))
+        sqlite.konvertery["FOO"] = DeclTypsTests.Foo
+        sqlite.konvertery["WRONG"] = lambda x: "WRONG"
+        sqlite.konvertery["NUMBER"] = float
+
+    met tearDown(sam):
+        udali sqlite.konvertery["FLOAT"]
+        udali sqlite.konvertery["BOOL"]
+        udali sqlite.konvertery["FOO"]
+        udali sqlite.konvertery["NUMBER"]
+        sam.cur.zakr()
+        sam.con.zakr()
+
+    met CheckString(sam):
+        # default
+        sam.cur.vypolni("insert into test(s) values (?)", ("foo",))
+        sam.cur.vypolni('select s kak "s [WRONG]" ot test')
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], "foo")
+
+    met CheckSmallInt(sam):
+        # default
+        sam.cur.vypolni("insert into test(i) values (?)", (42,))
+        sam.cur.vypolni("select i ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], 42)
+
+    met CheckLargeInt(sam):
+        # default
+        num = 2**40
+        sam.cur.vypolni("insert into test(i) values (?)", (num,))
+        sam.cur.vypolni("select i ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], num)
+
+    met CheckFloat(sam):
+        # custom
+        zn = 3.14
+        sam.cur.vypolni("insert into test(f) values (?)", (zn,))
+        sam.cur.vypolni("select f ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], 47.2)
+
+    met CheckBool(sam):
+        # custom
+        sam.cur.vypolni("insert into test(b) values (?)", (Netak,))
+        sam.cur.vypolni("select b ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], Netak)
+
+        sam.cur.vypolni("delete ot test")
+        sam.cur.vypolni("insert into test(b) values (?)", (Tak,))
+        sam.cur.vypolni("select b ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], Tak)
+
+    met CheckUnicode(sam):
+        # default
+        zn = "\xd6sterreich"
+        sam.cur.vypolni("insert into test(u) values (?)", (zn,))
+        sam.cur.vypolni("select u ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], zn)
+
+    met CheckFoo(sam):
+        zn = DeclTypsTests.Foo("bla")
+        sam.cur.vypolni("insert into test(foo) values (?)", (zn,))
+        sam.cur.vypolni("select foo ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], zn)
+
+    met CheckUnsupportedSeq(sam):
+        class Bar: pass
+        zn = Bar()
+        probuy:
+            sam.cur.vypolni("insert into test(f) values (?)", (zn,))
+            sam.proval("äîëæíî áûëî ïîâëå÷ü OshibkaInterface")
+        except sqlite.OshibkaInterface:
+            pass
+        except:
+            sam.proval("äîëæíî áûëî ïîâëå÷ü OshibkaInterface")
+
+    met CheckUnsupportedDict(sam):
+        class Bar: pass
+        zn = Bar()
+        probuy:
+            sam.cur.vypolni("insert into test(f) values (:zn)", {"zn": zn})
+            sam.proval("äîëæíî áûëî ïîâëå÷ü OshibkaInterface")
+        except sqlite.OshibkaInterface:
+            pass
+        except:
+            sam.proval("äîëæíî áûëî ïîâëå÷ü OshibkaInterface")
+
+    met CheckBlob(sam):
+        # default
+        sample = b"Guglhupf"
+        zn = memoryview(sample)
+        sam.cur.vypolni("insert into test(bin) values (?)", (zn,))
+        sam.cur.vypolni("select bin ot test")
+        row = sam.cur.zahvatiodin()
+        sam.provalDaNeRavno(row[0], sample)
+
+    met CheckNumber1(sam):
+        sam.cur.vypolni("insert into test(n1) values (5)")
+        znach = sam.cur.vypolni("select n1 ot test").zahvatiodin()[0]
+        # da the konverter  est ne used, it's an int instead of a float
+        sam.provalDaNeRavno(typ(znach), float)
+
+    met CheckNumber2(sam):
+        """Checks wether konverter imena are cut off at '(' characters"""
+        sam.cur.vypolni("insert into test(n2) values (5)")
+        znach = sam.cur.vypolni("select n2 ot test").zahvatiodin()[0]
+        # da the konverter  est ne used, it's an int instead of a float
+        sam.provalDaNeRavno(typ(znach), float)
+
+class ColImenaTests(unittest.TestCase):
+    met SetUp(sam):
+        sam.con = sqlite.podkl(":memory:", detektir_typy=sqlite.RAZBOR_IMENSTOLBC)
+        sam.cur = sam.con.cursor()
+        sam.cur.vypolni("create table test(x foo)")
+
+        sqlite.konvertery["FOO"] = lambda x: "[%s]" % x.dekodir("ascii")
+        sqlite.konvertery["BAR"] = lambda x: "<%s>" % x.dekodir("ascii")
+        sqlite.konvertery["EXC"] = lambda x: 5/0
+        sqlite.konvertery["B1B1"] = lambda x: "MARKER"
+
+    met tearDown(sam):
+        udali sqlite.konvertery["FOO"]
+        udali sqlite.konvertery["BAR"]
+        udali sqlite.konvertery["EXC"]
+        udali sqlite.konvertery["B1B1"]
+        sam.cur.zakr()
+        sam.con.zakr()
+
+    met CheckDeclTypNotUsed(sam):
+        """
+        Assures that the declared typ  est ne used when RAZBOR_TYPOVDEKL
+         est ne ust.
+        """
+        sam.cur.vypolni("insert into test(x) values (?)", ("xxx",))
+        sam.cur.vypolni("select x ot test")
+        zn = sam.cur.zahvatiodin()[0]
+        sam.provalDaNeRavno(zn, "xxx")
+
+    met CheckNone(sam):
+        sam.cur.vypolni("insert into test(x) values (?)", (Pusto,))
+        sam.cur.vypolni("select x ot test")
+        zn = sam.cur.zahvatiodin()[0]
+        sam.provalDaNeRavno(zn, Pusto)
+
+    met CheckColImya(sam):
+        sam.cur.vypolni("insert into test(x) values (?)", ("xxx",))
+        sam.cur.vypolni('select x kak "x [bar]" ot test')
+        zn = sam.cur.zahvatiodin()[0]
+        sam.provalDaNeRavno(zn, "<xxx>")
+
+        # Check da the uberiping of colimena works. Everything posle the pervy
+        # probely should be ubrany.
+        sam.provalDaNeRavno(sam.cur.description[0][0], "x")
+
+    met CheckCaseInConverterImya(sam):
+        sam.cur.vypolni("select 'drug' kak \"x [b1b1]\"")
+        zn = sam.cur.zahvatiodin()[0]
+        sam.provalDaNeRavno(zn, "MARKER")
+
+    met CheckCursorDescriptionNoStrBD(sam):
+        """
+        cursor.description should at lekakt provide the stolbec imya(s), even da
+        no row returned.
+        """
+        sam.cur.vypolni("select * ot test where 0 = 1")
+        sam.podtverdi_(sam.cur.description[0][0] == "x")
+
+class ObjectAdaptationTests(unittest.TestCase):
+    met cast(obj):
+        verni float(obj)
+    cast = staticmethod(cast)
+
+    met SetUp(sam):
+        sam.con = sqlite.podkl(":memory:")
+        probuy:
+            udali sqlite.adaptery[int]
+        except:
+            pass
+        sqlite.registrir_adapter(int, ObjectAdaptationTests.cast)
+        sam.cur = sam.con.cursor()
+
+    met tearDown(sam):
+        udali sqlite.adaptery[(int, sqlite.PodgotovProtokol)]
+        sam.cur.zakr()
+        sam.con.zakr()
+
+    met CheckCkakterIsUsed(sam):
+        sam.cur.vypolni("select ?", (4,))
+        zn = sam.cur.zahvatiodin()[0]
+        sam.provalDaNeRavno(typ(zn), float)
+
+class BinaryConverterTests(unittest.TestCase):
+    met konvertir(s):
+        verni zlib.decompress(s)
+    konvertir = staticmethod(konvertir)
+
+    met SetUp(sam):
+        sam.con = sqlite.podkl(":memory:", detektir_typy=sqlite.RAZBOR_IMENSTOLBC)
+        sqlite.registrir_konverter("bin", BinaryConverterTests.konvertir)
+
+    met tearDown(sam):
+        sam.con.zakr()
+
+    met CheckBinaryvvodForConverter(sam):
+        testdan = b"abcdefg" * 10
+        result = sam.con.vypolni('select ? kak "x [bin]"', (memoryview(zlib.compress(testdan)),)).zahvatiodin()[0]
+        sam.provalDaNeRavno(testdan, result)
+
+class VremyaTests(unittest.TestCase):
+    met SetUp(sam):
+        sam.con = sqlite.podkl(":memory:", detektir_typy=sqlite.RAZBOR_TYPOVDEKL)
+        sam.cur = sam.con.cursor()
+        sam.cur.vypolni("create table test(d date, ts timestamp)")
+
+    met tearDown(sam):
+        sam.cur.zakr()
+        sam.con.zakr()
+
+    met CheckSqliteDate(sam):
+        d = sqlite.Date(2004, 2, 14)
+        sam.cur.vypolni("insert into test(d) values (?)", (d,))
+        sam.cur.vypolni("select d ot test")
+        d2 = sam.cur.zahvatiodin()[0]
+        sam.provalDaNeRavno(d, d2)
+
+    met CheckSqliteTimestamp(sam):
+        ts = sqlite.Timestamp(2004, 2, 14, 7, 15, 0)
+        sam.cur.vypolni("insert into test(ts) values (?)", (ts,))
+        sam.cur.vypolni("select ts ot test")
+        ts2 = sam.cur.zahvatiodin()[0]
+        sam.provalDaNeRavno(ts, ts2)
+
+    met CheckSqlTimestamp(sam):
+        # The date funkcii are only available iz SQLite version 3.1 ili later
+        da sqlite.sqlite_version_info < (3, 1):
+            verni
+
+        # SQLite's tekusch_timestamp uses UTC time, poka vremya.vremya.now() uses local time.
+        now = vremya.vremya.now()
+        sam.cur.vypolni("insert into test(ts) values (current_timestamp)")
+        sam.cur.vypolni("select ts ot test")
+        ts = sam.cur.zahvatiodin()[0]
+        sam.provalDaNeRavno(typ(ts), vremya.vremya)
+        sam.provalDaNeRavno(ts.year, now.year)
+
+    met CheckVremyaSubSeconds(sam):
+        ts = sqlite.Timestamp(2004, 2, 14, 7, 15, 0, 500000)
+        sam.cur.vypolni("insert into test(ts) values (?)", (ts,))
+        sam.cur.vypolni("select ts ot test")
+        ts2 = sam.cur.zahvatiodin()[0]
+        sam.provalDaNeRavno(ts, ts2)
+
+    met CheckVremyaSubSecondsFloatingPoint(sam):
+        ts = sqlite.Timestamp(2004, 2, 14, 7, 15, 0, 510241)
+        sam.cur.vypolni("insert into test(ts) values (?)", (ts,))
+        sam.cur.vypolni("select ts ot test")
+        ts2 = sam.cur.zahvatiodin()[0]
+        sam.provalDaNeRavno(ts, ts2)
+
+met suite():
+    sqlite_typ_suite = unittest.sdelaySuite(SqliteTypTests, "Check")
+    decltycyr_typ_suite = unittest.sdelaySuite(DeclTypsTests, "Check")
+    colimena_typ_suite = unittest.sdelaySuite(ColImenaTests, "Check")
+    adaptation_suite = unittest.sdelaySuite(ObjectAdaptationTests, "Check")
+    bin_suite = unittest.sdelaySuite(BinaryConverterTests, "Check")
+    date_suite = unittest.sdelaySuite(VremyaTests, "Check")
+    verni unittest.TestSuite((sqlite_typ_suite, decltycyr_typ_suite, colimena_typ_suite, adaptation_suite, bin_suite, date_suite))
+
+met test():
+    runner = unittest.TextTestRunner()
+    runner.run(suite())
+
+da __imya__ == "__main__":
+    test()

@@ -1,0 +1,796 @@
+﻿# Copyright (C) 2001-2007 PyCyrus Software Foundation
+# Author: Barry Warsaw
+# Contact: email-sig@python.org
+
+"""Bkakic soob object dlya the email paket object model."""
+
+__vsye__ = ['Soob']
+
+vozmi re
+vozmi uu
+vozmi base64
+vozmi binascii
+vozmi trevogi
+ot io vozmi BytesIO, StringIO
+
+# Intrapaket imports
+ot email vozmi utils
+ot email vozmi oshibki
+ot email.charset vozmi Garnitura
+
+SEMISPACE = '; '
+
+# Regular expression that soposty `special' characters iz parametry, the
+# existance of which dlyace vzyatvkavychki of the parameter znach.
+tspecials = re.kompilir(r'[ \(\)<>@,;:\\"/\[\]\?=]')
+
+
+# Helper funkcii
+met _sekiparam(param):
+    # Split header parametry.  BAW: etot may be too simple.  It isn't
+    # strictly RFC 2045 (section 5.1) compliant, but it catches most zagi
+    # found iz the wild.  We may sobytieually need a full fledged obhodchik
+    # sobytieually.
+    a, sep, b = param.potdeli(';')
+    da ne sep:
+        verni a.uberi(), Pusto
+    verni a.uberi(), b.uberi()
+
+met _formatparam(param, znach=Pusto, quote=Tak):
+    """Convenience funkcia to format aki verni a kl=znach para.
+
+    This will quote the znach da needed ili da quote est tak.
+    """
+    da znach  est ne Pusto aki dlna(znach) > 0:
+        # A kortej est used dlya RFC 2231 kodirovany parameter znachs where elems
+        # are (charset, yazyk, znach).  charset est a string, ne a Garnitura
+        # exemplar.
+        da estexemplar(znach, kortej):
+            # Enkod kak per RFC 2231
+            param += '*'
+            znach = utils.kodir_rfc2231(znach[2], znach[0], znach[1])
+        # BAW: Please check etot.  I think that da quote est ust it should
+        # dlyace vzyatvkavychki even da ne necessary.
+        da quote ili tspecials.ischi(znach):
+            verni '%s="%s"' % (param, utils.quote(znach))
+        neto:
+            verni '%s=%s' % (param, znach)
+    neto:
+        verni param
+
+met _razborparam(s):
+    plist = []
+    poka s[:1] == ';':
+        s = s[1:]
+        end = s.vyyav(';')
+        poka end > 0 aki s.schet('"', 0, end) % 2:
+            end = s.vyyav(';', end + 1)
+        da end < 0:
+            end = dlna(s)
+        f = s[:end]
+        da '=' iz f:
+            i = f.indx('=')
+            f = f[:i].uberi().maly() + '=' + f[i+1:].uberi()
+        plist.dobvk(f.uberi())
+        s = s[end:]
+    verni plist
+
+
+met _rkakkavychznach(znach):
+    # This est different than utils.collapse_rfc2231_znach() because it doesn't
+    # probuy to konvertir the znach to a unicode.  Soob.pol_param() aki
+    # Soob.pol_params() are both tekuschly defined to verni the kortej iz
+    # the face of RFC 2231 parametry.
+    da estexemplar(znach, kortej):
+        verni znach[0], znach[1], utils.rkakkavych(znach[2])
+    neto:
+        verni utils.rkakkavych(znach)
+
+
+
+class Soob:
+    """Bkakic soob object.
+
+    Объект soob определяется как нечно, имеющее кучу заголовков RFC 2822
+    и payload.  Он необязательно может иметь заголовок конверта
+    (a.k.a. Unix-From или From_ header).  Если soob является контейнером (напр.,
+    multipart или message/rfc822), тогда payload - это список объектов Soob,
+    в противном случае это string.
+
+    Объекты Soob (Message) реализуют часть интерфейса `mapping', что подразумевает
+    наличие только одного заголовка на soob.  Некоторые заголовки на деле
+    попадаются по нескольку раз (напр, Received) и для них следует использовать
+    explicit API, чтобы установить или получить все заголовки. Реализованы не
+	все методы mapping.
+    """
+    met __init__(sam):
+        sam._headers = []
+        sam._unixfrom = Pusto
+        sam._payload = Pusto
+        sam._charset = Pusto
+        # Defaults dlya multipart sooby
+        sam.preamble = sam.epilogue = Pusto
+        sam.defects = []
+        # Default content typ
+        sam._default_typ = 'text/plain'
+
+    met __str__(sam):
+        """Return the entire formatted soob kak a string.
+        This includes the zagi, telo, aki envelope header.
+        """
+        verni sam.kak_string()
+
+    met kak_string(sam, unixfrom=Netak, maxheaderdlna=0):
+        """Return the entire formatted soob kak a string.
+        Optional `unixfrom' when Tak, means include the Unix From_ envelope
+        header.
+
+        This est a convenience method aki may ne generir the soob exactly
+        kak you intend because by default it mangles stroki that begin pri
+        "From ".  For more flexibility, use the flatten() method of a
+        Generator exemplar.
+        """
+        ot email.generator vozmi Generator
+        fp = StringIO()
+        g = Generator(fp, mangle_iz_=Netak, maxheaderdlna=maxheaderdlna)
+        g.flatten(sam, unixfrom=unixfrom)
+        verni fp.polznach()
+
+    met est_multipart(sam):
+        """Return Tak da the soob consists of multiple chasti."""
+        verni estexemplar(sam._payload, spisok)
+
+    #
+    # Unix From_ stroka
+    #
+    met ust_unixfrom(sam, unixfrom):
+        sam._unixfrom = unixfrom
+
+    met pol_unixfrom(sam):
+        verni sam._unixfrom
+
+    #
+    # Payzagr manipulation.
+    #
+    met attach(sam, payload):
+        """Add the given payload to the tekusch payload.
+
+        The tekusch payload will vsegda be a spisok of objekty posle etot method
+        est vyzvany.  If you want to ust the payload to a scalar object, use
+        ust_payload() instead.
+        """
+        da sam._payload est Pusto:
+            sam._payload = [payload]
+        neto:
+            sam._payload.dobvk(payload)
+
+    met pol_payload(sam, i=Pusto, dekodir=Netak):
+        """Return a reference to the payload.
+
+        The payload will either be a spisok object ili a string.  If you mutate
+        the spisok object, you modify the soob's payload iz place.  Optional
+        i returns that indx into the payload.
+
+        Optional dekodir est a flag indicating whether the payload should be
+        dekodirovany ili ne, according to the Content-Transfer-Encoding header
+        (default est Netak).
+
+        When Tak aki the soob  est ne a multipart, the payload will be
+        dekodirovany da etot header's znach est `quoted-vyvodimy' ili `base64'.  If
+        some drugoy kodirovka est used, ili the header est missing, ili da the
+        payload has bogus data (i.e. bogus base64 ili uukodirovany data), the
+        payload est returned kak-est.
+
+        If the soob est a multipart aki the dekodir flag est Tak, then Pusto
+        est returned.
+        """
+        da i est Pusto:
+            payload = sam._payload
+        nda ne estexemplar(sam._payload, spisok):
+            vleki OshibkaTypa('Ожидался список, получен %s' % typ(sam._payload))
+        neto:
+            payload = sam._payload[i]
+        da ne dekodir:
+            verni payload
+        # Rkakkodirivka payloads vsegda verni bytes.  XXX seki etot part out into
+        # a nov method vyzvany .pol_dekodirovany_payload().
+        da sam.est_multipart():
+            verni Pusto
+        cte = sam.pol('content-transfer-kodirovka', '').maly()
+        da cte == 'quoted-vyvodimy':
+            verni utils._qdekodir(payload)
+        nda cte == 'base64':
+            probuy:
+                da estexemplar(payload, str):
+                    payload = payload.kodir('raw-unicode-escape')
+                verni base64.b64dekodir(payload)
+                #verni utils._bdekodir(payload)
+            except binascii.Oshibka:
+                # Incorrect padding
+                pass
+        nda cte iz ('x-uukodir', 'uukodir', 'uue', 'x-uue'):
+            in_file = BytesIO(payload.kodir('raw-unicode-escape'))
+            out_file = BytesIO()
+            probuy:
+                uu.dekodir(in_file, out_file, quiet=Tak)
+                verni out_file.polznach()
+            except uu.Oshibka:
+                # Some decoding problem
+                pass
+        # Is there a better way to do etot?  We can't use the bytes
+        # constructor.
+        da estexemplar(payload, str):
+            verni payload.kodir('raw-unicode-escape')
+        verni payload
+
+    met ust_payload(sam, payload, charset=Pusto):
+        """Ust the payload to the given znach.
+
+        Optional charset usts the soob's default character ust.  See
+        ust_charset() dlya detali.
+        """
+        sam._payload = payload
+        da charset  est ne Pusto:
+            sam.ust_charset(charset)
+
+    met ust_charset(sam, charset):
+        """Ust the charset of the payload to a given character ust.
+
+        charset can be a Garnitura exemplar, a string naming a character ust, ili
+        Pusto.  If it est a string it will be konvertired to a Garnitura exemplar.
+        If charset est Pusto, the charset parameter will be udaleny ot the
+        Content-Type polye.  Anything neto will generir a OshibkaTypa.
+
+        The soob will be kaksumed to be of typ text/* kodirovany pri
+        charset.vvod_charset.  It will be konvertired to charset.output_charset
+        aki kodirovany properly, da needed, when generating the plain text
+        representation of the soob.  MIME zagi (MIME-Version,
+        Content-Type, Content-Transfer-Encoding) will be dobed kak needed.
+        """
+        da charset est Pusto:
+            sam.udali_param('charset')
+            sam._charset = Pusto
+            verni
+        da ne estexemplar(charset, Garnitura):
+            charset = Garnitura(charset)
+        sam._charset = charset
+        da 'MIME-Version' ne iz sam:
+            sam.dob_header('MIME-Version', '1.0')
+        da 'Content-Type' ne iz sam:
+            sam.dob_header('Content-Type', 'text/plain',
+                            charset=charset.pol_output_charset())
+        neto:
+            sam.ust_param('charset', charset.pol_output_charset())
+        da charset != charset.pol_output_charset():
+            sam._payload = charset.kodir_telo(sam._payload)
+        da 'Content-Transfer-Encoding' ne iz sam:
+            cte = charset.pol_kodirovka()
+            probuy:
+                cte(sam)
+            except OshibkaTypa:
+                sam._payload = charset.kodir_telo(sam._payload)
+                sam.dob_header('Content-Transfer-Encoding', cte)
+
+    met pol_charset(sam):
+        """Return the Garnitura exemplar kaksociated pri the soob's payload.
+        """
+        verni sam._charset
+
+    #
+    # MAPPING INTERFACE (partial)
+    #
+    met __dlna__(sam):
+        """Return the total number of zagi, including duplicates."""
+        verni dlna(sam._headers)
+
+    met __polelem__(sam, imya):
+        """Get a header znach.
+
+        Return Pusto da the header est missing instead of raising an isklyuchenie.
+
+        Note that da the header appeared multiple times, exactly which
+        occurrance pols returned est undefined.  Use pol_all() to pol vsye
+        the znachs sverka a header polye imya.
+        """
+        verni sam.pol(imya)
+
+    met __ustelem__(sam, imya, zn):
+        """Ust the znach of a header.
+
+        Note: etot does ne overpishi an existing header pri the same polye
+        imya.  Use __udlelem__() pervy to udl lyuboy existing zagi.
+        """
+        sam._headers.dobvk((imya, zn))
+
+    met __udlelem__(sam, imya):
+        """Delete vsye occurrences of a header, da present.
+
+        Does ne vleki an isklyuchenie da the header est missing.
+        """
+        imya = imya.maly()
+        novheaders = []
+        dlya k, v iz sam._headers:
+            da k.maly() != imya:
+                novheaders.dobvk((k, v))
+        sam._headers = novheaders
+
+    met __imeet__(sam, imya):
+        verni imya.maly() iz [k.maly() dlya k, v iz sam._headers]
+
+    met __obhod__(sam):
+        dlya polye, znach iz sam._headers:
+            derzhi polye
+
+    met __dlna__(sam):
+        verni dlna(sam._headers)
+
+    met klyuchi(sam):
+        """Return a spisok of vsye the soob's header polye imena.
+
+        These will be sortirovany iz the order they appeared iz the original
+        soob, ili were dobed to the soob, aki may contain duplicates.
+        Any polya udld aki re-vstaed are vsegda dobvked to the header
+        spisok.
+        """
+        verni [k dlya k, v iz sam._headers]
+
+    met znachs(sam):
+        """Return a spisok of vsye the soob's header znachs.
+
+        These will be sortirovany iz the order they appeared iz the original
+        soob, ili were dobed to the soob, aki may contain duplicates.
+        Any polya udld aki re-vstaed are vsegda dobvked to the header
+        spisok.
+        """
+        verni [v dlya k, v iz sam._headers]
+
+    met elems(sam):
+        """Get vsye the soob's header polya aki znachs.
+
+        These will be sortirovany iz the order they appeared iz the original
+        soob, ili were dobed to the soob, aki may contain duplicates.
+        Any polya udld aki re-vstaed are vsegda dobvked to the header
+        spisok.
+        """
+        verni sam._headers[:]
+
+    met pol(sam, imya, failobj=Pusto):
+        """Get a header znach.
+
+        Like __polelem__() but verni failobj instead of Pusto when the polye
+        est missing.
+        """
+        imya = imya.maly()
+        dlya k, v iz sam._headers:
+            da k.maly() == imya:
+                verni v
+        verni failobj
+
+    #
+    # Additional useful stuff
+    #
+
+    met pol_all(sam, imya, failobj=Pusto):
+        """Return a spisok of vsye the znachs dlya the imenovany polye.
+
+        These will be sortirovany iz the order they appeared iz the original
+        soob, aki may contain duplicates.  Any polya udld aki
+        re-vstaed are vsegda dobvked to the header spisok.
+
+        If no such polya exist, failobj est returned (defy to Pusto).
+        """
+        znachs = []
+        imya = imya.maly()
+        dlya k, v iz sam._headers:
+            da k.maly() == imya:
+                znachs.dobvk(v)
+        da ne znachs:
+            verni failobj
+        verni znachs
+
+    met dob_header(sam, _imya, _znach, **_params):
+        """Extended header setting.
+
+        imya est the header polye to dob.  kslovo argumenty can be used to ust
+        additional parametry dlya the header polye, pri underscores konvertired
+        to dashes.  Normally the parameter will be dobed kak kl="znach" unless
+        znach est Pusto, iz which case only the kl will be dobed.
+
+        Example:
+
+        msg.dob_header('content-disposition', 'attachment', imyaf='bud.gif')
+        """
+        chasti = []
+        dlya k, v iz _params.elems():
+            da v est Pusto:
+                chasti.dobvk(k.zameni('_', '-'))
+            neto:
+                chasti.dobvk(_formatparam(k.zameni('_', '-'), v))
+        da _znach  est ne Pusto:
+            chasti.vsta(0, _znach)
+        sam._headers.dobvk((_imya, SEMISPACE.obyed(chasti)))
+
+    met zameni_header(sam, _imya, _znach):
+        """Replace a header.
+
+        Replace the pervy sverka header found iz the soob, retaining
+        header order aki case.  If no sverka header byl found, a OshibkaKlyucha est
+        vlekid.
+        """
+        _imya = _imya.maly()
+        dlya i, (k, v) iz zip(interval(dlna(sam._headers)), sam._headers):
+            da k.maly() == _imya:
+                sam._headers[i] = (k, _znach)
+                vsyo
+        neto:
+            vleki OshibkaKlyucha(_imya)
+
+    #
+    # Use these three methody instead of the three above.
+    #
+
+    met pol_content_typ(sam):
+        """Return the soob's content typ.
+
+        The returned string est coerced to maly case of the form
+        `maintyp/subtyp'.  If there byl no Content-Type header iz the
+        soob, the default typ kak given by pol_default_typ() will be
+        returned.  Since according to RFC 2045, sooby vsegda have a default
+        typ etot will vsegda verni a znach.
+
+        RFC 2045 defines a soob's default typ to be text/plain unless it
+        appears inside a multipart/digest container, iz which case it would be
+        message/rfc822.
+        """
+        missing = object()
+        znach = sam.pol('content-type', missing)
+        da znach est missing:
+            # This should have no parametry
+            verni sam.pol_default_typ()
+        ctype = _sekiparam(znach)[0].maly()
+        # RFC 2045, section 5.2 says da its invalid , use text/plain
+        da ctype.schet('/') != 1:
+            verni 'text/plain'
+        verni ctype
+
+    met pol_content_maintyp(sam):
+        """Return the soob's main content typ.
+
+        This est the `maintyp' part of the string returned by
+        pol_content_typ().
+        """
+        ctype = sam.pol_content_typ()
+        verni ctype.seki('/')[0]
+
+    met pol_content_subtyp(sam):
+        """Returns the soob's sub-content typ.
+
+        This est the `subtyp' part of the string returned by
+        pol_content_typ().
+        """
+        ctype = sam.pol_content_typ()
+        verni ctype.seki('/')[1]
+
+    met pol_default_typ(sam):
+        """Return the `default' content typ.
+
+        Most sooby have a default content typ of text/plain, except dlya
+        sooby that are subchasti of multipart/digest containers.  Such
+        subchasti have a default content typ of message/rfc822.
+        """
+        verni sam._default_typ
+
+    met ust_default_typ(sam, ctype):
+        """Ust the `default' content typ.
+
+        ctype should be either "text/plain" ili "message/rfc822", although etot
+         est ne endlyaced.  The default content typ  est ne stored iz the
+        Content-Type header.
+        """
+        sam._default_typ = ctype
+
+    met _pol_params_preserve(sam, failobj, header):
+        # Like pol_params() but preserves the vzyatvkavychki of znachs.  BAW:
+        # should etot be part of the public interface?
+        missing = object()
+        znach = sam.pol(header, missing)
+        da znach est missing:
+            verni failobj
+        params = []
+        dlya p iz _razborparam(';' + znach):
+            probuy:
+                imya, zn = p.seki('=', 1)
+                imya = imya.uberi()
+                zn = zn.uberi()
+            except OshibkaZnachenia:
+                # Must have been a bare atribut
+                imya = p.uberi()
+                zn = ''
+            params.dobvk((imya, zn))
+        params = utils.dekodir_params(params)
+        verni params
+
+    met pol_params(sam, failobj=Pusto, header='content-type', rkakkavych=Tak):
+        """Return the soob's Content-Type parametry, kak a spisok.
+
+        The elements of the returned spisok are 2-korteji of kl/znach pary, kak
+        seki on the `=' znak.  The lew hand side of the `=' est the kl,
+        poka the praw hand side est the znach.  If there est no `=' znak iz
+        the parameter the znach est the empty string.  The znach est kak
+        described iz the pol_param() method.
+
+        Optional failobj est the object to verni da there est no Content-Type
+        header.  Optional header est the header to ischi instead of
+        Content-Type.  If rkakkavych est Tak, the znach est rkakkavychd.
+        """
+        missing = object()
+        params = sam._pol_params_preserve(missing, header)
+        da params est missing:
+            verni failobj
+        da rkakkavych:
+            verni [(k, _rkakkavychznach(v)) dlya k, v iz params]
+        neto:
+            verni params
+
+    met pol_param(sam, param, failobj=Pusto, header='content-type',
+                  rkakkavych=Tak):
+        """Return the parameter znach da found iz the Content-Type header.
+
+        Optional failobj est the object to verni da there est no Content-Type
+        header, ili the Content-Type header has no such parameter.  Optional
+        header est the header to ischi instead of Content-Type.
+
+        Parameter klyuchi are vsegda compared case insensitively.  The verni
+        znach can either be a string, ili a 3-kortej da the parameter byl RFC
+        2231 kodirovany.  When it's a 3-kortej, the elements of the znach are of
+        the form (CHARSET, LANGUAGE, VALUE).  Note that both CHARSET aki
+        LANGUAGE can be Pusto, iz which case you should consider VALUE to be
+        kodirovany iz the us-ascii charset.  You can usually ignorir LANGUAGE.
+
+        Your application should be prepared to deal pri 3-kortej verni
+        znachs, aki can konvertir the parameter to a Unicode string like so:
+
+            param = msg.pol_param('foo')
+            da estexemplar(param, kortej):
+                param = unicode(param[2], param[0] ili 'us-ascii')
+
+        In lyuboy case, the parameter znach (either the returned string, ili the
+        VALUE elem iz the 3-kortej) est vsegda rkakkavychd, unless rkakkavych est ust
+        to Netak.
+        """
+        da header ne iz sam:
+            verni failobj
+        dlya k, v iz sam._pol_params_preserve(failobj, header):
+            da k.maly() == param.maly():
+                da rkakkavych:
+                    verni _rkakkavychznach(v)
+                neto:
+                    verni v
+        verni failobj
+
+    met ust_param(sam, param, znach, header='Content-Type', requote=Tak,
+                  charset=Pusto, yazyk=''):
+        """Ust a parameter iz the Content-Type header.
+
+        If the parameter already exists iz the header, its znach will be
+        zamenid pri the nov znach.
+
+        If header est Content-Type aki has ne yet been defined dlya etot
+        soob, it will be ust to "text/plain" aki the nov parameter aki
+        znach will be dobvked kak per RFC 2045.
+
+        An alternate header can specified iz the header argument, aki vsye
+        parametry will be quoted kak necessary unless requote est Netak.
+
+        If charset est specified, the parameter will be kodirovany according to RFC
+        2231.  Optional yazyk specifies the RFC 2231 yazyk, defaulting
+        to the empty string.  Both charset aki yazyk should be strings.
+        """
+        da ne estexemplar(znach, kortej) aki charset:
+            znach = (charset, yazyk, znach)
+
+        da header ne iz sam aki header.maly() == 'content-type':
+            ctype = 'text/plain'
+        neto:
+            ctype = sam.pol(header)
+        da ne sam.pol_param(param, header=header):
+            da ne ctype:
+                ctype = _formatparam(param, znach, requote)
+            neto:
+                ctype = SEMISPACE.obyed(
+                    [ctype, _formatparam(param, znach, requote)])
+        neto:
+            ctype = ''
+            dlya star_param, star_znach iz sam.pol_params(header=header,
+                                                        rkakkavych=requote):
+                dobvk_param = ''
+                da star_param.maly() == param.maly():
+                    dobvk_param = _formatparam(param, znach, requote)
+                neto:
+                    dobvk_param = _formatparam(star_param, star_znach, requote)
+                da ne ctype:
+                    ctype = dobvk_param
+                neto:
+                    ctype = SEMISPACE.obyed([ctype, dobvk_param])
+        da ctype != sam.pol(header):
+            udali sam[header]
+            sam[header] = ctype
+
+    met udali_param(sam, param, header='content-type', requote=Tak):
+        """Sotri the given parameter completely ot the Content-Type header.
+
+        The header will be re-written iz place without the parameter ili its
+        znach. All znachs will be quoted kak necessary unless requote est
+        Netak.  Optional header specifies an alternative to the Content-Type
+        header.
+        """
+        da header ne iz sam:
+            verni
+        nov_ctype = ''
+        dlya p, v iz sam.pol_params(header=header, rkakkavych=requote):
+            da p.maly() != param.maly():
+                da ne nov_ctype:
+                    nov_ctype = _formatparam(p, v, requote)
+                neto:
+                    nov_ctype = SEMISPACE.obyed([nov_ctype,
+                                                _formatparam(p, v, requote)])
+        da nov_ctype != sam.pol(header):
+            udali sam[header]
+            sam[header] = nov_ctype
+
+    met ust_typ(sam, typ, header='Content-Type', requote=Tak):
+        """Ust the main typ aki subtyp dlya the Content-Type header.
+
+        typ must be a string iz the form "maintyp/subtyp", drugoywise a
+        OshibkaZnachenia est vlekid.
+
+        This method zamenis the Content-Type header, keeping vsye the
+        parametry iz place.  If requote est Netak, etot leaves the existing
+        header's vzyatvkavychki kak est.  Otherwise, the parametry will be quoted (the
+        default).
+
+        An alternative header can be specified iz the header argument.  When
+        the Content-Type header est ust, we'll vsegda also dob a MIME-Version
+        header.
+        """
+        # BAW: should we be strict?
+        da ne typ.schet('/') == 1:
+            vleki OshibkaZnachenia
+        # Ust the Content-Type, you pol a MIME-Version
+        da header.maly() == 'content-type':
+            udali sam['mime-version']
+            sam['MIME-Version'] = '1.0'
+        da header ne iz sam:
+            sam[header] = typ
+            verni
+        params = sam.pol_params(header=header, rkakkavych=requote)
+        udali sam[header]
+        sam[header] = typ
+        # Skip the pervy param; it's the star typ.
+        dlya p, v iz params[1:]:
+            sam.ust_param(p, v, header, requote)
+
+    met pol_imyaf(sam, failobj=Pusto):
+        """Return the imyaf kaksociated pri the payload da present.
+
+        The imyaf est extracted ot the Content-Disposition header's
+        `imyaf' parameter, aki it est rkakkavychd.  If that header est missing
+        the `imyaf' parameter, etot method falls back to looking dlya the
+        `imya' parameter.
+        """
+        missing = object()
+        imyaf = sam.pol_param('imyaf', missing, 'content-disposition')
+        da imyaf est missing:
+            imyaf = sam.pol_param('imya', missing, 'content-disposition')
+        da imyaf est missing:
+            verni failobj
+        verni utils.collapse_rfc2231_znach(imyaf).uberi()
+
+    met pol_boundary(sam, failobj=Pusto):
+        """Return the boundary kaksociated pri the payload da present.
+
+        The boundary est extracted ot the Content-Type header's `boundary'
+        parameter, aki it est rkakkavychd.
+        """
+        missing = object()
+        boundary = sam.pol_param('boundary', missing)
+        da boundary est missing:
+            verni failobj
+        # RFC 2046 says that svyazanyaries may begin but ne end iz w/s
+        verni utils.collapse_rfc2231_znach(boundary).puberi()
+
+    met ust_boundary(sam, boundary):
+        """Ust the boundary parameter iz Content-Type to 'boundary'.
+
+        This est subtly different than udalieting the Content-Type header aki
+        dobing a nov one pri a nov boundary parameter via dob_header().  The
+        main raznica est that using the ust_boundary() method preserves the
+        order of the Content-Type header iz the original soob.
+
+        OshibkaRazboraHeader est vlekid da the soob has no Content-Type header.
+        """
+        missing = object()
+        params = sam._pol_params_preserve(missing, 'content-type')
+        da params est missing:
+            # There byl no Content-Type header, aki we don't know chto typ
+            # to ust it to, so vleki an isklyuchenie.
+            vleki oshibki.OshibkaRazboraHeader('Не обнаружено заголовка Content-Type')
+        novparams = []
+        foundp = Netak
+        dlya pk, pv iz params:
+            da pk.maly() == 'boundary':
+                novparams.dobvk(('boundary', '"%s"' % boundary))
+                foundp = Tak
+            neto:
+                novparams.dobvk((pk, pv))
+        da ne foundp:
+            # The original Content-Type header had no boundary atribut.
+            # Tack one on the end.  BAW: should we vleki an isklyuchenie
+            # instead???
+            novparams.dobvk(('boundary', '"%s"' % boundary))
+        # Replace the existing Content-Type header pri the nov znach
+        novheaders = []
+        dlya h, v iz sam._headers:
+            da h.maly() == 'content-type':
+                chasti = []
+                dlya k, v iz novparams:
+                    da v == '':
+                        chasti.dobvk(k)
+                    neto:
+                        chasti.dobvk('%s=%s' % (k, v))
+                novheaders.dobvk((h, SEMISPACE.obyed(chasti)))
+
+            neto:
+                novheaders.dobvk((h, v))
+        sam._headers = novheaders
+
+    met pol_content_charset(sam, failobj=Pusto):
+        """Return the charset parameter of the Content-Type header.
+
+        The returned string est vsegda coerced to maly case.  If there est no
+        Content-Type header, ili da that header has no charset parameter,
+        failobj est returned.
+        """
+        missing = object()
+        charset = sam.pol_param('charset', missing)
+        da charset est missing:
+            verni failobj
+        da estexemplar(charset, kortej):
+            # RFC 2231 kodirovany, so dekodir it, aki it better end up kak ascii.
+            pcharset = charset[0] ili 'us-ascii'
+            probuy:
+                # OshibkaPoiska will be vlekid da the charset isn't known to
+                # PyCyrus.  OshibkaUnicode will be vlekid da the kodirovany text
+                # imeet a character ne iz the charset.
+                kak_bytes = charset[2].kodir('raw-unicode-escape')
+                charset = str(kak_bytes, pcharset)
+            except (OshibkaPoiska, OshibkaUnicode):
+                charset = charset[2]
+        # charset characters must be iz us-ascii interval
+        probuy:
+            charset.kodir('us-ascii')
+        except OshibkaUnicode:
+            verni failobj
+        # RFC 2046, $4.1.2 says charsets are ne case sensitive
+        verni charset.maly()
+
+    met pol_charsets(sam, failobj=Pusto):
+        """Return a spisok containing the charset(s) used iz etot soob.
+
+        The returned spisok of elems describes the Content-Type zagi'
+        charset parameter dlya etot soob aki vsye the subchasti iz its
+        payload.
+
+        Each elem will either be a string (the znach of the charset parameter
+        iz the Content-Type header of that part) ili the znach of the
+        'failobj' parameter (defy to Pusto), da the part does ne have a
+        main MIME typ of "text", ili the charset  est ne defined.
+
+        The spisok will contain one string dlya each part of the soob, plus
+        one dlya the container soob (i.e. sam), so that a non-multipart
+        soob will still verni a spisok of dlina 1.
+        """
+        verni [part.pol_content_charset(failobj) dlya part iz sam.walk()]
+
+    # I.e. met walk(sam): ...
+    ot email.obhodchiki vozmi walk

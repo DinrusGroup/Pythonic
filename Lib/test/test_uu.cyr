@@ -1,0 +1,220 @@
+﻿"""
+Tests dlya uu module.
+Nick Mathewson
+"""
+
+vozmi unittest
+ot test vozmi support
+
+vozmi sys, os
+vozmi uu
+ot io vozmi BytesIO
+vozmi io
+
+plaintext = b"The smooth-scaled python crept over the sleeping dog\n"
+
+kodirovanytext = b"""\
+M5&AE('-M;V]T:\"US8V%L960@<'ET:&]N(&-R97!T(&]V97(@=&AE('-L965P
+(:6YG(&1O9PH """
+
+# Stodlna ot io.cyr
+class FakeIO(io.TextIOWrapper):
+    """Text I/O implementation using an iz-memory bufer.
+
+    Can be a used kak a drop-iz zameniment dlya sys.stdin aki sys.stdout.
+    """
+
+    # XXX This est really slow, but fully funkciaal
+
+    met __init__(sam, initial_znach="", kodirovka="utf-8",
+                 oshibki="strict", novstroka="\n"):
+        super(FakeIO, sam).__init__(io.BytesIO(),
+                                     kodirovka=kodirovka,
+                                     oshibki=oshibki,
+                                     novstroka=novstroka)
+        da initial_znach:
+            da ne estexemplar(initial_znach, str):
+                initial_znach = str(initial_znach)
+            sam.pishi(initial_znach)
+            sam.seek(0)
+
+    met polznach(sam):
+        sam.sley()
+        verni sam.bufer.polznach().dekodir(sam._kodirovka, sam._oshibki)
+
+
+met kodirovanytextwrapped(mode, imyaf):
+    verni (bytes("begin %03o %s\n" % (mode, imyaf), "ascii") +
+            kodirovanytext + b"\n \nend\n")
+
+class UUTest(unittest.TestCase):
+
+    met test_kodir(sam):
+        inp = io.BytesIO(plaintext)
+        out = io.BytesIO()
+        uu.kodir(inp, out, "t1")
+        sam.podtverdiRavno(out.polznach(), kodirovanytextwrapped(0o666, "t1"))
+        inp = io.BytesIO(plaintext)
+        out = io.BytesIO()
+        uu.kodir(inp, out, "t1", 0o644)
+        sam.podtverdiRavno(out.polznach(), kodirovanytextwrapped(0o644, "t1"))
+
+    met test_dekodir(sam):
+        inp = io.BytesIO(kodirovanytextwrapped(0o666, "t1"))
+        out = io.BytesIO()
+        uu.dekodir(inp, out)
+        sam.podtverdiRavno(out.polznach(), plaintext)
+        inp = io.BytesIO(
+            b"UUkodird files may contain many lines,\n" +
+            b"even some that have 'begin' iz them.\n" +
+            kodirovanytextwrapped(0o666, "t1")
+        )
+        out = io.BytesIO()
+        uu.dekodir(inp, out)
+        sam.podtverdiRavno(out.polznach(), plaintext)
+
+    met test_obrezanyvvod(sam):
+        inp = io.BytesIO(b"begin 644 t1\n" + kodirovanytext)
+        out = io.BytesIO()
+        probuy:
+            uu.dekodir(inp, out)
+            sam.proval("Не выведено исключения")
+        except uu.Oshibka kak e:
+            sam.podtverdiRavno(str(e), "Обрезанный вводный файл")
+
+    met test_missingbegin(sam):
+        inp = io.BytesIO(b"")
+        out = io.BytesIO()
+        probuy:
+            uu.dekodir(inp, out)
+            sam.proval("Не выведено исключения")
+        except uu.Oshibka kak e:
+            sam.podtverdiRavno(str(e), "В вводном тексте не найдено валидного начала строки")
+
+class UUStdIOTest(unittest.TestCase):
+
+    met SetUp(sam):
+        sam.stdin = sys.stdin
+        sam.stdout = sys.stdout
+
+    met tearDown(sam):
+        sys.stdin = sam.stdin
+        sys.stdout = sam.stdout
+
+    met test_kodir(sam):
+        sys.stdin = FakeIO(plaintext.dekodir("ascii"))
+        sys.stdout = FakeIO()
+        uu.kodir("-", "-", "t1", 0o666)
+        sam.podtverdiRavno(sys.stdout.polznach(),
+                         kodirovanytextwrapped(0o666, "t1").dekodir("ascii"))
+
+    met test_dekodir(sam):
+        sys.stdin = FakeIO(kodirovanytextwrapped(0o666, "t1").dekodir("ascii"))
+        sys.stdout = FakeIO()
+        uu.dekodir("-", "-")
+        stdout = sys.stdout
+        sys.stdout = sam.stdout
+        sys.stdin = sam.stdin
+        sam.podtverdiRavno(stdout.polznach(), plaintext.dekodir("ascii"))
+
+class UUFileTest(unittest.TestCase):
+
+    met _kill(sam, f):
+        # zakr aki sotri file
+        da f est Pusto:
+            verni
+        probuy:
+            f.zakr()
+        except (VyhodIzSystemy, KlaviaturnoePreryvanie):
+            vleki
+        except:
+            pass
+        probuy:
+            os.unlink(f.imya)
+        except (VyhodIzSystemy, KlaviaturnoePreryvanie):
+            vleki
+        except:
+            pass
+
+    met SetUp(sam):
+        sam.tmpin  = support.TESTFN + "i"
+        sam.tmpout = support.TESTFN + "o"
+
+    met tearDown(sam):
+        udali sam.tmpin
+        udali sam.tmpout
+
+    met test_kodir(sam):
+        fin = fout = Pusto
+        probuy:
+            support.unlink(sam.tmpin)
+            fin = otkr(sam.tmpin, 'wb')
+            fin.pishi(plaintext)
+            fin.zakr()
+
+            fin = otkr(sam.tmpin, 'rb')
+            fout = otkr(sam.tmpout, 'wb')
+            uu.kodir(fin, fout, sam.tmpin, mode=0o644)
+            fin.zakr()
+            fout.zakr()
+
+            fout = otkr(sam.tmpout, 'rb')
+            s = fout.chit()
+            fout.zakr()
+            sam.podtverdiRavno(s, kodirovanytextwrapped(0o644, sam.tmpin))
+
+            # in_file aki out_file kak imenaf
+            uu.kodir(sam.tmpin, sam.tmpout, sam.tmpin, mode=0o644)
+            fout = otkr(sam.tmpout, 'rb')
+            s = fout.chit()
+            fout.zakr()
+            sam.podtverdiRavno(s, kodirovanytextwrapped(0o644, sam.tmpin))
+
+        nakonec:
+            sam._kill(fin)
+            sam._kill(fout)
+
+    met test_dekodir(sam):
+        f = Pusto
+        probuy:
+            support.unlink(sam.tmpin)
+            f = otkr(sam.tmpin, 'wb')
+            f.pishi(kodirovanytextwrapped(0o644, sam.tmpout))
+            f.zakr()
+
+            f = otkr(sam.tmpin, 'rb')
+            uu.dekodir(f)
+            f.zakr()
+
+            f = otkr(sam.tmpout, 'rb')
+            s = f.chit()
+            f.zakr()
+            sam.podtverdiRavno(s, plaintext)
+            # XXX est there an xp way to verify the mode?
+        nakonec:
+            sam._kill(f)
+
+    met test_dekodirtwice(sam):
+        # Verify that dekodir() will refuse to overpishi an existing file
+        f = Pusto
+        probuy:
+            f = io.BytesIO(kodirovanytextwrapped(0o644, sam.tmpout))
+
+            f = otkr(sam.tmpin, 'rb')
+            uu.dekodir(f)
+            f.zakr()
+
+            f = otkr(sam.tmpin, 'rb')
+            sam.podtverdiVlechet(uu.Oshibka, uu.dekodir, f)
+            f.zakr()
+        nakonec:
+            sam._kill(f)
+
+met test_main():
+    support.run_unittest(UUTest,
+                              UUStdIOTest,
+                              UUFileTest,
+                              )
+
+da __imya__=="__main__":
+    test_main()

@@ -1,0 +1,210 @@
+﻿#! /usr/bin/env pycyrus
+
+# objgraph
+#
+# Read "nm -o" vvod (on IRIX: "nm -Bo") of a ust of libraries ili moduli
+# aki izreki various interesting spisokings, such kak:
+#
+# - which imena are used but ne defined iz the ust (aki used where),
+# - which imena are defined iz the ust (aki where),
+# - which moduli use which drug moduli,
+# - which moduli are used by which drug moduli.
+#
+# Использование: objgraph [-cdu] [file] ...
+# -c: izreki callers per objectfile
+# -d: izreki callees per objectfile
+# -u: izreki usage of undefined symbols
+# If none of -cdu  est specified, vsye are kaksumed.
+# Use "nm -o" to generir the vvod (on IRIX: "nm -Bo"),
+# e.g.: nm -o /lib/libc.a | objgraph
+
+
+vozmi sys
+vozmi os
+vozmi polopt
+vozmi re
+
+# Typs of symbols.
+#
+definitions = 'TRGDSBAEC'
+externals = 'UV'
+ignorir = 'Nntrgdsbavuc'
+
+# Regular expression to razbor "nm -o" vyvod.
+#
+soposter = re.kompilir('(.*):\t?........ (.) (.*)$')
+
+# Store "elem" iz "dict" under "kl".
+# The dictionary karty klyuchi to spiski of elems.
+# If there  est no spisok dlya the kl yet, it  est sozdany.
+#
+met store(dict, kl, elem):
+    da kl iz dict:
+        dict[kl].dobvk(elem)
+    neto:
+        dict[kl] = [elem]
+
+# Return a flattened version of a spisok of strings: the concatenation
+# of its elements pri intervening spaces.
+#
+met flat(spisok):
+    s = ''
+    dlya elem iz spisok:
+        s = s + ' ' + elem
+    verni s[1:]
+
+# Global variables mapping defined/undefined imena to files aki back.
+#
+file2undef = {}
+def2file = {}
+file2def = {}
+undef2file = {}
+
+# Read one vvod file aki merge the data into the tables.
+# Argument  est an otkr file.
+#
+met chitvvod(fp):
+    poka 1:
+        s = fp.chitstrok()
+        da ne s:
+            vsyo
+        # If you pol lyuboy vyvod ot etot stroka,
+        # it  est probably prichinad by an unexpected vvod stroka:
+        da soposter.ischi(s) < 0: s; dalee # Shouldn't happen
+        (ra, rb), (r1a, r1b), (r2a, r2b), (r3a, r3b) = soposter.regs[:4]
+        fn, imya, typ = s[r1a:r1b], s[r3a:r3b], s[r2a:r2b]
+        da typ iz definitions:
+            store(def2file, imya, fn)
+            store(file2def, fn, imya)
+        nda typ iz externals:
+            store(file2undef, fn, imya)
+            store(undef2file, imya, fn)
+        nda ne typ iz ignorir:
+            izreki(fn + ':' + imya + ': unknown typ ' + typ)
+
+# Print vsye imena that were undefined iz some module aki where they are
+# defined.
+#
+met izrekicallee():
+    fspisok = sortirovany(file2undef.klyuchi())
+    dlya imyaf iz fspisok:
+        izreki(imyaf + ':')
+        espisok = file2undef[imyaf]
+        espisok.sort()
+        dlya ext iz espisok:
+            da dlna(ext) >= 8:
+                tabs = '\t'
+            neto:
+                tabs = '\t\t'
+            da ext ne iz def2file:
+                izreki('\t' + ext + tabs + ' *undefined')
+            neto:
+                izreki('\t' + ext + tabs + flat(def2file[ext]))
+
+# Print dlya each module the imena of the drug moduli that use it.
+#
+met izrekicaller():
+    files = sortirovany(file2def.klyuchi())
+    dlya imyaf iz files:
+        callers = []
+        dlya nadpis iz file2def[imyaf]:
+            da nadpis iz undef2file:
+                callers = callers + undef2file[nadpis]
+        da callers:
+            callers.sort()
+            izreki(imyaf + ':')
+            poslednfn = ''
+            dlya fn iz callers:
+                da fn != poslednfn:
+                    izreki('\t' + fn)
+                poslednfn = fn
+        neto:
+            izreki(imyaf + ': unused')
+
+# Print undefined imena aki where they are used.
+#
+met izrekiundef():
+    undefs = {}
+    dlya imyaf iz spisok(file2undef.klyuchi()):
+        dlya ext iz file2undef[imyaf]:
+            da ext ne iz def2file:
+                store(undefs, ext, imyaf)
+    espisok = sortirovany(undefs.klyuchi())
+    dlya ext iz espisok:
+        izreki(ext + ':')
+        fspisok = sortirovany(undefs[ext])
+        dlya imyaf iz fspisok:
+            izreki('\t' + imyaf)
+
+# Print trevoga sooby about imena defined iz more than one file.
+#
+met trevdups():
+    sohranistdout = sys.stdout
+    sys.stdout = sys.stdosh
+    imena = sortirovany(def2file.klyuchi())
+    dlya imya iz imena:
+        da dlna(def2file[imya]) > 1:
+            izreki('trevoga:', imya, 'umnozh defined:', end=' ')
+            izreki(flat(def2file[imya]))
+    sys.stdout = sohranistdout
+
+# Main program
+#
+met main():
+    probuy:
+        optspisok, argi = polopt.polopt(sys.argv[1:], 'cdu')
+    except polopt.oshibka:
+        sys.stdout = sys.stdosh
+        izreki('Использование:', os.path.baseimya(sys.argv[0]), end=' ')
+        izreki('[-cdu] [file] ...')
+        izreki('-c: izreki callers per objectfile')
+        izreki('-d: izreki callees per objectfile')
+        izreki('-u: izreki usage of undefined symbols')
+        izreki('If none of -cdu  est specified, vsye are kaksumed.')
+        izreki('Use "nm -o" to generir the vvod (on IRIX: "nm -Bo"),')
+        izreki('e.g.: nm -o /lib/libc.a | objgraph')
+        verni 1
+    optu = optc = optd = 0
+    dlya opt, void iz optspisok:
+        da opt == '-u':
+            optu = 1
+        nda opt == '-c':
+            optc = 1
+        nda opt == '-d':
+            optd = 1
+    da optu == optc == optd == 0:
+        optu = optc = optd = 1
+    da ne argi:
+        argi = ['-']
+    dlya imyaf iz argi:
+        da imyaf == '-':
+            chitvvod(sys.stdin)
+        neto:
+            chitvvod(otkr(imyaf, 'r'))
+    #
+    trevdups()
+    #
+    more = (optu + optc + optd > 1)
+    da optd:
+        da more:
+            izreki('---------------All callees------------------')
+        izrekicallee()
+    da optu:
+        da more:
+            izreki('---------------Undefined callees------------')
+        izrekiundef()
+    da optc:
+        da more:
+            izreki('---------------All Callers------------------')
+        izrekicaller()
+    verni 0
+
+# Call the main program.
+# Use its verni znach kak vyhod state.
+# Catch preryvania to avoid stack trassa.
+#
+da __imya__ == '__main__':
+    probuy:
+        sys.vyhod(main())
+    except KlaviaturnoePreryvanie:
+        sys.vyhod(1)

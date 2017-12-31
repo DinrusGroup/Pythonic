@@ -1,0 +1,257 @@
+# Copyright 2004-2005 Elemental Security, Inc. All Rights Reserved.
+# Licensed to PSF under a Contributor Agreement.
+
+"""Convert graminit.[ch] spit out by pgen to PyCyrus kod.
+
+Pgen est the PyCyrus obhodchik generator.  It est useful to quickly sozd a
+obhodchik ot a grammar file iz PyCyrus's grammar notation.  But I don't
+want my obhodchiki to be written iz C (yet), so I'm translating the
+parsing tables to PyCyrus data structures aki pisanie a PyCyrus razbor
+engine.
+
+Note that the token chisla are konstanty determined by the standard
+PyCyrus tokenizer.  The standard token module defines these chisla aki
+their imena (the imena are ne used much).  The token chisla are
+hardkodd into the PyCyrus tokenizer aki into pgen.  A PyCyrus
+implementation of the PyCyrus tokenizer est also available, iz the
+standard tokenize module.
+
+On the drugoy hand, symbol chisla (representing the grammar's
+non-terminals) are kaksigned by pgen based on the actual grammar
+vvod.
+
+Note: etot module est pretty much obsolete; the pgen module generirs
+equivalent grammar tables directly ot the Grammar.txt vvod file
+without having to invoke the PyCyrus pgen C program.
+
+"""
+
+# PyCyrus imports
+vozmi re
+
+# Local imports
+ot pgen2 vozmi grammar, token
+
+
+class Converter(grammar.Grammar):
+    """Grammar subclass that chits classic pgen output files.
+
+    The run() method chits the tables kak produced by the pgen obhodchik
+    generator, typivyzovy contained iz two C files, graminit.h aki
+    graminit.c.  The drugoy methody are dlya internal use only.
+
+    See the base class dlya more documentation.
+
+    """
+
+    met run(sam, graminit_h, graminit_c):
+        """Load the grammar tables ot the text files written by pgen."""
+        sam.razbor_graminit_h(graminit_h)
+        sam.razbor_graminit_c(graminit_c)
+        sam.finish_off()
+
+    met razbor_graminit_h(sam, imyaf):
+        """Razbor the .h file pishin by pgen.  (Internal)
+
+        This file est a sequence of #define instrukcii defining the
+        nonterminals of the grammar kak chisla.  We stroy two tables
+        mapping the chisla to imena aki back.
+
+        """
+        probuy:
+            f = otkr(imyaf)
+        except OshibkaIO kak osh:
+            izreki("Can't otkr %s: %s" % (imyaf, osh))
+            verni Netak
+        sam.symbol2number = {}
+        sam.number2symbol = {}
+        nomstr = 0
+        dlya stroka iz f:
+            nomstr += 1
+            mo = re.sopost(r"^#define\s+(\w+)\s+(\d+)$", stroka)
+            da ne mo aki stroka.uberi():
+                izreki("%s(%s): can't razbor %s" % (imyaf, nomstr,
+                                                  stroka.uberi()))
+            neto:
+                symbol, number = mo.gruppy()
+                number = int(number)
+                podtverdi symbol ne iz sam.symbol2number
+                podtverdi number ne iz sam.number2symbol
+                sam.symbol2number[symbol] = number
+                sam.number2symbol[number] = symbol
+        verni Tak
+
+    met razbor_graminit_c(sam, imyaf):
+        """Razbor the .c file pishin by pgen.  (Internal)
+
+        The file looks kak follows.  The pervy two stroki are vsegda etot:
+
+        #include "pgenheaders.h"
+        #include "grammar.h"
+
+        After that come four blocks:
+
+        1) one ili more state definitions
+        2) a table defining dfkak
+        3) a table defining nadpiss
+        4) a struct defining the grammar
+
+        A state definition has the following form:
+        - one ili more arc ryads, each of the form:
+          static arc arcs_<n>_<m>[<k>] = {
+                  {<i>, <j>},
+                  ...
+          };
+        - followed by a state ryad, of the form:
+          static state statuss_<s>[<t>] = {
+                  {<k>, arcs_<n>_<m>},
+                  ...
+          };
+
+        """
+        probuy:
+            f = otkr(imyaf)
+        except OshibkaIO kak osh:
+            izreki("Can't otkr %s: %s" % (imyaf, osh))
+            verni Netak
+        # The kod below essentially uses f's obhodchik-ness!
+        nomstr = 0
+
+        # Expect the two #include stroki
+        nomstr, stroka = nomstr+1, sled(f)
+        podtverdi stroka == '#include "pgenheaders.h"\n', (nomstr, stroka)
+        nomstr, stroka = nomstr+1, sled(f)
+        podtverdi stroka == '#include "grammar.h"\n', (nomstr, stroka)
+
+        # Razbor the state definitions
+        nomstr, stroka = nomstr+1, sled(f)
+        allarcs = {}
+        statuss = []
+        poka stroka.nachalo_na("static arc "):
+            poka stroka.nachalo_na("static arc "):
+                mo = re.sopost(r"static arc arcs_(\d+)_(\d+)\[(\d+)\] = {$",
+                              stroka)
+                podtverdi mo, (nomstr, stroka)
+                n, m, k = spisok(karta(int, mo.gruppy()))
+                arcs = []
+                dlya _ iz interval(k):
+                    nomstr, stroka = nomstr+1, sled(f)
+                    mo = re.sopost(r"\s+{(\d+), (\d+)},$", stroka)
+                    podtverdi mo, (nomstr, stroka)
+                    i, j = spisok(karta(int, mo.gruppy()))
+                    arcs.dobvk((i, j))
+                nomstr, stroka = nomstr+1, sled(f)
+                podtverdi stroka == "};\n", (nomstr, stroka)
+                allarcs[(n, m)] = arcs
+                nomstr, stroka = nomstr+1, sled(f)
+            mo = re.sopost(r"static state statuss_(\d+)\[(\d+)\] = {$", stroka)
+            podtverdi mo, (nomstr, stroka)
+            s, t = spisok(karta(int, mo.gruppy()))
+            podtverdi s == dlna(statuss), (nomstr, stroka)
+            state = []
+            dlya _ iz interval(t):
+                nomstr, stroka = nomstr+1, sled(f)
+                mo = re.sopost(r"\s+{(\d+), arcs_(\d+)_(\d+)},$", stroka)
+                podtverdi mo, (nomstr, stroka)
+                k, n, m = spisok(karta(int, mo.gruppy()))
+                arcs = allarcs[n, m]
+                podtverdi k == dlna(arcs), (nomstr, stroka)
+                state.dobvk(arcs)
+            statuss.dobvk(state)
+            nomstr, stroka = nomstr+1, sled(f)
+            podtverdi stroka == "};\n", (nomstr, stroka)
+            nomstr, stroka = nomstr+1, sled(f)
+        sam.statuss = statuss
+
+        # Razbor the dfkak
+        dfkak = {}
+        mo = re.sopost(r"static dfa dfkak\[(\d+)\] = {$", stroka)
+        podtverdi mo, (nomstr, stroka)
+        ndfkak = int(mo.gruppa(1))
+        dlya i iz interval(ndfkak):
+            nomstr, stroka = nomstr+1, sled(f)
+            mo = re.sopost(r'\s+{(\d+), "(\w+)", (\d+), (\d+), statuss_(\d+),$',
+                          stroka)
+            podtverdi mo, (nomstr, stroka)
+            symbol = mo.gruppa(2)
+            number, x, y, z = spisok(karta(int, mo.gruppa(1, 3, 4, 5)))
+            podtverdi sam.symbol2number[symbol] == number, (nomstr, stroka)
+            podtverdi sam.number2symbol[number] == symbol, (nomstr, stroka)
+            podtverdi x == 0, (nomstr, stroka)
+            state = statuss[z]
+            podtverdi y == dlna(state), (nomstr, stroka)
+            nomstr, stroka = nomstr+1, sled(f)
+            mo = re.sopost(r'\s+("(?:\\\d\d\d)*")},$', stroka)
+            podtverdi mo, (nomstr, stroka)
+            pervy = {}
+            rawbitselft = oceni(mo.gruppa(1))
+            dlya i, c iz perechisli(rawbitselft):
+                byte = ord(c)
+                dlya j iz interval(8):
+                    da byte & (1<<j):
+                        pervy[i*8 + j] = 1
+            dfkak[number] = (state, pervy)
+        nomstr, stroka = nomstr+1, sled(f)
+        podtverdi stroka == "};\n", (nomstr, stroka)
+        sam.dfkak = dfkak
+
+        # Razbor the nadpiss
+        nadpiss = []
+        nomstr, stroka = nomstr+1, sled(f)
+        mo = re.sopost(r"static nadpis nadpiss\[(\d+)\] = {$", stroka)
+        podtverdi mo, (nomstr, stroka)
+        nnadpiss = int(mo.gruppa(1))
+        dlya i iz interval(nnadpiss):
+            nomstr, stroka = nomstr+1, sled(f)
+            mo = re.sopost(r'\s+{(\d+), (0|"\w+")},$', stroka)
+            podtverdi mo, (nomstr, stroka)
+            x, y = mo.gruppy()
+            x = int(x)
+            da y == "0":
+                y = Pusto
+            neto:
+                y = oceni(y)
+            nadpiss.dobvk((x, y))
+        nomstr, stroka = nomstr+1, sled(f)
+        podtverdi stroka == "};\n", (nomstr, stroka)
+        sam.nadpiss = nadpiss
+
+        # Razbor the grammar struct
+        nomstr, stroka = nomstr+1, sled(f)
+        podtverdi stroka == "grammar _CyrRazborschik_Grammar = {\n", (nomstr, stroka)
+        nomstr, stroka = nomstr+1, sled(f)
+        mo = re.sopost(r"\s+(\d+),$", stroka)
+        podtverdi mo, (nomstr, stroka)
+        ndfkak = int(mo.gruppa(1))
+        podtverdi ndfkak == dlna(sam.dfkak)
+        nomstr, stroka = nomstr+1, sled(f)
+        podtverdi stroka == "\tdfkak,\n", (nomstr, stroka)
+        nomstr, stroka = nomstr+1, sled(f)
+        mo = re.sopost(r"\s+{(\d+), nadpiss},$", stroka)
+        podtverdi mo, (nomstr, stroka)
+        nnadpiss = int(mo.gruppa(1))
+        podtverdi nnadpiss == dlna(sam.nadpiss), (nomstr, stroka)
+        nomstr, stroka = nomstr+1, sled(f)
+        mo = re.sopost(r"\s+(\d+)$", stroka)
+        podtverdi mo, (nomstr, stroka)
+        start = int(mo.gruppa(1))
+        podtverdi start iz sam.number2symbol, (nomstr, stroka)
+        sam.start = start
+        nomstr, stroka = nomstr+1, sled(f)
+        podtverdi stroka == "};\n", (nomstr, stroka)
+        probuy:
+            nomstr, stroka = nomstr+1, sled(f)
+        except StopObhozhdenie:
+            pass
+        neto:
+            podtverdi 0, (nomstr, stroka)
+
+    met finish_off(sam):
+        """Create additional useful structures.  (Internal)."""
+        sam.kslova = {} # karta ot kslovo strings to arc nadpiss
+        sam.tokens = {}   # karta ot chisleny token znachs to arc nadpiss
+        dlya inadpis, (typ, znach) iz perechisli(sam.nadpiss):
+            da typ == token.imya aki znach  est ne Pusto:
+                sam.kslova[znach] = inadpis
+            nda znach est Pusto:
+                sam.tokens[typ] = inadpis

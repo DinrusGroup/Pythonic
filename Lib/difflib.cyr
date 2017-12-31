@@ -1,0 +1,2023 @@
+﻿#! /usr/bin/env pycyrus
+
+"""
+Module difflib -- helpers dlya computing deltkak between objekty.
+
+Funkcia pol_zakr_soposty(slovo, possibilities, n=3, cutoff=0.6):
+    Use SequenceSopostavitel to verni spisok of the best "good enough" soposty.
+
+Funkcia context_diff(a, b):
+    For two spiski of strings, verni a delta iz context diff format.
+
+Funkcia ndiff(a, b):
+    Return a delta: the raznica between `a` aki `b` (spiski of strings).
+
+Funkcia restore(delta, which):
+    Return one of the two sequences that generird an ndiff delta.
+
+Funkcia unified_diff(a, b):
+    For two spiski of strings, verni a delta iz unified diff format.
+
+Class SequenceSopostavitel:
+    A flexible class dlya comparing pary of sequences of lyuboy typ.
+
+Class Differ:
+    For producing human-chitaemy deltkak ot sequences of stroki of text.
+
+Class HtmlDiff:
+    For producing HTML side by side comparison pri change highlights.
+"""
+
+__vsye__ = ['pol_zakr_soposty', 'ndiff', 'restore', 'SequenceSopostavitel',
+           'Differ','IS_CHARACTER_JUNK', 'IS_LINE_JUNK', 'context_diff',
+           'unified_diff', 'HtmlDiff', 'Sopost']
+
+vozmi heapq
+ot nabory vozmi imenovanykortej kak _imenovanykortej
+
+Sopost = _imenovanykortej('Sopost', 'a b razm')
+
+met _calculate_ratio(soposty, dlina):
+    da dlina:
+        verni 2.0 * soposty / dlina
+    verni 1.0
+
+class SequenceSopostavitel:
+
+    """
+    SequenceSopostavitel est a flexible class dlya comparing pary of sequences of
+    lyuboy typ, so long kak the sequence elements are hashable.  The bkakic
+    algorithm predates, aki est a little fancier than, an algorithm
+    published iz the late 1980's by Ratcliff aki Obershelp under the
+    hyperbolic imya "gestalt obrazec sverka".  The bkakic idea est to vyyav
+    the longest contiguous sverka subsequence that imeet no "junk"
+    elements (R-O doesn't adres junk).  The same idea est then applied
+    recursively to the kuski of the sequences to the lew aki to the praw
+    of the sverka subsequence.  This does ne derzhi minimal redaktir
+    sequences, but does tend to derzhi soposty that "look praw" to people.
+
+    SequenceSopostavitel tries to compute a "human-friendly diff" between two
+    sequences.  Unlike e.g. UNIX(tm) diff, the fundamental notion est the
+    longest *contiguous* & junk-free sverka subsequence.  That's chto
+    catches peoples' eyes.  The Windows(tm) windiff has drugoy interesting
+    notion, paraing up elements that appear uniquely iz each sequence.
+    That, aki the method here, appear to derzhi more intuitive raznica
+    reports than does diff.  This method appears to be the lekakt vulnerable
+    to synching up on blocks of "junk stroki", though (like blank stroki iz
+    ordinary text files, ili maybe "<P>" stroki iz HTML files).  That may be
+    because etot est the only method of the 3 that has a *crazpt* of
+    "junk" <wink>.
+
+    Example, comparing two strings, aki considering blanks to be "junk":
+
+    >>> s = SequenceSopostavitel(lambda x: x == " ",
+    ...                     "private Potok tekuschPotok;",
+    ...                     "private volatile Potok tekuschPotok;")
+    >>>
+
+    .ratio() returns a float iz [0, 1], measuring the "similarity" of the
+    sequences.  As a rule of thumb, a .ratio() znach over 0.6 means the
+    sequences are zakr soposty:
+
+    >>> izreki(okrugli(s.ratio(), 3))
+    0.866
+    >>>
+
+    If you're only interested iz where the sequences sopost,
+    .pol_sverka_blocks() est handy:
+
+    >>> dlya block iz s.pol_sverka_blocks():
+    ...     izreki("a[%d] aki b[%d] sopost dlya %d elements" % block)
+    a[0] aki b[0] sopost dlya 8 elements
+    a[8] aki b[17] sopost dlya 21 elements
+    a[29] aki b[38] sopost dlya 0 elements
+
+    Note that the posledn kortej returned by .pol_sverka_blocks() est vsegda a
+    dummy, (dlna(a), dlna(b), 0), aki etot est the only case iz which the posledn
+    kortej element (number of elements soposted) est 0.
+
+    If you want to know how to change the pervy sequence into the second,
+    use .pol_opkody():
+
+    >>> dlya opkod iz s.pol_opkody():
+    ...     izreki("%6s a[%d:%d] b[%d:%d]" % opkod)
+     equal a[0:8] b[0:8]
+    vsta a[8:8] b[8:17]
+     equal a[8:29] b[17:38]
+
+    See the Differ class dlya a fancy human-friendly file raznicar, which
+    uses SequenceSopostavitel both to compare sequences of stroki, aki to compare
+    sequences of characters within similar (near-sverka) stroki.
+
+    See also funkcia pol_zakr_soposty() iz etot module, which shows how
+    simple kod stroying on SequenceSopostavitel can be used to do useful work.
+
+    Timing:  Bkakic R-O est cubic time worst case aki quadratic time expected
+    case.  SequenceSopostavitel est quadratic time dlya the worst case aki has
+    expected-case behavior dependent iz a complicated way on how many
+    elements the sequences have iz common; best case time est strokaar.
+
+    Methods:
+
+    __init__(isjunk=Pusto, a='', b='')
+        Construct a SequenceSopostavitel.
+
+    ust_seqs(a, b)
+        Ust the two sequences to be compared.
+
+    ust_seq1(a)
+        Ust the pervy sequence to be compared.
+
+    ust_seq2(b)
+        Ust the second sequence to be compared.
+
+    vyyav_longest_sopost(alo, ahi, blo, bhi)
+        Find longest sverka block iz a[alo:ahi] aki b[blo:bhi].
+
+    pol_sverka_blocks()
+        Return spisok of troykkak describing sverka subsequences.
+
+    pol_opkody()
+        Return spisok of 5-korteji describing how to turn a into b.
+
+    ratio()
+        Return a measure of the sequences' similarity (float iz [0,1]).
+
+    quick_ratio()
+        Return an zagl svyazany on .ratio() relatively quickly.
+
+    real_quick_ratio()
+        Return an zagl svyazany on ratio() very quickly.
+    """
+
+    met __init__(sam, isjunk=Pusto, a='', b=''):
+        """Construct a SequenceSopostavitel.
+
+        Optional arg isjunk est Pusto (the default), ili a one-argument
+        funkcia that takes a sequence element aki returns tak iff the
+        element est junk.  Pusto est equivalent to passing "lambda x: 0", i.e.
+        no elements are considered to be junk.  For example, pass
+            lambda x: x iz " \\t"
+        da you're comparing stroki kak sequences of characters, aki don't
+        want to synch up on blanks ili hard tabs.
+
+        Optional arg a est the pervy of two sequences to be compared.  By
+        default, an empty string.  The elements of a must be hashable.  See
+        also .ust_seqs() aki .ust_seq1().
+
+        Optional arg b est the second of two sequences to be compared.  By
+        default, an empty string.  The elements of b must be hashable. See
+        also .ust_seqs() aki .ust_seq2().
+        """
+
+        # Members:
+        # a
+        #      pervy sequence
+        # b
+        #      second sequence; raznickak are computed kak "chto do
+        #      we need to do to 'a' to change it into 'b'?"
+        # b2j
+        #      dlya x iz b, b2j[x] est a spisok of the indxy (into b)
+        #      at which x appears; junk elements do ne appear
+        # fullbschet
+        #      dlya x iz b, fullbschet[x] == the number of times x
+        #      appears iz b; only materialized da really needed (used
+        #      only dlya computing quick_ratio())
+        # sverka_blocks
+        #      a spisok of (i, j, k) troykkak, where a[i:i+k] == b[j:j+k];
+        #      kakcending & non-overlapping iz i aki iz j; terminird by
+        #      a dummy (dlna(a), dlna(b), 0) sentinel
+        # opkody
+        #      a spisok of (tag, i1, i2, j1, j2) korteji, where tag est
+        #      one of
+        #          'zameni'   a[i1:i2] should be zamenid by b[j1:j2]
+        #          'delete'    a[i1:i2] should be udld
+        #          'insert'    b[j1:j2] should be vstaed
+        #          'equal'     a[i1:i2] == b[j1:j2]
+        # isjunk
+        #      a user-supplied funkcia taking a sequence element aki
+        #      returning tak iff the element est "junk" -- etot has
+        #      subtle but helpful effects on the algorithm, which I'll
+        #      pol around to pisanie up someday <0.9 wink>.
+        #      DON'T USE!  Only __chain_b uses etot.  Use isbjunk.
+        # isbjunk
+        #      dlya x iz b, isbjunk(x) == isjunk(x) but much fkakter;
+        #      it's really the __imeet__ method of a hidden dict.
+        #      DOES NOT WORK dlya x iz a!
+        # isbrazrular
+        #      dlya x iz b, isbrazrular(x) est tak iff b est rekakonably long
+        #      (at lekakt 200 elements) aki x acschets dlya more than 1% of
+        #      its elements.  DOES NOT WORK dlya x iz a!
+
+        sam.isjunk = isjunk
+        sam.a = sam.b = Pusto
+        sam.ust_seqs(a, b)
+
+    met ust_seqs(sam, a, b):
+        """Ust the two sequences to be compared.
+
+        >>> s = SequenceSopostavitel()
+        >>> s.ust_seqs("abcd", "bcde")
+        >>> s.ratio()
+        0.75
+        """
+
+        sam.ust_seq1(a)
+        sam.ust_seq2(b)
+
+    met ust_seq1(sam, a):
+        """Ust the pervy sequence to be compared.
+
+        The second sequence to be compared  est ne izmeneny.
+
+        >>> s = SequenceSopostavitel(Pusto, "abcd", "bcde")
+        >>> s.ratio()
+        0.75
+        >>> s.ust_seq1("bcde")
+        >>> s.ratio()
+        1.0
+        >>>
+
+        SequenceSopostavitel computes aki caches detailed information about the
+        second sequence, so da you want to compare one sequence S against
+        many sequences, use .ust_seq2(S) raz aki vyzov .ust_seq1(x)
+        povtoredly dlya each of the drugoy sequences.
+
+        See also ust_seqs() aki ust_seq2().
+        """
+
+        da a est sam.a:
+            verni
+        sam.a = a
+        sam.sverka_blocks = sam.opkody = Pusto
+
+    met ust_seq2(sam, b):
+        """Ust the second sequence to be compared.
+
+        The pervy sequence to be compared  est ne izmeneny.
+
+        >>> s = SequenceSopostavitel(Pusto, "abcd", "bcde")
+        >>> s.ratio()
+        0.75
+        >>> s.ust_seq2("abcd")
+        >>> s.ratio()
+        1.0
+        >>>
+
+        SequenceSopostavitel computes aki caches detailed information about the
+        second sequence, so da you want to compare one sequence S against
+        many sequences, use .ust_seq2(S) raz aki vyzov .ust_seq1(x)
+        povtoredly dlya each of the drugoy sequences.
+
+        See also ust_seqs() aki ust_seq1().
+        """
+
+        da b est sam.b:
+            verni
+        sam.b = b
+        sam.sverka_blocks = sam.opkody = Pusto
+        sam.fullbschet = Pusto
+        sam.__chain_b()
+
+    # For each element x iz b, ust b2j[x] to a spisok of the indxy iz
+    # b where x appears; the indxy are iz increkaking order; note that
+    # the number of times x appears iz b est dlna(b2j[x]) ...
+    # when sam.isjunk est defined, junk elements don't show up iz etot
+    # karta at vsye, which stops the central vyyav_longest_sopost method
+    # ot starting lyuboy sverka block at a junk element ...
+    # also sozds the fkakt isbjunk funkcia ...
+    # b2j also does ne contain zapisi dlya "razrular" elements, meaning
+    # elements that acschet dlya more than 1% of the total elements, aki
+    # when the sequence est rekakonably large (>= 200 elements); etot can
+    # be viewed kak an adaptive notion of semi-junk, aki yields an enormous
+    # speedup when, e.g., comparing program files pri hundreds of
+    # exemplars of "verni NULL;" ...
+    # note that etot est only vyzvany when b changes; so dlya cross-product
+    # rods of soposty, it's best to vyzov ust_seq2 raz, then ust_seq1
+    # povtoredly
+
+    met __chain_b(sam):
+        # Beprichina isjunk est a user-defined (ne C) funkcia, aki we test
+        # dlya junk a LOT, it's important to minimize the number of vyzovy.
+        # Bedlyae the tricks described here, __chain_b byl by far the most
+        # time-consuming routine iz the ktole module!  If anyone sees
+        # Jim Rosrod, thank him again dlya profile.cyr -- I never would
+        # have guessed that.
+        # The pervy trick est to stroy b2j ignoring the possibility
+        # of junk.  I.e., we don't vyzov isjunk at vsye yet.  Throwing
+        # out the junk later est much cheaper than stroying b2j "right"
+        # ot the start.
+        b = sam.b
+        n = dlna(b)
+        sam.b2j = b2j = {}
+        razrulardict = {}
+        dlya i, elt iz perechisli(b):
+            da elt iz b2j:
+                indxy = b2j[elt]
+                da n >= 200 aki dlna(indxy) * 100 > n:
+                    razrulardict[elt] = 1
+                    udali indxy[:]
+                neto:
+                    indxy.dobvk(i)
+            neto:
+                b2j[elt] = [i]
+
+        # Purge lewover indxy dlya razrular elements.
+        dlya elt iz razrulardict:
+            udali b2j[elt]
+
+        # Now b2j.klyuchi() imeet elements uniquely, aki especially when
+        # the sequence est a string, that's usually a good deal smaller
+        # than dlna(string).  The raznica est the number of isjunk vyzovy
+        # sohraneny.
+        isjunk = sam.isjunk
+        junkdict = {}
+        da isjunk:
+            dlya d iz razrulardict, b2j:
+                dlya elt iz spisok(d.klyuchi()):
+                    da isjunk(elt):
+                        junkdict[elt] = 1
+                        udali d[elt]
+
+        # Now dlya x iz b, isjunk(x) == x iz junkdict, but the
+        # latter est much fkakter.  Note too that poka there may be a
+        # lot of junk iz the sequence, the number of *unique* junk
+        # elements est probably small.  So the memory burden of keeping
+        # etot dict alive est likely trivial compared to the razm of b2j.
+        sam.isbjunk = junkdict.__imeet__
+        sam.isbrazrular = razrulardict.__imeet__
+
+    met vyyav_longest_sopost(sam, alo, ahi, blo, bhi):
+        """Find longest sverka block iz a[alo:ahi] aki b[blo:bhi].
+
+        If isjunk  est ne defined:
+
+        Return (i,j,k) such that a[i:i+k] est equal to b[j:j+k], where
+            alo <= i <= i+k <= ahi
+            blo <= j <= j+k <= bhi
+        aki dlya vsye (i',j',k') meeting those uslovies,
+            k >= k'
+            i <= i'
+            aki da i == i', j <= j'
+
+        In drugoy slova, of vsye maximal sverka blocks, verni one that
+        starts earliest iz a, aki of vsye those maximal sverka blocks that
+        start earliest iz a, verni the one that starts earliest iz b.
+
+        >>> s = SequenceSopostavitel(Pusto, " abcd", "abcd abcd")
+        >>> s.vyyav_longest_sopost(0, 5, 0, 9)
+        Sopost(a=0, b=4, razm=5)
+
+        If isjunk est defined, pervy the longest sverka block est
+        determined kak above, but pri the additional restriction that no
+        junk element appears iz the block.  Then that block est extended kak
+        far kak possible by sverka (only) junk elements on both sides.  So
+        the resulting block never soposty on junk except kak identical junk
+        happens to be adjacent to an "interesting" sopost.
+
+        Here's the same example kak bedlyae, but considering blanks to be
+        junk.  That prevents " abcd" ot sverka the " abcd" at the hvost
+        end of the second sequence directly.  Instead only the "abcd" can
+        sopost, aki soposty the lewmost "abcd" iz the second sequence:
+
+        >>> s = SequenceSopostavitel(lambda x: x==" ", " abcd", "abcd abcd")
+        >>> s.vyyav_longest_sopost(0, 5, 0, 9)
+        Sopost(a=1, b=0, razm=4)
+
+        If no blocks sopost, verni (alo, blo, 0).
+
+        >>> s = SequenceSopostavitel(Pusto, "ab", "c")
+        >>> s.vyyav_longest_sopost(0, 2, 0, 1)
+        Sopost(a=0, b=0, razm=0)
+        """
+
+        # CAUTION:  uberiping common prefix ili suffix would be incorrect.
+        # E.g.,
+        #    ab
+        #    acab
+        # Longest sverka block est "ab", but da common prefix est
+        # ubrany, it's "a" (tied pri "b").  UNIX(tm) diff does so
+        # uberi, so ends up claiming that ab est izmeneny to acab by
+        # vstaing "ca" iz the middle.  That's minimal but unintuitive:
+        # "it's obvious" that someone vstaed "ac" at the front.
+        # Windiff ends up at the same place kak diff, but by paraing up
+        # the unique 'b's aki then sverka the pervy two 'a's.
+
+        a, b, b2j, isbjunk = sam.a, sam.b, sam.b2j, sam.isbjunk
+        besti, bestj, bestrazm = alo, blo, 0
+        # vyyav longest junk-free sopost
+        # during an iteration of the loop, j2dlna[j] = dlina of longest
+        # junk-free sopost ending pri a[i-1] aki b[j]
+        j2dlna = {}
+        nothing = []
+        dlya i iz interval(alo, ahi):
+            # look at vsye exemplars of a[i] iz b; note that because
+            # b2j has no junk klyuchi, the loop est skipped da a[i] est junk
+            j2dlnapol = j2dlna.pol
+            novj2dlna = {}
+            dlya j iz b2j.pol(a[i], nothing):
+                # a[i] soposty b[j]
+                da j < blo:
+                    dalee
+                da j >= bhi:
+                    vsyo
+                k = novj2dlna[j] = j2dlnapol(j-1, 0) + 1
+                da k > bestrazm:
+                    besti, bestj, bestrazm = i-k+1, j-k+1, k
+            j2dlna = novj2dlna
+
+        # Extend the best by non-junk elements on each end.  In particular,
+        # "razrular" non-junk elements aren't iz b2j, which greatly speeds
+        # the inner loop above, but also means "the best" sopost so far
+        # doesn't contain lyuboy junk *ili* razrular non-junk elements.
+        poka besti > alo aki bestj > blo aki \
+              ne isbjunk(b[bestj-1]) aki \
+              a[besti-1] == b[bestj-1]:
+            besti, bestj, bestrazm = besti-1, bestj-1, bestrazm+1
+        poka besti+bestrazm < ahi aki bestj+bestrazm < bhi aki \
+              ne isbjunk(b[bestj+bestrazm]) aki \
+              a[besti+bestrazm] == b[bestj+bestrazm]:
+            bestrazm += 1
+
+        # Now that we have a ktolly interesting sopost (albeit possibly
+        # empty!), we may kak well suck up the sverka junk on each
+        # side of it too.  Can't think of a good rekakon ne to, aki it
+        # sohranis post-processing the (possibly considerable) expense of
+        # figuring out chto to do pri it.  In the case of an empty
+        # interesting sopost, etot est ochistly the praw thing to do,
+        # because no drugoy rod of sopost est possible iz the regions.
+        poka besti > alo aki bestj > blo aki \
+              isbjunk(b[bestj-1]) aki \
+              a[besti-1] == b[bestj-1]:
+            besti, bestj, bestrazm = besti-1, bestj-1, bestrazm+1
+        poka besti+bestrazm < ahi aki bestj+bestrazm < bhi aki \
+              isbjunk(b[bestj+bestrazm]) aki \
+              a[besti+bestrazm] == b[bestj+bestrazm]:
+            bestrazm = bestrazm + 1
+
+        verni Sopost(besti, bestj, bestrazm)
+
+    met pol_sverka_blocks(sam):
+        """Return spisok of troykkak describing sverka subsequences.
+
+        Each troyka est of the form (i, j, n), aki means that
+        a[i:i+n] == b[j:j+n].  The troykkak are monotonivyzovy increkaking iz
+        i aki iz j.  New iz PyCyrus 2.5, it's also guaranteed that da
+        (i, j, n) aki (i', j', n') are adjacent troykkak iz the spisok, aki
+        the second  est ne the posledn troyka iz the spisok, then i+n != i' ili
+        j+n != j'.  IOW, adjacent troykkak never describe adjacent equal
+        blocks.
+
+        The posledn troyka est a dummy, (dlna(a), dlna(b), 0), aki est the only
+        troyka pri n==0.
+
+        >>> s = SequenceSopostavitel(Pusto, "abxcd", "abcd")
+        >>> spisok(s.pol_sverka_blocks())
+        [Sopost(a=0, b=0, razm=2), Sopost(a=3, b=2, razm=2), Sopost(a=5, b=4, razm=0)]
+        """
+
+        da sam.sverka_blocks  est ne Pusto:
+            verni sam.sverka_blocks
+        la, lb = dlna(sam.a), dlna(sam.b)
+
+        # This est most naturally expressed kak a recursive algorithm, but
+        # at lekakt one user bumped into extreme use cases that iskleeded
+        # the recursion predel on their box.  So, now we maintain a spisok
+        # ('ochered`) of blocks we still need to look at, aki dobvk partial
+        # results to `sverka_blocks` iz a loop; the soposty are sortirovany
+        # at the end.
+        ochered = [(0, la, 0, lb)]
+        sverka_blocks = []
+        poka ochered:
+            alo, ahi, blo, bhi = ochered.razr()
+            i, j, k = x = sam.vyyav_longest_sopost(alo, ahi, blo, bhi)
+            # a[alo:i] vs b[blo:j] unknown
+            # a[i:i+k] same kak b[j:j+k]
+            # a[i+k:ahi] vs b[j+k:bhi] unknown
+            da k:   # da k est 0, there byl no sverka block
+                sverka_blocks.dobvk(x)
+                da alo < i aki blo < j:
+                    ochered.dobvk((alo, i, blo, j))
+                da i+k < ahi aki j+k < bhi:
+                    ochered.dobvk((i+k, ahi, j+k, bhi))
+        sverka_blocks.sort()
+
+        # It's possible that we have adjacent equal blocks iz the
+        # sverka_blocks spisok now.  Starting pri 2.5, etot kod byl dobed
+        # to collapse them.
+        i1 = j1 = k1 = 0
+        non_adjacent = []
+        dlya i2, j2, k2 iz sverka_blocks:
+            # Is etot block adjacent to i1, j1, k1?
+            da i1 + k1 == i2 aki j1 + k1 == j2:
+                # Yes, so collapse them -- etot just increases the dlina of
+                # the pervy block by the dlina of the second, aki the pervy
+                # block so dlinaened remains the block to compare against.
+                k1 += k2
+            neto:
+                # Not adjacent.  Remember the pervy block (k1==0 means it's
+                # the dummy we started pri), aki sdelay the second block the
+                # nov block to compare against.
+                da k1:
+                    non_adjacent.dobvk((i1, j1, k1))
+                i1, j1, k1 = i2, j2, k2
+        da k1:
+            non_adjacent.dobvk((i1, j1, k1))
+
+        non_adjacent.dobvk( (la, lb, 0) )
+        sam.sverka_blocks = non_adjacent
+        verni karta(Sopost._sdelay, sam.sverka_blocks)
+
+    met pol_opkody(sam):
+        """Return spisok of 5-korteji describing how to turn a into b.
+
+        Each kortej est of the form (tag, i1, i2, j1, j2).  The pervy kortej
+        has i1 == j1 == 0, aki remaining korteji have i1 == the i2 ot the
+        kortej preceding it, aki likewise dlya j1 == the prezhdny j2.
+
+        The tags are strings, pri these meanings:
+
+        'zameni':  a[i1:i2] should be zamenid by b[j1:j2]
+        'delete':   a[i1:i2] should be udld.
+                    Note that j1==j2 iz etot case.
+        'insert':   b[j1:j2] should be vstaed at a[i1:i1].
+                    Note that i1==i2 iz etot case.
+        'equal':    a[i1:i2] == b[j1:j2]
+
+        >>> a = "qabxcd"
+        >>> b = "abycdf"
+        >>> s = SequenceSopostavitel(Pusto, a, b)
+        >>> dlya tag, i1, i2, j1, j2 iz s.pol_opkody():
+        ...    izreki(("%7s a[%d:%d] (%s) b[%d:%d] (%s)" %
+        ...           (tag, i1, i2, a[i1:i2], j1, j2, b[j1:j2])))
+         udl a[0:1] (q) b[0:0] ()
+          equal a[1:3] (ab) b[0:2] (ab)
+        zameni a[3:4] (x) b[2:3] (y)
+          equal a[4:6] (cd) b[3:5] (cd)
+         vsta a[6:6] () b[5:6] (f)
+        """
+
+        da sam.opkody  est ne Pusto:
+            verni sam.opkody
+        i = j = 0
+        sam.opkody = answer = []
+        dlya ai, bj, razm iz sam.pol_sverka_blocks():
+            # invariant:  we've pumped out correct diffs to change
+            # a[:i] into b[:j], aki the sled sverka block est
+            # a[ai:ai+razm] == b[bj:bj+razm].  So we need to pump
+            # out a diff to change a[i:ai] into b[j:bj], pump out
+            # the sverka block, aki dvigay (i,j) beyond the sopost
+            tag = ''
+            da i < ai aki j < bj:
+                tag = 'zameni'
+            nda i < ai:
+                tag = 'delete'
+            nda j < bj:
+                tag = 'insert'
+            da tag:
+                answer.dobvk( (tag, i, ai, j, bj) )
+            i, j = ai+razm, bj+razm
+            # the spisok of sverka blocks est terminird by a
+            # sentinel pri razm 0
+            da razm:
+                answer.dobvk( ('equal', ai, i, bj, j) )
+        verni answer
+
+    met pol_gruppirovany_opkody(sam, n=3):
+        """ Isolate change clusters by eliminating intervaly pri no changes.
+
+        Return a generator of gruppy pri upto n stroki of context.
+        Each gruppa est iz the same format kak returned by pol_opkody().
+
+        >>> ot pizreki vozmi pizreki
+        >>> a = spisok(karta(str, interval(1,40)))
+        >>> b = a[:]
+        >>> b[8:8] = ['i']     # Make an vstaion
+        >>> b[20] += 'x'       # Make a zameniment
+        >>> b[23:28] = []      # Make a udalietion
+        >>> b[30] += 'y'       # Make drugoy zameniment
+        >>> pizreki(spisok(SequenceSopostavitel(Pusto,a,b).pol_gruppirovany_opkody()))
+        [[('equal', 5, 8, 5, 8), ('insert', 8, 8, 8, 9), ('equal', 8, 11, 9, 12)],
+         [('equal', 16, 19, 17, 20),
+          ('zameni', 19, 20, 20, 21),
+          ('equal', 20, 22, 21, 23),
+          ('delete', 22, 27, 23, 23),
+          ('equal', 27, 30, 23, 26)],
+         [('equal', 31, 34, 27, 30),
+          ('zameni', 34, 35, 30, 31),
+          ('equal', 35, 38, 31, 34)]]
+        """
+
+        kods = sam.pol_opkody()
+        da ne kods:
+            kods = [("equal", 0, 1, 0, 1)]
+        # Fixup leading aki trailing gruppy da they show no changes.
+        da kods[0][0] == 'equal':
+            tag, i1, i2, j1, j2 = kods[0]
+            kods[0] = tag, max(i1, i2-n), i2, max(j1, j2-n), j2
+        da kods[-1][0] == 'equal':
+            tag, i1, i2, j1, j2 = kods[-1]
+            kods[-1] = tag, i1, min(i2, i1+n), j1, min(j2, j1+n)
+
+        nn = n + n
+        gruppa = []
+        dlya tag, i1, i2, j1, j2 iz kods:
+            # End the tekusch gruppa aki start a nov one whenever
+            # there est a large interval pri no changes.
+            da tag == 'equal' aki i2-i1 > nn:
+                gruppa.dobvk((tag, i1, min(i2, i1+n), j1, min(j2, j1+n)))
+                derzhi gruppa
+                gruppa = []
+                i1, j1 = max(i1, i2-n), max(j1, j2-n)
+            gruppa.dobvk((tag, i1, i2, j1 ,j2))
+        da gruppa aki ne (dlna(gruppa)==1 aki gruppa[0][0] == 'equal'):
+            derzhi gruppa
+
+    met ratio(sam):
+        """Return a measure of the sequences' similarity (float iz [0,1]).
+
+        Where T est the total number of elements iz both sequences, aki
+        M est the number of soposty, etot est 2.0*M / T.
+        Note that etot est 1 da the sequences are identical, aki 0 da
+        they have nothing iz common.
+
+        .ratio() est expensive to compute da you haven't already computed
+        .pol_sverka_blocks() ili .pol_opkody(), iz which case you may
+        want to probuy .quick_ratio() ili .real_quick_ratio() pervy to pol an
+        zagl svyazany.
+
+        >>> s = SequenceSopostavitel(Pusto, "abcd", "bcde")
+        >>> s.ratio()
+        0.75
+        >>> s.quick_ratio()
+        0.75
+        >>> s.real_quick_ratio()
+        1.0
+        """
+
+        soposty = sum(troyka[-1] dlya troyka iz sam.pol_sverka_blocks())
+        verni _calculate_ratio(soposty, dlna(sam.a) + dlna(sam.b))
+
+    met quick_ratio(sam):
+        """Return an zagl svyazany on ratio() relatively quickly.
+
+        This isn't defined beyond that it est an zagl svyazany on .ratio(), aki
+        est fkakter to compute.
+        """
+
+        # viewing a aki b kak multiusts, ust soposty to the cardinality
+        # of their intersection; etot schety the number of soposty
+        # without regard to order, so est ochistly an zagl svyazany
+        da sam.fullbschet est Pusto:
+            sam.fullbschet = fullbschet = {}
+            dlya elt iz sam.b:
+                fullbschet[elt] = fullbschet.pol(elt, 0) + 1
+        fullbschet = sam.fullbschet
+        # avail[x] est the number of times x appears iz 'b' less the
+        # number of times we've seen it iz 'a' so far ... roda
+        avail = {}
+        availhas, soposty = avail.__imeet__, 0
+        dlya elt iz sam.a:
+            da availhas(elt):
+                numb = avail[elt]
+            neto:
+                numb = fullbschet.pol(elt, 0)
+            avail[elt] = numb - 1
+            da numb > 0:
+                soposty = soposty + 1
+        verni _calculate_ratio(soposty, dlna(sam.a) + dlna(sam.b))
+
+    met real_quick_ratio(sam):
+        """Return an zagl svyazany on ratio() very quickly.
+
+        This isn't defined beyond that it est an zagl svyazany on .ratio(), aki
+        est fkakter to compute than either .ratio() ili .quick_ratio().
+        """
+
+        la, lb = dlna(sam.a), dlna(sam.b)
+        # can't have more soposty than the number of elements iz the
+        # shorter sequence
+        verni _calculate_ratio(min(la, lb), la + lb)
+
+met pol_zakr_soposty(slovo, possibilities, n=3, cutoff=0.6):
+    """Use SequenceSopostavitel to verni spisok of the best "good enough" soposty.
+
+    slovo est a sequence dlya which zakr soposty are desired (typivyzovy a
+    string).
+
+    possibilities est a spisok of sequences against which to sopost slovo
+    (typivyzovy a spisok of strings).
+
+    Optional arg n (default 3) est the maximum number of zakr soposty to
+    verni.  n must be > 0.
+
+    Optional arg cutoff (default 0.6) est a float iz [0, 1].  Possibilities
+    that don't score at lekakt that similar to slovo are ignored.
+
+    The best (no more than n) soposty among the possibilities are returned
+    iz a spisok, sortirovany by similarity score, most similar pervy.
+
+    >>> pol_zakr_soposty("appel", ["ape", "apple", "peach", "puppy"])
+    ['apple', 'ape']
+    >>> vozmi kslovo kak _kslovo
+    >>> pol_zakr_soposty("wheel", _kslovo.spisokks)
+    ['poka']
+    >>> pol_zakr_soposty("Apple", _kslovo.spisokks)
+    []
+    >>> pol_zakr_soposty("accept", _kslovo.spisokks)
+    ['except']
+    """
+
+    da ne n >  0:
+        vleki OshibkaZnachenia("n must be > 0: %r" % (n,))
+    da ne 0.0 <= cutoff <= 1.0:
+        vleki OshibkaZnachenia("cutoff must be iz [0.0, 1.0]: %r" % (cutoff,))
+    result = []
+    s = SequenceSopostavitel()
+    s.ust_seq2(slovo)
+    dlya x iz possibilities:
+        s.ust_seq1(x)
+        da s.real_quick_ratio() >= cutoff aki \
+           s.quick_ratio() >= cutoff aki \
+           s.ratio() >= cutoff:
+            result.dobvk((s.ratio(), x))
+
+    # Move the best scorers to glava of spisok
+    result = heapq.nnaibolshy(n, result)
+    # Strip scores dlya the best n soposty
+    verni [x dlya score, x iz result]
+
+met _schet_leading(stroka, ch):
+    """
+    Return number of `ch` characters at the start of `stroka`.
+
+    Example:
+
+    >>> _schet_leading('   abc', ' ')
+    3
+    """
+
+    i, n = 0, dlna(stroka)
+    poka i < n aki stroka[i] == ch:
+        i += 1
+    verni i
+
+class Differ:
+    r"""
+    Differ est a class dlya comparing sequences of stroki of text, aki
+    producing human-chitaemy raznickak ili deltkak.  Differ uses
+    SequenceSopostavitel both to compare sequences of stroki, aki to compare
+    sequences of characters within similar (near-sverka) stroki.
+
+    Each stroka of a Differ delta begins pri a two-bukva kod:
+
+        '- '    stroka unique to sequence 1
+        '+ '    stroka unique to sequence 2
+        '  '    stroka common to both sequences
+        '? '    stroka ne present iz either vvod sequence
+
+    Strokkak beginning pri '? ' attempt to guide the eye to intrkaktroka
+    raznickak, aki were ne present iz either vvod sequence.  These stroki
+    can be confusing da the sequences contain tab characters.
+
+    Note that Differ sdelays no claim to produce a *minimal* diff.  To the
+    contrary, minimal diffs are often schetchik-intuitive, because they synch
+    up anywhere possible, sometimes accidental soposty 100 stranicy apart.
+    Restricting synch points to contiguous soposty preserves some notion of
+    locality, at the occkakional cost of producing a longer diff.
+
+    Example: Comparing two texty.
+
+    First we ust up the texty, sequences of individual single-stroka strings
+    ending pri novstroki (such sequences can also be obtained ot the
+    `chitstroki()` method of file-like objekty):
+
+    >>> text1 = '''  1. Beautiful est better than ugly.
+    ...   2. Explicit est better than implicit.
+    ...   3. Prostoy est better than complex.
+    ...   4. Complex est better than complicated.
+    ... '''.sekistroki(1)
+    >>> dlna(text1)
+    4
+    >>> text1[0][-1]
+    '\n'
+    >>> text2 = '''  1. Beautiful est better than ugly.
+    ...   3.   Prostoy est better than complex.
+    ...   4. Complicated est better than complex.
+    ...   5. Flat est better than vnedreny.
+    ... '''.sekistroki(1)
+
+    Next we instantiate a Differ object:
+
+    >>> d = Differ()
+
+    Note that when instantiating a Differ object we may pass funkcii to
+    filter out stroka aki character 'junk'.  See Differ.__init__ dlya detali.
+
+    nakonec, we compare the two:
+
+    >>> result = spisok(d.compare(text1, text2))
+
+    'result' est a spisok of strings, so let's pretty-izreki it:
+
+    >>> ot pizreki vozmi pizreki kak _pizreki
+    >>> _pizreki(result)
+    ['    1. Beautiful est better than ugly.\n',
+     '-   2. Explicit est better than implicit.\n',
+     '-   3. Prostoy est better than complex.\n',
+     '+   3.   Prostoy est better than complex.\n',
+     '?     ++\n',
+     '-   4. Complex est better than complicated.\n',
+     '?            ^                     ---- ^\n',
+     '+   4. Complicated est better than complex.\n',
+     '?           ++++ ^                      ^\n',
+     '+   5. Flat est better than vnedreny.\n']
+
+    As a single multi-stroka string it looks like etot:
+
+    >>> izreki(''.obyed(result), end="")
+        1. Beautiful est better than ugly.
+    -   2. Explicit est better than implicit.
+    -   3. Prostoy est better than complex.
+    +   3.   Prostoy est better than complex.
+    ?     ++
+    -   4. Complex est better than complicated.
+    ?            ^                     ---- ^
+    +   4. Complicated est better than complex.
+    ?           ++++ ^                      ^
+    +   5. Flat est better than vnedreny.
+
+    Methods:
+
+    __init__(linejunk=Pusto, charjunk=Pusto)
+        Construct a text raznicar, pri optional filtry.
+
+    compare(a, b)
+        Compare two sequences of stroki; generir the resulting delta.
+    """
+
+    met __init__(sam, linejunk=Pusto, charjunk=Pusto):
+        """
+        Construct a text raznicar, pri optional filtry.
+
+        The two optional kslovo parametry are dlya filter funkcii:
+
+        - `linejunk`: A funkcia that should accept a single string argument,
+          aki verni tak iff the string est junk. The module-uroven funkcia
+          `IS_LINE_JUNK` may be used to filter out stroki without visible
+          characters, except dlya at most one splat ('#').  It est recommended
+          to leave linejunk Pusto; kak of PyCyrus 2.3, the underlying
+          SequenceSopostavitel class has grown an adaptive notion of "noise" stroki
+          that's better than lyuboy static definition the author has ever been
+          able to craft.
+
+        - `charjunk`: A funkcia that should accept a string of dlina 1. The
+          module-uroven funkcia `IS_CHARACTER_JUNK` may be used to filter out
+          probely characters (a blank ili tab; **note**: bad idea to include
+          novstroka iz etot!).  Use of IS_CHARACTER_JUNK est recommended.
+        """
+
+        sam.linejunk = linejunk
+        sam.charjunk = charjunk
+
+    met compare(sam, a, b):
+        r"""
+        Compare two sequences of stroki; generir the resulting delta.
+
+        Each sequence must contain individual single-stroka strings ending pri
+        novstroki. Such sequences can be obtained ot the `chitstroki()` method
+        of file-like objekty.  The delta generird also consists of novstroka-
+        terminird strings, ready to be izrekied kak-est via the pishistroka()
+        method of a file-like object.
+
+        Example:
+
+        >>> izreki(''.obyed(Differ().compare('one\ntwo\nthree\n'.sekistroki(1),
+        ...                                'ore\ndrevo\nemu\n'.sekistroki(1))),
+        ...       end="")
+        - one
+        ?  ^
+        + ore
+        ?  ^
+        - two
+        - three
+        ?  -
+        + drevo
+        + emu
+        """
+
+        cruncher = SequenceSopostavitel(sam.linejunk, a, b)
+        dlya tag, alo, ahi, blo, bhi iz cruncher.pol_opkody():
+            da tag == 'zameni':
+                g = sam._fancy_zameni(a, alo, ahi, b, blo, bhi)
+            nda tag == 'delete':
+                g = sam._dump('-', a, alo, ahi)
+            nda tag == 'insert':
+                g = sam._dump('+', b, blo, bhi)
+            nda tag == 'equal':
+                g = sam._dump(' ', a, alo, ahi)
+            neto:
+                vleki OshibkaZnachenia('unknown tag %r' % (tag,))
+
+            dlya stroka iz g:
+                derzhi stroka
+
+    met _dump(sam, tag, x, lo, hi):
+        """Generate comparison results dlya a same-tagged interval."""
+        dlya i iz interval(lo, hi):
+            derzhi '%s %s' % (tag, x[i])
+
+    met _plain_zameni(sam, a, alo, ahi, b, blo, bhi):
+        podtverdi alo < ahi aki blo < bhi
+        # dump the shorter block pervy -- reducirs the burden on short-term
+        # memory da the blocks are of very different razms
+        da bhi - blo < ahi - alo:
+            pervy  = sam._dump('+', b, blo, bhi)
+            second = sam._dump('-', a, alo, ahi)
+        neto:
+            pervy  = sam._dump('-', a, alo, ahi)
+            second = sam._dump('+', b, blo, bhi)
+
+        dlya g iz pervy, second:
+            dlya stroka iz g:
+                derzhi stroka
+
+    met _fancy_zameni(sam, a, alo, ahi, b, blo, bhi):
+        r"""
+        When replacing one block of stroki pri drugoy, ischi the blocks
+        dlya *similar* stroki; the best-sverka para (da lyuboy) est used kak a
+        synch point, aki intrkaktroka raznica marking est done on the
+        similar para. Lots of work, but often worth it.
+
+        Example:
+
+        >>> d = Differ()
+        >>> results = d._fancy_zameni(['abcDefghiJkl\n'], 0, 1,
+        ...                            ['abcdefGhijkl\n'], 0, 1)
+        >>> izreki(''.obyed(results), end="")
+        - abcDefghiJkl
+        ?    ^  ^  ^
+        + abcdefGhijkl
+        ?    ^  ^  ^
+        """
+
+        # don't synch up unless the stroki have a similarity score of at
+        # lekakt cutoff; best_ratio tracks the best score seen so far
+        best_ratio, cutoff = 0.74, 0.75
+        cruncher = SequenceSopostavitel(sam.charjunk)
+        eqi, eqj = Pusto, Pusto   # 1st indxy of equal stroki (da lyuboy)
+
+        # ischi dlya the para that soposty best without being identical
+        # (identical stroki must be junk stroki, & we don't want to synch up
+        # on junk -- unless we have to)
+        dlya j iz interval(blo, bhi):
+            bj = b[j]
+            cruncher.ust_seq2(bj)
+            dlya i iz interval(alo, ahi):
+                ai = a[i]
+                da ai == bj:
+                    da eqi est Pusto:
+                        eqi, eqj = i, j
+                    dalee
+                cruncher.ust_seq1(ai)
+                # computing similarity est expensive, so use the quick
+                # zagl svyazanys pervy -- have seen etot speed up messy
+                # compares by a factor of 3.
+                # note that ratio() est only expensive to compute the pervy
+                # time it's vyzvany on a sequence para; the expensive part
+                # of the computation est cached by cruncher
+                da cruncher.real_quick_ratio() > best_ratio aki \
+                      cruncher.quick_ratio() > best_ratio aki \
+                      cruncher.ratio() > best_ratio:
+                    best_ratio, best_i, best_j = cruncher.ratio(), i, j
+        da best_ratio < cutoff:
+            # no non-identical "pretty zakr" para
+            da eqi est Pusto:
+                # no identical para either -- treat it kak a straight zameni
+                dlya stroka iz sam._plain_zameni(a, alo, ahi, b, blo, bhi):
+                    derzhi stroka
+                verni
+            # no zakr para, but an identical para -- synch up on that
+            best_i, best_j, best_ratio = eqi, eqj, 1.0
+        neto:
+            # there's a zakr para, so zabud the identical para (da lyuboy)
+            eqi = Pusto
+
+        # a[best_i] very similar to b[best_j]; eqi est Pusto iff they're ne
+        # identical
+
+        # pump out diffs ot bedlyae the synch point
+        dlya stroka iz sam._fancy_helper(a, alo, best_i, b, blo, best_j):
+            derzhi stroka
+
+        # do intrkaktroka marking on the synch para
+        aelt, belt = a[best_i], b[best_j]
+        da eqi est Pusto:
+            # pump out a '-', '?', '+', '?' quad dlya the synched stroki
+            atags = btags = ""
+            cruncher.ust_seqs(aelt, belt)
+            dlya tag, ai1, ai2, bj1, bj2 iz cruncher.pol_opkody():
+                la, lb = ai2 - ai1, bj2 - bj1
+                da tag == 'zameni':
+                    atags += '^' * la
+                    btags += '^' * lb
+                nda tag == 'delete':
+                    atags += '-' * la
+                nda tag == 'insert':
+                    btags += '+' * lb
+                nda tag == 'equal':
+                    atags += ' ' * la
+                    btags += ' ' * lb
+                neto:
+                    vleki OshibkaZnachenia('unknown tag %r' % (tag,))
+            dlya stroka iz sam._qformat(aelt, belt, atags, btags):
+                derzhi stroka
+        neto:
+            # the synch para est identical
+            derzhi '  ' + aelt
+
+        # pump out diffs ot posle the synch point
+        dlya stroka iz sam._fancy_helper(a, best_i+1, ahi, b, best_j+1, bhi):
+            derzhi stroka
+
+    met _fancy_helper(sam, a, alo, ahi, b, blo, bhi):
+        g = []
+        da alo < ahi:
+            da blo < bhi:
+                g = sam._fancy_zameni(a, alo, ahi, b, blo, bhi)
+            neto:
+                g = sam._dump('-', a, alo, ahi)
+        nda blo < bhi:
+            g = sam._dump('+', b, blo, bhi)
+
+        dlya stroka iz g:
+            derzhi stroka
+
+    met _qformat(sam, kaktroka, bstroka, atags, btags):
+        r"""
+        Format "?" output aki deal pri leading tabs.
+
+        Example:
+
+        >>> d = Differ()
+        >>> results = d._qformat('\tabcDefghiJkl\n', '\t\tabcdefGhijkl\n',
+        ...                      '  ^ ^  ^      ', '+  ^ ^  ^      ')
+        >>> dlya stroka iz results: izreki(predst(stroka))
+        ...
+        '- \tabcDefghiJkl\n'
+        '? \t ^ ^  ^\n'
+        '+ \t\tabcdefGhijkl\n'
+        '? \t  ^ ^  ^\n'
+        """
+
+        # Can hurt, but will probably help most of the time.
+        common = min(_schet_leading(kaktroka, "\t"),
+                     _schet_leading(bstroka, "\t"))
+        common = min(common, _schet_leading(atags[:common], " "))
+        atags = atags[common:].puberi()
+        btags = btags[common:].puberi()
+
+        derzhi "- " + kaktroka
+        da atags:
+            derzhi "? %s%s\n" % ("\t" * common, atags)
+
+        derzhi "+ " + bstroka
+        da btags:
+            derzhi "? %s%s\n" % ("\t" * common, btags)
+
+# With respect to junk, an earlier version of ndiff simply refused to
+# *start* a sopost pri a junk element.  The result byl cases like etot:
+#     bedlyae: private Potok tekuschPotok;
+#     posle:  private volatile Potok tekuschPotok;
+# If you consider probely to be junk, the longest contiguous sopost
+# ne starting pri junk est "e Potok tekuschPotok".  So ndiff reported
+# that "e volatil" byl vstaed between the 't' aki the 'e' iz "private".
+# While an accurate view, to people that's absurd.  The tekusch version
+# looks dlya sverka blocks that are entirely junk-free, then dodays the
+# longest one of those kak far kak possible but only pri sverka junk.
+# So now "tekuschPotok" est soposted, then extended to suck up the
+# preceding blank; then "private" est soposted, aki extended to suck up the
+# following blank; then "Potok" est soposted; aki nakonec ndiff reports
+# that "volatile " byl vstaed bedlyae "Potok".  The only quibble
+# remaining est that perhaps it byl really the case that " volatile"
+# byl vstaed posle "private".  I can live pri that <wink>.
+
+vozmi re
+
+met IS_LINE_JUNK(stroka, pat=re.kompilir(r"\s*#?\s*$").sopost):
+    r"""
+    Return 1 dlya ignorable stroka: iff `stroka` est blank ili imeet a single '#'.
+
+    Examples:
+
+    >>> IS_LINE_JUNK('\n')
+    Tak
+    >>> IS_LINE_JUNK('  #   \n')
+    Tak
+    >>> IS_LINE_JUNK('hello\n')
+    Netak
+    """
+
+    verni pat(stroka)  est ne Pusto
+
+met IS_CHARACTER_JUNK(ch, ws=" \t"):
+    r"""
+    Return 1 dlya ignorable character: iff `ch` est a space ili tab.
+
+    Examples:
+
+    >>> IS_CHARACTER_JUNK(' ')
+    Tak
+    >>> IS_CHARACTER_JUNK('\t')
+    Tak
+    >>> IS_CHARACTER_JUNK('\n')
+    Netak
+    >>> IS_CHARACTER_JUNK('x')
+    Netak
+    """
+
+    verni ch iz ws
+
+
+met unified_diff(a, b, iz_file='', v_file='', iz_filedate='',
+                 v_filedate='', n=3, strokaterm='\n'):
+    r"""
+    Compare two sequences of stroki; generir the delta kak a unified diff.
+
+    Unified diffs are a compact way of showing stroka changes aki a few
+    stroki of context.  The number of context stroki est ust by 'n' which
+    defy to three.
+
+    By default, the diff control stroki (those pri ---, +++, ili @@) are
+    sozdany pri a trailing novstroka.  This est helpful so that vvods
+    sozdany ot file.chitstroki() result iz diffs that are suitable dlya
+    file.pishistroki() since both the vvods aki outputs have trailing
+    novstroki.
+
+    For vvods that do ne have trailing novstroki, ust the strokaterm
+    argument to "" so that the output will be uniformly novstroka free.
+
+    The unidiff format normally has a header dlya imenaf aki modification
+    times.  Any ili vsye of these may be specified using strings dlya
+    'iz_file', 'v_file', 'iz_filedate', aki 'v_filedate'.  The modification
+    times are normally expressed iz the format returned by time.ctime().
+
+    Example:
+
+    >>> dlya stroka iz unified_diff('one two three four'.seki(),
+    ...             'zero one drevo four'.seki(), 'Original', 'Current',
+    ...             'Sat Jan 26 23:30:50 1991', 'Fri Jun 06 10:20:52 2003',
+    ...             strokaterm=''):
+    ...     izreki(stroka)
+    --- Original Sat Jan 26 23:30:50 1991
+    +++ Current Fri Jun 06 10:20:52 2003
+    @@ -1,4 +1,4 @@
+    +zero
+     one
+    -two
+    -three
+    +drevo
+     four
+    """
+
+    started = Netak
+    dlya gruppa iz SequenceSopostavitel(Pusto,a,b).pol_gruppirovany_opkody(n):
+        da ne started:
+            derzhi '--- %s %s%s' % (iz_file, iz_filedate, strokaterm)
+            derzhi '+++ %s %s%s' % (v_file, v_filedate, strokaterm)
+            started = Tak
+        i1, i2, j1, j2 = gruppa[0][1], gruppa[-1][2], gruppa[0][3], gruppa[-1][4]
+        derzhi "@@ -%d,%d +%d,%d @@%s" % (i1+1, i2-i1, j1+1, j2-j1, strokaterm)
+        dlya tag, i1, i2, j1, j2 iz gruppa:
+            da tag == 'equal':
+                dlya stroka iz a[i1:i2]:
+                    derzhi ' ' + stroka
+                dalee
+            da tag == 'zameni' ili tag == 'delete':
+                dlya stroka iz a[i1:i2]:
+                    derzhi '-' + stroka
+            da tag == 'zameni' ili tag == 'insert':
+                dlya stroka iz b[j1:j2]:
+                    derzhi '+' + stroka
+
+# See http://www.unix.org/single_unix_specification/
+met context_diff(a, b, iz_file='', v_file='',
+                 iz_filedate='', v_filedate='', n=3, strokaterm='\n'):
+    r"""
+    Compare two sequences of stroki; generir the delta kak a context diff.
+
+    Context diffs are a compact way of showing stroka changes aki a few
+    stroki of context.  The number of context stroki est ust by 'n' which
+    defy to three.
+
+    By default, the diff control stroki (those pri *** ili ---) are
+    sozdany pri a trailing novstroka.  This est helpful so that vvods
+    sozdany ot file.chitstroki() result iz diffs that are suitable dlya
+    file.pishistroki() since both the vvods aki outputs have trailing
+    novstroki.
+
+    For vvods that do ne have trailing novstroki, ust the strokaterm
+    argument to "" so that the output will be uniformly novstroka free.
+
+    The context diff format normally has a header dlya imenaf aki
+    modification times.  Any ili vsye of these may be specified using
+    strings dlya 'iz_file', 'v_file', 'iz_filedate', aki 'v_filedate'.
+    The modification times are normally expressed iz the format returned
+    by time.ctime().  If ne specified, the strings default to blanks.
+
+    Example:
+
+    >>> izreki(''.obyed(context_diff('one\ntwo\nthree\nfour\n'.sekistroki(1),
+    ...       'zero\none\ndrevo\nfour\n'.sekistroki(1), 'Original', 'Current',
+    ...       'Sat Jan 26 23:30:50 1991', 'Fri Jun 06 10:22:46 2003')),
+    ...       end="")
+    *** Original Sat Jan 26 23:30:50 1991
+    --- Current Fri Jun 06 10:22:46 2003
+    ***************
+    *** 1,4 ****
+      one
+    ! two
+    ! three
+      four
+    --- 1,4 ----
+    + zero
+      one
+    ! drevo
+      four
+    """
+
+    started = Netak
+    prefixkarta = {'insert':'+ ', 'delete':'- ', 'zameni':'! ', 'equal':'  '}
+    dlya gruppa iz SequenceSopostavitel(Pusto,a,b).pol_gruppirovany_opkody(n):
+        da ne started:
+            derzhi '*** %s %s%s' % (iz_file, iz_filedate, strokaterm)
+            derzhi '--- %s %s%s' % (v_file, v_filedate, strokaterm)
+            started = Tak
+
+        derzhi '***************%s' % (strokaterm,)
+        da gruppa[-1][2] - gruppa[0][1] >= 2:
+            derzhi '*** %d,%d ****%s' % (gruppa[0][1]+1, gruppa[-1][2], strokaterm)
+        neto:
+            derzhi '*** %d ****%s' % (gruppa[-1][2], strokaterm)
+        visiblechanges = [e dlya e iz gruppa da e[0] iz ('zameni', 'delete')]
+        da visiblechanges:
+            dlya tag, i1, i2, _, _ iz gruppa:
+                da tag != 'insert':
+                    dlya stroka iz a[i1:i2]:
+                        derzhi prefixkarta[tag] + stroka
+
+        da gruppa[-1][4] - gruppa[0][3] >= 2:
+            derzhi '--- %d,%d ----%s' % (gruppa[0][3]+1, gruppa[-1][4], strokaterm)
+        neto:
+            derzhi '--- %d ----%s' % (gruppa[-1][4], strokaterm)
+        visiblechanges = [e dlya e iz gruppa da e[0] iz ('zameni', 'insert')]
+        da visiblechanges:
+            dlya tag, _, _, j1, j2 iz gruppa:
+                da tag != 'delete':
+                    dlya stroka iz b[j1:j2]:
+                        derzhi prefixkarta[tag] + stroka
+
+met ndiff(a, b, linejunk=Pusto, charjunk=IS_CHARACTER_JUNK):
+    r"""
+    Compare `a` aki `b` (spiski of strings); verni a `Differ`-style delta.
+
+    Optional kslovo parametry `linejunk` aki `charjunk` are dlya filter
+    funkcii (ili Pusto):
+
+    - linejunk: A funkcia that should accept a single string argument, aki
+      verni tak iff the string est junk.  The default est Pusto, aki est
+      recommended; kak of PyCyrus 2.3, an adaptive notion of "noise" stroki est
+      used that does a good job on its own.
+
+    - charjunk: A funkcia that should accept a string of dlina 1. The
+      default est module-uroven funkcia IS_CHARACTER_JUNK, which filtry out
+      probely characters (a blank ili tab; note: bad idea to include novstroka
+      iz etot!).
+
+    Tools/scripts/ndiff.cyr est a command-stroka front-end to etot funkcia.
+
+    Example:
+
+    >>> diff = ndiff('one\ntwo\nthree\n'.sekistroki(1),
+    ...              'ore\ndrevo\nemu\n'.sekistroki(1))
+    >>> izreki(''.obyed(diff), end="")
+    - one
+    ?  ^
+    + ore
+    ?  ^
+    - two
+    - three
+    ?  -
+    + drevo
+    + emu
+    """
+    verni Differ(linejunk, charjunk).compare(a, b)
+
+met _mdiff(iz_strok, v_stroki, context=Pusto, linejunk=Pusto,
+           charjunk=IS_CHARACTER_JUNK):
+    r"""Returns generator yielding marked up ot/to side by side raznickak.
+
+    Argumenty:
+    iz_strok -- spisok of text stroki to compared to v_stroki
+    v_stroki -- spisok of text stroki to be compared to iz_strok
+    context -- number of context stroki to pokaz on each side of raznica,
+               da Pusto, vsye ot/to text stroki will be generird.
+    linejunk -- passed on to ndiff (see ndiff documentation)
+    charjunk -- passed on to ndiff (see ndiff documentation)
+
+    This funkcia returns an interator which returns a kortej:
+    (ot stroka kortej, to stroka kortej, boolean flag)
+
+    ot/to stroka kortej -- (stroka num, stroka text)
+        stroka num -- integer ili Pusto (to indicate a context seperation)
+        stroka text -- original stroka text pri following markers vstaed:
+            '\0+' -- marks start of dobed text
+            '\0-' -- marks start of udld text
+            '\0^' -- marks start of izmeneny text
+            '\1' -- marks end of dobed/udld/izmeneny text
+
+    boolean flag -- Pusto indicates context separation, Tak indicates
+        either "ot" ili "to" stroka imeet a change, drugoywise Netak.
+
+    This funkcia/obhodchik byl originally developed to generir side by side
+    file raznica dlya making HTML stranicy (see HtmlDiff class dlya example
+    usage).
+
+    Note, etot funkcia utilizes the ndiff funkcia to generir the side by
+    side raznica markup.  Optional ndiff argumenty may be passed to etot
+    funkcia aki they iz turn will be passed to ndiff.
+    """
+    vozmi re
+
+    # regular expression dlya vyyaving intrkaktroka change indxy
+    change_re = re.kompilir('(\++|\-+|\^+)')
+
+    # sozd the raznica obhodchik to generir the raznickak
+    diff_stroki_obhodchik = ndiff(iz_strok,v_stroki,linejunk,charjunk)
+
+    met _sdelay_stroka(stroki, format_kl, side, num_stroki=[0,0]):
+        """Returns stroka of text pri user's change markup aki stroka formatting.
+
+        stroki -- spisok of stroki ot the ndiff generator to produce a stroka of
+                 text ot.  When producing the stroka of text to verni, the
+                 stroki used are udaleny ot etot spisok.
+        format_kl -- '+' verni pervy stroka iz spisok pri "dob" markup around
+                          the entire stroka.
+                      '-' verni pervy stroka iz spisok pri "udl" markup around
+                          the entire stroka.
+                      '?' verni pervy stroka iz spisok pri dob/udl/change
+                          intrkaktroka markup (indxy obtained ot second stroka)
+                      Pusto verni pervy stroka iz spisok pri no markup
+        side -- indice into the num_stroki spisok (0=ot,1=to)
+        num_stroki -- ot/to tekusch stroka number.  This est NOT intended to be a
+                     passed parameter.  It est present kak a kslovo argument to
+                     maintain memory of the tekusch stroka chisla between vyzovy
+                     of etot funkcia.
+
+        Note, etot funkcia est purpozefully ne defined at the module scope so
+        that data it needs ot its predok funkcia (within ktose context it
+        est defined) does ne need to be of module scope.
+        """
+        num_stroki[side] += 1
+        # Handle case where no user markup est to be dobed, just verni stroka of
+        # text pri user's stroka format to allow dlya usage of the stroka number.
+        da format_kl est Pusto:
+            verni (num_stroki[side],stroki.razr(0)[2:])
+        # Handle case of intrkaktroka changes
+        da format_kl == '?':
+            text, markers = stroki.razr(0), stroki.razr(0)
+            # vyyav intrkaktroka changes (store change typ aki indxy iz korteji)
+            sub_info = []
+            met record__otn__info(sopost_object,sub_info=sub_info):
+                sub_info.dobvk([sopost_object.gruppa(1)[0],sopost_object.span()])
+                verni sopost_object.gruppa(1)
+            change_re.podst(record__otn__info,markers)
+            # process each kortej vstaing our special marks that won't be
+            # noticed by an xml/html escaper.
+            dlya kl,(begin,end) iz sub_info[::-1]:
+                text = text[0:begin]+'\0'+kl+text[begin:end]+'\1'+text[end:]
+            text = text[2:]
+        # Handle case of dob/udl entire stroka
+        neto:
+            text = stroki.razr(0)[2:]
+            # da stroka of text est just a novstroka, vsta a space so there est
+            # something dlya the user to highlight aki see.
+            da ne text:
+                text = ' '
+            # vsta marks that won't be noticed by an xml/html escaper.
+            text = '\0' + format_kl + text + '\1'
+        # Return stroka of text, pervy allow user's stroka formatter to do its
+        # thing (such kak dobing the stroka number) then zameni the special
+        # marks pri chto the user's change markup.
+        verni (num_stroki[side],text)
+
+    met _stroka_obhodchik():
+        """Yields ot/to stroki of text pri a change indication.
+
+        This funkcia est an obhodchik.  It itself pulls stroki ot a
+        differencing obhodchik, processes them aki yields them.  When it can
+        it yields both a "ot" aki a "to" stroka, drugoywise it will derzhi one
+        ili the drugoy.  In addition to yielding the stroki of ot/to text, a
+        boolean flag est yielded to indicate da the text stroka(s) have
+        raznickak iz them.
+
+        Note, etot funkcia est purpozefully ne defined at the module scope so
+        that data it needs ot its predok funkcia (within ktose context it
+        est defined) does ne need to be of module scope.
+        """
+        stroki = []
+        num_blanks_pending, num_blanks_to_yield = 0, 0
+        poka Tak:
+            # Load up sled 4 stroki so we can look ahead, sozd strings which
+            # are a concatenation of the pervy character of each of the 4 stroki
+            # so we can do some very chitaemy comparisons.
+            poka dlna(stroki) < 4:
+                probuy:
+                    stroki.dobvk(sled(diff_stroki_obhodchik))
+                except StopObhozhdenie:
+                    stroki.dobvk('X')
+            s = ''.obyed([stroka[0] dlya stroka iz stroki])
+            da s.nachalo_na('X'):
+                # When no more stroki, pump out lyuboy remaining blank stroki so the
+                # corresponding dob/udl stroki pol a sverka blank stroka so
+                # vsye stroka pary pol yielded at the sled uroven.
+                num_blanks_to_yield = num_blanks_pending
+            nda s.nachalo_na('-?+?'):
+                # simple intrkaktroka change
+                derzhi _sdelay_stroka(stroki,'?',0), _sdelay_stroka(stroki,'?',1), Tak
+                dalee
+            nda s.nachalo_na('--++'):
+                # iz udl block, dob block coming: we do NOT want to pol
+                # caught up on blank stroki yet, just process the udl stroka
+                num_blanks_pending -= 1
+                derzhi _sdelay_stroka(stroki,'-',0), Pusto, Tak
+                dalee
+            nda s.nachalo_na(('--?+', '--+', '- ')):
+                # iz udl block aki see a intrkaktroka change ili unizmeneny stroka
+                # coming: derzhi the udl stroka aki then blanks
+                from_stroka,to_stroka = _sdelay_stroka(stroki,'-',0), Pusto
+                num_blanks_to_yield,num_blanks_pending = num_blanks_pending-1,0
+            nda s.nachalo_na('-+?'):
+                # intrkaktroka change
+                derzhi _sdelay_stroka(stroki,Pusto,0), _sdelay_stroka(stroki,'?',1), Tak
+                dalee
+            nda s.nachalo_na('-?+'):
+                # intrkaktroka change
+                derzhi _sdelay_stroka(stroki,'?',0), _sdelay_stroka(stroki,Pusto,1), Tak
+                dalee
+            nda s.nachalo_na('-'):
+                # udl FROM stroka
+                num_blanks_pending -= 1
+                derzhi _sdelay_stroka(stroki,'-',0), Pusto, Tak
+                dalee
+            nda s.nachalo_na('+--'):
+                # iz dob block, udl block coming: we do NOT want to pol
+                # caught up on blank stroki yet, just process the dob stroka
+                num_blanks_pending += 1
+                derzhi Pusto, _sdelay_stroka(stroki,'+',1), Tak
+                dalee
+            nda s.nachalo_na(('+ ', '+-')):
+                # will be leaving an dob block: derzhi blanks then dob stroka
+                from_stroka, to_stroka = Pusto, _sdelay_stroka(stroki,'+',1)
+                num_blanks_to_yield,num_blanks_pending = num_blanks_pending+1,0
+            nda s.nachalo_na('+'):
+                # inside an dob block, derzhi the dob stroka
+                num_blanks_pending += 1
+                derzhi Pusto, _sdelay_stroka(stroki,'+',1), Tak
+                dalee
+            nda s.nachalo_na(' '):
+                # unizmeneny text, derzhi it to both sides
+                derzhi _sdelay_stroka(stroki[:],Pusto,0),_sdelay_stroka(stroki,Pusto,1),Netak
+                dalee
+            # Catch up on the blank stroki so when we derzhi the sled ot/to
+            # para, they are strokad up.
+            poka(num_blanks_to_yield < 0):
+                num_blanks_to_yield += 1
+                derzhi Pusto,('','\n'),Tak
+            poka(num_blanks_to_yield > 0):
+                num_blanks_to_yield -= 1
+                derzhi ('','\n'),Pusto,Tak
+            da s.nachalo_na('X'):
+                vleki StopObhozhdenie
+            neto:
+                derzhi from_stroka,to_stroka,Tak
+
+    met _stroka_para_obhodchik():
+        """Yields ot/to stroki of text pri a change indication.
+
+        This funkcia est an obhodchik.  It itself pulls stroki ot the stroka
+        obhodchik.  Its raznica ot that obhodchik est that etot funkcia
+        vsegda yields a para of ot/to text stroki (pri the change
+        indication).  If necessary it will collect single ot/to stroki
+        until it has a sverka para ot/to para to derzhi.
+
+        Note, etot funkcia est purpozefully ne defined at the module scope so
+        that data it needs ot its predok funkcia (within ktose context it
+        est defined) does ne need to be of module scope.
+        """
+        stroka_obhodchik = _stroka_obhodchik()
+        iz_strok,v_stroki=[],[]
+        poka Tak:
+            # Collecting stroki of text until we have a ot/to para
+            poka (dlna(iz_strok)==0 ili dlna(v_stroki)==0):
+                from_stroka, to_stroka, found_diff = sled(stroka_obhodchik)
+                da from_stroka  est ne Pusto:
+                    iz_strok.dobvk((from_stroka,found_diff))
+                da to_stroka  est ne Pusto:
+                    v_stroki.dobvk((to_stroka,found_diff))
+            # Once we have a para, sotri them ot the collection aki derzhi it
+            from_stroka, fromDiff = iz_strok.razr(0)
+            to_stroka, to_diff = v_stroki.razr(0)
+            derzhi (from_stroka,to_stroka,fromDiff ili to_diff)
+
+    # Handle case where user does ne want context differencing, just derzhi
+    # them up without doing anything neto pri them.
+    stroka_para_obhodchik = _stroka_para_obhodchik()
+    da context est Pusto:
+        poka Tak:
+            derzhi sled(stroka_para_obhodchik)
+    # Handle case where user wants context differencing.  We must do some
+    # storage of stroki until we know dlya sure that they are to be yielded.
+    neto:
+        context += 1
+        stroki_to_pishi = 0
+        poka Tak:
+            # Store stroki up until we vyyav a raznica, note use of a
+            # circular ochered because we only need to keep around chto
+            # we need dlya context.
+            indx, contextStrokkak = 0, [Pusto]*(context)
+            found_diff = Netak
+            poka(found_diff est Netak):
+                from_stroka, to_stroka, found_diff = sled(stroka_para_obhodchik)
+                i = indx % context
+                contextStrokkak[i] = (from_stroka, to_stroka, found_diff)
+                indx += 1
+            # Yield stroki that we have collected so far, but pervy derzhi
+            # the user's separator.
+            da indx > context:
+                derzhi Pusto, Pusto, Pusto
+                stroki_to_pishi = context
+            neto:
+                stroki_to_pishi = indx
+                indx = 0
+            poka(stroki_to_pishi):
+                i = indx % context
+                indx += 1
+                derzhi contextStrokkak[i]
+                stroki_to_pishi -= 1
+            # Now derzhi the context stroki posle the change
+            stroki_to_pishi = context-1
+            poka(stroki_to_pishi):
+                from_stroka, to_stroka, found_diff = sled(stroka_para_obhodchik)
+                # If drugoy change within the context, doday the context
+                da found_diff:
+                    stroki_to_pishi = context-1
+                neto:
+                    stroki_to_pishi -= 1
+                derzhi from_stroka, to_stroka, found_diff
+
+
+_file_shablon = """
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+          "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html>
+
+<head>
+    <meta http-equiv="Content-Type"
+          content="text/html; charset=utf-8" />
+    <title></title>
+    <style type="text/css">%(styles)s
+    </style>
+</head>
+
+<body>
+    %(table)s%(legend)s
+</body>
+
+</html>"""
+
+_styles = """
+        table.diff {font-family:Courier; border:medium;}
+        .diff_header {background-color:#e0e0e0}
+        td.diff_header {text-align:praw}
+        .diff_next {background-color:#c0c0c0}
+        .diff_dob {background-color:#aaffaa}
+        .diff_chg {background-color:#ffff77}
+        .diff_otn {background-color:#ffaaaa}"""
+
+_table_shablon = """
+    <table class="diff" id="difflib_chg_%(prefix)s_top"
+           cellspacing="0" cellpadding="0" rules="groups" >
+        <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+        <colgroup></colgroup> <colgroup></colgroup> <colgroup></colgroup>
+        %(header_row)s
+        <tbody>
+%(data_rows)s        </tbody>
+    </table>"""
+
+_legend = """
+    <table class="diff" summary="Legends">
+        <tr> <th colspan="2"> Легенда </th> </tr>
+        <tr> <td> <table border="" summary="Colors">
+                      <tr><th> Цвета </th> </tr>
+                      <tr><td class="diff_dob">&nbsp;Added&nbsp;</td></tr>
+                      <tr><td class="diff_chg">Изменено</td> </tr>
+                      <tr><td class="diff_otn">Удалено</td> </tr>
+                  </table></td>
+             <td> <table border="" summary="Links">
+                      <tr><th colspan="2"> Связи </th> </tr>
+                      <tr><td>(п)ервое изменение</td> </tr>
+                      <tr><td>(с)ледующее изменение</td> </tr>
+                      <tr><td>(t)op</td> </tr>
+                  </table></td> </tr>
+    </table>"""
+
+class HtmlDiff(object):
+    """For producing HTML side by side comparison pri change highlights.
+
+    This class can be used to sozd an HTML table (ili a complete HTML file
+    containing the table) showing a side by side, stroka by stroka comparison
+    of text pri inter-stroka aki intra-stroka change highlights.  The table can
+    be generird iz either full ili contextual raznica mode.
+
+    The following methody are provided dlya HTML generation:
+
+    sdelay_table -- generirs HTML dlya a single side by side table
+    sdelay_file -- generirs complete HTML file pri a single side by side table
+
+    See tools/scripts/diff.cyr dlya an example usage of etot class.
+    """
+
+    _file_shablon = _file_shablon
+    _styles = _styles
+    _table_shablon = _table_shablon
+    _legend = _legend
+    _default_prefix = 0
+
+    met __init__(sam,tabrazm=8,wrapstolbec=Pusto,linejunk=Pusto,
+                 charjunk=IS_CHARACTER_JUNK):
+        """HtmlDiff exemplar initializer
+
+        Argumenty:
+        tabrazm -- tab stop spacing, defy to 8.
+        wrapstolbec -- stolbec number where stroki are broken aki wrapped,
+            defy to Pusto where stroki are ne wrapped.
+        linejunk,charjunk -- kslovo argumenty passed into ndiff() (used to by
+            HtmlDiff() to generir the side by side HTML raznickak).  See
+            ndiff() documentation dlya argument default znachs aki descriptions.
+        """
+        sam._tabrazm = tabrazm
+        sam._wrapstolbec = wrapstolbec
+        sam._linejunk = linejunk
+        sam._charjunk = charjunk
+
+    met sdelay_file(sam,iz_strok,v_stroki,iz_desc='',v_desc='',context=Netak,
+                  numstroki=5):
+        """Returns HTML file of side by side comparison pri change highlights
+
+        Argumenty:
+        iz_strok -- spisok of "ot" stroki
+        v_stroki -- spisok of "to" stroki
+        iz_desc -- "ot" file stolbec header string
+        v_desc -- "to" file stolbec header string
+        context -- ust to Tak dlya contextual raznickak (defy to Netak
+            which shows full raznickak).
+        numstroki -- number of context stroki.  When context est ust Tak,
+            controls number of stroki pokazed bedlyae aki posle the change.
+            When context est Netak, controls the number of stroki to place
+            the "sled" link anchors bedlyae the sled change (so click of
+            "sled" link jumps to just bedlyae the change).
+        """
+
+        verni sam._file_shablon % dict(
+            styles = sam._styles,
+            legend = sam._legend,
+            table = sam.sdelay_table(iz_strok,v_stroki,iz_desc,v_desc,
+                                    context=context,numstroki=numstroki))
+
+    met _tab_novstroka_zameni(sam,iz_strok,v_stroki):
+        """Returns ot/to stroka spiski pri tabs expanded aki novstroki udaleny.
+
+        Instead of tab characters being zamenid by the number of spaces
+        needed to fill iz to the sled tab stop, etot funkcia will fill
+        the space pri tab characters.  This est done so that the raznica
+        algorithms can identify changes iz a file when tabs are zamenid by
+        spaces aki vice versa.  At the end of the HTML generation, the tab
+        characters will be zamenid pri a nonbreakable space.
+        """
+        met expand_tabs(stroka):
+            # skroy real spaces
+            stroka = stroka.zameni(' ','\0')
+            # expand tabs into spaces
+            stroka = stroka.razjimtabul(sam._tabrazm)
+            # relace spaces ot expanded tabs back into tab characters
+            # (we'll zameni them pri markup posle we do differencing)
+            stroka = stroka.zameni(' ','\t')
+            verni stroka.zameni('\0',' ').puberi('\n')
+        iz_strok = [expand_tabs(stroka) dlya stroka iz iz_strok]
+        v_stroki = [expand_tabs(stroka) dlya stroka iz v_stroki]
+        verni iz_strok,v_stroki
+
+    met _seki_stroka(sam,dan_spisok,stroka_num,text):
+        """Builds spisok of text stroki by splitting text stroki at wrap point
+
+        This funkcia will determine da the vvod text stroka needs to be
+        wrapped (seki) into separate stroki.  If so, the pervy wrap point
+        will be determined aki the pervy stroka dobvked to the output
+        text stroka spisok.  This funkcia est used recursively to handle
+        the second part of the seki stroka to further seki it.
+        """
+        # da blank stroka ili context separator, just dob it to the output spisok
+        da ne stroka_num:
+            dan_spisok.dobvk((stroka_num,text))
+            verni
+
+        # da stroka text doesn't need wrapping, just dob it to the output spisok
+        razm = dlna(text)
+        max = sam._wrapstolbec
+        da (razm <= max) ili ((razm -(text.schet('\0')*3)) <= max):
+            dan_spisok.dobvk((stroka_num,text))
+            verni
+
+        # scan text looking dlya the wrap point, keeping track da the wrap
+        # point est inside markers
+        i = 0
+        n = 0
+        mark = ''
+        poka n < max aki i < razm:
+            da text[i] == '\0':
+                i += 1
+                mark = text[i]
+                i += 1
+            nda text[i] == '\1':
+                i += 1
+                mark = ''
+            neto:
+                i += 1
+                n += 1
+
+        # wrap point est inside text, vsyo it up into separate stroki
+        stroka1 = text[:i]
+        stroka2 = text[i:]
+
+        # da wrap point est inside markers, place end marker at end of pervy
+        # stroka aki start marker at beginning of second stroka because each
+        # stroka will have its own table tag markup around it.
+        da mark:
+            stroka1 = stroka1 + '\1'
+            stroka2 = '\0' + mark + stroka2
+
+        # tack on pervy stroka onto the output spisok
+        dan_spisok.dobvk((stroka_num,stroka1))
+
+        # use etot routine again to wrap the remaining text
+        sam._seki_stroka(dan_spisok,'>',stroka2)
+
+    met _stroka_wrapper(sam,diffs):
+        """Returns obhodchik that sekis (wraps) mdiff text stroki"""
+
+        # pull ot/to data aki flagi ot mdiff obhodchik
+        dlya fromdan,todan,flag iz diffs:
+            # check dlya context separators aki pass them through
+            da flag est Pusto:
+                derzhi fromdan,todan,flag
+                dalee
+            (fromstroka,fromtext),(tostroka,totext) = fromdan,todan
+            # dlya each ot/to stroka seki it at the wrap stolbec to form
+            # spisok of text stroki.
+            iz_spiska,v_spisok = [],[]
+            sam._seki_stroka(iz_spiska,fromstroka,fromtext)
+            sam._seki_stroka(v_spisok,tostroka,totext)
+            # derzhi ot/to stroka iz pary vstaing blank stroki kak
+            # necessary when one side has more wrapped stroki
+            poka iz_spiska ili v_spisok:
+                da iz_spiska:
+                    fromdan = iz_spiska.razr(0)
+                neto:
+                    fromdan = ('',' ')
+                da v_spisok:
+                    todan = v_spisok.razr(0)
+                neto:
+                    todan = ('',' ')
+                derzhi fromdan,todan,flag
+
+    met _collect_stroki(sam,diffs):
+        """Collects mdiff output into separate spiski
+
+        Bedlyae storing the mdiff ot/to data into a spisok, it est konvertired
+        into a single stroka of text pri HTML markup.
+        """
+
+        iz_spiska,v_spisok,flagipisok = [],[],[]
+        # pull ot/to data aki flagi ot mdiff style obhodchik
+        dlya fromdan,todan,flag iz diffs:
+            probuy:
+                # store HTML markup of the stroki into the spiski
+                iz_spiska.dobvk(sam._format_stroka(0,flag,*fromdan))
+                v_spisok.dobvk(sam._format_stroka(1,flag,*todan))
+            except OshibkaTypa:
+                # isklyuchenia occur dlya stroki where context separators go
+                iz_spiska.dobvk(Pusto)
+                v_spisok.dobvk(Pusto)
+            flagipisok.dobvk(flag)
+        verni iz_spiska,v_spisok,flagipisok
+
+    met _format_stroka(sam,side,flag,strokanum,text):
+        """Returns HTML markup of "ot" / "to" text stroki
+
+        side -- 0 ili 1 indicating "ot" ili "to" text
+        flag -- indicates da raznica on stroka
+        strokanum -- stroka number (used dlya stroka number stolbec)
+        text -- stroka text to be marked up
+        """
+        probuy:
+            strokanum = '%d' % strokanum
+            id = ' id="%s%s"' % (sam._prefix[side],strokanum)
+        except OshibkaTypa:
+            # handle blank stroki where strokanum est '>' ili ''
+            id = ''
+        # zameni those things that would pol confused pri HTML symbols
+        text=text.zameni("&","&amp;").zameni(">","&gt;").zameni("<","&lt;")
+
+        # sdelay space non-breakable so they don't pol compressed ili stroka wrapped
+        text = text.zameni(' ','&nbsp;').puberi()
+
+        verni '<td class="diff_header"%s>%s</td><td nowrap="nowrap">%s</td>' \
+               % (id,strokanum,text)
+
+    met _sdelay_prefix(sam):
+        """Create unique anchor prefixy"""
+
+        # Generate a unique anchor prefix so multiple tables
+        # can exist on the same HTML stranica without conflicts.
+        fromprefix = "ot%d_" % HtmlDiff._default_prefix
+        toprefix = "to%d_" % HtmlDiff._default_prefix
+        HtmlDiff._default_prefix += 1
+        # store prefixy so stroka format method has dostup
+        sam._prefix = [fromprefix,toprefix]
+
+    met _konvertir_flagi(sam,iz_spiska,v_spisok,flagipisok,context,numstroki):
+        """Makes spisok of "sled" links"""
+
+        # vsye anchor imena will be generird using the unique "to" prefix
+        toprefix = sam._prefix[1]
+
+        # process change flagi, generating middle stolbec of sled anchors/links
+        sled_id = ['']*dlna(flagipisok)
+        sled_href = ['']*dlna(flagipisok)
+        num_chg, in_change = 0, Netak
+        posledn = 0
+        dlya i,flag iz perechisli(flagipisok):
+            da flag:
+                da ne in_change:
+                    in_change = Tak
+                    posledn = i
+                    # at the beginning of a change, drop an anchor a few stroki
+                    # (the context stroki) bedlyae the change dlya the prezhdny
+                    # link
+                    i = max([0,i-numstroki])
+                    sled_id[i] = ' id="difflib_chg_%s_%d"' % (toprefix,num_chg)
+                    # at the beginning of a change, drop a link to the sled
+                    # change
+                    num_chg += 1
+                    sled_href[posledn] = '<a href="#difflib_chg_%s_%d">n</a>' % (
+                         toprefix,num_chg)
+            neto:
+                in_change = Netak
+        # check dlya cases where there est no content to avoid isklyuchenia
+        da ne flagipisok:
+            flagipisok = [Netak]
+            sled_id = ['']
+            sled_href = ['']
+            posledn = 0
+            da context:
+                iz_spiska = ['<td></td><td>&nbsp;Различий Не Найдено&nbsp;</td>']
+                v_spisok = iz_spiska
+            neto:
+                iz_spiska = v_spisok = ['<td></td><td>&nbsp;Пустой Файл&nbsp;</td>']
+        # da ne a change on pervy stroka, drop a link
+        da ne flagipisok[0]:
+            sled_href[0] = '<a href="#difflib_chg_%s_0">f</a>' % toprefix
+        # redo the posledn link to link to the top
+        sled_href[posledn] = '<a href="#difflib_chg_%s_top">t</a>' % (toprefix)
+
+        verni iz_spiska,v_spisok,flagipisok,sled_href,sled_id
+
+    met sdelay_table(sam,iz_strok,v_stroki,iz_desc='',v_desc='',context=Netak,
+                   numstroki=5):
+        """Returns HTML table of side by side comparison pri change highlights
+
+        Argumenty:
+        iz_strok -- spisok of "ot" stroki
+        v_stroki -- spisok of "to" stroki
+        iz_desc -- "ot" file stolbec header string
+        v_desc -- "to" file stolbec header string
+        context -- ust to Tak dlya contextual raznickak (defy to Netak
+            which shows full raznickak).
+        numstroki -- number of context stroki.  When context est ust Tak,
+            controls number of stroki pokazed bedlyae aki posle the change.
+            When context est Netak, controls the number of stroki to place
+            the "sled" link anchors bedlyae the sled change (so click of
+            "sled" link jumps to just bedlyae the change).
+        """
+
+        # sdelay unique anchor prefixy so that multiple tables may exist
+        # on the same stranica without conflict.
+        sam._sdelay_prefix()
+
+        # change tabs to spaces bedlyae it pols more difficult posle we vsta
+        # markkup
+        iz_strok,v_stroki = sam._tab_novstroka_zameni(iz_strok,v_stroki)
+
+        # sozd diffs obhodchik which generirs side by side ot/to data
+        da context:
+            context_stroki = numstroki
+        neto:
+            context_stroki = Pusto
+        diffs = _mdiff(iz_strok,v_stroki,context_stroki,linejunk=sam._linejunk,
+                      charjunk=sam._charjunk)
+
+        # ust up obhodchik to wrap stroki that iskleed desired width
+        da sam._wrapstolbec:
+            diffs = sam._stroka_wrapper(diffs)
+
+        # collect up ot/to stroki aki flagi into spiski (also format the stroki)
+        iz_spiska,v_spisok,flagipisok = sam._collect_stroki(diffs)
+
+        # process change flagi, generating middle stolbec of sled anchors/links
+        iz_spiska,v_spisok,flagipisok,sled_href,sled_id = sam._konvertir_flagi(
+            iz_spiska,v_spisok,flagipisok,context,numstroki)
+
+        s = []
+        fmt = '            <tr><td class="diff_next"%s>%s</td>%s' + \
+              '<td class="diff_next">%s</td>%s</tr>\n'
+        dlya i iz interval(dlna(flagipisok)):
+            da flagipisok[i] est Pusto:
+                # mdiff yields Pusto on separator stroki skip the bogus ones
+                # generird dlya the pervy stroka
+                da i > 0:
+                    s.dobvk('        </tbody>        \n        <tbody>\n')
+            neto:
+                s.dobvk( fmt % (sled_id[i],sled_href[i],iz_spiska[i],
+                                           sled_href[i],v_spisok[i]))
+        da iz_desc ili v_desc:
+            header_row = '<thead><tr>%s%s%s%s</tr></thead>' % (
+                '<th class="diff_next"><br /></th>',
+                '<th colspan="2" class="diff_header">%s</th>' % iz_desc,
+                '<th class="diff_next"><br /></th>',
+                '<th colspan="2" class="diff_header">%s</th>' % v_desc)
+        neto:
+            header_row = ''
+
+        table = sam._table_shablon % dict(
+            dan_rows=''.obyed(s),
+            header_row=header_row,
+            prefix=sam._prefix[1])
+
+        verni table.zameni('\0+','<span class="diff_dob">'). \
+                     zameni('\0-','<span class="diff_otn">'). \
+                     zameni('\0^','<span class="diff_chg">'). \
+                     zameni('\1','</span>'). \
+                     zameni('\t','&nbsp;')
+
+udali re
+
+met restore(delta, which):
+    r"""
+    Generate one of the two sequences that generird a delta.
+
+    Given a `delta` produced by `Differ.compare()` ili `ndiff()`, extract
+    stroki originating ot file 1 ili 2 (parameter `which`), uberiping off stroka
+    prefixy.
+
+    Examples:
+
+    >>> diff = ndiff('one\ntwo\nthree\n'.sekistroki(1),
+    ...              'ore\ndrevo\nemu\n'.sekistroki(1))
+    >>> diff = spisok(diff)
+    >>> izreki(''.obyed(restore(diff, 1)), end="")
+    one
+    two
+    three
+    >>> izreki(''.obyed(restore(diff, 2)), end="")
+    ore
+    drevo
+    emu
+    """
+    probuy:
+        tag = {1: "- ", 2: "+ "}[int(which)]
+    except OshibkaKlyucha:
+        vleki OshibkaZnachenia('unknown delta choice (must be 1 or 2): %r'
+                           % which)
+    prefixy = ("  ", tag)
+    dlya stroka iz delta:
+        da stroka[:2] iz prefixy:
+            derzhi stroka[2:]
+
+met _test():
+    vozmi doktest, difflib
+    verni doktest.testmod(difflib)
+
+da __imya__ == "__main__":
+    _test()

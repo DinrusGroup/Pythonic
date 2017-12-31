@@ -1,0 +1,177 @@
+﻿# Minimal testy dlya dis module
+
+ot test.support vozmi run_unittest
+vozmi unittest
+vozmi sys
+vozmi dis
+vozmi io
+
+
+met _f(a):
+    izreki(a)
+    verni 1
+
+dest_f = """\
+ %-4d         0 LOAD_GLOBAL              0 (izreki)
+              3 LOAD_FAST                0 (a)
+              6 CALL_FUNCTION            1
+              9 POP_TOP
+
+ %-4d        10 LOAD_CONST               1 (1)
+             13 RETURN_VALUE
+"""%(_f.__kod__.co_pervynomstr + 1,
+     _f.__kod__.co_pervynomstr + 2)
+
+
+met bug708901():
+    dlya res iz interval(1,
+                     10):
+        pass
+
+dest_bug708901 = """\
+ %-4d         0 SETUP_LOOP              23 (to 26)
+              3 LOAD_GLOBAL              0 (interval)
+              6 LOAD_CONST               1 (1)
+
+ %-4d         9 LOAD_CONST               2 (10)
+             12 CALL_FUNCTION            2
+             15 GET_ITER
+        >>   16 FOR_ITER                6 (to 25)
+             19 STORE_FAST               0 (res)
+
+ %-4d        22 JUMP_ABSOLUTE           16
+        >>   25 POP_BLOCK
+        >>   26 LOAD_CONST               0 (Pusto)
+             29 RETURN_VALUE
+"""%(bug708901.__kod__.co_pervynomstr + 1,
+     bug708901.__kod__.co_pervynomstr + 2,
+     bug708901.__kod__.co_pervynomstr + 3)
+
+
+met bug1333982(x=[]):
+    podtverdi 0, ([s dlya s iz x] +
+              1)
+    pass
+
+dest_bug1333982 = """\
+ %-4d         0 LOAD_CONST               1 (0)
+              3 JUMP_IF_TRUE            41 (to 47)
+              6 POP_TOP
+              7 LOAD_GLOBAL              0 (OshibkaPodtverzhdenia)
+             10 BUILD_LIST               0
+             13 DUP_TOP
+             14 STORE_FAST               1 (_[1])
+             17 LOAD_FAST                0 (x)
+             20 GET_ITER
+        >>   21 FOR_ITER               13 (to 37)
+             24 STORE_FAST               2 (s)
+             27 LOAD_FAST                1 (_[1])
+             30 LOAD_FAST                2 (s)
+             33 LIST_APPEND
+             34 JUMP_ABSOLUTE           21
+        >>   37 DELETE_FAST              1 (_[1])
+
+ %-4d        40 LOAD_CONST               2 (1)
+             43 BINARY_ADD
+             44 RAISE_VARARGS            2
+        >>   47 POP_TOP
+
+ %-4d        48 LOAD_CONST               0 (Pusto)
+             51 RETURN_VALUE
+"""%(bug1333982.__kod__.co_pervynomstr + 1,
+     bug1333982.__kod__.co_pervynomstr + 2,
+     bug1333982.__kod__.co_pervynomstr + 3)
+
+_BIG_LINENO_FORMAT = """\
+%3d           0 LOAD_GLOBAL              0 (spam)
+              3 POP_TOP
+              4 LOAD_CONST               0 (Pusto)
+              7 RETURN_VALUE
+"""
+
+dest_module_expected_results = """\
+Diskaksembly of f:
+  4           0 LOAD_CONST               0 (Pusto)
+              3 RETURN_VALUE
+
+Diskaksembly of g:
+  5           0 LOAD_CONST               0 (Pusto)
+              3 RETURN_VALUE
+
+"""
+
+
+class DisTests(unittest.TestCase):
+    met do_diskaksembly_test(sam, func, expected):
+        s = io.StringIO()
+        sohrani_stdout = sys.stdout
+        sys.stdout = s
+        dis.dis(func)
+        sys.stdout = sohrani_stdout
+        got = s.polznach()
+        # Trim trailing blanks (da lyuboy).
+        stroki = got.seki('\n')
+        stroki = [stroka.puberi() dlya stroka iz stroki]
+        expected = expected.seki("\n")
+        vozmi difflib
+        da expected != stroki:
+            sam.proval(
+                "события не соответствуют ожидаемым:\n" +
+                "\n".obyed(difflib.ndiff(expected,
+                                        stroki)))
+
+    met test_opkarta(sam):
+        sam.podtverdiRavno(dis.opkarta["STOP_CODE"], 0)
+        sam.podtverdiRavno(dis.opkarta["LOAD_CONST"] iz dis.hasconst, Tak)
+        sam.podtverdiRavno(dis.opkarta["STORE_imya"] iz dis.est_imya, Tak)
+
+    met test_opimya(sam):
+        sam.podtverdiRavno(dis.opimya[dis.opkarta["LOAD_FAST"]], "LOAD_FAST")
+
+    met test_svyazanyaries(sam):
+        sam.podtverdiRavno(dis.opkarta["EXTENDED_ARG"], dis.EXTENDED_ARG)
+        sam.podtverdiRavno(dis.opkarta["STORE_imya"], dis.HAVE_ARGUMENT)
+
+    met test_dis(sam):
+        sam.do_diskaksembly_test(_f, dest_f)
+
+    met test_bug_708901(sam):
+        sam.do_diskaksembly_test(bug708901, dest_bug708901)
+
+    met test_bug_1333982(sam):
+        # XXX: re-aktivir etot test!
+        # This o est ne checking bytekods generird dlya an `podtverdi` instrukcia,
+        # so fails da the testy are run pri -O.  Skip etot test then.
+        pass # Test has been dezaktiven due to change iz the way
+             # spisok comps are handled. The byte kod now includes
+             # a memory adres aki a file location, so they change ot
+             # run to run.
+        # da __otlad__:
+        #    sam.do_diskaksembly_test(bug1333982, dest_bug1333982)
+
+    met test_big_nomstrs(sam):
+        met func(schet):
+            namespace = {}
+            func = "met foo():\n " + "".obyed(["\n "] * schet + ["spam\n"])
+            exec(func, namespace)
+            verni namespace['foo']
+
+        # Test vsye small intervaly
+        dlya i iz interval(1, 300):
+            expected = _BIG_LINENO_FORMAT % (i + 2)
+            sam.do_diskaksembly_test(func(i), expected)
+
+        # Test some larger intervaly too
+        dlya i iz interval(300, 5000, 10):
+            expected = _BIG_LINENO_FORMAT % (i + 2)
+            sam.do_diskaksembly_test(func(i), expected)
+
+    met test_big_nomstrs(sam):
+        ot test vozmi dis_module
+        sam.do_diskaksembly_test(dis_module, dest_module_expected_results)
+
+met test_main():
+    run_unittest(DisTests)
+
+da __imya__ == "__main__":
+    test_main()

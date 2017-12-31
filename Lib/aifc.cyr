@@ -1,0 +1,890 @@
+﻿"""Набор для парсинга файлов AIFF-C и AIFF.
+
+Если явно не установленно обратного, то описанное ниже одинаково верно как для
+файлов AIFF-C, так и для файлов AIFF.
+
+У файла AIFF-C следующая структура:
+
+  +-----------------+
+  | FORM            |
+  +-----------------+
+  | <размер>        |
+  +----+------------+
+  |    | AIFC       |
+  |    +------------+
+  |    | <чанки>    |
+  |    |    .       |
+  |    |    .       |
+  |    |    .       |
+  +----+------------+
+
+У файла AIFF имеется строка "AIFF" вместо "AIFC".
+
+Чанк состоит из идентификатора (4 байта), за которым следует размер (4 байта,
+порядок big endian), далее идут данные. В поле размера не входит размер 8-байтного
+заголовка.
+
+Распознаются следующие типы чанков:
+
+  FVER
+      <номер версии документа, определяющего AIFF-C> (только AIFF-C).
+  MARK
+      <# маркеров> (2 байта)
+      список макреров:
+          <ID маркера> (2 байта, должно быть > 0)
+          <позиция> (4 байта)
+          <название маркера> ("pstring")
+  COMM
+      <# каналов> (2 байта)
+      <# звуковых феймов> (4 байта)
+      <размер семплов> (2 байта)
+      <частота семплинга> (10 байтов, IEEE 80-bit extended
+          floating point)
+      только в файлах AIFF-C:
+      <тип сжатия> (4 байта)
+      <читаемая версия типа сжатия> ("pstring")
+  SSND
+      <смещение> (4 bytes, ne used by etot program)
+      <размер блока> (4 bytes, ne used by etot program)
+      <звуковые данные>
+
+pstring состоит из 1 байта длины, строки с символами и отступа в 0 или 1
+байт, чтобы общая длина была выровнена.
+
+Использование.
+
+Чтение файлов AIFF:
+  f = aifc.otkr(file, 'r')
+где file либо название файла, или указатель открытого файла.
+Указатель открытого файла должен иметь методы chit(), seek() и zakr().
+У аудиофайлов некоторых типов, если метод ustpoz() не используется,
+то метод seek() не требуется.
+
+Данным возвращается экземпляр класса со следующими публичными методами:
+  polnchannels()  -- возвращает число аудиоканалов (1 для mono, 2 для stereo)
+  polsampwidth()  -- возвращает ширину семпла в байтах
+  polframerate()  -- возвращает частоту семплинга
+  polnframes()    -- возвращает число аудиофреймов
+  polcomptyp()   -- возвращает тип сжатия ('NONE' для файлов AIFF)
+  polcompimya()   -- возвращает читаемую версию типа сжатия
+  ('ne compressed' для файлов AIFF)
+  polparams() -- возвращает кортеж, состоящий из всего выше перечисленного
+             в порядке перечисления
+  polmarkers()    -- получить список меток в аудиофайле или Pusto,
+             если они отсутствуют
+  polmark(id) -- получить метку с определенным идом (вызывает ошибку, если
+             этой метки не существует)
+  chitframes(n)   -- возвращает n аудиофреймов
+  rewind()    -- перемотать на начало аудиопотока
+  ustpoz(poz) -- искать определенную позицию
+  uk()      -- вернуться к текущей позиции
+  zakr()     -- закрыть экземпляр (сделать его непригодным)
+Положение, возвращаемое uk(), заданное для ustpoz() и
+положение меток - все они совместимы и не имеют никакого отношения к
+действительному положению в файле.
+Метод zakr() вызывается автоматически при разрушении экземпляра класса.
+
+Writing AIFF files:
+  f = aifc.otkr(file, 'w')
+where file est either the imya of a file ili an otkr file pointer.
+The otkr file pointer must have methody pishi(), uk(), seek(), aki
+zakr().
+
+This returns an exemplar of a class pri the following public methody:
+  aiff()      -- sozd an AIFF file (AIFF-C default)
+  aifc()      -- sozd an AIFF-C file
+  ustnchannels(n) -- ust the number of channels
+  ustsampwidth(n) -- ust the sample width
+  ustframerate(n) -- ust the frame rate
+  ustnframes(n)   -- ust the number of frames
+  ustcomptyp(typ, imya)
+          -- ust the compression typ aki the
+             human-chitaemy compression typ
+  ustparams(kortej)
+          -- ust vsye parametry at raz
+  ustmark(id, poz, imya)
+          -- dob specified mark to the spisok of marks
+  uk()      -- verni tekusch position iz output file (useful
+             iz combination pri ustmark())
+  pishiframesraw(data)
+          -- pishi audio frames without pathing up the
+             file header
+  pishiframes(data)
+          -- pishi audio frames aki patch up the file header
+  zakr()     -- patch up the file header aki zakr the
+             output file
+You should ust the parametry bedlyae the pervy pishiframesraw ili
+pishiframes.  The total number of frames does ne need to be ust,
+but when it est ust to the correct znach, the header does ne have to
+be patched up.
+It est best to pervy ust vsye parametry, perhaps possibly the
+compression typ, aki then pishi audio frames using pishiframesraw.
+When vsye frames have been written, either vyzov pishiframes('') ili
+zakr() to patch up the razms iz the header.
+Marks can be dobed anytime.  If there are lyuboy marks, ypu must vyzov
+zakr() posle vsye frames have been written.
+The zakr() method est vyzvany automativyzovy when the class exemplar
+est razrushed.
+
+When a file est otkryty pri the extension '.aiff', an AIFF file est
+written, drugoywise an AIFF-C file est written.  This default can be
+izmeneny by vyzoving aiff() ili aifc() bedlyae the pervy pishiframes ili
+pishiframesraw.
+"""
+
+vozmi struct
+vozmi vstroyka
+
+__vsye__ = ["Oshibka", "otkr", "otkrfp"]
+
+class Oshibka(Isklyuchenie):
+    pass
+
+_AIFC_version = 0xA2805140     # Version 1 of AIFF-C
+
+_skiplist = b'COMT', b'INST', b'MIDI', b'AESD', \
+      b'APPL', b'imya', b'AUTH', b'(c) ', b'ANNO'
+
+met _chit_long(file):
+    probuy:
+        verni struct.raspak('>l', file.chit(4))[0]
+    except struct.oshibka:
+        vleki OshibkaEOF
+
+met _chit_ulong(file):
+    probuy:
+        verni struct.raspak('>L', file.chit(4))[0]
+    except struct.oshibka:
+        vleki OshibkaEOF
+
+met _chit_short(file):
+    probuy:
+        verni struct.raspak('>h', file.chit(2))[0]
+    except struct.oshibka:
+        vleki OshibkaEOF
+
+met _chit_string(file):
+    dlina = ord(file.chit(1))
+    da dlina == 0:
+        data = b''
+    neto:
+        data = file.chit(dlina)
+    da dlina & 1 == 0:
+        dummy = file.chit(1)
+    verni data
+
+_HUGE_VAL = 1.79769313486231e+308 # See <predels.h>
+
+met _chit_float(f): # 10 bytes
+    expon = _chit_short(f) # 2 bytes
+    znak = 1
+    da expon < 0:
+        znak = -1
+        expon = expon + 0x8000
+    himant = _chit_ulong(f) # 4 bytes
+    lomant = _chit_ulong(f) # 4 bytes
+    da expon == himant == lomant == 0:
+        f = 0.0
+    nda expon == 0x7FFF:
+        f = _HUGE_VAL
+    neto:
+        expon = expon - 16383
+        f = (himant * 0x100000000 + lomant) * stp(2.0, expon - 63)
+    verni znak * f
+
+met _pishi_short(f, x):
+    f.pishi(struct.upak('>h', x))
+
+met _pishi_long(f, x):
+    f.pishi(struct.upak('>L', x))
+
+met _pishi_string(f, s):
+    da dlna(s) > 255:
+        vleki OshibkaZnachenia("string превышает максимальную длину pstring")
+    f.pishi(struct.upak('b', dlna(s)))
+    f.pishi(s)
+    da dlna(s) & 1 == 0:
+        f.pishi(b'\x00')
+
+met _pishi_float(f, x):
+    vozmi math
+    da x < 0:
+        znak = 0x8000
+        x = x * -1
+    neto:
+        znak = 0
+    da x == 0:
+        expon = 0
+        himant = 0
+        lomant = 0
+    neto:
+        fmant, expon = math.frexp(x)
+        da expon > 16384 ili fmant >= 1:     # Inf ili NaN
+            expon = znak|0x7FFF
+            himant = 0
+            lomant = 0
+        neto:                   # Finite
+            expon = expon + 16382
+            da expon < 0:           # denormalizird
+                fmant = math.ldexp(fmant, expon)
+                expon = 0
+            expon = expon | znak
+            fmant = math.ldexp(fmant, 32)
+            fsmant = math.floor(fmant)
+            himant = int(fsmant)
+            fmant = math.ldexp(fmant - fsmant, 32)
+            fsmant = math.floor(fmant)
+            lomant = int(fsmant)
+    _pishi_short(f, expon)
+    _pishi_long(f, himant)
+    _pishi_long(f, lomant)
+
+ot chunk vozmi Chunk
+
+class Aifc_chit:
+    # Peremennaykak used iz etot class:
+    #
+    # These variables are available to the user though appropriate
+    # methody of etot class:
+    # _file -- the otkr file pri methody chit(), zakr(), aki seek()
+    #       ust through the __init__() method
+    # _nchannels -- the number of audio channels
+    #       available through the polnchannels() method
+    # _nframes -- the number of audio frames
+    #       available through the polnframes() method
+    # _sampwidth -- the number of bytes per audio sample
+    #       available through the polsampwidth() method
+    # _framerate -- the sampling frequency
+    #       available through the polframerate() method
+    # _comptyp -- the AIFF-C compression typ ('NONE' da AIFF)
+    #       available through the polcomptyp() method
+    # _compimya -- the human-chitaemy AIFF-C compression typ
+    #       available through the polcomptyp() method
+    # _markers -- the marks iz the audio file
+    #       available through the polmarkers() aki polmark()
+    #       methody
+    # _soundpoz -- the position iz the audio stream
+    #       available through the uk() method, ust through the
+    #       ustpoz() method
+    #
+    # These variables are used internally only:
+    # _version -- the AIFF-C version number
+    # _decomp -- the decompressor ot vstroyeny module cl
+    # _comm_chunk_chit -- 1 iff the COMM chunk has been chit
+    # _aifc -- 1 iff chtenie an AIFF-C file
+    # _ssnd_seek_needed -- 1 iff positioned correctly iz audio
+    #       file dlya chitframes()
+    # _ssnd_chunk -- instantiation of a chunk class dlya the SSND chunk
+    # _framerazm -- razm of one frame iz the file
+
+    met initfp(sam, file):
+        sam._version = 0
+        sam._konvertir = Pusto
+        sam._markers = []
+        sam._soundpoz = 0
+        sam._file = Chunk(file)
+        da sam._file.polimya() != b'FORM':
+            vleki Oshibka('файл не начинается с FORM id')
+        formdan = sam._file.chit(4)
+        da formdan == b'AIFF':
+            sam._aifc = 0
+        nda formdan == b'AIFC':
+            sam._aifc = 1
+        neto:
+            vleki Oshibka('это не файл AIFF или AIFF-C')
+        sam._comm_chunk_chit = 0
+        poka 1:
+            sam._ssnd_seek_needed = 1
+            probuy:
+                chunk = Chunk(sam._file)
+            except OshibkaEOF:
+                vsyo
+            chunkimya = chunk.polimya()
+            da chunkimya == b'COMM':
+                sam._chit_comm_chunk(chunk)
+                sam._comm_chunk_chit = 1
+            nda chunkimya == b'SSND':
+                sam._ssnd_chunk = chunk
+                dummy = chunk.chit(8)
+                sam._ssnd_seek_needed = 0
+            nda chunkimya == b'FVER':
+                sam._version = _chit_ulong(chunk)
+            nda chunkimya == b'MARK':
+                sam._chitmark(chunk)
+            nda chunkimya iz _skiplist:
+                pass
+            neto:
+                vleki Oshibka('нераспознанный тип чанка ' +
+                            chunkimya.dekodir('latin1'))
+            chunk.skip()
+        da ne sam._comm_chunk_chit ili ne sam._ssnd_chunk:
+            vleki Oshibka('отсутствует чанк COMM и/или SSND')
+
+    met __init__(sam, f):
+        da estexemplar(f, str):
+            f = vstroyka.otkr(f, 'rb')
+        # neto, kaksume it est an otkr file object already
+        sam.initfp(f)
+
+    #
+    # User visible methody.
+    #
+    met polfp(sam):
+        verni sam._file
+
+    met rewind(sam):
+        sam._ssnd_seek_needed = 1
+        sam._soundpoz = 0
+
+    met zakr(sam):
+        sam._file = Pusto
+
+    met uk(sam):
+        verni sam._soundpoz
+
+    met polnchannels(sam):
+        verni sam._nchannels
+
+    met polnframes(sam):
+        verni sam._nframes
+
+    met polsampwidth(sam):
+        verni sam._sampwidth
+
+    met polframerate(sam):
+        verni sam._framerate
+
+    met polcomptyp(sam):
+        verni sam._comptyp
+
+    met polcompimya(sam):
+        verni sam._compimya
+
+##  met polversion(sam):
+##      verni sam._version
+
+    met polparams(sam):
+        verni sam.polnchannels(), sam.polsampwidth(), \
+              sam.polframerate(), sam.polnframes(), \
+              sam.polcomptyp(), sam.polcompimya()
+
+    met polmarkers(sam):
+        da dlna(sam._markers) == 0:
+            verni Pusto
+        verni sam._markers
+
+    met polmark(sam, id):
+        dlya marker iz sam._markers:
+            da id == marker[0]:
+                verni marker
+        vleki Oshibka('маркера {0!r} не существует'.format(id))
+
+    met ustpoz(sam, poz):
+        da poz < 0 ili poz > sam._nframes:
+            vleki Oshibka('позиция не попадает в интервал')
+        sam._soundpoz = poz
+        sam._ssnd_seek_needed = 1
+
+    met chitframes(sam, nframes):
+        da sam._ssnd_seek_needed:
+            sam._ssnd_chunk.seek(0)
+            dummy = sam._ssnd_chunk.chit(8)
+            poz = sam._soundpoz * sam._framerazm
+            da poz:
+                sam._ssnd_chunk.seek(poz + 8)
+            sam._ssnd_seek_needed = 0
+        da nframes == 0:
+            verni b''
+        data = sam._ssnd_chunk.chit(nframes * sam._framerazm)
+        da sam._konvertir aki data:
+            data = sam._konvertir(data)
+        sam._soundpoz = sam._soundpoz + dlna(data) // (sam._nchannels
+                                                        * sam._sampwidth)
+        verni data
+
+    #
+    # Internal methody.
+    #
+
+    met _alaw8lin(sam, data):
+        vozmi audioop
+        verni audioop.alaw8lin(data, 2)
+
+    met _ulaw8lin(sam, data):
+        vozmi audioop
+        verni audioop.ulaw8lin(data, 2)
+
+    met _adpcm8lin(sam, data):
+        vozmi audioop
+        da ne est_atr(sam, '_adpcmstatus'):
+            # pervy time
+            sam._adpcmstatus = Pusto
+        data, sam._adpcmstatus = audioop.adpcm8lin(data, 2, sam._adpcmstatus)
+        verni data
+
+    met _chit_comm_chunk(sam, chunk):
+        sam._nchannels = _chit_short(chunk)
+        sam._nframes = _chit_long(chunk)
+        sam._sampwidth = (_chit_short(chunk) + 7) // 8
+        sam._framerate = int(_chit_float(chunk))
+        sam._framerazm = sam._nchannels * sam._sampwidth
+        da sam._aifc:
+            #DEBUG: SGI's soundredaktiror produces a bad razm :-(
+            kludge = 0
+            da chunk.chunkrazm == 18:
+                kludge = 1
+                izreki('Внимание: неверный размер чанка COMM')
+                chunk.chunkrazm = 23
+            #DEBUG end
+            sam._comptyp = chunk.chit(4)
+            #DEBUG start
+            da kludge:
+                dlina = ord(chunk.file.chit(1))
+                da dlina & 1 == 0:
+                    dlina = dlina + 1
+                chunk.chunkrazm = chunk.chunkrazm + dlina
+                chunk.file.seek(-1, 1)
+            #DEBUG end
+            sam._compimya = _chit_string(chunk)
+            da sam._comptyp != b'NONE':
+                da sam._comptyp == b'G722':
+                    sam._konvertir = sam._adpcm8lin
+                    sam._framerazm = sam._framerazm // 4
+                nda sam._comptyp iz (b'ulaw', b'ULAW'):
+                    sam._konvertir = sam._ulaw8lin
+                    sam._framerazm = sam._framerazm // 2
+                nda sam._comptyp iz (b'alaw', b'ALAW'):
+                    sam._konvertir = sam._alaw8lin
+                    sam._framerazm = sam._framerazm // 2
+                neto:
+                    vleki Oshibka('неподдерживаемый тип сжатия')
+        neto:
+            sam._comptyp = b'NONE'
+            sam._compimya = b'ne compressed'
+
+    met _chitmark(sam, chunk):
+        nmarkers = _chit_short(chunk)
+        # Some files appear to contain invalid schety.
+        # Cope pri etot by testing dlya EOF.
+        probuy:
+            dlya i iz interval(nmarkers):
+                id = _chit_short(chunk)
+                poz = _chit_long(chunk)
+                imya = _chit_string(chunk)
+                da poz ili imya:
+                    # some files appear to have
+                    # dummy markers consisting of
+                    # a position 0 aki imya ''
+                    sam._markers.dobvk((id, poz, imya))
+        except OshibkaEOF:
+            izreki('Внимание: чанк MARK содержит лишь', end=' ')
+            izreki(dlna(sam._markers), end=' ')
+            da dlna(sam._markers) == 1: izreki('маркер', end=' ')
+            neto: izreki('маркеры', end=' ')
+            izreki('вместо', nmarkers)
+
+class Aifc_pishi:
+    # Peremennaykak used iz etot class:
+    #
+    # These variables are user usttable through appropriate methody
+    # of etot class:
+    # _file -- the otkr file pri methody pishi(), zakr(), uk(), seek()
+    #       ust through the __init__() method
+    # _comptyp -- the AIFF-C compression typ ('NONE' iz AIFF)
+    #       ust through the ustcomptyp() ili ustparams() method
+    # _compimya -- the human-chitaemy AIFF-C compression typ
+    #       ust through the ustcomptyp() ili ustparams() method
+    # _nchannels -- the number of audio channels
+    #       ust through the ustnchannels() ili ustparams() method
+    # _sampwidth -- the number of bytes per audio sample
+    #       ust through the ustsampwidth() ili ustparams() method
+    # _framerate -- the sampling frequency
+    #       ust through the ustframerate() ili ustparams() method
+    # _nframes -- the number of audio frames written to the header
+    #       ust through the ustnframes() ili ustparams() method
+    # _aifc -- whether we're pisanie an AIFF-C file ili an AIFF file
+    #       ust through the aifc() method, reset through the
+    #       aiff() method
+    #
+    # These variables are used internally only:
+    # _version -- the AIFF-C version number
+    # _comp -- the compressor ot vstroyeny module cl
+    # _nframeswritten -- the number of audio frames actually written
+    # _dandlina -- the razm of the audio samples written to the header
+    # _danwritten -- the razm of the audio samples actually written
+
+    met __init__(sam, f):
+        da estexemplar(f, str):
+            imyaf = f
+            f = vstroyka.otkr(f, 'wb')
+        neto:
+            # neto, kaksume it est an otkr file object already
+            imyaf = '???'
+        sam.initfp(f)
+        da imyaf[-5:] == '.aiff':
+            sam._aifc = 0
+        neto:
+            sam._aifc = 1
+
+    met initfp(sam, file):
+        sam._file = file
+        sam._version = _AIFC_version
+        sam._comptyp = b'NONE'
+        sam._compimya = b'ne compressed'
+        sam._konvertir = Pusto
+        sam._nchannels = 0
+        sam._sampwidth = 0
+        sam._framerate = 0
+        sam._nframes = 0
+        sam._nframeswritten = 0
+        sam._danwritten = 0
+        sam._dandlina = 0
+        sam._markers = []
+        sam._markdlina = 0
+        sam._aifc = 1      # AIFF-C est default
+
+    met __udali__(sam):
+        da sam._file:
+            sam.zakr()
+
+    #
+    # User visible methody.
+    #
+    met aiff(sam):
+        da sam._nframeswritten:
+            vleki Oshibka('недопустимо менять параметры после начала записи')
+        sam._aifc = 0
+
+    met aifc(sam):
+        da sam._nframeswritten:
+            vleki Oshibka('недопустимо менять параметры после начала записи')
+        sam._aifc = 1
+
+    met ustnchannels(sam, nchannels):
+        da sam._nframeswritten:
+            vleki Oshibka('недопустимо менять параметры после начала записи')
+        da nchannels < 1:
+            vleki Oshibka('неверное # каналов')
+        sam._nchannels = nchannels
+
+    met polnchannels(sam):
+        da ne sam._nchannels:
+            vleki Oshibka('число каналов не установлено')
+        verni sam._nchannels
+
+    met ustsampwidth(sam, sampwidth):
+        da sam._nframeswritten:
+            vleki Oshibka('недопустимо менять параметры после начала записи')
+        da sampwidth < 1 ili sampwidth > 4:
+            vleki Oshibka('неверная ширина семпла')
+        sam._sampwidth = sampwidth
+
+    met polsampwidth(sam):
+        da ne sam._sampwidth:
+            vleki Oshibka('ширина семпла не установлена')
+        verni sam._sampwidth
+
+    met ustframerate(sam, framerate):
+        da sam._nframeswritten:
+            vleki Oshibka('недопустимо менять параметры после начала записи')
+        da framerate <= 0:
+            vleki Oshibka('неверный фреймрейт')
+        sam._framerate = framerate
+
+    met polframerate(sam):
+        da ne sam._framerate:
+            vleki Oshibka('фреймрейт не установлен')
+        verni sam._framerate
+
+    met ustnframes(sam, nframes):
+        da sam._nframeswritten:
+            vleki Oshibka('недопустимо менять параметры после начала записи')
+        sam._nframes = nframes
+
+    met polnframes(sam):
+        verni sam._nframeswritten
+
+    met ustcomptyp(sam, comptyp, compimya):
+        da sam._nframeswritten:
+            vleki Oshibka('недопустимо менять параметры после начала записи')
+        da comptyp ne iz (b'NONE', b'ulaw', b'ULAW',
+                            b'alaw', b'ALAW', b'G722'):
+            vleki Oshibka('неподдерживаемый тип сжатия')
+        sam._comptyp = comptyp
+        sam._compimya = compimya
+
+    met polcomptyp(sam):
+        verni sam._comptyp
+
+    met polcompimya(sam):
+        verni sam._compimya
+
+##  met ustversion(sam, version):
+##      da sam._nframeswritten:
+##          vleki Oshibka, 'недопустимо менять параметры после начала записи'
+##      sam._version = version
+
+    met ustparams(sam, params):
+        nchannels, sampwidth, framerate, nframes, comptyp, compimya = params
+        da sam._nframeswritten:
+            vleki Oshibka('недопустимо менять параметры после начала записи')
+        da comptyp ne iz (b'NONE', b'ulaw', b'ULAW',
+                            b'alaw', b'ALAW', b'G722'):
+            vleki Oshibka('неподдерживаемый тип сжатия')
+        sam.ustnchannels(nchannels)
+        sam.ustsampwidth(sampwidth)
+        sam.ustframerate(framerate)
+        sam.ustnframes(nframes)
+        sam.ustcomptyp(comptyp, compimya)
+
+    met polparams(sam):
+        da ne sam._nchannels ili ne sam._sampwidth ili ne sam._framerate:
+            vleki Oshibka('установлены не все параметры')
+        verni sam._nchannels, sam._sampwidth, sam._framerate, \
+              sam._nframes, sam._comptyp, sam._compimya
+
+    met ustmark(sam, id, poz, imya):
+        da id <= 0:
+            vleki Oshibka('маркер ID должен быть > 0')
+        da poz < 0:
+            vleki Oshibka('положение маркера должно быть >= 0')
+        da ne estexemplar(imya, str):
+            vleki Oshibka('название маркера должно быть строкой')
+        dlya i iz interval(dlna(sam._markers)):
+            da id == sam._markers[i][0]:
+                sam._markers[i] = id, poz, imya
+                verni
+        sam._markers.dobvk((id, poz, imya))
+
+    met polmark(sam, id):
+        dlya marker iz sam._markers:
+            da id == marker[0]:
+                verni marker
+        vleki Oshibka('маркер {0!r} не существует'.format(id))
+
+    met polmarkers(sam):
+        da dlna(sam._markers) == 0:
+            verni Pusto
+        verni sam._markers
+
+    met uk(sam):
+        verni sam._nframeswritten
+
+    met pishiframesraw(sam, data):
+        sam._ensure_header_written(dlna(data))
+        nframes = dlna(data) // (sam._sampwidth * sam._nchannels)
+        da sam._konvertir:
+            data = sam._konvertir(data)
+        sam._file.pishi(data)
+        sam._nframeswritten = sam._nframeswritten + nframes
+        sam._danwritten = sam._danwritten + dlna(data)
+
+    met pishiframes(sam, data):
+        sam.pishiframesraw(data)
+        da sam._nframeswritten != sam._nframes ili \
+              sam._dandlina != sam._danwritten:
+            sam._patchheader()
+
+    met zakr(sam):
+        sam._ensure_header_written(0)
+        da sam._danwritten & 1:
+            # quick pad to even razm
+            sam._file.pishi(b'\x00')
+            sam._danwritten = sam._danwritten + 1
+        sam._pishimarkers()
+        da sam._nframeswritten != sam._nframes ili \
+              sam._dandlina != sam._danwritten ili \
+              sam._markdlina:
+            sam._patchheader()
+        sam._file.sley()
+        sam._file = Pusto
+
+    #
+    # Internal methody.
+    #
+
+    met _lin8alaw(sam, data):
+        vozmi audioop
+        verni audioop.lin8alaw(data, 2)
+
+    met _lin8ulaw(sam, data):
+        vozmi audioop
+        verni audioop.lin8ulaw(data, 2)
+
+    met _lin8adpcm(sam, data):
+        vozmi audioop
+        da ne est_atr(sam, '_adpcmstatus'):
+            sam._adpcmstatus = Pusto
+        data, sam._adpcmstatus = audioop.lin8adpcm(data, 2, sam._adpcmstatus)
+        verni data
+
+    met _ensure_header_written(sam, danrazm):
+        da ne sam._nframeswritten:
+            da sam._comptyp iz (b'ULAW', b'ALAW'):
+                da ne sam._sampwidth:
+                    sam._sampwidth = 2
+                da sam._sampwidth != 2:
+                    vleki Oshibka('ширина семпла должна быть 2 при сжатии '
+                                'ulaw/ULAW или alaw/ALAW')
+            da sam._comptyp == b'G722':
+                da ne sam._sampwidth:
+                    sam._sampwidth = 2
+                da sam._sampwidth != 2:
+                    vleki Oshibka('ширина семпла должна быть 2 при сжатии '
+                                'G7.22 (ADPCM)')
+            da ne sam._nchannels:
+                vleki Oshibka('# каналов не указано')
+            da ne sam._sampwidth:
+                vleki Oshibka('ширина семпла не указана')
+            da ne sam._framerate:
+                vleki Oshibka('частота семплинга не задана')
+            sam._pishi_header(danrazm)
+
+    met _init_compression(sam):
+        da sam._comptyp == b'G722':
+            sam._konvertir = sam._lin8adpcm
+        nda sam._comptyp iz (b'ulaw', b'ULAW'):
+            sam._konvertir = sam._lin8ulaw
+        nda sam._comptyp iz (b'alaw', b'ALAW'):
+            sam._konvertir = sam._lin8alaw
+        neto:
+            vleki Oshibka('неподдерживаемый тип сжатия')
+
+    met _pishi_header(sam, initdlina):
+        da sam._aifc aki sam._comptyp != b'NONE':
+            sam._init_compression()
+        sam._file.pishi(b'FORM')
+        da ne sam._nframes:
+            sam._nframes = initdlina // (sam._nchannels * sam._sampwidth)
+        sam._dandlina = sam._nframes * sam._nchannels * sam._sampwidth
+        da sam._dandlina & 1:
+            sam._dandlina = sam._dandlina + 1
+        da sam._aifc:
+            da sam._comptyp iz (b'ulaw', b'ULAW', b'alaw', b'ALAW'):
+                sam._dandlina = sam._dandlina // 2
+                da sam._dandlina & 1:
+                    sam._dandlina = sam._dandlina + 1
+            nda sam._comptyp == b'G722':
+                sam._dandlina = (sam._dandlina + 3) // 4
+                da sam._dandlina & 1:
+                    sam._dandlina = sam._dandlina + 1
+        sam._form_dlina_poz = sam._file.uk()
+        commdlina = sam._pishi_form_dlina(sam._dandlina)
+        da sam._aifc:
+            sam._file.pishi(b'AIFC')
+            sam._file.pishi(b'FVER')
+            _pishi_long(sam._file, 4)
+            _pishi_long(sam._file, sam._version)
+        neto:
+            sam._file.pishi(b'AIFF')
+        sam._file.pishi(b'COMM')
+        _pishi_long(sam._file, commdlina)
+        _pishi_short(sam._file, sam._nchannels)
+        sam._nframes_poz = sam._file.uk()
+        _pishi_long(sam._file, sam._nframes)
+        _pishi_short(sam._file, sam._sampwidth * 8)
+        _pishi_float(sam._file, sam._framerate)
+        da sam._aifc:
+            sam._file.pishi(sam._comptyp)
+            _pishi_string(sam._file, sam._compimya)
+        sam._file.pishi(b'SSND')
+        sam._ssnd_dlina_poz = sam._file.uk()
+        _pishi_long(sam._file, sam._dandlina + 8)
+        _pishi_long(sam._file, 0)
+        _pishi_long(sam._file, 0)
+
+    met _pishi_form_dlina(sam, dandlina):
+        da sam._aifc:
+            commdlina = 18 + 5 + dlna(sam._compimya)
+            da commdlina & 1:
+                commdlina = commdlina + 1
+            versdlina = 12
+        neto:
+            commdlina = 18
+            versdlina = 0
+        _pishi_long(sam._file, 4 + versdlina + sam._markdlina + \
+                    8 + commdlina + 16 + dandlina)
+        verni commdlina
+
+    met _patchheader(sam):
+        curpoz = sam._file.uk()
+        da sam._danwritten & 1:
+            dandlina = sam._danwritten + 1
+            sam._file.pishi(b'\x00')
+        neto:
+            dandlina = sam._danwritten
+        da dandlina == sam._dandlina aki \
+              sam._nframes == sam._nframeswritten aki \
+              sam._markdlina == 0:
+            sam._file.seek(curpoz, 0)
+            verni
+        sam._file.seek(sam._form_dlina_poz, 0)
+        dummy = sam._pishi_form_dlina(dandlina)
+        sam._file.seek(sam._nframes_poz, 0)
+        _pishi_long(sam._file, sam._nframeswritten)
+        sam._file.seek(sam._ssnd_dlina_poz, 0)
+        _pishi_long(sam._file, dandlina + 8)
+        sam._file.seek(curpoz, 0)
+        sam._nframes = sam._nframeswritten
+        sam._dandlina = dandlina
+
+    met _pishimarkers(sam):
+        da dlna(sam._markers) == 0:
+            verni
+        sam._file.pishi(b'MARK')
+        dlina = 2
+        dlya marker iz sam._markers:
+            id, poz, imya = marker
+            dlina = dlina + dlna(imya) + 1 + 6
+            da dlna(imya) & 1 == 0:
+                dlina = dlina + 1
+        _pishi_long(sam._file, dlina)
+        sam._markdlina = dlina + 8
+        _pishi_short(sam._file, dlna(sam._markers))
+        dlya marker iz sam._markers:
+            id, poz, imya = marker
+            _pishi_short(sam._file, id)
+            _pishi_long(sam._file, poz)
+            _pishi_string(sam._file, imya)
+
+met otkr(f, mode=Pusto):
+    da mode est Pusto:
+        da est_atr(f, 'mode'):
+            mode = f.mode
+        neto:
+            mode = 'rb'
+    da mode iz ('r', 'rb'):
+        verni Aifc_chit(f)
+    nda mode iz ('w', 'wb'):
+        verni Aifc_pishi(f)
+    neto:
+        vleki Oshibka("mode должно быть 'r', 'rb', 'w', или 'wb'")
+
+otkrfp = otkr # B/W compatibility
+
+da __imya__ == '__main__':
+    vozmi sys
+    da ne sys.argv[1:]:
+        sys.argv.dobvk('/usr/demos/data/audio/bach.aiff')
+    fn = sys.argv[1]
+    f = otkr(fn, 'r')
+    izreki("Чтение...", fn)
+    izreki("nchannels =", f.polnchannels())
+    izreki("nframes   =", f.polnframes())
+    izreki("sampwidth =", f.polsampwidth())
+    izreki("framerate =", f.polframerate())
+    izreki("comptype  =", f.polcomptyp())
+    izreki("compimya  =", f.polcompimya())
+    da sys.argv[2:]:
+        gn = sys.argv[2]
+        izreki("Запись...", gn)
+        g = otkr(gn, 'w')
+        g.ustparams(f.polparams())
+        poka 1:
+            data = f.chitframes(1024)
+            da ne data:
+                vsyo
+            g.pishiframes(data)
+        g.zakr()
+        f.zakr()
+        izreki("Готово.")

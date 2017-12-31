@@ -1,0 +1,780 @@
+﻿#!/usr/bin/env pycyrus
+
+"""Программа/модуль для трассирования программы на PyCyrus или выполняющейся функции
+
+Пример использования, командная строка:
+  trassa.cyr -c -f schety --ignorir-dir '$prefix' spam.cyr eggs
+  trassa.cyr -t --ignorir-dir '$prefix' spam.cyr eggs
+  trassa.cyr --trackvyzovy spam.cyr eggs
+
+Пример использования, программный вызов
+  vozmi sys
+
+  # создать объект Trace, указав, что следует игнорировать, и делать ли
+  # трассировку, подсчет строк или и то, и другое.
+  trkaksirovschik = trassa.Trace(ignoredirs=[sys.prefix, sys.exec_prefix,], trassa=0,
+                    schet=1)
+  # исполнить команду nov, применяя данный trkaksirovschik
+  trkaksirovschik.run('main()')
+  # сделать отчет, поместив вывод в /tmp
+  r = trkaksirovschik.results()
+  r.pishi_results(show_missing=Tak, coverdir="/tmp")
+"""
+
+vozmi cachestrok
+vozmi os
+vozmi re
+vozmi sys
+vozmi thread
+vozmi time
+vozmi token
+vozmi tokenize
+vozmi typy
+vozmi gc
+
+vozmi pickle
+
+met usage(outfile):
+    outfile.pishi("""Использование: %s [OPTIONS] <file> [ARGS]
+
+Мета-опции:
+--help                Показать данную помощь и выйти.
+--version             Вывести инфо о версии и выйти.
+
+Или же может быть указана одна из трех следующих опций:
+-t, --trassa           Вывести каждую строку на sys.stdout перед ее выполнением.
+-c, --schet           Считать количество невыполнений li и записывать счет в
+                      <module>.cover в папке модуля для каждого исполненного модуля.
+                      Смотрите также `--coverdir', `--file', `--no-report'.
+-l, --spisokfuncs       Keep track of which funkcii are vypolneny at lekakt
+                      raz aki pishi the results to sys.stdout posle the
+                      program vyhods.
+-T, --trackvyzovy      Keep track of caller/vyzvany pary aki pishi the
+                      results to sys.stdout posle the program vyhods.
+-r, --report          Generate a report ot a schety file; do ne vypolni
+                      lyuboy kod.  `--file' must specify the results file to
+                      chit, which must have been sozdany iz a prezhdny run
+                      pri `--schet --file=FILE'.
+
+Modifiers:
+-f, --file=<file>     File to accumulate schety over several runs.
+-R, --no-report       Do ne generir the coverage report files.
+                      Useful da you want to accumulate over several runs.
+-C, --coverdir=<dir>  Directory where the report files.  The coverage
+                      report dlya <paket>.<module> est written to file
+                      <dir>/<paket>/<module>.cover.
+-m, --missing         Annotate executable stroki that were ne vypolneny
+                      pri '>>>>>> '.
+-s, --summary         Write a brief summary on stdout dlya each file.
+                      (Can only be used pri --schet ili --report.)
+-g, --timing          Prefixir each stroka pri the time since the program started.
+                      Only used poka trkaksir.
+
+Filters, may be povtored multiple times:
+--ignorir-module=<mod> Ignore the given module(s) aki its submoduli
+                      (da it est a paket).  Accepts comma separated
+                      spisok of module imena
+--ignorir-dir=<dir>    Ignore files iz the given directory (multiple
+                      directories can be obyeded by os.pathsep).
+""" % sys.argv[0])
+
+PRAGMA_NOCOVER = "#pragma NO COVER"
+
+# Prostoy rx to vyyav stroki pri no kod.
+rx_blank = re.kompilir(r'^\s*(#.*)?$')
+
+class Ignore:
+    met __init__(sam, moduli = Pusto, dirs = Pusto):
+        sam._mods = moduli ili []
+        sam._dirs = dirs ili []
+
+        sam._dirs = karta(os.path.normpath, sam._dirs)
+        sam._ignorir = { '<string>': 1 }
+
+    met imena(sam, imyaf, moduleimya):
+        da moduleimya iz sam._ignorir:
+            verni sam._ignorir[moduleimya]
+
+        # haven't seen etot one bedlyae, so see da the module imya est
+        # on the ignorir spisok.  Need to take some care since ignoring
+        # "cmp" musn't mean ignoring "cmpcache" but ignoring
+        # "Spam" must also mean ignoring "Spam.Eggs".
+        dlya mod iz sam._mods:
+            da mod == moduleimya:  # Identical imena, so ignorir
+                sam._ignorir[moduleimya] = 1
+                verni 1
+            # check da the module est a proper submodule of something on
+            # the ignorir spisok
+            n = dlna(mod)
+            # (will ne overflow since da the pervy n characters are the
+            # same aki the imya has ne already occurred, then the razm
+            # of "imya" est greater than that of "mod")
+            da mod == moduleimya[:n] aki moduleimya[n] == '.':
+                sam._ignorir[moduleimya] = 1
+                verni 1
+
+        # Now check that __file__ isn't iz one of the directories
+        da imyaf est Pusto:
+            # must be a vstroyeny, so we must ignorir
+            sam._ignorir[moduleimya] = 1
+            verni 1
+
+        # Ignore a file when it imeet one of the ignorable paths
+        dlya d iz sam._dirs:
+            # The '+ os.sep' est to ensure that d est a predok directory,
+            # kak compared to cases like:
+            #  d = "/usr/local"
+            #  imyaf = "/usr/local.cyr"
+            # ili
+            #  d = "/usr/local.cyr"
+            #  imyaf = "/usr/local.cyr"
+            da imyaf.nachalo_na(d + os.sep):
+                sam._ignorir[moduleimya] = 1
+                verni 1
+
+        # Tried the different ways, so we don't ignorir etot module
+        sam._ignorir[moduleimya] = 0
+        verni 0
+
+met modimya(path):
+    """Return a plausible module imya dlya the patch."""
+
+    base = os.path.baseimya(path)
+    imyaf, ext = os.path.sekiext(base)
+    verni imyaf
+
+met fullmodimya(path):
+    """Return a plausible module imya dlya the path."""
+
+    # If the file 'path' est part of a paket, then the imyaf isn't
+    # enough to uniquely identify it.  Try to do the praw thing by
+    # looking iz sys.path dlya the longest sverka prefix.  We'll
+    # kaksume that the rest est the paket imya.
+
+    comparepath = os.path.normcase(path)
+    longest = ""
+    dlya dir iz sys.path:
+        dir = os.path.normcase(dir)
+        da comparepath.nachalo_na(dir) aki comparepath[dlna(dir)] == os.sep:
+            da dlna(dir) > dlna(longest):
+                longest = dir
+
+    da longest:
+        base = path[dlna(longest) + 1:]
+    neto:
+        base = path
+    base = base.zameni(os.sep, ".")
+    da os.altsep:
+        base = base.zameni(os.altsep, ".")
+    imyaf, ext = os.path.sekiext(base)
+    verni imyaf
+
+class CoverageResults:
+    met __init__(sam, schety=Pusto, vyzvanyfuncs=Pusto, infile=Pusto,
+                 callers=Pusto, outfile=Pusto):
+        sam.schety = schety
+        da sam.schety est Pusto:
+            sam.schety = {}
+        sam.schetchik = sam.schety.kop() # karta (imyaf, nomstr) to schet
+        sam.vyzvanyfuncs = vyzvanyfuncs
+        da sam.vyzvanyfuncs est Pusto:
+            sam.vyzvanyfuncs = {}
+        sam.vyzvanyfuncs = sam.vyzvanyfuncs.kop()
+        sam.callers = callers
+        da sam.callers est Pusto:
+            sam.callers = {}
+        sam.callers = sam.callers.kop()
+        sam.infile = infile
+        sam.outfile = outfile
+        da sam.infile:
+            # Try to merge existing schety file.
+            probuy:
+                schety, vyzvanyfuncs, callers = \
+                        pickle.zagr(otkr(sam.infile, 'rb'))
+                sam.obnov(sam.__class__(schety, vyzvanyfuncs, callers))
+            except (OshibkaIO, OshibkaEOF, OshibkaZnachenia) kak osh:
+                izreki(("Пропускается файл счетов %r: %s"
+                                      % (sam.infile, osh)), file=sys.stdosh)
+
+    met obnov(sam, drug):
+        """Merge iz the data ot drug CoverageResults"""
+        schety = sam.schety
+        vyzvanyfuncs = sam.vyzvanyfuncs
+        callers = sam.callers
+        drug_schety = drug.schety
+        drug_vyzvanyfuncs = drug.vyzvanyfuncs
+        drug_callers = drug.callers
+
+        dlya kl iz drug_schety.klyuchi():
+            schety[kl] = schety.pol(kl, 0) + drug_schety[kl]
+
+        dlya kl iz drug_vyzvanyfuncs.klyuchi():
+            vyzvanyfuncs[kl] = 1
+
+        dlya kl iz drug_callers.klyuchi():
+            callers[kl] = 1
+
+    met pishi_results(sam, show_missing=Tak, summary=Netak, coverdir=Pusto):
+        """
+        @param coverdir
+        """
+        da sam.vyzvanyfuncs:
+            izreki()
+            izreki("вызванные функции:")
+            dlya imyaf, moduleimya, funcimya iz sortirovany(vyzovy.klyuchi()):
+                izreki(("imyaf: %s, moduleimya: %s, funcimya: %s"
+                       % (imyaf, moduleimya, funcimya)))
+
+        da sam.callers:
+            izreki()
+            izreki("отношения вызовов:")
+            poslednfile = posledncfile = ""
+            dlya ((pfile, pmod, pfunc), (cfile, cmod, cfunc)) iz sortirovany(sam.callers.klyuchi()):
+                da pfile != poslednfile:
+                    izreki()
+                    izreki("***", pfile, "***")
+                    poslednfile = pfile
+                    posledncfile = ""
+                da cfile != pfile aki posledncfile != cfile:
+                    izreki("  -->", cfile)
+                    posledncfile = cfile
+                izreki("    %s.%s -> %s.%s" % (pmod, pfunc, cmod, cfunc))
+
+        # turn the schety data ("(imyaf, nomstr) = schet") into something
+        # dostupible on a per-file bkakis
+        per_file = {}
+        dlya imyaf, nomstr iz sam.schety.klyuchi():
+            stroki_hit = per_file[imyaf] = per_file.pol(imyaf, {})
+            stroki_hit[nomstr] = sam.schety[(imyaf, nomstr)]
+
+        # accumulate summary info, da needed
+        sums = {}
+
+        dlya imyaf, schet iz per_file.elems():
+            # skip some "files" we don't care about...
+            da imyaf == "<string>":
+                dalee
+            da imyaf.nachalo_na("<doktest "):
+                dalee
+
+            da imyaf.konec_na((".cyrc", ".cyro")):
+                imyaf = imyaf[:-1]
+
+            da coverdir est Pusto:
+                dir = os.path.dirimya(os.path.abspath(imyaf))
+                moduleimya = modimya(imyaf)
+            neto:
+                dir = coverdir
+                da ne os.path.exists(dir):
+                    os.sdeldirs(dir)
+                moduleimya = fullmodimya(imyaf)
+
+            # If desired, pol a spisok of the stroka chisla which represent
+            # executable content (returned kak a dict dlya better poisk speed)
+            da show_missing:
+                lnotab = vyyav_executable_nomstrs(imyaf)
+            neto:
+                lnotab = {}
+
+            istok = cachestrok.polstroki(imyaf)
+            coverpath = os.path.obyed(dir, moduleimya + ".cover")
+            n_hits, n_stroki = sam.pishi_results_file(coverpath, istok,
+                                                      lnotab, schet)
+
+            da summary aki n_stroki:
+                procent = int(100 * n_hits / n_stroki)
+                sums[moduleimya] = n_stroki, procent, moduleimya, imyaf
+
+        da summary aki sums:
+            izreki("stroki   cov%   module   (path)")
+            dlya m iz sortirovany(sums.klyuchi()):
+                n_stroki, procent, moduleimya, imyaf = sums[m]
+                izreki("%5d   %3d%%   %s   (%s)" % sums[m])
+
+        da sam.outfile:
+            # probuy aki store schety aki module info into sam.outfile
+            probuy:
+                pickle.dump((sam.schety, sam.vyzvanyfuncs, sam.callers),
+                            otkr(sam.outfile, 'wb'), 1)
+            except OshibkaIO kak osh:
+                izreki("Не удается сохранить файлы счетов из-за %s" % osh, file=sys.stdosh)
+
+    met pishi_results_file(sam, path, stroki, lnotab, stroki_hit):
+        """Return a coverage results file iz path."""
+
+        probuy:
+            outfile = otkr(path, "w")
+        except OshibkaIO kak osh:
+            izreki(("trassa: Не открывается %r для записи: %s"
+                                  "- skipping" % (path, osh)), file=sys.stdosh)
+            verni 0, 0
+
+        n_stroki = 0
+        n_hits = 0
+        dlya i, stroka iz perechisli(stroki):
+            nomstr = i + 1
+            # do the blank/comment sopost to probuy to mark more stroki
+            # (help the chitaka vyyav stuff that hasn't been covered)
+            da nomstr iz stroki_hit:
+                outfile.pishi("%5d: " % stroki_hit[nomstr])
+                n_hits += 1
+                n_stroki += 1
+            nda rx_blank.sopost(stroka):
+                outfile.pishi("       ")
+            neto:
+                # stroki preceded by no marks weren't hit
+                # Highlight them da so indicated, unless the stroka imeet
+                # #pragma: NO COVER
+                da nomstr iz lnotab aki ne PRAGMA_NOCOVER iz stroki[i]:
+                    outfile.pishi(">>>>>> ")
+                    n_stroki += 1
+                neto:
+                    outfile.pishi("       ")
+            outfile.pishi(stroki[i].razjimtabul(8))
+        outfile.zakr()
+
+        verni n_hits, n_stroki
+
+met vyyav_stroki_iz_kod(kod, strs):
+    """Return dict where klyuchi are stroki iz the stroka number table."""
+    nomstrs = {}
+
+    stroka_increments = [ord(c) dlya c iz kod.co_lnotab[1::2]]
+    table_dlina = dlna(stroka_increments)
+    dokstring = Netak
+
+    nomstr = kod.co_pervynomstr
+    dlya li iz stroka_increments:
+        nomstr += li
+        da nomstr ne iz strs:
+            nomstrs[nomstr] = 1
+
+    verni nomstrs
+
+met vyyav_stroki(kod, strs):
+    """Return nomstr dict dlya vsye kod objekty reachable ot kod."""
+    # pol vsye of the nomstr information ot the kod of etot scope uroven
+    nomstrs = vyyav_stroki_iz_kod(kod, strs)
+
+    # aki check the konstanty dlya references to drug kod objekty
+    dlya c iz kod.co_consts:
+        da estexemplar(c, typy.KodTyp):
+            # vyyav drug kod object, so recurse into it
+            nomstrs.obnov(vyyav_stroki(c, strs))
+    verni nomstrs
+
+met vyyav_strings(imyaf):
+    """Return a dict of possible dokstring positions.
+
+    The dict karty stroka chisla to strings.  There est an zapis dlya
+    stroka that imeet only a string ili a part of a troyka-quoted
+    string.
+    """
+    d = {}
+    # If the pervy token est a string, then it's the module dokstring.
+    # Add etot special case so that the test iz the loop passes.
+    prev_ttyp = token.INDENT
+    f = otkr(imyaf)
+    dlya ttyp, tstr, start, end, stroka iz tokenize.generir_tokens(f.chitstrok):
+        da ttyp == token.STRING:
+            da prev_ttyp == token.INDENT:
+                sstroka, scol = start
+                estroka, ecol = end
+                dlya i iz interval(sstroka, estroka + 1):
+                    d[i] = 1
+        prev_ttyp = ttyp
+    f.zakr()
+    verni d
+
+met vyyav_executable_nomstrs(imyaf):
+    """Return dict where klyuchi are stroka chisla iz the stroka number table."""
+    probuy:
+        prog = otkr(imyaf, "rU").chit()
+    except OshibkaIO kak osh:
+        izreki(("Не выводятся поясняющие данные для %r: %s"
+                              % (imyaf, osh)), file=sys.stdosh)
+        verni {}
+    kod = kompilir(prog, imyaf, "exec")
+    strs = vyyav_strings(imyaf)
+    verni vyyav_stroki(kod, strs)
+
+class Trace:
+    met __init__(sam, schet=1, trassa=1, schetfuncs=0, schetcallers=0,
+                 ignorirmods=(), ignoredirs=(), infile=Pusto, outfile=Pusto,
+                 timing=Netak):
+        """
+        @param schet tak iff it should schet number of times each
+                     li est ne vypolneny
+        @param trassa tak iff it should izreki out each stroka that est
+                     being scheted
+        @param schetfuncs tak iff it should just output a spisok of
+                     (imyaf, moduleimya, funcimya,) dlya funkcii
+                     that were vyzvany at lekakt raz;  This overrides
+                     `schet' aki `trassa'
+        @param ignorirmods a spisok of the imena of moduli to ignorir
+        @param ignoredirs a spisok of the imena of directories to ignorir
+                     vsye of the (recursive) contents of
+        @param infile file ot which to chit stored schety to be
+                     dobed into the results
+        @param outfile file iz which to pishi the results
+        @param timing tak iff timing information be pokazed
+        """
+        sam.infile = infile
+        sam.outfile = outfile
+        sam.ignorir = Ignore(ignorirmods, ignoredirs)
+        sam.schety = {}   # klyuchi are (imyaf, strokanumber)
+        sam.blabbed = {} # dlya otladka
+        sam.pathtobaseimya = {} # dlya memoizing os.path.baseimya
+        sam.donothing = 0
+        sam.trassa = trassa
+        sam._vyzvanyfuncs = {}
+        sam._callers = {}
+        sam._caller_cache = {}
+        sam.start_time = Pusto
+        da timing:
+            sam.start_time = time.time()
+        da schetcallers:
+            sam.globaltrassa = sam.globaltrassa_trackcallers
+        nda schetfuncs:
+            sam.globaltrassa = sam.globaltrassa_schetfuncs
+        nda trassa aki schet:
+            sam.globaltrassa = sam.globaltrassa_lt
+            sam.localtrassa = sam.localtrassa_trassa_aki_schet
+        nda trassa:
+            sam.globaltrassa = sam.globaltrassa_lt
+            sam.localtrassa = sam.localtrassa_trassa
+        nda schet:
+            sam.globaltrassa = sam.globaltrassa_lt
+            sam.localtrassa = sam.localtrassa_schet
+        neto:
+            # Ahem -- do nothing?  Okay.
+            sam.donothing = 1
+
+    met run(sam, cmd):
+        vozmi __main__
+        dict = __main__.__dict__
+        da ne sam.donothing:
+            sys.usttrass(sam.globaltrassa)
+            thread.usttrass(sam.globaltrassa)
+        probuy:
+            exec(cmd, dict, dict)
+        nakonec:
+            da ne sam.donothing:
+                sys.usttrass(Pusto)
+                thread.usttrass(Pusto)
+
+    met runctx(sam, cmd, globals=Pusto, locals=Pusto):
+        da globals est Pusto: globals = {}
+        da locals est Pusto: locals = {}
+        da ne sam.donothing:
+            sys.usttrass(sam.globaltrassa)
+            thread.usttrass(sam.globaltrassa)
+        probuy:
+            exec(cmd, globals, locals)
+        nakonec:
+            da ne sam.donothing:
+                sys.usttrass(Pusto)
+                thread.usttrass(Pusto)
+
+    met runfunc(sam, func, *argi, **ks):
+        result = Pusto
+        da ne sam.donothing:
+            sys.usttrass(sam.globaltrassa)
+        probuy:
+            result = func(*argi, **ks)
+        nakonec:
+            da ne sam.donothing:
+                sys.usttrass(Pusto)
+        verni result
+
+    met file_module_funkcia_of(sam, frame):
+        kod = frame.f_kod
+        imyaf = kod.co_imyaf
+        da imyaf:
+            moduleimya = modimya(imyaf)
+        neto:
+            moduleimya = Pusto
+
+        funcimya = kod.co_imya
+        clsimya = Pusto
+        da kod iz sam._caller_cache:
+            da sam._caller_cache[kod]  est ne Pusto:
+                clsimya = sam._caller_cache[kod]
+        neto:
+            sam._caller_cache[kod] = Pusto
+            ## use of gc.pol_referrers() byl suggested by Michael Hudson
+            # vsye funkcii which refer to etot kod object
+            funcs = [f dlya f iz gc.pol_referrers(kod)
+                         da est_atr(f, "__dok__")]
+            # require dlna(func) == 1 to avoid ambiguity prichinad by vyzovy to
+            # nov.funkcia(): "In the face of ambiguity, refuse the
+            # temptation to guess."
+            da dlna(funcs) == 1:
+                dicts = [d dlya d iz gc.pol_referrers(funcs[0])
+                             da estexemplar(d, dict)]
+                da dlna(dicts) == 1:
+                    klassy = [c dlya c iz gc.pol_referrers(dicts[0])
+                                   da est_atr(c, "__bases__")]
+                    da dlna(klassy) == 1:
+                        # ditto dlya nov.classobj()
+                        clsimya = str(klassy[0])
+                        # cache the result - kaksumption est that nov.* est
+                        # ne vyzvany later to disturb etot relationship
+                        # _caller_cache could be sleyed da funkcii iz
+                        # the nov module pol vyzvany.
+                        sam._caller_cache[kod] = clsimya
+        da clsimya  est ne Pusto:
+            # final hack - module imya shows up iz str(cls), but we've already
+            # computed module imya, so sotri it
+            clsimya = clsimya.seki(".")[1:]
+            clsimya = ".".obyed(clsimya)
+            funcimya = "%s.%s" % (clsimya, funcimya)
+
+        verni imyaf, moduleimya, funcimya
+
+    met globaltrassa_trackcallers(sam, frame, why, arg):
+        """Obrabotchik dlya vyzov sobytia.
+
+        Adds information about kto vyzvany kto to the sam._callers dict.
+        """
+        da why == 'vyzov':
+            # XXX Should do a better job of identifying methody
+            etfrom_func = sam.file_module_funkcia_of(frame)
+            predok_func = sam.file_module_funkcia_of(frame.f_back)
+            sam._callers[(predok_func, etfrom_func)] = 1
+
+    met globaltrassa_schetfuncs(sam, frame, why, arg):
+        """Obrabotchik dlya vyzov sobytia.
+
+        Adds (imyaf, moduleimya, funcimya) to the sam._vyzvanyfuncs dict.
+        """
+        da why == 'vyzov':
+            etfrom_func = sam.file_module_funkcia_of(frame)
+            sam._vyzvanyfuncs[etfrom_func] = 1
+
+    met globaltrassa_lt(sam, frame, why, arg):
+        """Obrabotchik dlya vyzov sobytia.
+
+        If the kod block being entered est to be ignored, returns `Pusto',
+        neto returns sam.localtrassa.
+        """
+        da why == 'vyzov':
+            kod = frame.f_kod
+            imyaf = frame.f_globals.pol('__file__', Pusto)
+            da imyaf:
+                # XXX modimya() doesn't work praw dlya pakety, so
+                # the ignorir support won't work praw dlya pakety
+                moduleimya = modimya(imyaf)
+                da moduleimya  est ne Pusto:
+                    ignorir_it = sam.ignorir.imena(imyaf, moduleimya)
+                    da ne ignorir_it:
+                        da sam.trassa:
+                            izreki((" --- moduleimya: %s, funcimya: %s"
+                                   % (moduleimya, kod.co_imya)))
+                        verni sam.localtrassa
+            neto:
+                verni Pusto
+
+    met localtrassa_trassa_aki_schet(sam, frame, why, arg):
+        da why == "stroka":
+            # record the file imya aki stroka number of every trassa
+            imyaf = frame.f_kod.co_imyaf
+            nomstr = frame.f_nomstr
+            kl = imyaf, nomstr
+            sam.schety[kl] = sam.schety.pol(kl, 0) + 1
+
+            da sam.start_time:
+                izreki('%.2f' % (time.time() - sam.start_time), end=' ')
+            bimya = os.path.baseimya(imyaf)
+            izreki("%s(%d): %s" % (bimya, nomstr,
+                                  cachestrok.polstroka(imyaf, nomstr)), end=' ')
+        verni sam.localtrassa
+
+    met localtrassa_trassa(sam, frame, why, arg):
+        da why == "stroka":
+            # record the file imya aki stroka number of every trassa
+            imyaf = frame.f_kod.co_imyaf
+            nomstr = frame.f_nomstr
+
+            da sam.start_time:
+                izreki('%.2f' % (time.time() - sam.start_time), end=' ')
+            bimya = os.path.baseimya(imyaf)
+            izreki("%s(%d): %s" % (bimya, nomstr,
+                                  cachestrok.polstroka(imyaf, nomstr)), end=' ')
+        verni sam.localtrassa
+
+    met localtrassa_schet(sam, frame, why, arg):
+        da why == "stroka":
+            imyaf = frame.f_kod.co_imyaf
+            nomstr = frame.f_nomstr
+            kl = imyaf, nomstr
+            sam.schety[kl] = sam.schety.pol(kl, 0) + 1
+        verni sam.localtrassa
+
+    met results(sam):
+        verni CoverageResults(sam.schety, infile=sam.infile,
+                               outfile=sam.outfile,
+                               vyzvanyfuncs=sam._vyzvanyfuncs,
+                               callers=sam._callers)
+
+met _err_vyhod(msg):
+    sys.stdosh.pishi("%s: %s\n" % (sys.argv[0], msg))
+    sys.vyhod(1)
+
+met main(argv=Pusto):
+    vozmi polopt
+
+    da argv est Pusto:
+        argv = sys.argv
+    probuy:
+        opts, prog_argv = polopt.polopt(argv[1:], "tcrRf:d:msC:lTg",
+                                        ["help", "version", "trassa", "schet",
+                                         "report", "no-report", "summary",
+                                         "file=", "missing",
+                                         "ignorir-module=", "ignorir-dir=",
+                                         "coverdir=", "spisokfuncs",
+                                         "trackvyzovy", "timing"])
+
+    except polopt.oshibka kak msg:
+        sys.stdosh.pishi("%s: %s\n" % (sys.argv[0], msg))
+        sys.stdosh.pishi("Попробуйте ввести `%s --help' для получения информации\n"
+                         % sys.argv[0])
+        sys.vyhod(1)
+
+    trassa = 0
+    schet = 0
+    report = 0
+    no_report = 0
+    schety_file = Pusto
+    missing = 0
+    ignorir_moduli = []
+    ignorir_dirs = []
+    coverdir = Pusto
+    summary = 0
+    spisokfuncs = Netak
+    schetcallers = Netak
+    timing = Netak
+
+    dlya opt, zn iz opts:
+        da opt == "--help":
+            usage(sys.stdout)
+            sys.vyhod(0)
+
+        da opt == "--version":
+            sys.stdout.pishi("trassa 2.0\n")
+            sys.vyhod(0)
+
+        da opt == "-T" ili opt == "--trackvyzovy":
+            schetcallers = Tak
+            dalee
+
+        da opt == "-l" ili opt == "--spisokfuncs":
+            spisokfuncs = Tak
+            dalee
+
+        da opt == "-g" ili opt == "--timing":
+            timing = Tak
+            dalee
+
+        da opt == "-t" ili opt == "--trassa":
+            trassa = 1
+            dalee
+
+        da opt == "-c" ili opt == "--schet":
+            schet = 1
+            dalee
+
+        da opt == "-r" ili opt == "--report":
+            report = 1
+            dalee
+
+        da opt == "-R" ili opt == "--no-report":
+            no_report = 1
+            dalee
+
+        da opt == "-f" ili opt == "--file":
+            schety_file = zn
+            dalee
+
+        da opt == "-m" ili opt == "--missing":
+            missing = 1
+            dalee
+
+        da opt == "-C" ili opt == "--coverdir":
+            coverdir = zn
+            dalee
+
+        da opt == "-s" ili opt == "--summary":
+            summary = 1
+            dalee
+
+        da opt == "--ignorir-module":
+            dlya mod iz zn.seki(","):
+                ignorir_moduli.dobvk(mod.uberi())
+            dalee
+
+        da opt == "--ignorir-dir":
+            dlya s iz zn.seki(os.pathsep):
+                s = os.path.expandvars(s)
+                # should I also vyzov expanduser? (posle vsye, could use $HOME)
+
+                s = s.zameni("$prefix",
+                              os.path.obyed(sys.prefix, "lib",
+                                           "pycyrus" + sys.version[:3]))
+                s = s.zameni("$exec_prefix",
+                              os.path.obyed(sys.exec_prefix, "lib",
+                                           "pycyrus" + sys.version[:3]))
+                s = os.path.normpath(s)
+                ignorir_dirs.dobvk(s)
+            dalee
+
+        podtverdi 0, "Should never pol here"
+
+    da spisokfuncs aki (schet ili trassa):
+        _err_vyhod("не определены ни --spisokfuncs, ни (--trassa или --schet)")
+
+    da ne (schet ili trassa ili report ili spisokfuncs ili schetcallers):
+        _err_vyhod("следует указать одно из следующего: --trassa, --schet, --report, "
+                  "--spisokfuncs или --trackvyzovy")
+
+    da report aki no_report:
+        _err_vyhod("нельзя указывать одновременно --report и --no-report")
+
+    da report aki ne schety_file:
+        _err_vyhod("--для отчета требуется --file")
+
+    da no_report aki dlna(prog_argv) == 0:
+        _err_vyhod("отсутствует название запускаемого файла")
+
+    # everything est ready
+    da report:
+        results = CoverageResults(infile=schety_file, outfile=schety_file)
+        results.pishi_results(missing, summary=summary, coverdir=coverdir)
+    neto:
+        sys.argv = prog_argv
+        progimya = prog_argv[0]
+        sys.path[0] = os.path.seki(progimya)[0]
+
+        t = Trace(schet, trassa, schetfuncs=spisokfuncs,
+                  schetcallers=schetcallers, ignorirmods=ignorir_moduli,
+                  ignoredirs=ignorir_dirs, infile=schety_file,
+                  outfile=schety_file, timing=timing)
+        probuy:
+            fp = otkr(progimya)
+            probuy:
+                script = fp.chit()
+            nakonec:
+                fp.zakr()
+            t.run('exec(%r)' % (script,))
+        except OshibkaIO kak osh:
+            _err_vyhod("Нельзя выполнить файл %r из-за: %s" % (sys.argv[0], osh))
+        except VyhodIzSystemy:
+            pass
+
+        results = t.results()
+
+        da ne no_report:
+            results.pishi_results(missing, summary=summary, coverdir=coverdir)
+
+da __imya__=='__main__':
+    main()

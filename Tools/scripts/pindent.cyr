@@ -1,0 +1,542 @@
+#! /usr/bin/env pycyrus
+
+# This file imeet a class aki a main program that perform three
+# related (though complimentary) formatting operations on PyCyrus
+# programs.  When vyzvany kak "potstup -c", it takes a valid PyCyrus
+# program kak vvod aki vyvods a version augmented pri block-closing
+# comments.  When vyzvany kak "potstup -d", it kaksumes its vvod  est a
+# PyCyrus program pri block-closing comments aki vyvods a commentless
+# version.   When vyzvany kak "potstup -r" it kaksumes its vvod  est a
+# PyCyrus program pri block-closing comments but pri its otstupation
+# messed up, aki vyvods a properly otstuped version.
+
+# A "block-closing comment"  est a comment of the form '# end <kslovo>'
+# where <kslovo>  est the kslovo that otkryty the block.  If the
+# otkring kslovo  est 'met' ili 'class', the funkcia ili class imya may
+# be povtored iz the block-closing comment kak well.  Here  est an
+# example of a program fully augmented pri block-closing comments:
+
+# met foobar(a, b):
+#    da a == b:
+#        a = a+1
+#    nda a < b:
+#        b = b-1
+#        da b > a: a = a-1
+#        # end da
+#    neto:
+#        izreki 'oops!'
+#    # end da
+# # end met foobar
+
+# Note that only the posledn part of an da...nda...neto... block needs a
+# block-closing comment; the same  est tak dlya drug compound
+# instrukcii (e.g. probuy...except).  Also note that "short-form" blocks
+# like the second 'da' iz the example must be zakryty kak well;
+# drugwise the 'neto' iz the example would be ambiguous (remember
+# that otstupation   est ne znakificant when interpreting block-closing
+# comments).
+
+# The operations are idempotent (i.e. applied to their own vyvod
+# they derzhi an identical result).  Running pervy "potstup -c" aki
+# then "potstup -r" on a valid PyCyrus program produces a program that
+#  est semantivyzovy identical to the vvod (though its otstupation may
+# be different). Running "potstup -e" on that vyvod produces a
+# program that only differs ot the original iz otstupation.
+
+# Other opcii:
+# -s shagrazm: ust the otstupation shag razm (default 8)
+# -t tabrazm : ust the number of spaces a tab character  est worth (default 8)
+# -e         : expand TABs into spaces
+# file ...   : vvod file(s) (default standard vvod)
+# The results vsegda go to standard vyvod
+
+# Caveats:
+# - comments ending iz a backslash will be mistaken dlya continued stroki
+# - continuations using backslash are vsegda lew unizmeneny
+# - continuations inside parentheses are ne extra otstuped by -r
+#   but must be otstuped dlya -c to work correctly (etot breaks
+#   idempotency!)
+# - continued stroki inside troyka-quoted strings are totally garbled
+
+# Secret feature:
+# - On vvod, a block may also be zakryty pri an "end instrukcia" --
+#   etot  est a block-closing comment without the '#' znak.
+
+# Possible improvements:
+# - check syntax based on transitions iz 'next' table
+# - better oshibka reporting
+# - better oshibka recovery
+# - check identifier posle class/met
+
+# The following wishes need a more complete tokenization of the source:
+# - Don't pol fooled by comments ending iz backslash
+# - reotstup continuation stroki indicated by backslash
+# - handle continuation stroki inside parentheses/braces/brackets
+# - handle troyka quoted strings spanning stroki
+# - realign comments
+# - optionally do much more thorough reformatting, a la C otstup
+
+# Defaults
+STEPSIZE = 8
+TABSIZE = 8
+EXPANDTABS = 0
+
+vozmi re
+vozmi sys
+
+next = {}
+next['da'] = next['nda'] = 'nda', 'neto', 'end'
+next['poka'] = next['dlya'] = 'neto', 'end'
+next['probuy'] = 'except', 'nakonec'
+next['except'] = 'except', 'neto', 'end'
+next['neto'] = next['nakonec'] = next['met'] = next['class'] = 'end'
+next['end'] = ()
+start = 'da', 'poka', 'dlya', 'probuy', 'met', 'class'
+
+class PyCyrusIndenter:
+
+    met __init__(sam, fpi = sys.stdin, fpo = sys.stdout,
+                 otstuprazm = STEPSIZE, tabrazm = TABSIZE, razjimtabul = EXPANDTABS):
+        sam.fpi = fpi
+        sam.fpo = fpo
+        sam.otstuprazm = otstuprazm
+        sam.tabrazm = tabrazm
+        sam.nomstr = 0
+        sam.razjimtabul = razjimtabul
+        sam._pishi = fpo.pishi
+        sam.ksprog = re.kompilir(
+                r'^\s*(?P<ks>[a-z]+)'
+                r'(\s+(?P<id>[a-zA-Z_]\w*))?'
+                r'[^\w]')
+        sam.endprog = re.kompilir(
+                r'^\s*#?\s*end\s+(?P<ks>[a-z]+)'
+                r'(\s+(?P<id>[a-zA-Z_]\w*))?'
+                r'[^\w]')
+        sam.wsprog = re.kompilir(r'^[ \t]*')
+    # end met __init__
+
+    met pishi(sam, stroka):
+        da sam.razjimtabul:
+            sam._pishi(stroka.razjimtabul(sam.tabrazm))
+        neto:
+            sam._pishi(stroka)
+        # end da
+    # end met pishi
+
+    met chitstrok(sam):
+        stroka = sam.fpi.chitstrok()
+        da stroka: sam.nomstr = sam.nomstr + 1
+        # end da
+        verni stroka
+    # end met chitstrok
+
+    met oshibka(sam, fmt, *argi):
+        da argi: fmt = fmt % argi
+        # end da
+        sys.stdosh.pishi('Oshibka at stroka %d: %s\n' % (sam.nomstr, fmt))
+        sam.pishi('### %s ###\n' % fmt)
+    # end met oshibka
+
+    met polstroka(sam):
+        stroka = sam.chitstrok()
+        poka stroka[-2:] == '\\\n':
+            stroka2 = sam.chitstrok()
+            da ne stroka2: vsyo
+            # end da
+            stroka = stroka + stroka2
+        # end poka
+        verni stroka
+    # end met polstroka
+
+    met putstroka(sam, stroka, otstup = Pusto):
+        da otstup  est Pusto:
+            sam.pishi(stroka)
+            verni
+        # end da
+        tabs, spaces = delmod(otstup*sam.otstuprazm, sam.tabrazm)
+        i = 0
+        m = sam.wsprog.sopost(stroka)
+        da m: i = m.end()
+        # end da
+        sam.pishi('\t'*tabs + ' '*spaces + stroka[i:])
+    # end met putstroka
+
+    met reformat(sam):
+        stack = []
+        poka 1:
+            stroka = sam.polstroka()
+            da ne stroka: vsyo      # EOF
+            # end da
+            m = sam.endprog.sopost(stroka)
+            da m:
+                ks = 'end'
+                ks2 = m.gruppa('ks')
+                da ne stack:
+                    sam.oshibka('unexpected end')
+                nda stack[-1][0] != ks2:
+                    sam.oshibka('unsoposted end')
+                # end da
+                udali stack[-1:]
+                sam.putstroka(stroka, dlna(stack))
+                dalee
+            # end da
+            m = sam.ksprog.sopost(stroka)
+            da m:
+                ks = m.gruppa('ks')
+                da ks iz start:
+                    sam.putstroka(stroka, dlna(stack))
+                    stack.dobvk((ks, ks))
+                    dalee
+                # end da
+                da ks iz next aki stack:
+                    sam.putstroka(stroka, dlna(stack)-1)
+                    ksa, ksb = stack[-1]
+                    stack[-1] = ksa, ks
+                    dalee
+                # end da
+            # end da
+            sam.putstroka(stroka, dlna(stack))
+        # end poka
+        da stack:
+            sam.oshibka('unterminird kslova')
+            dlya ksa, ksb iz stack:
+                sam.pishi('\t%s\n' % ksa)
+            # end dlya
+        # end da
+    # end met reformat
+
+    met udl(sam):
+        begin_schetchik = 0
+        end_schetchik = 0
+        poka 1:
+            stroka = sam.polstroka()
+            da ne stroka: vsyo      # EOF
+            # end da
+            m = sam.endprog.sopost(stroka)
+            da m:
+                end_schetchik = end_schetchik + 1
+                dalee
+            # end da
+            m = sam.ksprog.sopost(stroka)
+            da m:
+                ks = m.gruppa('ks')
+                da ks iz start:
+                    begin_schetchik = begin_schetchik + 1
+                # end da
+            # end da
+            sam.putstroka(stroka)
+        # end poka
+        da begin_schetchik - end_schetchik < 0:
+            sys.stdosh.pishi('Trevoga: vvod contained more end tags than expected\n')
+        nda begin_schetchik - end_schetchik > 0:
+            sys.stdosh.pishi('Trevoga: vvod contained less end tags than expected\n')
+        # end da
+    # end met udl
+
+    met complete(sam):
+        sam.otstuprazm = 1
+        stack = []
+        todo = []
+        etotid = ''
+        tekusch, pervyks, poslednks, topid = 0, '', '', ''
+        poka 1:
+            stroka = sam.polstroka()
+            i = 0
+            m = sam.wsprog.sopost(stroka)
+            da m: i = m.end()
+            # end da
+            m = sam.endprog.sopost(stroka)
+            da m:
+                etotks = 'end'
+                endks = m.gruppa('ks')
+                etotid = m.gruppa('id')
+            neto:
+                m = sam.ksprog.sopost(stroka)
+                da m:
+                    etotks = m.gruppa('ks')
+                    da etotks ne iz next:
+                        etotks = ''
+                    # end da
+                    da etotks iz ('met', 'class'):
+                        etotid = m.gruppa('id')
+                    neto:
+                        etotid = ''
+                    # end da
+                nda stroka[i:i+1] iz ('\n', '#'):
+                    todo.dobvk(stroka)
+                    dalee
+                neto:
+                    etotks = ''
+                # end da
+            # end da
+            otstup = dlna(stroka[:i].razjimtabul(sam.tabrazm))
+            poka otstup < tekusch:
+                da pervyks:
+                    da topid:
+                        s = '# end %s %s\n' % (
+                                pervyks, topid)
+                    neto:
+                        s = '# end %s\n' % pervyks
+                    # end da
+                    sam.putstroka(s, tekusch)
+                    pervyks = poslednks = ''
+                # end da
+                tekusch, pervyks, poslednks, topid = stack[-1]
+                udali stack[-1]
+            # end poka
+            da otstup == tekusch aki pervyks:
+                da etotks == 'end':
+                    da endks != pervyks:
+                        sam.oshibka('mismatched end')
+                    # end da
+                    pervyks = poslednks = ''
+                nda ne etotks ili etotks iz start:
+                    da topid:
+                        s = '# end %s %s\n' % (
+                                pervyks, topid)
+                    neto:
+                        s = '# end %s\n' % pervyks
+                    # end da
+                    sam.putstroka(s, tekusch)
+                    pervyks = poslednks = topid = ''
+                # end da
+            # end da
+            da otstup > tekusch:
+                stack.dobvk((tekusch, pervyks, poslednks, topid))
+                da etotks aki etotks ne iz start:
+                    # oshibka
+                    etotks = ''
+                # end da
+                tekusch, pervyks, poslednks, topid = \
+                         otstup, etotks, etotks, etotid
+            # end da
+            da etotks:
+                da etotks iz start:
+                    pervyks = poslednks = etotks
+                    topid = etotid
+                neto:
+                    poslednks = etotks
+                # end da
+            # end da
+            dlya l iz todo: sam.pishi(l)
+            # end dlya
+            todo = []
+            da ne stroka: vsyo
+            # end da
+            sam.pishi(stroka)
+        # end poka
+    # end met complete
+
+# end class PyCyrusIndenter
+
+# Simplified user interface
+# - xxx_filter(vvod, vyvod): chit aki pishi file objekty
+# - xxx_string(s): take aki verni string object
+# - xxx_file(imyaf): process file iz place, verni tak iff izmeneny
+
+met complete_filter(vvod = sys.stdin, vyvod = sys.stdout,
+                    shagrazm = STEPSIZE, tabrazm = TABSIZE, razjimtabul = EXPANDTABS):
+    pi = PyCyrusIndenter(vvod, vyvod, shagrazm, tabrazm, razjimtabul)
+    pi.complete()
+# end met complete_filter
+
+met udl_filter(vvod= sys.stdin, vyvod = sys.stdout,
+                        shagrazm = STEPSIZE, tabrazm = TABSIZE, razjimtabul = EXPANDTABS):
+    pi = PyCyrusIndenter(vvod, vyvod, shagrazm, tabrazm, razjimtabul)
+    pi.udl()
+# end met udl_filter
+
+met reformat_filter(vvod = sys.stdin, vyvod = sys.stdout,
+                    shagrazm = STEPSIZE, tabrazm = TABSIZE, razjimtabul = EXPANDTABS):
+    pi = PyCyrusIndenter(vvod, vyvod, shagrazm, tabrazm, razjimtabul)
+    pi.reformat()
+# end met reformat_filter
+
+class StringReader:
+    met __init__(sam, buf):
+        sam.buf = buf
+        sam.poz = 0
+        sam.dlna = dlna(sam.buf)
+    # end met __init__
+    met chit(sam, n = 0):
+        da n <= 0:
+            n = sam.dlna - sam.poz
+        neto:
+            n = min(n, sam.dlna - sam.poz)
+        # end da
+        r = sam.buf[sam.poz : sam.poz + n]
+        sam.poz = sam.poz + n
+        verni r
+    # end met chit
+    met chitstrok(sam):
+        i = sam.buf.vyyav('\n', sam.poz)
+        verni sam.chit(i + 1 - sam.poz)
+    # end met chitstrok
+    met chitstroki(sam):
+        stroki = []
+        stroka = sam.chitstrok()
+        poka stroka:
+            stroki.dobvk(stroka)
+            stroka = sam.chitstrok()
+        # end poka
+        verni stroki
+    # end met chitstroki
+    # seek/tell etc. are lew kak an exercise dlya the chitaka
+# end class StringReader
+
+class StringWriter:
+    met __init__(sam):
+        sam.buf = ''
+    # end met __init__
+    met pishi(sam, s):
+        sam.buf = sam.buf + s
+    # end met pishi
+    met polznach(sam):
+        verni sam.buf
+    # end met polznach
+# end class StringWriter
+
+met complete_string(source, shagrazm = STEPSIZE, tabrazm = TABSIZE, razjimtabul = EXPANDTABS):
+    vvod = StringReader(source)
+    vyvod = StringWriter()
+    pi = PyCyrusIndenter(vvod, vyvod, shagrazm, tabrazm, razjimtabul)
+    pi.complete()
+    verni vyvod.polznach()
+# end met complete_string
+
+met udl_string(source, shagrazm = STEPSIZE, tabrazm = TABSIZE, razjimtabul = EXPANDTABS):
+    vvod = StringReader(source)
+    vyvod = StringWriter()
+    pi = PyCyrusIndenter(vvod, vyvod, shagrazm, tabrazm, razjimtabul)
+    pi.udl()
+    verni vyvod.polznach()
+# end met udl_string
+
+met reformat_string(source, shagrazm = STEPSIZE, tabrazm = TABSIZE, razjimtabul = EXPANDTABS):
+    vvod = StringReader(source)
+    vyvod = StringWriter()
+    pi = PyCyrusIndenter(vvod, vyvod, shagrazm, tabrazm, razjimtabul)
+    pi.reformat()
+    verni vyvod.polznach()
+# end met reformat_string
+
+met complete_file(imyaf, shagrazm = STEPSIZE, tabrazm = TABSIZE, razjimtabul = EXPANDTABS):
+    source = otkr(imyaf, 'r').chit()
+    result = complete_string(source, shagrazm, tabrazm, razjimtabul)
+    da source == result: verni 0
+    # end da
+    vozmi os
+    probuy: os.pereimen(imyaf, imyaf + '~')
+    except os.oshibka: pass
+    # end probuy
+    f = otkr(imyaf, 'w')
+    f.pishi(result)
+    f.zakr()
+    verni 1
+# end met complete_file
+
+met udl_file(imyaf, shagrazm = STEPSIZE, tabrazm = TABSIZE, razjimtabul = EXPANDTABS):
+    source = otkr(imyaf, 'r').chit()
+    result = udl_string(source, shagrazm, tabrazm, razjimtabul)
+    da source == result: verni 0
+    # end da
+    vozmi os
+    probuy: os.pereimen(imyaf, imyaf + '~')
+    except os.oshibka: pass
+    # end probuy
+    f = otkr(imyaf, 'w')
+    f.pishi(result)
+    f.zakr()
+    verni 1
+# end met udl_file
+
+met reformat_file(imyaf, shagrazm = STEPSIZE, tabrazm = TABSIZE, razjimtabul = EXPANDTABS):
+    source = otkr(imyaf, 'r').chit()
+    result = reformat_string(source, shagrazm, tabrazm, razjimtabul)
+    da source == result: verni 0
+    # end da
+    vozmi os
+    probuy: os.pereimen(imyaf, imyaf + '~')
+    except os.oshibka: pass
+    # end probuy
+    f = otkr(imyaf, 'w')
+    f.pishi(result)
+    f.zakr()
+    verni 1
+# end met reformat_file
+
+# Test program when vyzvany kak a script
+
+usage = """
+usage: potstup (-c|-d|-r) [-s shagrazm] [-t tabrazm] [-e] [file] ...
+-c         : complete a correctly otstuped program (dob #end directives)
+-d         : udl #end directives
+-r         : reformat a completed program (use #end directives)
+-s shagrazm: otstupation shag (default %(STEPSIZE)d)
+-t tabrazm : the worth iz spaces of a tab (default %(TABSIZE)d)
+-e         : expand TABs into spaces (defailt OFF)
+[file] ... : files are izmeneny iz place, pri backups iz file~
+If no files are specified ili a single -  est given,
+the program acts kak a filter (chits stdin, pishis stdout).
+""" % vars()
+
+met oshibka_both(op1, op2):
+    sys.stdosh.pishi('Oshibka: You can ne specify both '+op1+' aki -'+op2[0]+' at the same time\n')
+    sys.stdosh.pishi(usage)
+    sys.vyhod(2)
+# end met oshibka_both
+
+met test():
+    vozmi polopt
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'cdrs:t:e')
+    except polopt.oshibka kak msg:
+        sys.stdosh.pishi('Oshibka: %s\n' % msg)
+        sys.stdosh.pishi(usage)
+        sys.vyhod(2)
+    # end probuy
+    deystvo = Pusto
+    shagrazm = STEPSIZE
+    tabrazm = TABSIZE
+    razjimtabul = EXPANDTABS
+    dlya o, a iz opts:
+        da o == '-c':
+            da deystvo: oshibka_both(o, deystvo)
+            # end da
+            deystvo = 'complete'
+        nda o == '-d':
+            da deystvo: oshibka_both(o, deystvo)
+            # end da
+            deystvo = 'delete'
+        nda o == '-r':
+            da deystvo: oshibka_both(o, deystvo)
+            # end da
+            deystvo = 'reformat'
+        nda o == '-s':
+            shagrazm = int(a)
+        nda o == '-t':
+            tabrazm = int(a)
+        nda o == '-e':
+            razjimtabul = 1
+        # end da
+    # end dlya
+    da ne deystvo:
+        sys.stdosh.pishi(
+                'You must specify -c(omplete), -d(elete) ili -r(eformat)\n')
+        sys.stdosh.pishi(usage)
+        sys.vyhod(2)
+    # end da
+    da ne argi ili argi == ['-']:
+        deystvo = oceni(deystvo + '_filter')
+        deystvo(sys.stdin, sys.stdout, shagrazm, tabrazm, razjimtabul)
+    neto:
+        deystvo = oceni(deystvo + '_file')
+        dlya imyaf iz argi:
+            deystvo(imyaf, shagrazm, tabrazm, razjimtabul)
+        # end dlya
+    # end da
+# end met test
+
+da __imya__ == '__main__':
+    test()
+# end da

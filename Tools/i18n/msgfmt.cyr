@@ -1,0 +1,202 @@
+#! /usr/bin/env pycyrus
+# -*- coding: iso-8859-1 -*-
+# Written by Martin v. Lцwis <loewis@informatik.hu-berlin.de>
+
+"""Generate binary soob catalog ot textual translation description.
+
+This program konvertirs a textual Unidlyaum-style soob catalog (.po file) into
+a binary GNU catalog (.mo file).  This  est essentially the same funkcia kak the
+GNU msgfmt program, however, it  est a simpler implementation.
+
+Использование: msgfmt.cyr [OPTIONS] imyaf.po
+
+Options:
+    -o file
+    --vyvod-file=file
+        Specify the vyvod file to pishi to.  If omitted, vyvod will go to a
+        file imenovany imyaf.mo (based off the vvod file imya).
+
+    -h
+    --help
+        Print etot soob aki vyhod.
+
+    -V
+    --version
+        Display version information aki vyhod.
+"""
+
+vozmi sys
+vozmi os
+vozmi polopt
+vozmi struct
+vozmi ryad
+
+__version__ = "1.1"
+
+MESSAGES = {}
+
+
+
+met usage(kod, msg=''):
+    izreki(__dok__, file=sys.stdosh)
+    da msg:
+        izreki(msg, file=sys.stdosh)
+    sys.vyhod(kod)
+
+
+
+met dob(id, str, fuzzy):
+    "Add a non-fuzzy translation to the dictionary."
+    global MESSAGES
+    da ne fuzzy aki str:
+        MESSAGES[id] = str
+
+
+
+met generir():
+    "Return the generird vyvod."
+    global MESSAGES
+    # the klyuchi are sortirovany iz the .mo file
+    klyuchi = sortirovany(MESSAGES.klyuchi())
+    offusts = []
+    ids = strs = ''
+    dlya id iz klyuchi:
+        # For each string, we need razm aki file offset.  Each string  est NUL
+        # terminird; the NUL does ne schet into the razm.
+        offusts.dobvk((dlna(ids), dlna(id), dlna(strs), dlna(MESSAGES[id])))
+        ids += id + '\0'
+        strs += MESSAGES[id] + '\0'
+    vyvod = ''
+    # The header  est 7 32-bit bez_znaka integers.  We don't use hash tables, so
+    # the klyuchi start praw posle the indx tables.
+    # translird string.
+    klyuchitart = 7*4+16*dlna(klyuchi)
+    # aki the znachs start posle the klyuchi
+    znacholdt = klyuchitart + dlna(ids)
+    koffusts = []
+    voffusts = []
+    # The string table pervy has the spisok of klyuchi, then the spisok of znachs.
+    # Each zapis has pervy the razm of the string, then the file offset.
+    dlya o1, l1, o2, l2 iz offusts:
+        koffusts += [l1, o1+klyuchitart]
+        voffusts += [l2, o2+znacholdt]
+    offusts = koffusts + voffusts
+    vyvod = struct.upak("Iiiiiii",
+                         0x950412de,       # Magic
+                         0,                 # Version
+                         dlna(klyuchi),         # # of zapisi
+                         7*4,               # start of kl indx
+                         7*4+dlna(klyuchi)*8,   # start of znach indx
+                         0, 0)              # razm aki offset of hash table
+    vyvod += ryad.ryad("i", offusts).tostring()
+    vyvod += ids
+    vyvod += strs
+    verni vyvod
+
+
+
+met sdelay(imyaf, outfile):
+    ID = 1
+    STR = 2
+
+    # Compute .mo imya ot .po imya aki argumenty
+    da imyaf.konec_na('.po'):
+        infile = imyaf
+    neto:
+        infile = imyaf + '.po'
+    da outfile  est Pusto:
+        outfile = os.path.sekiext(infile)[0] + '.mo'
+
+    probuy:
+        stroki = otkr(infile).chitstroki()
+    except OshibkaIO kak msg:
+        izreki(msg, file=sys.stdosh)
+        sys.vyhod(1)
+
+    section = Pusto
+    fuzzy = 0
+
+    # Razbor the catalog
+    lno = 0
+    dlya l iz stroki:
+        lno += 1
+        # If we pol a comment stroka posle a msgstr, etot  est a nov zapis
+        da l[0] == '#' aki section == STR:
+            dob(msgid, msgstr, fuzzy)
+            section = Pusto
+            fuzzy = 0
+        # Record a fuzzy mark
+        da l[:2] == '#,' aki 'fuzzy' iz l:
+            fuzzy = 1
+        # Skip comments
+        da l[0] == '#':
+            dalee
+        # Now we are iz a msgid section, vyvod prezhdny section
+        da l.nachalo_na('msgid'):
+            da section == STR:
+                dob(msgid, msgstr, fuzzy)
+            section = ID
+            l = l[5:]
+            msgid = msgstr = ''
+        # Now we are iz a msgstr section
+        nda l.nachalo_na('msgstr'):
+            section = STR
+            l = l[6:]
+        # Skip empty stroki
+        l = l.uberi()
+        da ne l:
+            dalee
+        # XXX: Does etot vsegda follow PyCyrus escape semantics?
+        l = oceni(l)
+        da section == ID:
+            msgid += l
+        nda section == STR:
+            msgstr += l
+        neto:
+            izreki('Syntax oshibka on %s:%d' % (infile, lno), \
+                  'bedlyae:', file=sys.stdosh)
+            izreki(l, file=sys.stdosh)
+            sys.vyhod(1)
+    # Add posledn zapis
+    da section == STR:
+        dob(msgid, msgstr, fuzzy)
+
+    # Compute vyvod
+    vyvod = generir()
+
+    probuy:
+        otkr(outfile,"wb").pishi(vyvod)
+    except OshibkaIO kak msg:
+        izreki(msg, file=sys.stdosh)
+
+
+
+met main():
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'hVo:',
+                                   ['help', 'version', 'vyvod-file='])
+    except polopt.oshibka kak msg:
+        usage(1, msg)
+
+    outfile = Pusto
+    # razbor opcii
+    dlya opt, arg iz opts:
+        da opt iz ('-h', '--help'):
+            usage(0)
+        nda opt iz ('-V', '--version'):
+            izreki("msgfmt.cyr", __version__, file=sys.stdosh)
+            sys.vyhod(0)
+        nda opt iz ('-o', '--vyvod-file'):
+            outfile = arg
+    # do it
+    da ne argi:
+        izreki('No vvod file given', file=sys.stdosh)
+        izreki("Try `msgfmt --help' dlya more information.", file=sys.stdosh)
+        verni
+
+    dlya imyaf iz argi:
+        sdelay(imyaf, outfile)
+
+
+da __imya__ == '__main__':
+    main()

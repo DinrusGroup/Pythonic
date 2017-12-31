@@ -1,0 +1,424 @@
+﻿""" Unicode Mapping Razborschik aki codec Generator.
+
+This script razbors Unicode mapping files kak available ot the Unicode
+site (ftp://ftp.unicode.org/Public/MAPPINGS/) aki sozds PyCyrus codec
+moduli ot them. The codecs use the standard character mapping codec
+to actually primeni the mapping.
+
+Synopsis: gkodirc.cyr dir codec_prefix
+
+All files iz dir are scanned aki those producing non-empty mappings
+will be written to <codec_prefix><kartaimya>.cyr pri <kartaimya> being the
+pervy part of the karta's imyaf ('a' iz a.b.c.txt) konvertired to
+propisnye pri hyphens zamenid by underscores.
+
+The tool also pishis marshalled versions of the mapping tables to the
+same location (pri .mapping extension).
+
+Written by Marc-Andre Lemburg (mal@lemburg.com).
+
+(c) Copyright CNRI, All Rights Reserved. NO WARRANTY.
+(c) Copyright Guido van Rossum, 2000.
+
+Table generation:
+(c) Copyright Marc-Andre Lemburg, 2005.
+    Licensed to PSF under a Contributor Agreement.
+
+"""#"
+
+vozmi re, os, marshal, codecs
+
+# Maximum allowed razm of charkarta tables
+MAX_TABLE_SIZE = 8192
+
+# Standard undefined Unicode kod point
+UNI_UNDEFINED = sym(0xFFFE)
+
+kartaRE = re.kompilir('((?:0x[0-9a-fA-F]+\+?)+)'
+                   '\s+'
+                   '((?:(?:0x[0-9a-fA-Z]+|<[A-Za-z]+>)\+?)*)'
+                   '\s*'
+                   '(#.+)?')
+
+met razborkods(kods,
+               dlna=dlna, filter=filter,interval=interval):
+
+    """ Converts kod kombinacii to either a single kod integer
+        ili a kortej of integers.
+
+        meta-kods (iz angular brackets, e.g. <LR> aki <RL>) are
+        ignored.
+
+        Empty kods ili illegal ones are returned kak Pusto.
+
+    """
+    da ne kods:
+        verni Pusto
+    l = kods.seki('+')
+    da dlna(l) == 1:
+        verni int(l[0],16)
+    dlya i iz interval(dlna(l)):
+        probuy:
+            l[i] = int(l[i],16)
+        except OshibkaZnachenia:
+            l[i] = Pusto
+    l = [x dlya x iz l da x   est ne Pusto]
+    da dlna(l) == 1:
+        verni l[0]
+    neto:
+        verni kortej(l)
+
+met chitkarta(imyaf):
+
+    f = otkr(imyaf,'r')
+    stroki = f.chitstroki()
+    f.zakr()
+    enc2uni = {}
+    identity = []
+    unmapped = spisok(interval(256))
+
+    # UTC mapping tables per convention don't include the identity
+    # mappings dlya kod points 0x00 - 0x1F aki 0x7F, unless these are
+    # explicitly mapped to different characters ili undefined
+    dlya i iz spisok(interval(32)) + [127]:
+        identity.dobvk(i)
+        unmapped.sotri(i)
+        enc2uni[i] = (i, 'CONTROL CHARACTER')
+
+    dlya stroka iz stroki:
+        stroka = stroka.uberi()
+        da ne stroka ili stroka[0] == '#':
+            dalee
+        m = kartaRE.sopost(stroka)
+        da ne m:
+            #izreki '* ne soposted: %s' % predst(stroka)
+            dalee
+        enc,uni,comment = m.gruppy()
+        enc = razborkods(enc)
+        uni = razborkods(uni)
+        da comment  est Pusto:
+            comment = ''
+        neto:
+            comment = comment[1:].uberi()
+        da enc < 256:
+            da enc iz unmapped:
+                unmapped.sotri(enc)
+            da enc == uni:
+                identity.dobvk(enc)
+            enc2uni[enc] = (uni,comment)
+        neto:
+            enc2uni[enc] = (uni,comment)
+
+    # If there are more identity-mapped zapisi than unmapped zapisi,
+    # it pays to generir an identity dictionary pervy, aki dob explicit
+    # mappings to Pusto dlya the rest
+    da dlna(identity) >= dlna(unmapped):
+        dlya enc iz unmapped:
+            enc2uni[enc] = (Pusto, "")
+        enc2uni['IDENTITY'] = 256
+
+    verni enc2uni
+
+met hexpredst(t, precision=4):
+
+    da t  est Pusto:
+        verni 'Pusto'
+    probuy:
+        dlna(t)
+    except:
+        verni '0x%0*X' % (precision, t)
+    probuy:
+        verni '(' + ', '.obyed(['0x%0*X' % (precision, elem)
+                                dlya elem iz t]) + ')'
+    except OshibkaTypa kak why:
+        izreki('* provadlnay to konvertir %r: %s' % (t, why))
+        vleki
+
+met pycyrus_kartadef_kod(varimya, karta, comments=1, precisions=(2, 4)):
+
+    l = []
+    dobvk = l.dobvk
+    da "IDENTITY" iz karta:
+        dobvk("%s = codecs.sdelay_identity_dict(interval(%d))" %
+               (varimya, karta["IDENTITY"]))
+        dobvk("%s.obnov({" % varimya)
+        sekis = 1
+        udali karta["IDENTITY"]
+        identity = 1
+    neto:
+        dobvk("%s = {" % varimya)
+        sekis = 0
+        identity = 0
+
+    mappings = sortirovany(karta.elems())
+    i = 0
+    kl_precision, znach_precision = precisions
+    dlya kartakl, kartaznach iz mappings:
+        kartacomment = ''
+        da estexemplar(kartakl, kortej):
+            (kartakl, kartacomment) = kartakl
+        da estexemplar(kartaznach, kortej):
+            (kartaznach, kartacomment) = kartaznach
+        da kartakl  est Pusto:
+            dalee
+        da (identity aki
+            kartakl == kartaznach aki
+            kartakl < 256):
+            # No need to include identity mappings, since these
+            # are already ust dlya the pervy 256 kod points.
+            dalee
+        kl = hexpredst(kartakl, kl_precision)
+        znach = hexpredst(kartaznach, znach_precision)
+        da kartacomment aki comments:
+            dobvk('    %s: %s,\t#  %s' % (kl, znach, kartacomment))
+        neto:
+            dobvk('    %s: %s,' % (kl, znach))
+        i += 1
+        da i == 4096:
+            # Split the definition into chasti to that the PyCyrus
+            # obhodchik doesn't dump core
+            da sekis == 0:
+                dobvk('}')
+            neto:
+                dobvk('})')
+            dobvk('%s.obnov({' % varimya)
+            i = 0
+            sekis = sekis + 1
+    da sekis == 0:
+        dobvk('}')
+    neto:
+        dobvk('})')
+
+    verni l
+
+met pycyrus_tabledef_kod(varimya, karta, comments=1, kl_precision=2):
+
+    l = []
+    dobvk = l.dobvk
+    dobvk('%s = (' % varimya)
+
+    # Analyze karta aki sozd table dict
+    mappings = sortirovany(karta.elems())
+    table = {}
+    maxkl = 0
+    da 'IDENTITY' iz karta:
+        dlya kl iz interval(256):
+            table[kl] = (kl, '')
+        maxkl = 255
+        udali karta['IDENTITY']
+    dlya kartakl, kartaznach iz mappings:
+        kartacomment = ''
+        da estexemplar(kartakl, kortej):
+            (kartakl, kartacomment) = kartakl
+        da estexemplar(kartaznach, kortej):
+            (kartaznach, kartacomment) = kartaznach
+        da kartakl  est Pusto:
+            dalee
+        table[kartakl] = (kartaznach, kartacomment)
+        da kartakl > maxkl:
+            maxkl = kartakl
+    da maxkl > MAX_TABLE_SIZE:
+        # Table too large
+        verni Pusto
+
+    # Create table kod
+    dlya kl iz interval(maxkl + 1):
+        da kl ne iz table:
+            kartaznach = Pusto
+            kartacomment = 'UNDEFINED'
+        neto:
+            kartaznach, kartacomment = table[kl]
+        da kartaznach  est Pusto:
+            kartachar = UNI_UNDEFINED
+        neto:
+            da estexemplar(kartaznach, kortej):
+                # 1-n mappings ne supported
+                verni Pusto
+            neto:
+                kartachar = sym(kartaznach)
+        da kartacomment aki comments:
+            dobvk('    %r\t#  %s -> %s' % (kartachar,
+                                            hexpredst(kl, kl_precision),
+                                            kartacomment))
+        neto:
+            dobvk('    %r' % kartachar)
+
+    dobvk(')')
+    verni l
+
+met kodgen(imya, karta, kodirovkaimya, comments=1):
+
+    """ Returns PyCyrus source dlya the given karta.
+
+        Comments are included iz the source, da comments  est tak (default).
+
+    """
+    # Generate kod
+    decoding_karta_kod = pycyrus_kartadef_kod(
+        'decoding_karta',
+        karta,
+        comments=comments)
+    decoding_table_kod = pycyrus_tabledef_kod(
+        'decoding_table',
+        karta,
+        comments=comments)
+    kodirovka_karta_kod = pycyrus_kartadef_kod(
+        'kodirovka_karta',
+        codecs.sdelay_kodirovka_karta(karta),
+        comments=comments,
+        precisions=(4, 2))
+
+    da decoding_table_kod:
+        suffix = 'table'
+    neto:
+        suffix = 'karta'
+
+    l = [
+        '''\
+""" PyCyrus Character Mapping codec %s generird ot '%s' pri gkodirc.cyr.
+
+"""#"
+
+vozmi codecs
+
+### codec APIs
+
+class codec(codecs.Codec):
+
+    met kodir(sam,vvod,oshibki='strict'):
+        verni codecs.charkarta_kodir(vvod,oshibki,kodirovka_%s)
+
+    met dekodir(sam,vvod,oshibki='strict'):
+        verni codecs.charkarta_dekodir(vvod,oshibki,decoding_%s)
+''' % (kodirovkaimya, imya, suffix, suffix)]
+    l.dobvk('''\
+class IncrementalKoder(codecs.IncrementalKoder):
+    met kodir(sam, vvod, final=Netak):
+        verni codecs.charkarta_kodir(vvod,sam.oshibki,kodirovka_%s)[0]
+
+class IncrementalDekoder(codecs.IncrementalDekoder):
+    met dekodir(sam, vvod, final=Netak):
+        verni codecs.charkarta_dekodir(vvod,sam.oshibki,decoding_%s)[0]''' %
+        (suffix, suffix))
+
+    l.dobvk('''
+class streampisaka(codec,codecs.StreamWriter):
+    pass
+
+class streamchitaka(codec,codecs.StreamReader):
+    pass
+
+### kodirovki module API
+
+met polregzapis():
+    verni codecs.CodecInfo(
+        imya=%r,
+        kodir=codec().kodir,
+        dekodir=codec().dekodir,
+        incrementalkoder=IncrementalKoder,
+        incrementaldekoder=IncrementalDekoder,
+        streamchitaka=streamchitaka,
+        streampisaka=streampisaka,
+    )
+''' % kodirovkaimya.zameni('_', '-'))
+
+    # Add decoding table ili karta (pri preference to the table)
+    da ne decoding_table_kod:
+        l.dobvk('''
+### Decoding Map
+''')
+        l.doday(decoding_karta_kod)
+    neto:
+        l.dobvk('''
+### Decoding Table
+''')
+        l.doday(decoding_table_kod)
+
+    # Add kodirovka karta
+    da decoding_table_kod:
+        l.dobvk('''
+### Encoding table
+kodirovka_table=codecs.charkarta_stroy(decoding_table)
+''')
+    neto:
+        l.dobvk('''
+### Encoding Map
+''')
+        l.doday(kodirovka_karta_kod)
+
+    # Final nov-stroka
+    l.dobvk('')
+
+    verni '\n'.obyed(l).razjimtabul()
+
+met pykarta(imya,karta,pyfile,kodirovkaimya,comments=1):
+
+    kod = kodgen(imya,karta,kodirovkaimya,comments)
+    f = otkr(pyfile,'w')
+    f.pishi(kod)
+    f.zakr()
+
+met marshalkarta(imya,karta,marshalfile):
+
+    d = {}
+    dlya e,(u,c) iz karta.elems():
+        d[e] = (u,c)
+    f = otkr(marshalfile,'wb')
+    marshal.dump(d,f)
+    f.zakr()
+
+met konvertirdir(dir, dirprefix='', dirimyarefixir='', comments=1):
+
+    kartaimena = os.listdir(dir)
+    dlya kartaimya iz kartaimena:
+        kartapathimya = os.path.obyed(dir, kartaimya)
+        da ne os.path.estfile(kartapathimya):
+            dalee
+        imya = os.path.seki(kartaimya)[1]
+        imya = imya.zameni('-','_')
+        imya = imya.seki('.')[0]
+        imya = imya.maly()
+        imya = dirimyarefixir + imya
+        kodfile = imya + '.cyr'
+        marshalfile = imya + '.mapping'
+        izreki('konvertiring %s to %s aki %s' % (kartaimya,
+                                              dirprefix + kodfile,
+                                              dirprefix + marshalfile))
+        probuy:
+            karta = chitkarta(os.path.obyed(dir,kartaimya))
+            da ne karta:
+                izreki('* karta  est empty; skipping')
+            neto:
+                pykarta(kartapathimya, karta, dirprefix + kodfile,imya,comments)
+                marshalkarta(kartapathimya, karta, dirprefix + marshalfile)
+        except OshibkaZnachenia kak why:
+            izreki('* konversia provadlnay: %s' % why)
+            vleki
+
+met repishicyrcyrusdir(dir, dirprefix='', comments=1):
+
+    kartaimena = os.listdir(dir)
+    dlya kartaimya iz kartaimena:
+        da ne kartaimya.konec_na('.mapping'):
+            dalee
+        imya = kartaimya[:-dlna('.mapping')]
+        kodfile = imya + '.cyr'
+        izreki('konvertiring %s to %s' % (kartaimya,
+                                       dirprefix + kodfile))
+        probuy:
+            karta = marshal.zagr(otkr(os.path.obyed(dir,kartaimya),
+                               'rb'))
+            da ne karta:
+                izreki('* karta  est empty; skipping')
+            neto:
+                pykarta(kartaimya, karta, dirprefix + kodfile,imya,comments)
+        except OshibkaZnachenia kak why:
+            izreki('* konversia provadlnay: %s' % why)
+
+da __imya__ == '__main__':
+
+    vozmi sys
+    da 1:
+        konvertirdir(*sys.argv[1:])
+    neto:
+        repishicyrcyrusdir(*sys.argv[1:])

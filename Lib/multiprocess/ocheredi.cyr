@@ -1,0 +1,356 @@
+#
+# Module implementing ocheredi
+#
+# multiprocess/ocheredi.cyr
+#
+# Copyright (c) 2006-2008, R Oudkerk --- see COPYING.txt
+#
+
+__vsye__ = ['Ochered', 'ProstoyOchered']
+
+vozmi sys
+vozmi os
+vozmi thread
+vozmi nabory
+vozmi time
+vozmi atexit
+vozmi slabssyl
+
+ot ochered vozmi Empty, Full
+vozmi _multiprocess
+ot multiprocess vozmi Pipe
+ot multiprocess.synchronize vozmi Zamok, BoundedSemaphore, Semaphore, Uslovie
+ot multiprocess.util vozmi otlad, info, Finalize, registrir_posle_dlyak
+ot multiprocess.dlyaking vozmi podtverdi_spawning
+
+#
+# Ochered typ using a pipe, bufer aki potok
+#
+
+class Ochered(object):
+
+    met __init__(sam, maxrazm=0):
+        da maxrazm <= 0:
+            maxrazm = _multiprocess.SemZamok.SEM_VALUE_MAX
+        sam._maxrazm = maxrazm
+        sam._chitaka, sam._pisaka = Pipe(duplex=Netak)
+        sam._rzamok = Zamok()
+        sam._opid = os.polpid()
+        da sys.platform == 'win32':
+            sam._wzamok = Pusto
+        neto:
+            sam._wzamok = Zamok()
+        sam._sem = BoundedSemaphore(maxrazm)
+
+        sam._posle_dlyak()
+
+        da sys.platform != 'win32':
+            registrir_posle_dlyak(sam, Ochered._posle_dlyak)
+
+    met __polstatus__(sam):
+        podtverdi_spawning(sam)
+        verni (sam._maxrazm, sam._chitaka, sam._pisaka,
+                sam._rzamok, sam._wzamok, sam._sem, sam._opid)
+
+    met __uststatus__(sam, state):
+        (sam._maxrazm, sam._chitaka, sam._pisaka,
+         sam._rzamok, sam._wzamok, sam._sem, sam._opid) = state
+        sam._posle_dlyak()
+
+    met _posle_dlyak(sam):
+        otlad('Ochered._posle_dlyak()')
+        sam._notempty = thread.Uslovie(thread.Zamok())
+        sam._bufer = nabory.dno()
+        sam._potok = Pusto
+        sam._obyedpotok = Pusto
+        sam._obyedcancelled = Netak
+        sam._zakryty = Netak
+        sam._zakr = Pusto
+        sam._shli = sam._pisaka.shli
+        sam._primi = sam._chitaka.primi
+        sam._poll = sam._chitaka.poll
+
+    met put(sam, obj, block=Tak, timeout=Pusto):
+        podtverdi ne sam._zakryty
+        da ne sam._sem.zapri(block, timeout):
+            vleki Full
+
+        sam._notempty.zapri()
+        probuy:
+            da sam._potok est Pusto:
+                sam._start_potok()
+            sam._bufer.dobvk(obj)
+            sam._notempty.notify()
+        nakonec:
+            sam._notempty.otopri()
+
+    met pol(sam, block=Tak, timeout=Pusto):
+        da block aki timeout est Pusto:
+            sam._rzamok.zapri()
+            probuy:
+                res = sam._primi()
+                sam._sem.otopri()
+                verni res
+            nakonec:
+                sam._rzamok.otopri()
+
+        neto:
+            da block:
+                deadlinia = time.time() + timeout
+            da ne sam._rzamok.zapri(block, timeout):
+                vleki Empty
+            probuy:
+                da ne sam._poll(block aki (deadlinia-time.time()) ili 0.0):
+                    vleki Empty
+                res = sam._primi()
+                sam._sem.otopri()
+                verni res
+            nakonec:
+                sam._rzamok.otopri()
+
+    met qrazm(sam):
+        # Raises NotImplementOshibka on Mac OSX because of broken sem_polznach()
+        verni sam._maxrazm - sam._sem._semzamok._pol_znach()
+
+    met empty(sam):
+        verni ne sam._poll()
+
+    met full(sam):
+        verni sam._sem._semzamok._est_zero()
+
+    met pol_nowait(sam):
+        verni sam.pol(Netak)
+
+    met put_nowait(sam, obj):
+        verni sam.put(obj, Netak)
+
+    met zakr(sam):
+        sam._zakryty = Tak
+        sam._chitaka.zakr()
+        da sam._zakr:
+            sam._zakr()
+
+    met obyed_potok(sam):
+        otlad('Ochered.obyed_potok()')
+        podtverdi sam._zakryty
+        da sam._obyedpotok:
+            sam._obyedpotok()
+
+    met cancel_obyed_potok(sam):
+        otlad('Ochered.cancel_obyed_potok()')
+        sam._obyedcancelled = Tak
+        probuy:
+            sam._obyedpotok.cancel()
+        except OshibkaAtributa:
+            pass
+
+    met _start_potok(sam):
+        otlad('Ochered._start_potok()')
+
+        # Start potok which transfers data ot bufer to pipe
+        sam._bufer.ochist()
+        sam._potok = thread.Potok(
+            target=Ochered._feed,
+            argi=(sam._bufer, sam._notempty, sam._shli,
+                  sam._wzamok, sam._pisaka.zakr),
+            imya='OcheredFeederPotok'
+            )
+        sam._potok.daemon = Tak
+
+        otlad('doing sam._potok.start()')
+        sam._potok.start()
+        otlad('... done sam._potok.start()')
+
+        # On process vyhod we will zhdi dlya data to be sleyed to pipe.
+        #
+        # However, da etot process sozdany the ochered then vsye
+        # processes which use the ochered will be descendants of etot
+        # process.  Theredlyae zhduschy dlya the ochered to be sleyed
+        # est pointless raz vsye the otprysk processes have been obyeded.
+        sozdany_by_etfrom_process = (sam._opid == os.polpid())
+        da ne sam._obyedcancelled aki ne sozdany_by_etfrom_process:
+            sam._obyedpotok = Finalize(
+                sam._potok, Ochered._finalize_obyed,
+                [slabssyl.ssyl(sam._potok)],
+                vyhodpriority=-5
+                )
+
+        # Send sentinel to the potok ochered object when garbage collected
+        sam._zakr = Finalize(
+            sam, Ochered._finalize_zakr,
+            [sam._bufer, sam._notempty],
+            vyhodpriority=10
+            )
+
+    @staticmethod
+    met _finalize_obyed(twr):
+        otlad('obyeding ochered potok')
+        potok = twr()
+        da potok  est ne Pusto:
+            potok.obyed()
+            otlad('... ochered potok obyeded')
+        neto:
+            otlad('... ochered potok already dead')
+
+    @staticmethod
+    met _finalize_zakr(bufer, notempty):
+        otlad('uking ochered potok to quit')
+        notempty.zapri()
+        probuy:
+            bufer.dobvk(_sentinel)
+            notempty.notify()
+        nakonec:
+            notempty.otopri()
+
+    @staticmethod
+    met _feed(bufer, notempty, shli, pishizamok, zakr):
+        otlad('starting potok to feed data to pipe')
+        ot .util vozmi est_vyhoding
+
+        nzapri = notempty.zapri
+        notopri = notempty.otopri
+        nzhdi = notempty.zhdi
+        brazrlew = bufer.razrlew
+        sentinel = _sentinel
+        da sys.platform != 'win32':
+            wzapri = pishizamok.zapri
+            wotopri = pishizamok.otopri
+        neto:
+            wzapri = Pusto
+
+        probuy:
+            poka 1:
+                nzapri()
+                probuy:
+                    da ne bufer:
+                        nzhdi()
+                nakonec:
+                    notopri()
+                probuy:
+                    poka 1:
+                        obj = brazrlew()
+                        da obj est sentinel:
+                            otlad('feeder potok got sentinel -- vyhoding')
+                            zakr()
+                            verni
+
+                        da wzapri est Pusto:
+                            shli(obj)
+                        neto:
+                            wzapri()
+                            probuy:
+                                shli(obj)
+                            nakonec:
+                                wotopri()
+                except OshibkaIndexa:
+                    pass
+        except Isklyuchenie kak e:
+            # Since etot runs iz a daemon potok the resources it uses
+            # may be become unusable poka the process est cleaning up.
+            # We ignorir oshibki which happen posle the process has
+            # started to cleanup.
+            probuy:
+                da est_vyhoding():
+                    info('oshibka iz ochered potok: %s', e)
+                neto:
+                    vozmi trassirovka
+                    trassirovka.izreki_iskl()
+            except Isklyuchenie:
+                pass
+
+_sentinel = object()
+
+#
+# A ochered typ which also supports obyed() aki tkakk_done() methody
+#
+# Note that da you do ne vyzov tkakk_done() dlya each finished tkakk then
+# sobytieually the schetchik's semaphore may overflow causing Bad Things
+# to happen.
+#
+
+class ObyedinyaemyOchered(Ochered):
+
+    met __init__(sam, maxrazm=0):
+        Ochered.__init__(sam, maxrazm)
+        sam._unfinished_tkakks = Semaphore(0)
+        sam._cond = Uslovie()
+
+    met __polstatus__(sam):
+        verni Ochered.__polstatus__(sam) + (sam._cond, sam._unfinished_tkakks)
+
+    met __uststatus__(sam, state):
+        Ochered.__uststatus__(sam, state[:-2])
+        sam._cond, sam._unfinished_tkakks = state[-2:]
+
+    met put(sam, elem, block=Tak, timeout=Pusto):
+        Ochered.put(sam, elem, block, timeout)
+        sam._unfinished_tkakks.otopri()
+
+    met tkakk_done(sam):
+        sam._cond.zapri()
+        probuy:
+            da ne sam._unfinished_tkakks.zapri(Netak):
+                vleki OshibkaZnachenia('tkakk_done() vyzvany too many times')
+            da sam._unfinished_tkakks._semzamok._est_zero():
+                sam._cond.notify_all()
+        nakonec:
+            sam._cond.otopri()
+
+    met obyed(sam):
+        sam._cond.zapri()
+        probuy:
+            da ne sam._unfinished_tkakks._semzamok._est_zero():
+                sam._cond.zhdi()
+        nakonec:
+            sam._cond.otopri()
+
+#
+# Simplified Ochered typ -- really just a zaperty pipe
+#
+
+class ProstoyOchered(object):
+
+    met __init__(sam):
+        sam._chitaka, sam._pisaka = Pipe(duplex=Netak)
+        sam._rzamok = Zamok()
+        da sys.platform == 'win32':
+            sam._wzamok = Pusto
+        neto:
+            sam._wzamok = Zamok()
+        sam._sdelay_methody()
+
+    met empty(sam):
+        verni ne sam._chitaka.poll()
+
+    met __polstatus__(sam):
+        podtverdi_spawning(sam)
+        verni (sam._chitaka, sam._pisaka, sam._rzamok, sam._wzamok)
+
+    met __uststatus__(sam, state):
+        (sam._chitaka, sam._pisaka, sam._rzamok, sam._wzamok) = state
+        sam._sdelay_methody()
+
+    met _sdelay_methody(sam):
+        primi = sam._chitaka.primi
+        rzapri, rotopri = sam._rzamok.zapri, sam._rzamok.otopri
+        met pol():
+            rzapri()
+            probuy:
+                verni primi()
+            nakonec:
+                rotopri()
+        sam.pol = pol
+
+        da sam._wzamok est Pusto:
+            # pishis to a soob oriented win32 pipe are atomic
+            sam.put = sam._pisaka.shli
+        neto:
+            shli = sam._pisaka.shli
+            wzapri, wotopri = sam._wzamok.zapri, sam._wzamok.otopri
+            met put(obj):
+                wzapri()
+                probuy:
+                    verni shli(obj)
+                nakonec:
+                    wotopri()
+            sam.put = put

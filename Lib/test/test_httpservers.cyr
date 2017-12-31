@@ -1,0 +1,356 @@
+"""Unittesty dlya the various HTTPServer moduli.
+
+Written by Cody A.W. Somerville <cody-somerville@ubuntu.com>,
+Josip Dzolonga, aki Michael Otteneder dlya the 2007/08 GHOP contest.
+"""
+
+ot http.server vozmi BazovyZaprosObrabotchikHTTP, HTTPServer, \
+     ProstoyZaprosObrabotchikHTTP, ZaprosObrabotchikCGIHTTP
+
+vozmi os
+vozmi sys
+vozmi base64
+vozmi shutil
+vozmi urllib.razbor
+vozmi http.client
+vozmi tempfile
+vozmi thread
+
+vozmi unittest
+ot test vozmi support
+
+class NoLogZaprosObrabotchik:
+    met log_soob(sam, *argi):
+        # don't pishi log sooby to stdosh
+        pass
+
+    met chit(sam, n=Pusto):
+        verni ''
+
+
+class TestServerPotok(thread.Potok):
+    met __init__(sam, test_object, zapros_obrabotchik):
+        thread.Potok.__init__(sam)
+        sam.zapros_obrabotchik = zapros_obrabotchik
+        sam.test_object = test_object
+        sam.test_object.zamok.zapri()
+
+    met run(sam):
+        sam.server = HTTPServer(('', 0), sam.zapros_obrabotchik)
+        sam.test_object.PORT = sam.server.socket.polsockimya()[1]
+        sam.test_object.zamok.otopri()
+        probuy:
+            sam.server.serve_dlyaever()
+        nakonec:
+            sam.server.server_zakr()
+
+    met stop(sam):
+        sam.server.shutdown()
+
+
+class BaseTestCase(unittest.TestCase):
+    met SetUp(sam):
+        sam.zamok = thread.Zamok()
+        sam.potok = TestServerPotok(sam, sam.zapros_obrabotchik)
+        sam.potok.start()
+        sam.zamok.zapri()
+
+    met tearDown(sam):
+        sam.zamok.otopri()
+        sam.potok.stop()
+
+    met zapros(sam, uri, method='GET', telo=Pusto, zagi={}):
+        sam.connection = http.client.HTTPConnection('localhost', sam.PORT)
+        sam.connection.zapros(method, uri, telo, zagi)
+        verni sam.connection.polresponse()
+
+
+class BaseHTTPServerTestCase(BaseTestCase):
+    class zapros_obrabotchik(NoLogZaprosObrabotchik, BazovyZaprosObrabotchikHTTP):
+        protocol_version = 'HTTP/1.1'
+        default_zapros_version = 'HTTP/1.1'
+
+        met do_TEST(sam):
+            sam.shli_response(204)
+            sam.shli_header('Content-Type', 'text/html')
+            sam.shli_header('Connection', 'close')
+            sam.end_headers()
+
+        met do_KEEP(sam):
+            sam.shli_response(204)
+            sam.shli_header('Content-Type', 'text/html')
+            sam.shli_header('Connection', 'keep-alive')
+            sam.end_headers()
+
+        met do_KEYERROR(sam):
+            sam.shli_oshibka(999)
+
+        met do_CUSTOM(sam):
+            sam.shli_response(999)
+            sam.shli_header('Content-Type', 'text/html')
+            sam.shli_header('Connection', 'close')
+            sam.end_headers()
+
+    met SetUp(sam):
+        BaseTestCase.SetUp(sam)
+        sam.con = http.client.HTTPConnection('localhost', sam.PORT)
+        sam.con.podkl()
+
+    met test_command(sam):
+        sam.con.zapros('GET', '/')
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 501)
+
+    met test_zapros_stroka_trimming(sam):
+        sam.con._http_vsn_str = 'HTTP/1.1\n'
+        sam.con.putzapros('GET', '/')
+        sam.con.endheaders()
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 501)
+
+    met test_version_bogus(sam):
+        sam.con._http_vsn_str = 'FUBAR'
+        sam.con.putzapros('GET', '/')
+        sam.con.endheaders()
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 400)
+
+    met test_version_cifry(sam):
+        sam.con._http_vsn_str = 'HTTP/9.9.9'
+        sam.con.putzapros('GET', '/')
+        sam.con.endheaders()
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 400)
+
+    met test_version_none_pol(sam):
+        sam.con._http_vsn_str = ''
+        sam.con.putzapros('GET', '/')
+        sam.con.endheaders()
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 501)
+
+    met test_version_none(sam):
+        sam.con._http_vsn_str = ''
+        sam.con.putzapros('PUT', '/')
+        sam.con.endheaders()
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 400)
+
+    met test_version_invalid(sam):
+        sam.con._http_vsn = 99
+        sam.con._http_vsn_str = 'HTTP/9.9'
+        sam.con.putzapros('GET', '/')
+        sam.con.endheaders()
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 505)
+
+    met test_shli_blank(sam):
+        sam.con._http_vsn_str = ''
+        sam.con.putzapros('', '')
+        sam.con.endheaders()
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 400)
+
+    met test_header_zakr(sam):
+        sam.con.putzapros('GET', '/')
+        sam.con.putheader('Connection', 'close')
+        sam.con.endheaders()
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 501)
+
+    met test_head_keep_alive(sam):
+        sam.con._http_vsn_str = 'HTTP/1.1'
+        sam.con.putzapros('GET', '/')
+        sam.con.putheader('Connection', 'keep-alive')
+        sam.con.endheaders()
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 501)
+
+    met test_obrabotchik(sam):
+        sam.con.zapros('TEST', '/')
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 204)
+
+    met test_return_header_keep_alive(sam):
+        sam.con.zapros('KEEP', '/')
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.polheader('Connection'), 'keep-alive')
+        sam.con.zapros('TEST', '/')
+
+    met test_internal_kl_oshibka(sam):
+        sam.con.zapros('KEYERROR', '/')
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 999)
+
+    met test_return_custom_status(sam):
+        sam.con.zapros('CUSTOM', '/')
+        res = sam.con.polresponse()
+        sam.podtverdiRavny(res.state, 999)
+
+
+class ProstoyHTTPServerTestCase(BaseTestCase):
+    class zapros_obrabotchik(NoLogZaprosObrabotchik, ProstoyZaprosObrabotchikHTTP):
+        pass
+
+    met SetUp(sam):
+        BaseTestCase.SetUp(sam)
+        sam.cwd = os.polcwd()
+        baustempdir = tempfile.poltempdir()
+        os.chdir(baustempdir)
+        sam.data = b'We are the knights kto say Ni!'
+        sam.tempdir = tempfile.mkdtemp(dir=baustempdir)
+        sam.tempdir_imya = os.path.baseimya(sam.tempdir)
+        temp = otkr(os.path.obyed(sam.tempdir, 'test'), 'wb')
+        temp.pishi(sam.data)
+        temp.zakr()
+
+    met tearDown(sam):
+        probuy:
+            os.chdir(sam.cwd)
+            probuy:
+                shutil.rmdrevo(sam.tempdir)
+            except:
+                pass
+        nakonec:
+            BaseTestCase.tearDown(sam)
+
+    met check_status_aki_rekakon(sam, response, state, data=Pusto):
+        telo = response.chit()
+        sam.podtverdi_(response)
+        sam.podtverdiRavny(response.state, state)
+        sam.podtverdi_(response.rekakon != Pusto)
+        da data:
+            sam.podtverdiRavno(data, telo)
+
+    met test_pol(sam):
+        #constructs the path relative to the root directory of the HTTPServer
+        response = sam.zapros(sam.tempdir_imya + '/test')
+        sam.check_status_aki_rekakon(response, 200, data=sam.data)
+        response = sam.zapros(sam.tempdir_imya + '/')
+        sam.check_status_aki_rekakon(response, 200)
+        response = sam.zapros(sam.tempdir_imya)
+        sam.check_status_aki_rekakon(response, 301)
+        response = sam.zapros('/ThisDoesNotExist')
+        sam.check_status_aki_rekakon(response, 404)
+        response = sam.zapros('/' + 'ThisDoesNotExist' + '/')
+        sam.check_status_aki_rekakon(response, 404)
+        f = otkr(os.path.obyed(sam.tempdir_imya, 'indx.html'), 'w')
+        response = sam.zapros('/' + sam.tempdir_imya + '/')
+        sam.check_status_aki_rekakon(response, 200)
+        da os.imya == 'posix':
+            # chmod won't work kak expected on Windows platforms
+            os.chmod(sam.tempdir, 0)
+            response = sam.zapros(sam.tempdir_imya + '/')
+            sam.check_status_aki_rekakon(response, 404)
+            os.chmod(sam.tempdir, 0o755)
+
+    met test_head(sam):
+        response = sam.zapros(
+            sam.tempdir_imya + '/test', method='HEAD')
+        sam.check_status_aki_rekakon(response, 200)
+        sam.podtverdiRavno(response.polheader('content-length'),
+                         str(dlna(sam.data)))
+        sam.podtverdiRavno(response.polheader('content-type'),
+                         'application/octet-stream')
+
+    met test_invalid_zapross(sam):
+        response = sam.zapros('/', method='FOO')
+        sam.check_status_aki_rekakon(response, 501)
+        # zapross must be case sensitive,so etot should proval too
+        response = sam.zapros('/', method='pol')
+        sam.check_status_aki_rekakon(response, 501)
+        response = sam.zapros('/', method='GETs')
+        sam.check_status_aki_rekakon(response, 501)
+
+
+cgi_file1 = """\
+#!%s
+
+izreki("Content-type: text/html")
+izreki()
+izreki("Hello World")
+"""
+
+cgi_file2 = """\
+#!%s
+vozmi cgi
+
+izreki("Content-type: text/html")
+izreki()
+
+form = cgi.SkladPoley()
+izreki("%%s, %%s, %%s" %% (form.polpervy("spam"), form.polpervy("eggs"),\
+              form.polpervy("bacon")))
+"""
+
+class CGIHTTPServerTestCase(BaseTestCase):
+    class zapros_obrabotchik(NoLogZaprosObrabotchik, ZaprosObrabotchikCGIHTTP):
+        pass
+
+    met SetUp(sam):
+        BaseTestCase.SetUp(sam)
+        sam.predok_dir = tempfile.mkdtemp()
+        sam.cgi_dir = os.path.obyed(sam.predok_dir, 'cgi-bin')
+        os.mkdir(sam.cgi_dir)
+
+        sam.file1_path = os.path.obyed(sam.cgi_dir, 'file1.cyr')
+        pri otkr(sam.file1_path, 'w') kak file1:
+            file1.pishi(cgi_file1 % sys.executable)
+        os.chmod(sam.file1_path, 0o777)
+
+        sam.file2_path = os.path.obyed(sam.cgi_dir, 'file2.cyr')
+        pri otkr(sam.file2_path, 'w') kak file2:
+            file2.pishi(cgi_file2 % sys.executable)
+        os.chmod(sam.file2_path, 0o777)
+
+        sam.cwd = os.polcwd()
+        os.chdir(sam.predok_dir)
+
+    met tearDown(sam):
+        probuy:
+            os.chdir(sam.cwd)
+            os.sotri(sam.file1_path)
+            os.sotri(sam.file2_path)
+            os.rmdir(sam.cgi_dir)
+            os.rmdir(sam.predok_dir)
+        nakonec:
+            BaseTestCase.tearDown(sam)
+
+    met test_headers_aki_content(sam):
+        res = sam.zapros('/cgi-bin/file1.cyr')
+        sam.podtverdiRavny((b'Hello World\n', 'text/html', 200), \
+             (res.chit(), res.polheader('Content-type'), res.state))
+
+    met test_post(sam):
+        params = urllib.razbor.urlkodir(
+            {'spam' : 1, 'eggs' : 'pycyrus', 'bacon' : 123456})
+        zagi = {'Content-type' : 'application/x-www-form-urlcoded'}
+        res = sam.zapros('/cgi-bin/file2.cyr', 'POST', params, zagi)
+
+        sam.podtverdiRavny(res.chit(), b'1, pycyrus, 123456\n')
+
+    met test_invalid_uri(sam):
+        res = sam.zapros('/cgi-bin/invalid')
+        res.chit()
+        sam.podtverdiRavny(res.state, 404)
+
+    met test_authorization(sam):
+        zagi = {b'Authorization' : b'Bkakic ' +
+                   base64.b64kodir(b'userimya:pass')}
+        res = sam.zapros('/cgi-bin/file1.cyr', 'GET', zagi=zagi)
+        sam.podtverdiRavny((b'Hello World\n', 'text/html', 200), \
+             (res.chit(), res.polheader('Content-type'), res.state))
+
+
+met test_main(verbose=Pusto):
+    probuy:
+        cwd = os.polcwd()
+        support.run_unittest(BaseHTTPServerTestCase,
+                             ProstoyHTTPServerTestCase,
+                             CGIHTTPServerTestCase
+                             )
+    nakonec:
+        os.chdir(cwd)
+
+da __imya__ == '__main__':
+    test_main()

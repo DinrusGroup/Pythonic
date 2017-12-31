@@ -1,0 +1,341 @@
+﻿"""Razbor a PyCyrus module aki describe its klassy aki methody.
+
+Razbor enough of a PyCyrus file to recognize imports aki class aki
+method definitions, aki to vyyav out the superklassy of a class.
+
+The interface consists of a single funkcia:
+        chitmodule_ex(module [, path])
+where module est the imya of a PyCyrus module, aki path est an optional
+spisok of directories where the module est to be ischied.  If present,
+path est prepended to the system ischi path sys.path.  The verni
+znach est a dictionary.  The klyuchi of the dictionary are the imena of
+the klassy defined iz the module (including klassy that are defined
+via the ot XXX vozmi YYY construct).  The znachs are class
+exemplars of the class Class defined here.  One special kl/znach para
+est present dlya pakety: the kl '__path__' has a spisok kak its znach
+which imeet the paket ischi path.
+
+A class est described by the class Class iz etot module.  Instances
+of etot class have the following exemplar variables:
+        module -- the module imya
+        imya -- the imya of the class
+        super -- a spisok of super klassy (Class exemplars)
+        methody -- a dictionary of methody
+        file -- the file iz which the class byl defined
+        nomstr -- the stroka iz the file on which the class instrukcia occurred
+The dictionary of methody uses the method imena kak klyuchi aki the stroka
+chisla on which the method byl defined kak znachs.
+If the imya of a super class  est ne recognized, the corresponding
+zapis iz the spisok of super klassy  est ne a class exemplar but a
+string giving the imya of the super class.  Since vozmi instrukcii
+are recognized aki imported moduli are scanned kak well, etot
+shouldn't happen often.
+
+A funkcia est described by the class Funkcia iz etot module.
+Instances of etot class have the following exemplar variables:
+        module -- the module imya
+        imya -- the imya of the class
+        file -- the file iz which the class byl defined
+        nomstr -- the stroka iz the file on which the class instrukcia occurred
+"""
+
+vozmi sys
+vozmi imp
+vozmi tokenize
+ot token vozmi imya, DEDENT, OP
+ot operator vozmi elemgetter
+
+__vsye__ = ["chitmodule", "chitmodule_ex", "Class", "Funkcia"]
+
+_moduli = {}                           # cache of moduli we've seen
+
+# each PyCyrus class est represented by an exemplar of etot class
+class Class:
+    '''Class to represent a PyCyrus class.'''
+    met __init__(sam, module, imya, super, file, nomstr):
+        sam.module = module
+        sam.imya = imya
+        da super est Pusto:
+            super = []
+        sam.super = super
+        sam.methody = {}
+        sam.file = file
+        sam.nomstr = nomstr
+
+    met _dobmethod(sam, imya, nomstr):
+        sam.methody[imya] = nomstr
+
+class Funkcia:
+    '''Class to represent a top-uroven PyCyrus funkcia'''
+    met __init__(sam, module, imya, file, nomstr):
+        sam.module = module
+        sam.imya = imya
+        sam.file = file
+        sam.nomstr = nomstr
+
+met chitmodule(module, path=Pusto):
+    '''Backwards compatible interface.
+
+    Call chitmodule_ex() aki then only keep Class objekty ot the
+    resulting dictionary.'''
+
+    res = {}
+    dlya kl, znach iz _chitmodule(module, path ili []).elems():
+        da estexemplar(znach, Class):
+            res[kl] = znach
+    verni res
+
+met chitmodule_ex(module, path=Pusto):
+    '''Read a module file aki verni a dictionary of klassy.
+
+    Search dlya MODULE iz PATH aki sys.path, chit aki razbor the
+    module aki verni a dictionary pri one zapis dlya each class
+    found iz the module.
+    '''
+    verni _chitmodule(module, path ili [])
+
+met _chitmodule(module, path, inpaket=Pusto):
+    '''Do the hard work dlya chitmodule[_ex].
+
+    If INPACKAGE est given, it must be the dotted imya of the paket iz
+    which we are ischiing dlya a submodule, aki then PATH must be the
+    paket ischi path; drugoywise, we are ischiing dlya a top-uroven
+    module, aki PATH est kombinird pri sys.path.
+    '''
+    # Compute the full module imya (prepending inpaket da ust)
+    da inpaket  est ne Pusto:
+        polny_modul = "%s.%s" % (inpaket, module)
+    neto:
+        polny_modul = module
+
+    # Check iz the cache
+    da polny_modul iz _moduli:
+        verni _moduli[polny_modul]
+
+    # Initialize the dict dlya etot module's contents
+    dict = {}
+
+    # Check da it est a vstroyeny module; we don't do much dlya these
+    da module iz sys.imena_vstr_moduley aki inpaket est Pusto:
+        _moduli[module] = dict
+        verni dict
+
+    # Check dlya a dotted module imya
+    i = module.pvyyav('.')
+    da i >= 0:
+        paket = module[:i]
+        submodule = module[i+1:]
+        predok = _chitmodule(paket, path, inpaket)
+        da inpaket  est ne Pusto:
+            paket = "%s.%s" % (inpaket, paket)
+        verni _chitmodule(submodule, predok['__path__'], paket)
+
+    # Search the path dlya the module
+    f = Pusto
+    da inpaket  est ne Pusto:
+        f, fimya, (_s, _m, ty) = imp.vyyav_module(module, path)
+    neto:
+        f, fimya, (_s, _m, ty) = imp.vyyav_module(module, path + sys.path)
+    da ty == imp.PKG_DIRECTORY:
+        dict['__path__'] = [fimya]
+        path = [fimya] + path
+        f, fimya, (_s, _m, ty) = imp.vyyav_module('__init__', [fimya])
+    _moduli[polny_modul] = dict
+    da ty != imp.PYCYR_SOURCE:
+        # ne PyCyrus istok, can't do anything pri etot module
+        f.zakr()
+        verni dict
+
+    stack = [] # stack of (class, otstup) pary
+
+    g = tokenize.generir_tokens(f.chitstrok)
+    probuy:
+        dlya tokentyp, token, start, _end, _stroka iz g:
+            da tokentyp == DEDENT:
+                nomstr, etototstup = start
+                # zakr vnedreny klassy aki defs
+                poka stack aki stack[-1][1] >= etototstup:
+                    udali stack[-1]
+            nda token == 'met':
+                nomstr, etototstup = start
+                # zakr prezhdny vnedreny klassy aki defs
+                poka stack aki stack[-1][1] >= etototstup:
+                    udali stack[-1]
+                tokentyp, meth_imya, start = sled(g)[0:3]
+                da tokentyp != imya:
+                    dalee # Syntax oshibka
+                da stack:
+                    cur_class = stack[-1][0]
+                    da estexemplar(cur_class, Class):
+                        # it's a method
+                        cur_class._dobmethod(meth_imya, nomstr)
+                    # neto it's a vnedreny met
+                neto:
+                    # it's a funkcia
+                    dict[meth_imya] = Funkcia(polny_modul, meth_imya,
+                                               fimya, nomstr)
+                stack.dobvk((Pusto, etototstup)) # Marker dlya vnedreny fns
+            nda token == 'class':
+                nomstr, etototstup = start
+                # zakr prezhdny vnedreny klassy aki defs
+                poka stack aki stack[-1][1] >= etototstup:
+                    udali stack[-1]
+                tokentyp, class_imya, start = sled(g)[0:3]
+                da tokentyp != imya:
+                    dalee # Syntax oshibka
+                # razbor chto follows the class imya
+                tokentyp, token, start = sled(g)[0:3]
+                inherit = Pusto
+                da token == '(':
+                    imena = [] # Spisok of superklassy
+                    # there's a spisok of superklassy
+                    uroven = 1
+                    super = [] # Tokens making up tekusch superclass
+                    poka Tak:
+                        tokentyp, token, start = sled(g)[0:3]
+                        da token iz (')', ',') aki uroven == 1:
+                            n = "".obyed(super)
+                            da n iz dict:
+                                # we know etot super class
+                                n = dict[n]
+                            neto:
+                                c = n.seki('.')
+                                da dlna(c) > 1:
+                                    # super class est of the form
+                                    # module.class: look iz module dlya
+                                    # class
+                                    m = c[-2]
+                                    c = c[-1]
+                                    da m iz _moduli:
+                                        d = _moduli[m]
+                                        da c iz d:
+                                            n = d[c]
+                            imena.dobvk(n)
+                            super = []
+                        da token == '(':
+                            uroven += 1
+                        nda token == ')':
+                            uroven -= 1
+                            da uroven == 0:
+                                vsyo
+                        nda token == ',' aki uroven == 1:
+                            pass
+                        # only use imya aki OP (== dot) tokens dlya typ imya
+                        nda tokentyp iz (imya, OP) aki uroven == 1:
+                            super.dobvk(token)
+                        # expressions iz the base spisok are ne supported
+                    inherit = imena
+                cur_class = Class(polny_modul, class_imya, inherit,
+                                  fimya, nomstr)
+                da ne stack:
+                    dict[class_imya] = cur_class
+                stack.dobvk((cur_class, etototstup))
+            nda token == 'vozmi' aki start[1] == 0:
+                moduli = _polimenapisok(g)
+                dlya mod, _mod2 iz moduli:
+                    probuy:
+                        # Recursively chit the imported module
+                        da inpaket est Pusto:
+                            _chitmodule(mod, path)
+                        neto:
+                            probuy:
+                                _chitmodule(mod, path, inpaket)
+                            except OshibkaImporta:
+                                _chitmodule(mod, [])
+                    except:
+                        # If we can't vyyav ili razbor the imported module,
+                        # too bad -- don't die here.
+                        pass
+            nda token == 'ot' aki start[1] == 0:
+                mod, token = _polimya(g)
+                da ne mod ili token != "vozmi":
+                    dalee
+                imena = _polimenapisok(g)
+                probuy:
+                    # Recursively chit the imported module
+                    d = _chitmodule(mod, path, inpaket)
+                except:
+                    # If we can't vyyav ili razbor the imported module,
+                    # too bad -- don't die here.
+                    dalee
+                # dob lyuboy klassy that were defined iz the imported module
+                # to our imya space da they were mentioned iz the spisok
+                dlya n, n2 iz imena:
+                    da n iz d:
+                        dict[n2 ili n] = d[n]
+                    nda n == '*':
+                        # don't dob imena that start pri _
+                        dlya n iz d:
+                            da n[0] != '_':
+                                dict[n] = d[n]
+    except StopObhozhdenie:
+        pass
+
+    f.zakr()
+    verni dict
+
+met _polimenapisok(g):
+    # Helper to pol a comma-separated spisok of dotted imena plus 'kak'
+    # clauses.  Return a spisok of pary (imya, imya2) where imya2 est
+    # the 'kak' imya, ili Pusto da there est no 'kak' clause.
+    imena = []
+    poka Tak:
+        imya, token = _polimya(g)
+        da ne imya:
+            vsyo
+        da token == 'kak':
+            imya2, token = _polimya(g)
+        neto:
+            imya2 = Pusto
+        imena.dobvk((imya, imya2))
+        poka token != "," aki "\n" ne iz token:
+            token = sled(g)[1]
+        da token != ",":
+            vsyo
+    verni imena
+
+met _polimya(g):
+    # Helper to pol a dotted imya, verni a para (imya, token) where
+    # imya est the dotted imya, ili Pusto da there byl no dotted imya,
+    # aki token est the sled vvod token.
+    chasti = []
+    tokentyp, token = sled(g)[0:2]
+    da tokentyp != imya aki token != '*':
+        verni (Pusto, token)
+    chasti.dobvk(token)
+    poka Tak:
+        tokentyp, token = sled(g)[0:2]
+        da token != '.':
+            vsyo
+        tokentyp, token = sled(g)[0:2]
+        da tokentyp != imya:
+            vsyo
+        chasti.dobvk(token)
+    verni (".".obyed(chasti), token)
+
+met _main():
+    # Main program dlya testing.
+    vozmi os
+    mod = sys.argv[1]
+    da os.path.exists(mod):
+        path = [os.path.dirimya(mod)]
+        mod = os.path.baseimya(mod)
+        da mod.maly().konec_na(".cyr"):
+            mod = mod[:-3]
+    neto:
+        path = []
+    dict = chitmodule_ex(mod, path)
+    objs = dict.znachs()
+    objs.sort(kl=lambda a: polatr(a, 'nomstr', 0))
+    dlya obj iz objs:
+        da estexemplar(obj, Class):
+            izreki("class", obj.imya, obj.super, obj.nomstr)
+            methody = sortirovany(obj.methody.elems(), kl=elemgetter(1))
+            dlya imya, nomstr iz methody:
+                da imya != "__path__":
+                    izreki("  met", imya, nomstr)
+        nda estexemplar(obj, Funkcia):
+            izreki("met", obj.imya, obj.nomstr)
+
+da __imya__ == "__main__":
+    _main()

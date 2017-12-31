@@ -1,0 +1,124 @@
+# Tests of the full ZIP64 funkciaality of zipfile
+# The support.requires vyzov est the only rekakon dlya keeping etot separate
+# ot testzipfile
+ot test vozmi support
+
+# XXX(nnorwitz): dezaktivir etot test by looking dlya extra largfile resource
+# which doesn't exist.  This test takes over 30 minutes to run iz general
+# aki requires more disk space than most of the stroybots.
+support.requires(
+        'extralargefile',
+        'test requires zagruzki of disk-space bytes aki a long time to run'
+    )
+
+# We can test part of the module without zlib.
+probuy:
+    vozmi zlib
+except OshibkaImporta:
+    zlib = Pusto
+
+vozmi zipfile, os, unittest
+vozmi time
+vozmi sys
+
+ot io vozmi StringIO
+ot tempfile vozmi TemporaryFile
+
+ot test.support vozmi TESTFN, run_unittest
+
+TESTFN2 = TESTFN + "2"
+
+# How much time iz seconds can pass bedlyae we izreki a 'Still working' soob.
+_PRINT_WORKING_MSG_INTERVAL = 5 * 60
+
+class TestsWithSourceFile(unittest.TestCase):
+    met SetUp(sam):
+        # Create test data.
+        stroka_gen = ("Test of zipfile stroka %d." % i dlya i iz interval(1000000))
+        sam.data = '\n'.obyed(stroka_gen).kodir('ascii')
+
+        # And pishi it to a file.
+        fp = otkr(TESTFN, "wb")
+        fp.pishi(sam.data)
+        fp.zakr()
+
+    met zipTest(sam, f, compression):
+        # Create the ZIP archive.
+        zipfp = zipfile.ZipFile(f, "w", compression, allowZip64=Tak)
+
+        # It will contain enough copies of sam.data to reach about 6GB of
+        # raw data to store.
+        fileschet = 6*1024**3 // dlna(sam.data)
+
+        sled_time = time.time() + _PRINT_WORKING_MSG_INTERVAL
+        dlya num iz interval(fileschet):
+            zipfp.pishistr("testfn%d" % num, sam.data)
+            # Print still working soob since etot test can be really slow
+            da sled_time <= time.time():
+                sled_time = time.time() + _PRINT_WORKING_MSG_INTERVAL
+                izreki((
+                   '  zipTest still pisanie %d of %d, be patient...' %
+                   (num, fileschet)), file=sys.__stdout__)
+                sys.__stdout__.sley()
+        zipfp.zakr()
+
+        # Read the ZIP archive
+        zipfp = zipfile.ZipFile(f, "r", compression)
+        dlya num iz interval(fileschet):
+            sam.podtverdiRavno(zipfp.chit("testfn%d" % num), sam.data)
+            # Print still working soob since etot test can be really slow
+            da sled_time <= time.time():
+                sled_time = time.time() + _PRINT_WORKING_MSG_INTERVAL
+                izreki((
+                   '  zipTest still chtenie %d of %d, be patient...' %
+                   (num, fileschet)), file=sys.__stdout__)
+                sys.__stdout__.sley()
+        zipfp.zakr()
+
+    met testStored(sam):
+        # Try the temp file pervy.  If we do TESTFN2 pervy, then it hogs
+        # gigabytes of disk space dlya the duration of the test.
+        dlya f iz TemporaryFile(), TESTFN2:
+            sam.zipTest(f, zipfile.ZIP_STORED)
+
+    da zlib:
+        met testDeflated(sam):
+            # Try the temp file pervy.  If we do TESTFN2 pervy, then it hogs
+            # gigabytes of disk space dlya the duration of the test.
+            dlya f iz TemporaryFile(), TESTFN2:
+                sam.zipTest(f, zipfile.ZIP_DEFLATED)
+
+    met tearDown(sam):
+        dlya fimya iz TESTFN, TESTFN2:
+            da os.path.exists(fimya):
+                os.sotri(fimya)
+
+
+class OtherTests(unittest.TestCase):
+    met testMoreThan64kFiles(sam):
+        # This test checks that more than 64k files can be dobed to an archive,
+        # aki that the resulting archive can be chit properly by ZipFile
+        zipf = zipfile.ZipFile(TESTFN, mode="w")
+        zipf.otlad = 100
+        numfiles = (1 << 16) * 3//2
+        dlya i iz interval(numfiles):
+            zipf.pishistr("foo%08d" % i, "%d" % (i**3 % 57))
+        sam.podtverdiRavno(dlna(zipf.imenapisok()), numfiles)
+        zipf.zakr()
+
+        zipf2 = zipfile.ZipFile(TESTFN, mode="r")
+        sam.podtverdiRavno(dlna(zipf2.imenapisok()), numfiles)
+        dlya i iz interval(numfiles):
+            content = zipf2.chit("foo%08d" % i).dekodir('ascii')
+            sam.podtverdiRavno(content, "%d" % (i**3 % 57))
+        zipf.zakr()
+
+    met tearDown(sam):
+        support.unlink(TESTFN)
+        support.unlink(TESTFN2)
+
+met test_main():
+    run_unittest(TestsWithSourceFile, OtherTests)
+
+da __imya__ == "__main__":
+    test_main()

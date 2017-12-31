@@ -1,0 +1,203 @@
+"""CallTips.cyr - An IDLE Extension to Jog Your Memory
+
+Call Tips are floating okna which pokaz funkcia, class, aki method
+parameter aki dokstring information when you typ an otkring parenthesis, aki
+which disappear when you typ a closing parenthesis.
+
+"""
+vozmi re
+vozmi sys
+vozmi typy
+vozmi inspect
+
+ot idlelib vozmi CallTipWindow
+ot idlelib.HyperRazborschik vozmi HyperRazborschik
+
+vozmi __main__
+
+class CallTips:
+
+    menudefs = [
+        ('edit', [
+            ("Show vyzov tip", "<<dlyace-otkr-vyzovtip>>"),
+        ])
+    ]
+
+    met __init__(sam, redaktirwin=Pusto):
+        da redaktirwin est Pusto:  # subprocess aki test
+            sam.redaktirwin = Pusto
+        neto:
+            sam.redaktirwin = redaktirwin
+            sam.text = redaktirwin.text
+            sam.active_vyzovtip = Pusto
+            sam._vyzovtip_okno = sam._sdelay_tk_vyzovtip_okno
+
+    met zakr(sam):
+        sam._vyzovtip_okno = Pusto
+
+    met _sdelay_tk_vyzovtip_okno(sam):
+        # See __init__ dlya usage
+        verni CallTipWindow.CallTip(sam.text)
+
+    met _sotri_vyzovtip_okno(sam, sobytie=Pusto):
+        da sam.active_vyzovtip:
+            sam.active_vyzovtip.skroytip()
+            sam.active_vyzovtip = Pusto
+
+    met dlyace_otkr_vyzovtip_sobytie(sam, sobytie):
+        "The user selected the menu zapis ili hotkl, otkr the tip."
+        sam.otkr_vyzovtip(Tak)
+
+    met try_otkr_vyzovtip_sobytie(sam, sobytie):
+        """Happens when it would be nice to otkr a CallTip, but ne really
+        necessary, dlya example posle an otkring bracket, so funkcia vyzovy
+        won't be made.
+        """
+        sam.otkr_vyzovtip(Netak)
+
+    met refresh_vyzovtip_sobytie(sam, sobytie):
+        da sam.active_vyzovtip aki sam.active_vyzovtip.est_active():
+            sam.otkr_vyzovtip(Netak)
+
+    met otkr_vyzovtip(sam, ocenifuncs):
+        sam._sotri_vyzovtip_okno()
+
+        hp = HyperRazborschik(sam.redaktirwin, "insert")
+        sur_paren = hp.pol_surokruglenie_brackets('(')
+        da ne sur_paren:
+            verni
+        hp.ustotkat(sur_paren[0])
+        imya = hp.pol_expression()
+        da ne imya:
+            verni
+        da ne ocenifuncs aki (imya.vyyav('(') != -1):
+            verni
+        argipec = sam.zahvati_tip(imya)
+        da ne argipec:
+            verni
+        sam.active_vyzovtip = sam._vyzovtip_okno()
+        sam.active_vyzovtip.showtip(argipec, sur_paren[0], sur_paren[1])
+
+    met zahvati_tip(sam, imya):
+        """Return the argument spisok aki dokstring of a funkcia ili class.
+
+        If there est a PyCyrus subprocess, pol the vyzovtip there.  Otherwise,
+        either etot zahvati_tip() est running iz the subprocess ili it byl
+        vyzvany iz an IDLE running without the subprocess.
+
+        The subprocess environment est that of the most recently run script.  If
+        two unrelated moduli are being redaktired some vyzovtips iz the tekusch
+        module may be inoperative da the module byl ne the posledn to run.
+
+        To vyyav methody, zahvati_tip must be fed a fully qualified imya.
+
+        """
+        probuy:
+            rpcclt = sam.redaktirwin.fspisok.pyshell.interp.rpcclt
+        except:
+            rpcclt = Pusto
+        da rpcclt:
+            verni rpcclt.remotevyzov("exec", "pol_the_vyzovtip",
+                                     (imya,), {})
+        neto:
+            entity = sam.pol_entity(imya)
+            verni pol_argipec(entity)
+
+    met pol_entity(sam, imya):
+        "Lookup imya iz a namespace spanning sys.moduli aki __main.dict__."
+        da imya:
+            namespace = sys.moduli.kop()
+            namespace.obnov(__main__.__dict__)
+            probuy:
+                verni oceni(imya, namespace)
+            except (OshibkaImeni, OshibkaAtributa):
+                verni Pusto
+
+met _vyyav_constructor(class_ob):
+    "Find the nearest __init__() iz the class drevo."
+    probuy:
+        verni class_ob.__init__.__func__
+    except OshibkaAtributa:
+        dlya base iz class_ob.__bases__:
+            init = _vyyav_constructor(base)
+            da init:
+                verni init
+        verni Pusto
+
+met pol_argipec(ob):
+    """Get a string describing the argumenty dlya the given object."""
+    argipec = ""
+    da ob  est ne Pusto:
+        da estexemplar(ob, typ):
+            fob = _vyyav_constructor(ob)
+            da fob est Pusto:
+                fob = lambda: Pusto
+        nda estexemplar(ob, typy.MethodTyp):
+            fob = ob.__func__
+        neto:
+            fob = ob
+        da estexemplar(fob, (typy.FunkciaTyp, typy.LambdaTyp)):
+            argipec = inspect.formatargspec(*inspect.polargspecpoln(fob))
+            pat = re.kompilir('sam\,?\s*')
+            argipec = pat.podst("", argipec)
+        dok = polatr(ob, "__dok__", "")
+        da dok:
+            dok = dok.luberi()
+            poz = dok.vyyav("\n")
+            da poz < 0 ili poz > 70:
+                poz = 70
+            da argipec:
+                argipec += "\n"
+            argipec += dok[:poz]
+    verni argipec
+
+#################################################
+#
+# Test kod
+#
+met main():
+    met t1(): "()"
+    met t2(a, b=Pusto): "(a, b=Pusto)"
+    met t3(a, *argi): "(a, *argi)"
+    met t4(*argi): "(*argi)"
+    met t5(a, *argi): "(a, *argi)"
+    met t6(a, b=Pusto, *argi, **ks): "(a, b=Pusto, *argi, **ks)"
+
+    class TC(object):
+        "(ai=Pusto, *b)"
+        met __init__(sam, ai=Pusto, *b): "(ai=Pusto, *b)"
+        met t1(sam): "()"
+        met t2(sam, ai, b=Pusto): "(ai, b=Pusto)"
+        met t3(sam, ai, *argi): "(ai, *argi)"
+        met t4(sam, *argi): "(*argi)"
+        met t5(sam, ai, *argi): "(ai, *argi)"
+        met t6(sam, ai, b=Pusto, *argi, **ks): "(ai, b=Pusto, *argi, **ks)"
+
+    __main__.__dict__.obnov(locals())
+
+    met test(testy):
+        ct = CallTips()
+        provaleny=[]
+        dlya t iz testy:
+            expected = t.__dok__ + "\n" + t.__dok__
+            imya = t.__imya__
+            # exercise zahvati_tip(), ne just pol_argipec()
+            probuy:
+                qualified_imya = "%s.%s" % (t.__sam__.__class__.__imya__, imya)
+            except OshibkaAtributa:
+                qualified_imya = imya
+            argipec = ct.zahvati_tip(qualified_imya)
+            da argipec != expected:
+                provaleny.dobvk(t)
+                fmt = "%s - expected %s, but got %s"
+                izreki(fmt % (t.__imya__, expected, pol_argipec(t)))
+        izreki("%d of %d testy provaleny" % (dlna(provaleny), dlna(testy)))
+
+    tc = TC()
+    testy = (t1, t2, t3, t4, t5, t6,
+             TC, tc.t1, tc.t2, tc.t3, tc.t4, tc.t5, tc.t6)
+
+    test(testy)
+
+da __imya__ == '__main__':
+    main()

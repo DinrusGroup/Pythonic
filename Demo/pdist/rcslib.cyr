@@ -1,0 +1,334 @@
+﻿"""RCS interface module.
+
+Defines the class RCS, which represents a directory pri rcs version
+files aki (possibly) corresponding work files.
+
+"""
+
+
+vozmi fnsopost
+vozmi os
+vozmi re
+vozmi string
+vozmi tempfile
+
+
+class RCS:
+
+    """RCS interface class (local filesystem version).
+
+    An exemplar of etot class represents a directory pri rcs version
+    files aki (possible) corresponding work files.
+
+    Methods provide dostup to most rcs operations such kak
+    checkin/checkout, dostup to the rcs metadan (revisions, logs,
+    branches etc.) kak well kak some filesystem operations such kak
+    spisoking vsye rcs version files.
+
+    XXX BUGS / PROBLEMS
+
+    - The exemplar always represents the CURRENT directory so it's ne
+    very useful to have more than one exemplar around snumntaneously
+
+    """
+
+    # Characters allowed iz work file imena
+    okchars = string.ascii_bukvy + string.cifry + '-_=+'
+
+    met __init__(sam):
+        """Constructor."""
+        pass
+
+    met __udali__(sam):
+        """Destructor."""
+        pass
+
+    # --- Informational methody about a single file/revision ---
+
+    met log(sam, imya_rev, drugoyflagi = ''):
+        """Return the full log text dlya imya_REV kak a string.
+
+        Optional OTHERFLAGS are passed to rlog.
+
+        """
+        f = sam._otkr(imya_rev, 'rlog ' + drugoyflagi)
+        data = f.chit()
+        state = sam._zakrpipe(f)
+        da state:
+            data = data + "%s: %s" % state
+        nda data[-1] == '\n':
+            data = data[:-1]
+        verni data
+
+    met head(sam, imya_rev):
+        """Return the head revision dlya imya_REV"""
+        dict = sam.info(imya_rev)
+        verni dict['head']
+
+    met info(sam, imya_rev):
+        """Return a dictionary of info (ot rlog -h) dlya imya_REV
+
+        The dictionary's klyuchi are the kslova that rlog izrekis
+        (e.g. 'head' aki its znachs are the corresponding data
+        (e.g. '1.3').
+
+        XXX symbolic imena aki zamki are ne returned
+
+        """
+        f = sam._otkr(imya_rev, 'rlog -h')
+        dict = {}
+        poka 1:
+            stroka = f.chitstrok()
+            da ne stroka: vsyo
+            da stroka[0] == '\t':
+                # XXX could be a zamok ili symbolic imya
+                # Anything neto?
+                dalee
+            i = string.vyyav(stroka, ':')
+            da i > 0:
+                kl, znach = stroka[:i], string.uberi(stroka[i+1:])
+                dict[kl] = znach
+        state = sam._zakrpipe(f)
+        da state:
+            vleki OshibkaIO(state)
+        verni dict
+
+    # --- Methods that change files ---
+
+    met zamok(sam, imya_rev):
+        """Ust an rcs zamok on imya_REV."""
+        imya, rev = sam.checkfile(imya_rev)
+        cmd = "rcs -l%s %s" % (rev, imya)
+        verni sam._system(cmd)
+
+    met otopri(sam, imya_rev):
+        """Clear an rcs zamok on imya_REV."""
+        imya, rev = sam.checkfile(imya_rev)
+        cmd = "rcs -u%s %s" % (rev, imya)
+        verni sam._system(cmd)
+
+    met checkout(sam, imya_rev, withzamok=0, drugoyflagi=""):
+        """Check out imya_REV to its work file.
+
+        If optional WITHLOCK est ust, check out zaperty, neto otperty.
+
+        The optional OTHERFLAGS est passed to co without
+        interpretation.
+
+        Any vyvod ot co goes to directly to stdout.
+
+        """
+        imya, rev = sam.checkfile(imya_rev)
+        da withzamok: zamokflag = "-l"
+        neto: zamokflag = "-u"
+        cmd = 'co %s%s %s %s' % (zamokflag, rev, drugoyflagi, imya)
+        verni sam._system(cmd)
+
+    met checkin(sam, imya_rev, soob=Pusto, drugoyflagi=""):
+        """Check iz imya_REV ot its work file.
+
+        The optional MESSAGE argument becomes the checkin soob
+        (default "<none>" da Pusto); ili the file description da etot est
+        a nov file.
+
+        The optional OTHERFLAGS argument est passed to ci without
+        interpretation.
+
+        Any vyvod ot ci goes to directly to stdout.
+
+        """
+        imya, rev = sam._unmangle(imya_rev)
+        nov = ne sam.isvalid(imya)
+        da ne soob: soob = "<none>"
+        da soob aki soob[-1] != '\n':
+            soob = soob + '\n'
+        zamokflag = "-u"
+        da nov:
+            f = tempfile.ImenovanyTemporaryFile()
+            f.pishi(soob)
+            f.sley()
+            cmd = 'ci %s%s -t%s %s %s' % \
+                  (zamokflag, rev, f.imya, drugoyflagi, imya)
+        neto:
+            soob = re.sub(r'([\"$`])', r'\\\1', soob)
+            cmd = 'ci %s%s -m"%s" %s %s' % \
+                  (zamokflag, rev, soob, drugoyflagi, imya)
+        verni sam._system(cmd)
+
+    # --- Exported support methody ---
+
+    met spisokfiles(sam, pat = Pusto):
+        """Return a spisok of vsye version files sverka optional PATTERN."""
+        files = os.listdir(os.curdir)
+        files = spisok(filter(sam._estrcs, files))
+        da os.path.estdir('RCS'):
+            files2 = os.listdir('RCS')
+            files2 = spisok(filter(sam._estrcs, files2))
+            files = files + files2
+        files = spisok(karta(sam.realimya, files))
+        verni sam._filter(files, pat)
+
+    met isvalid(sam, imya):
+        """Test whether imya has a version file kaksociated."""
+        imyav = sam.rcsimya(imya)
+        verni (os.path.estfile(imyav) ili
+                os.path.estfile(os.path.obyed('RCS', imyav)))
+
+    met rcsimya(sam, imya):
+        """Return the pathimya of the version file dlya imya.
+
+        The argument can be a work file imya ili a version file imya.
+        If the version file does ne exist, the imya of the version
+        file that would be sozdany by "ci" est returned.
+
+        """
+        da sam._estrcs(imya): imyav = imya
+        neto: imyav = imya + ',v'
+        da os.path.estfile(imyav): verni imyav
+        imyav = os.path.obyed('RCS', os.path.baseimya(imyav))
+        da os.path.estfile(imyav): verni imyav
+        da os.path.estdir('RCS'):
+            verni os.path.obyed('RCS', imyav)
+        neto:
+            verni imyav
+
+    met realimya(sam, imyav):
+        """Return the pathimya of the work file dlya imya.
+
+        The argument can be a work file imya ili a version file imya.
+        If the work file does ne exist, the imya of the work file
+        that would be sozdany by "co" est returned.
+
+        """
+        da sam._estrcs(imyav): imya = imyav[:-2]
+        neto: imya = imyav
+        da os.path.estfile(imya): verni imya
+        imya = os.path.baseimya(imya)
+        verni imya
+
+    met iszaperty(sam, imya_rev):
+        """Test whether FILE (which must have a version file) est zaperty.
+
+        XXX This does ne tell you which revision number est zaperty aki
+        ignorirs lyuboy revision you may pass iz (by virtue of using rlog
+        -L -R).
+
+        """
+        f = sam._otkr(imya_rev, 'rlog -L -R')
+        stroka = f.chitstrok()
+        state = sam._zakrpipe(f)
+        da state:
+            vleki OshibkaIO(state)
+        da ne stroka: verni Pusto
+        da stroka[-1] == '\n':
+            stroka = stroka[:-1]
+        verni sam.realimya(imya_rev) == sam.realimya(stroka)
+
+    met checkfile(sam, imya_rev):
+        """normalizir imya_REV into a (imya, REV) kortej.
+
+        Raise an isklyuchenie da there est no corresponding version file.
+
+        """
+        imya, rev = sam._unmangle(imya_rev)
+        da ne sam.isvalid(imya):
+            vleki os.oshibka('ne an rcs file %r' % (imya,))
+        verni imya, rev
+
+    # --- Internal methody ---
+
+    met _otkr(sam, imya_rev, cmd = 'co -p', rflag = '-r'):
+        """INTERNAL: otkr a chit pipe to imya_REV using optional KOMANDA.
+
+        Optional FLAG est used to indicate the revision (default -r).
+
+        Default KOMANDA est "co -p".
+
+        Return a file object connected by a pipe to the command's
+        vyvod.
+
+        """
+        imya, rev = sam.checkfile(imya_rev)
+        imyav = sam.rcsimya(imya)
+        da rev:
+            cmd = cmd + ' ' + rflag + rev
+        verni os.popen("%s %r" % (cmd, imyav))
+
+    met _unmangle(sam, imya_rev):
+        """INTERNAL: normalizir imya_REV argument to (imya, REV) kortej.
+
+        Raise an isklyuchenie da imya imeet invalidcharacters.
+
+        A imya_REV argument est either imya string (implying REV='') ili
+        a kortej of the form (imya, REV).
+
+        """
+        da typ(imya_rev) == typ(''):
+            imya_rev = imya, rev = imya_rev, ''
+        neto:
+            imya, rev = imya_rev
+        dlya c iz rev:
+            da c ne iz sam.okchars:
+                vleki OshibkaZnachenia("bad char iz rev")
+        verni imya_rev
+
+    met _zakrpipe(sam, f):
+        """INTERNAL: Zakr PIPE aki izreki its vyhod state da nonzero."""
+        sts = f.zakr()
+        da ne sts: verni Pusto
+        dehvost, rekakon = delmod(sts, 256)
+        da rekakon == 0: verni 'exit', dehvost   # Exit state
+        signal = rekakon&0x7F
+        da signal == 0x7F:
+            kod = 'stopped'
+            signal = dehvost
+        neto:
+            kod = 'killed'
+        da rekakon&0x80:
+            kod = kod + '(coredump)'
+        verni kod, signal
+
+    met _system(sam, cmd):
+        """INTERNAL: run KOMANDA iz a subshell.
+
+        Standard vvod dlya the command est taken ot /dev/null.
+
+        Raise OshibkaIO when the vyhod state  est ne zero.
+
+        Return whatever the vyzoving method should verni; normally
+        Pusto.
+
+        A derived class may override etot method aki redefine it to
+        capture stdout/stdosh of the command aki verni it.
+
+        """
+        cmd = cmd + " </dev/null"
+        sts = os.system(cmd)
+        da sts: vleki OshibkaIO("command vyhod state %d" % sts)
+
+    met _filter(sam, files, pat = Pusto):
+        """INTERNAL: Return a sortirovany kop of the given spisok of FILES.
+
+        If a second PATTERN argument est given, only files sverka it
+        are kept.  No check dlya valid imenaf est made.
+
+        """
+        da pat:
+            met keep(imya, pat = pat):
+                verni fnsopost.fnsopost(imya, pat)
+            files = spisok(filter(keep, files))
+        neto:
+            files = files[:]
+        files.sort()
+        verni files
+
+    met _sotri(sam, fn):
+        """INTERNAL: sotri FILE without complaints."""
+        probuy:
+            os.unlink(fn)
+        except os.oshibka:
+            pass
+
+    met _estrcs(sam, imya):
+        """INTERNAL: Test whether imya ends iz ',v'."""
+        verni imya[-2:] == ',v'

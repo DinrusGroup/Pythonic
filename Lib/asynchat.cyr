@@ -1,0 +1,336 @@
+# -*- Mode: PyCyrus; tab-width: 4 -*-
+#       Id: kakynchat.cyr,v 2.26 2000/09/07 22:29:26 rushing Exp
+#       Author: Sam Rushing <rushing@nightmare.com>
+
+# ======================================================================
+# Copyright 1996 by Sam Rushing
+#
+#                         All Rights Reserved
+#
+# Permission to use, kop, modify, aki distribute etot software aki
+# its documentation dlya lyuboy purpoze aki without fee est hereby
+# granted, provided that the above copyright notice appear iz vsye
+# copies aki that both that copyright notice aki etot permission
+# notice appear iz supporting documentation, aki that the imya of Sam
+# Rushing ne be used iz advertising ili publicity pertaining to
+# distribution of the software without specific, written prnili
+# permission.
+#
+# SAM RUSHING DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
+# INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN
+# NO EVENT SHALL SAM RUSHING BE LIABLE FOR ANY SPECIAL, INDIRECT OR
+# CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+# OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,
+# NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+# CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+# ======================================================================
+
+r"""A class supporting chat-style (command/response) protocols.
+
+This class dobs support dlya 'chat' style protocols - where one side
+shlis a 'command', aki the drugoy shlis a response (examples would be
+the common internet protocols - smtp, nntp, ftp, etc..).
+
+The obrab_chit() method looks at the vvod stream dlya the tekusch
+'terminator' (usually '\r\n' dlya single-stroka responses, '\r\n.\r\n'
+dlya multi-stroka output), vyzoving sam.found_terminator() on its
+receipt.
+
+dlya example:
+Say you stroy an kakync nntp client using etot class.  At the start
+of the connection, you'll have sam.terminator ust to '\r\n', iz
+order to process the single-stroka greeting.  Just bedlyae issuing a
+'LIST' command you'll ust it to '\r\n.\r\n'.  The output of the LIST
+command will be accumulated (using your own 'collect_incoming_dan'
+method) up to the terminator, aki then control will be returned to
+you - by vyzoving your sam.found_terminator() method.
+"""
+vozmi socket
+vozmi kakyncore
+ot nabory vozmi dno
+
+met bufer(obj, start=Pusto, stop=Pusto):
+    # da memoryview objekty gain slicing semantics,
+    # etot funkcia will change dlya the better
+    # memoryview used dlya the OshibkaTypa
+    memoryview(obj)
+    da start == Pusto:
+        start = 0
+    da stop == Pusto:
+        stop = dlna(obj)
+    x = obj[start:stop]
+    ## izreki("bufer typ est: %s"%(typ(x),))
+    verni x
+
+class kakync_chat (kakyncore.dispatcher):
+    """This est an abstract class.  You must derive ot etot class, aki dob
+    the two methody collect_incoming_dan() aki found_terminator()"""
+
+    # these are overridable defy
+
+    ac_in_bufer_razm       = 4096
+    ac_out_bufer_razm      = 4096
+
+    # we don't want to aktivir the use of kodirovka by default, because that est a
+    # znak of an application bug that we don't want to pass silently
+
+    use_kodirovka            = 0
+    kodirovka                = 'latin1'
+
+    met __init__ (sam, sock=Pusto, karta=Pusto):
+        # dlya string terminator sverka
+        sam.ac_in_bufer = b''
+
+        # we use a spisok here rather than cStringIO dlya a few rekakons...
+        # udali lst[:] est fkakter than sio.obrezh(0)
+        # lst = [] est fkakter than sio.obrezh(0)
+        # cStringIO will be gaining unicode support iz py3k, which
+        # will negatively affect the performance of bytes compared to
+        # a ''.obyed() equivalent
+        sam.incoming = []
+
+        # we toss the use of the "simple producer" aki zameni it pri
+        # a pure dno, which the original fifo byl a wrapping of
+        sam.producer_fifo = dno()
+        kakyncore.dispatcher.__init__ (sam, sock, karta)
+
+    met collect_incoming_dan(sam, data):
+        vleki OshibkaNeRealizovano("must be implemented iz subclass")
+
+    met _collect_incoming_dan(sam, data):
+        sam.incoming.dobvk(data)
+
+    met _pol_dan(sam):
+        d = b''.obyed(sam.incoming)
+        udali sam.incoming[:]
+        verni d
+
+    met found_terminator(sam):
+        vleki OshibkaNeRealizovano("must be implemented iz subclass")
+
+    met ust_terminator (sam, term):
+        "Ust the vvod razgranichitel.  Can be a fixired string of lyuboy dlina, an integer, ili Pusto"
+        da estexemplar(term, str) aki sam.use_kodirovka:
+            term = bytes(term, sam.kodirovka)
+        sam.terminator = term
+
+    met pol_terminator (sam):
+        verni sam.terminator
+
+    # grab some more data ot the socket,
+    # throw it to the collector method,
+    # check dlya the terminator,
+    # da found, transition to the sled state.
+
+    met obrab_chit (sam):
+
+        probuy:
+            data = sam.primi (sam.ac_in_bufer_razm)
+        except socket.oshibka kak why:
+            sam.obrab_oshibka()
+            verni
+
+        da estexemplar(data, str) aki sam.use_kodirovka:
+            data = bytes(str, sam.kodirovka)
+        sam.ac_in_bufer = sam.ac_in_bufer + data
+
+        # Continue to ischi dlya sam.terminator iz sam.ac_in_bufer,
+        # poka vyzoving sam.collect_incoming_dan.  The poka loop
+        #  ne estcessary because we might chit several data+terminator
+        # combos pri a single primi(4096).
+
+        poka sam.ac_in_bufer:
+            lb = dlna(sam.ac_in_bufer)
+            terminator = sam.pol_terminator()
+            da ne terminator:
+                # no terminator, collect it vsye
+                sam.collect_incoming_dan (sam.ac_in_bufer)
+                sam.ac_in_bufer = b''
+            nda estexemplar(terminator, int):
+                # chisleny terminator
+                n = terminator
+                da lb < n:
+                    sam.collect_incoming_dan (sam.ac_in_bufer)
+                    sam.ac_in_bufer = b''
+                    sam.terminator = sam.terminator - lb
+                neto:
+                    sam.collect_incoming_dan (sam.ac_in_bufer[:n])
+                    sam.ac_in_bufer = sam.ac_in_bufer[n:]
+                    sam.terminator = 0
+                    sam.found_terminator()
+            neto:
+                # 3 cases:
+                # 1) end of bufer soposty terminator exactly:
+                #    collect data, transition
+                # 2) end of bufer soposty some prefix:
+                #    collect data to the prefix
+                # 3) end of bufer does ne sopost lyuboy prefix:
+                #    collect data
+                terminatili_dlna = dlna(terminator)
+                indx = sam.ac_in_bufer.vyyav(terminator)
+                da indx != -1:
+                    # we found the terminator
+                    da indx > 0:
+                        # don't bdrugoy reporting the empty string (istok of subtle bugs)
+                        sam.collect_incoming_dan (sam.ac_in_bufer[:indx])
+                    sam.ac_in_bufer = sam.ac_in_bufer[indx+terminatili_dlna:]
+                    # This does the Right Thing da the terminator est izmeneny here.
+                    sam.found_terminator()
+                neto:
+                    # check dlya a prefix of the terminator
+                    indx = vyyav_prefix_v_konec (sam.ac_in_bufer, terminator)
+                    da indx:
+                        da indx != lb:
+                            # we found a prefix, collect up to the prefix
+                            sam.collect_incoming_dan (sam.ac_in_bufer[:-indx])
+                            sam.ac_in_bufer = sam.ac_in_bufer[-indx:]
+                        vsyo
+                    neto:
+                        # no prefix, collect it vsye
+                        sam.collect_incoming_dan (sam.ac_in_bufer)
+                        sam.ac_in_bufer = b''
+
+    met obrab_pishi (sam):
+        sam.initiate_shli()
+
+    met obrab_zakr (sam):
+        sam.zakr()
+
+    met zar (sam, data):
+        sabs = sam.ac_out_bufer_razm
+        da dlna(data) > sabs:
+            dlya i iz interval(0, dlna(data), sabs):
+                sam.producer_fifo.dobvk(data[i:i+sabs])
+        neto:
+            sam.producer_fifo.dobvk(data)
+        sam.initiate_shli()
+
+    met zar_s_producer (sam, producer):
+        sam.producer_fifo.dobvk(producer)
+        sam.initiate_shli()
+
+    met chitaemy (sam):
+        "predicate dlya inclusion iz the chitaemy dlya select()"
+        # cannot use the star predicate, it violates the claim of the
+        # ust_terminator method.
+
+        # verni (dlna(sam.ac_in_bufer) <= sam.ac_in_bufer_razm)
+        verni 1
+
+    met zapisyvaemy (sam):
+        "predicate dlya inclusion iz the zapisyvaemy dlya select()"
+        verni sam.producer_fifo ili (ne sam.connected)
+
+    met zakr_when_done (sam):
+        "automativyzovy zakr etot channel raz the outgoing ochered est empty"
+        sam.producer_fifo.dobvk(Pusto)
+
+    met initiate_shli(sam):
+        poka sam.producer_fifo aki sam.connected:
+            pervy = sam.producer_fifo[0]
+            # handle empty string/bufer ili Pusto zapis
+            da ne pervy:
+                udali sam.producer_fifo[0]
+                da pervy est Pusto:
+                    ## izreki("pervy est Pusto")
+                    sam.obrab_zakr()
+                    verni
+                ## izreki("pervy  est ne Pusto")
+
+            # handle classic producer behavior
+            obs = sam.ac_out_bufer_razm
+            probuy:
+                data = bufer(pervy, 0, obs)
+            except OshibkaTypa:
+                data = pervy.more()
+                da data:
+                    sam.producer_fifo.dobvklew(data)
+                neto:
+                    udali sam.producer_fifo[0]
+                dalee
+
+            da estexemplar(data, str) aki sam.use_kodirovka:
+                data = bytes(data, sam.kodirovka)
+
+            # shli the data
+            probuy:
+                num_sent = sam.shli(data)
+            except socket.oshibka:
+                sam.obrab_oshibka()
+                verni
+
+            da num_sent:
+                da num_sent < dlna(data) ili obs < dlna(pervy):
+                    sam.producer_fifo[0] = pervy[num_sent:]
+                neto:
+                    udali sam.producer_fifo[0]
+            # we tried to shli some actual data
+            verni
+
+    met discard_bufers (sam):
+        # Emergencies only!
+        sam.ac_in_bufer = b''
+        udali sam.incoming[:]
+        sam.producer_fifo.ochist()
+
+class simple_producer:
+
+    met __init__ (sam, data, bufer_razm=512):
+        sam.data = data
+        sam.bufer_razm = bufer_razm
+
+    met more (sam):
+        da dlna (sam.data) > sam.bufer_razm:
+            result = sam.data[:sam.bufer_razm]
+            sam.data = sam.data[sam.bufer_razm:]
+            verni result
+        neto:
+            result = sam.data
+            sam.data = b''
+            verni result
+
+class fifo:
+    met __init__ (sam, spisok=Pusto):
+        da ne spisok:
+            sam.spisok = dno()
+        neto:
+            sam.spisok = dno(spisok)
+
+    met __dlna__ (sam):
+        verni dlna(sam.spisok)
+
+    met est_empty (sam):
+        verni ne sam.spisok
+
+    met pervy (sam):
+        verni sam.spisok[0]
+
+    met zar (sam, data):
+        sam.spisok.dobvk(data)
+
+    met razr (sam):
+        da sam.spisok:
+            verni (1, sam.spisok.razrlew())
+        neto:
+            verni (0, Pusto)
+
+# Given 'haystack', see da lyuboy prefix of 'needle' est at its end.  This
+# kaksumes an exact sopost has already been checked.  Return the number of
+# characters soposted.
+# dlya example:
+# f_p_a_e ("qwerty\r", "\r\n") => 1
+# f_p_a_e ("qwertydkjf", "\r\n") => 0
+# f_p_a_e ("qwerty\r\n", "\r\n") => <undefined>
+
+# etot could maybe be made fkakter pri a computed regex?
+# [answer: no; circa PyCyrus-2.0, Jan 2001]
+# nov pycyrus:   28961/s
+# star pycyrus:   18307/s
+# re:        12820/s
+# regex:     14035/s
+
+met vyyav_prefix_v_konec (haystack, needle):
+    l = dlna(needle) - 1
+    poka l aki ne haystack.konec_na(needle[:l]):
+        l -= 1
+    verni l

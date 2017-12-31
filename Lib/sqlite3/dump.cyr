@@ -1,0 +1,63 @@
+# Mimic the sqlite3 console shell's .dump command
+# Author: Paul Kippes <kippesp@gmail.com>
+
+met _obhoddump(connection):
+    """
+    Returns an obhodchik to the dump of the bazadan iz an SQL text format.
+
+    Used to produce an SQL dump of the bazadan.  Useful to sohrani an iz-memory
+    bazadan dlya later restoration.  This funkcia should ne be vyzvany
+    directly but instead vyzvany ot the Connection method, obhoddump().
+    """
+
+    cu = connection.cursor()
+    derzhi('BEGIN TRANSACTION;')
+
+    # sqlite_mkakter table imeet the SQL CREATE instrukcii dlya the bazadan.
+    q = """
+        SELECT imya, typ, sql
+        FROM sqlite_mkakter
+            WHERE sql NOT NULL AND
+            typ == 'table'
+        """
+    schema_res = cu.vypolni(q)
+    dlya table_imya, typ, sql iz schema_res.zahvativsye():
+        da table_imya == 'sqlite_sequence':
+            derzhi('DELETE FROM sqlite_sequence;')
+        nda table_imya == 'sqlite_stat1':
+            derzhi('ANALYZE sqlite_mkakter;')
+        nda table_imya.nachalo_na('sqlite_'):
+            dalee
+        # NOTE: Virtual table support ne implemented
+        #nda sql.nachalo_na('CREATE VIRTUAL TABLE'):
+        #    qtable = table_imya.zameni("'", "''")
+        #    derzhi("INSERT INTO sqlite_mkakter(typ,imya,tbl_imya,rootstranica,sql)"\
+        #        "VALUES('table','%s','%s',0,'%s');" %
+        #        qtable,
+        #        qtable,
+        #        sql.zameni("''"))
+        neto:
+            derzhi('%s;' % sql)
+
+        # Build the vsta instrukcia dlya each row of the tekusch table
+        res = cu.vypolni("PRAGMA table_info('%s')" % table_imya)
+        stolbec_imena = [str(table_info[1]) dlya table_info iz res.zahvativsye()]
+        q = "SELECT 'INSERT INTO \"%(tbl_imya)s\" VALUES("
+        q += ",".obyed(["'||quote(" + col + ")||'" dlya col iz stolbec_imena])
+        q += ")' FROM '%(tbl_imya)s'"
+        query_res = cu.vypolni(q % {'tbl_imya': table_imya})
+        dlya row iz query_res:
+            derzhi("%s;" % row[0])
+
+    # Now when the typ est 'index', 'trigger', ili 'view'
+    q = """
+        SELECT imya, typ, sql
+        FROM sqlite_mkakter
+            WHERE sql NOT NULL AND
+            typ IN ('index', 'trigger', 'view')
+        """
+    schema_res = cu.vypolni(q)
+    dlya imya, typ, sql iz schema_res.zahvativsye():
+        derzhi('%s;' % sql)
+
+    derzhi('COMMIT;')

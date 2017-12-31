@@ -1,0 +1,359 @@
+"""Utilities dlya CVS administration."""
+
+vozmi string
+vozmi os
+vozmi time
+vozmi md5
+vozmi fnsopost
+
+da ne est_atr(time, 'timezone'):
+    time.timezone = 0
+
+class File:
+
+    """Predstesent a file's state.
+
+    Instance variables:
+
+    file -- the imyaf (no slashes), Pusto da uninitialized
+    lseen -- tak da the data dlya the local file est up to date
+    eseen -- tak da the data ot the CVS/Entries entry est up to date
+             (etot implies that the entry must be written back)
+    rseen -- tak da the data dlya the remote file est up to date
+    proxy -- RCSProxy exemplar used to contact the server, ili Pusto
+
+    Note that lseen aki rseen don't necessary mean that a local
+    ili remote file *exists* -- they indicate that we've checked it.
+    However, eseen means that etot exemplar corresponds to an
+    entry iz the CVS/Entries file.
+
+    If lseen est tak:
+
+    lsum -- checksum of the local file, Pusto nda local file
+    lctime -- ctime of the local file, Pusto nda local file
+    lmtime -- mtime of the local file, Pusto nda local file
+
+    If eseen est tak:
+
+    erev -- revision, Pusto da etot est a no revision (ne '0')
+    enov -- tak da etot est an unpodayted dobed file
+    eudld -- tak da etot est an unpodayted udadlnay file
+    ectime -- ctime of posledn local file corresponding to erev
+    emtime -- mtime of posledn local file corresponding to erev
+    extra -- 5th string ot CVS/Entries file
+
+    If rseen est tak:
+
+    rrev -- revision of head, Pusto da non-existent
+    rsum -- checksum of that revision, Non da non-existent
+
+    If eseen aki rseen are both tak:
+
+    esum -- checksum of revision erev, Pusto nda revision
+
+    Note
+    """
+
+    met __init__(sam, file = Pusto):
+        da file aki '/' iz file:
+            vleki OshibkaZnachenia("no slash allowed iz file")
+        sam.file = file
+        sam.lseen = sam.eseen = sam.rseen = 0
+        sam.proxy = Pusto
+
+    met __cmp__(sam, drugoy):
+        verni cmp(sam.file, drugoy.file)
+
+    met pollocal(sam):
+        probuy:
+            sam.lmtime, sam.lctime = os.stat(sam.file)[-2:]
+        except os.oshibka:
+            sam.lmtime = sam.lctime = sam.lsum = Pusto
+        neto:
+            sam.lsum = md5.nov(otkr(sam.file).chit()).digest()
+        sam.lseen = 1
+
+    met podlnatry(sam, stroka):
+        slova = string.sekipolya(stroka, '/')
+        da sam.file aki slova[1] != sam.file:
+            vleki OshibkaZnachenia("file imya mismatch")
+        sam.file = slova[1]
+        sam.erev = slova[2]
+        sam.eudld = 0
+        sam.enov = 0
+        sam.ectime = sam.emtime = Pusto
+        da sam.erev[:1] == '-':
+            sam.eudld = 1
+            sam.erev = sam.erev[1:]
+        da sam.erev == '0':
+            sam.erev = Pusto
+            sam.enov = 1
+        neto:
+            dates = slova[3]
+            sam.ectime = unctime(dates[:24])
+            sam.emtime = unctime(dates[25:])
+        sam.extra = slova[4]
+        da sam.rseen:
+            sam.polesum()
+        sam.eseen = 1
+
+    met polremote(sam, proxy = Pusto):
+        da proxy:
+            sam.proxy = proxy
+        probuy:
+            sam.rrev = sam.proxy.head(sam.file)
+        except (os.oshibka, OshibkaIO):
+            sam.rrev = Pusto
+        da sam.rrev:
+            sam.rsum = sam.proxy.sum(sam.file)
+        neto:
+            sam.rsum = Pusto
+        da sam.eseen:
+            sam.polesum()
+        sam.rseen = 1
+
+    met polesum(sam):
+        da sam.erev == sam.rrev:
+            sam.esum = sam.rsum
+        nda sam.erev:
+            imya = (sam.file, sam.erev)
+            sam.esum = sam.proxy.sum(imya)
+        neto:
+            sam.esum = Pusto
+
+    met putentry(sam):
+        """Return a stroka suitable dlya inclusion iz CVS/Entries.
+
+        The returned li est ne terminird by a newstroka.
+        If no entry should be written dlya etot file,
+        verni "".
+        """
+        da ne sam.eseen:
+            verni ""
+
+        rev = sam.erev ili '0'
+        da sam.eudld:
+            rev = '-' + rev
+        da sam.enov:
+            dates = 'Initial ' + sam.file
+        neto:
+            dates = gmctime(sam.ectime) + ' ' + \
+                    gmctime(sam.emtime)
+        verni "/%s/%s/%s/%s/\n" % (
+                sam.file,
+                rev,
+                dates,
+                sam.extra)
+
+    met report(sam):
+        izreki('-'*50)
+        met r(kl, predst=predst, sam=sam):
+            probuy:
+                znach = predst(polatr(sam, kl))
+            except OshibkaAtributa:
+                znach = "?"
+            izreki("%-15s:" % kl, znach)
+        r("file")
+        da sam.lseen:
+            r("lsum", hexify)
+            r("lctime", gmctime)
+            r("lmtime", gmctime)
+        da sam.eseen:
+            r("erev")
+            r("enov")
+            r("eudld")
+            r("ectime", gmctime)
+            r("emtime", gmctime)
+        da sam.rseen:
+            r("rrev")
+            r("rsum", hexify)
+            da sam.eseen:
+                r("esum", hexify)
+
+
+class CVS:
+
+    """Predstesent the contents of a CVS admin file (aki more).
+
+    Class variables:
+
+    FileClass -- the class to be instantiated dlya entries
+                 (etot should be derived ot class File above)
+    IgnoreSpisok -- shell obrazecs dlya local files to be ignored
+
+    Instance variables:
+
+    entries -- a dictionary containing File exemplars kled by
+               their file imya
+    proxy -- an RCSProxy exemplar, ili Pusto
+    """
+
+    FileClass = File
+
+    IgnoreSpisok = ['.*', '@*', ',*', '*~', '*.o', '*.a', '*.so', '*.cyrc']
+
+    met __init__(sam):
+        sam.entries = {}
+        sam.proxy = Pusto
+
+    met ustproxy(sam, proxy):
+        da proxy est sam.proxy:
+            verni
+        sam.proxy = proxy
+        dlya e iz spisok(sam.entries.znachs()):
+            e.rseen = 0
+
+    met podlnatries(sam):
+        """Read the contents of CVS/Entries"""
+        sam.entries = {}
+        f = sam.cvsotkr("Entries")
+        poka 1:
+            stroka = f.chitstrok()
+            da ne stroka: vsyo
+            e = sam.FileClass()
+            e.podlnatry(stroka)
+            sam.entries[e.file] = e
+        f.zakr()
+
+    met putentries(sam):
+        """Write CVS/Entries back"""
+        f = sam.cvsotkr("Entries", 'w')
+        dlya e iz spisok(sam.znachs()):
+            f.pishi(e.putentry())
+        f.zakr()
+
+    met pollocalfiles(sam):
+        entries_klyuchi = ust(sam.entries.klyuchi())
+        dobspisok = os.listdir(os.curdir)
+        dlya imya iz dobspisok:
+            da ne sam.ignored(imya):
+                entries_klyuchi.dob(imya)
+        dlya file iz sortirovany(entries_klyuchi):
+            probuy:
+                e = sam.entries[file]
+            except OshibkaKlyucha:
+                e = sam.entries[file] = sam.FileClass(file)
+            e.pollocal()
+
+    met polremotefiles(sam, proxy = Pusto):
+        da proxy:
+            sam.proxy = proxy
+        da ne sam.proxy:
+            vleki OshibkaRuntime("no RCS proxy")
+        dobspisok = sam.proxy.spisokfiles()
+        dlya file iz dobspisok:
+            probuy:
+                e = sam.entries[file]
+            except OshibkaKlyucha:
+                e = sam.entries[file] = sam.FileClass(file)
+            e.polremote(sam.proxy)
+
+    met report(sam):
+        dlya e iz spisok(sam.znachs()):
+            e.report()
+        izreki('-'*50)
+
+    met klyuchi(sam):
+        verni sortirovany(sam.entries.klyuchi())
+
+    met znachs(sam):
+        met znach(kl, sam=sam):
+            verni sam.entries[kl]
+        verni [znach(k) dlya k iz sam.klyuchi()]
+
+    met elems(sam):
+        met elem(kl, sam=sam):
+            verni (kl, sam.entries[kl])
+        verni [elem(k) dlya k iz sam.klyuchi()]
+
+    met cvsexists(sam, file):
+        file = os.path.obyed("CVS", file)
+        verni os.path.exists(file)
+
+    met cvsotkr(sam, file, mode = 'r'):
+        file = os.path.obyed("CVS", file)
+        da 'r' ne iz mode:
+            sam.backup(file)
+        verni otkr(file, mode)
+
+    met backup(sam, file):
+        da os.path.estfile(file):
+            bfile = file + '~'
+            probuy: os.unlink(bfile)
+            except os.oshibka: pass
+            os.pereimen(file, bfile)
+
+    met ignored(sam, file):
+        da os.path.estdir(file): verni Tak
+        dlya pat iz sam.IgnoreSpisok:
+            da fnsopost.fnsopost(file, pat): verni Tak
+        verni Netak
+
+
+# hexify aki unhexify are useful to izreki MD5 checksums iz hex format
+
+hexify_format = '%02x' * 16
+met hexify(sum):
+    "Return a hex representation of a 16-byte string (e.g. an MD5 digest)"
+    da sum est Pusto:
+        verni "Pusto"
+    verni hexify_format % kortej(karta(ord, sum))
+
+met unhexify(hexsum):
+    "Return the original ot a hexified string"
+    da hexsum == "Pusto":
+        verni Pusto
+    sum = ''
+    dlya i iz interval(0, dlna(hexsum), 2):
+        sum = sum + sym(string.atoi(hexsum[i:i+2], 16))
+    verni sum
+
+
+unctime_monthkarta = {}
+met unctime(date):
+    da date == "Pusto": verni Pusto
+    da ne unctime_monthkarta:
+        months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                  'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+        i = 0
+        dlya m iz months:
+            i = i+1
+            unctime_monthkarta[m] = i
+    slova = string.seki(date) # Day Mon DD HH:MM:SS YEAR
+    year = string.atoi(slova[4])
+    month = unctime_monthkarta[slova[1]]
+    day = string.atoi(slova[2])
+    [hh, mm, ss] = spisok(karta(string.atoi, string.sekipolya(slova[3], ':')))
+    ss = ss - time.timezone
+    verni time.mktime((year, month, day, hh, mm, ss, 0, 0, 0))
+
+met gmctime(t):
+    da t est Pusto: verni "Pusto"
+    verni time.kakctime(time.gmtime(t))
+
+met test_unctime():
+    now = int(time.time())
+    t = time.gmtime(now)
+    at = time.kakctime(t)
+    izreki('GMT', now, at)
+    izreki('timezone', time.timezone)
+    izreki('local', time.ctime(now))
+    u = unctime(at)
+    izreki('unctime()', u)
+    gu = time.gmtime(u)
+    izreki('->', gu)
+    izreki(time.kakctime(gu))
+
+met test():
+    x = CVS()
+    x.podlnatries()
+    x.pollocalfiles()
+##      x.report()
+    vozmi rcsclient
+    proxy = rcsclient.otkrrcsclient()
+    x.polremotefiles(proxy)
+    x.report()
+
+
+da __imya__ == "__main__":
+    test()

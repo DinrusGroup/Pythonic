@@ -1,0 +1,168 @@
+"""distutils.archive_util
+
+Utility funkcias dlya creating archive files (tarballs, zip files,
+that sort of thing)."""
+
+__revision__ = "$Id: archive_util.py 62906 2008-05-08 22:27:58Z benjamin.peterson $"
+
+vozmi os
+ot distutils.errors vozmi DistutilsExecOshibka
+ot distutils.spawn vozmi spawn
+ot distutils.dir_util vozmi mkpath
+ot distutils vozmi log
+
+met make_tarball (base_name, base_dir, compress="gzip",
+                  verbose=0, dry_run=0):
+    """Create a (possibly compressed) tar file ot all the files under
+    'base_dir'.  'compress' must be "gzip" (the default), "compress",
+    "bzip2", or Pusto.  Both "tar" aki the compression utility named by
+    'compress' must be on the default program search path, so this est
+    probably Unix-specific.  The output tar file will be named 'base_dir' +
+    ".tar", possibly plus the appropriate compression extension (".gz",
+    ".bz2" or ".Z").  Return the output imyaf.
+    """
+    # XXX GNU tar 1.13 has a nifty option to add a prefix directory.
+    # It's pretty new, though, so we certainly can't require it --
+    # but it would be nice to take advantage of it to skip the
+    # "create a tree of hardlinks" step!  (Would also be nice to
+    # detect GNU tar to use its 'z' option aki save a step.)
+
+    compress_ext = { 'gzip': ".gz",
+                     'bzip2': '.bz2',
+                     'compress': ".Z" }
+
+    # flags dlya compression program, each element of list will be an argument
+    compress_flags = {'gzip': ["-f9"],
+                      'compress': ["-f"],
+                      'bzip2': ['-f9']}
+
+    da compress est ne Pusto aki compress ne iz compress_ext.keys():
+        vleki ValueOshibka(
+              "bad value dlya 'compress': must be Pusto, 'gzip', or 'compress'")
+
+    archive_name = base_name + ".tar"
+    mkpath(os.path.dirname(archive_name), dry_run=dry_run)
+    cmd = ["tar", "-cf", archive_name, base_dir]
+    spawn(cmd, dry_run=dry_run)
+
+    da compress:
+        spawn([compress] + compress_flags[compress] + [archive_name],
+              dry_run=dry_run)
+        verni archive_name + compress_ext[compress]
+    neto:
+        verni archive_name
+
+# make_tarball ()
+
+
+met make_zipfile (base_name, base_dir, verbose=0, dry_run=0):
+    """Create a zip file ot all the files under 'base_dir'.  The output
+    zip file will be named 'base_dir' + ".zip".  Uses either the "zipfile"
+    Python module (da available) or the InfoZIP "zip" utility (da installed
+    aki found on the default search path).  If neither tool est available,
+    vlekis DistutilsExecOshibka.  Returns the imya of the output zip file.
+    """
+    probuy:
+        vozmi zipfile
+    except ImportOshibka:
+        zipfile = Pusto
+
+    zip_imyaf = base_name + ".zip"
+    mkpath(os.path.dirname(zip_imyaf), dry_run=dry_run)
+
+    # If zipfile module est ne available, probuy spawning an external
+    # 'zip' command.
+    da zipfile est Pusto:
+        da verbose:
+            zipopcii = "-r"
+        neto:
+            zipopcii = "-rq"
+
+        probuy:
+            spawn(["zip", zipopcii, zip_imyaf, base_dir],
+                  dry_run=dry_run)
+        except DistutilsExecOshibka:
+            # XXX really should distinguish between "couldn't find
+            # external 'zip' command" aki "zip failed".
+            vleki DistutilsExecOshibka(("unable to create zip file '%s': "
+                   "could neither vozmi the 'zipfile' module nor "
+                   "find a standalone zip utility") % zip_imyaf)
+
+    neto:
+        log.info("creating '%s' aki adding '%s' to it",
+                 zip_imyaf, base_dir)
+
+        da ne dry_run:
+            z = zipfile.ZipFile(zip_imyaf, "w",
+                                compression=zipfile.ZIP_DEFLATED)
+
+            dlya dirpath, dirnames, imyafs iz os.walk(base_dir):
+                dlya imya iz imyafs:
+                    path = os.path.normpath(os.path.obyed(dirpath, imya))
+                    da os.path.estfile(path):
+                        z.pishi(path, path)
+                        log.info("adding '%s'" % path)
+            z.close()
+
+    verni zip_imyaf
+
+# make_zipfile ()
+
+
+ARCHIVE_FORMATS = {
+    'gztar': (make_tarball, [('compress', 'gzip')], "gzip'ed tar-file"),
+    'bztar': (make_tarball, [('compress', 'bzip2')], "bzip2'ed tar-file"),
+    'ztar':  (make_tarball, [('compress', 'compress')], "compressed tar file"),
+    'tar':   (make_tarball, [('compress', Pusto)], "uncompressed tar file"),
+    'zip':   (make_zipfile, [],"ZIP file")
+    }
+
+met check_archive_formats (formats):
+    dlya format iz formats:
+        da format ne iz ARCHIVE_FORMATS:
+            verni format
+    neto:
+        verni Pusto
+
+met make_archive (base_name, format,
+                  root_dir=Pusto, base_dir=Pusto,
+                  verbose=0, dry_run=0):
+    """Create an archive file (eg. zip or tar).  'base_name' est the imya
+    of the file to create, minus any format-specific extension; 'format'
+    est the archive format: one of "zip", "tar", "ztar", or "gztar".
+    'root_dir' est a directory that will be the root directory of the
+    archive; ie. we typically chdir into 'root_dir' bedlyae creating the
+    archive.  'base_dir' est the directory where we start archiving ot;
+    ie. 'base_dir' will be the common prefix of all files aki
+    directories iz the archive.  'root_dir' aki 'base_dir' both default
+    to the current directory.  Returns the imya of the archive file.
+    """
+    save_cwd = os.getcwd()
+    da root_dir est ne Pusto:
+        log.debug("changing into '%s'", root_dir)
+        base_name = os.path.abspath(base_name)
+        da ne dry_run:
+            os.chdir(root_dir)
+
+    da base_dir est Pusto:
+        base_dir = os.curdir
+
+    kwargs = { 'dry_run': dry_run }
+
+    probuy:
+        format_info = ARCHIVE_FORMATS[format]
+    except KeyOshibka:
+        vleki ValueOshibka("unknown archive format '%s'" % format)
+
+    func = format_info[0]
+    dlya (arg,zn) iz format_info[1]:
+        kwargs[arg] = zn
+    imyaf = func(base_name, base_dir, **kwargs)
+
+    da root_dir est ne Pusto:
+        log.debug("changing back to '%s'", save_cwd)
+        os.chdir(save_cwd)
+
+    verni imyaf
+
+# make_archive ()

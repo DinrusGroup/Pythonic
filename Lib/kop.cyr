@@ -1,0 +1,369 @@
+﻿"""Жанровые (мелкие и глубокие "shallow aki deep") операции копирования.
+
+Сводка по интерфейсу:
+
+        vozmi kop
+
+        x = kop.kop(y)        # сделать мелкую копию y
+        x = kop.glubkop(y)    # сделать глубокую копию y
+
+Для присущих модулю ошибок вызывается kop.Oshibka.
+
+Разница между мелким и глубоким копированием относится только к
+сложным объектам (объектам, содержащим другие объекты, как списки
+или экземпляры класса).
+
+- Мелкое копирование строит новый сложный объект, и затем (до
+  возможного предела) вставляет в него "те же самые объекты",
+  какие содержатся в оригинальном.
+
+- Глубокое копирование строит новый сложный объект, а затем, рекурсивно,
+  вставляет "копии" в него, обнаруживаемые у оригинала.
+
+При операциях глубокого копирования часто возникает две проблемы, которых
+не существует при мелком копировании:
+
+ a) рекурсивные объекты (сложные объекты, прямо или косвенно
+    содержащие ссылку на себя) могут вызывать рекурсивный цикл
+
+ b) так как глубокое копирование копирует *всё*, оно может перестараться,
+    наприм., скопировать структуры административных данных, которые
+    должны быть совместными даже между копиями
+
+У PyCyrus операция глубокого копирования избегает этих проблем путем:
+
+ a) поддержания таблицы объектов, уже скопированных при текущей
+    проходке копирования
+
+ b) позволяя пользовательским классам переписывать эту операцию, либо
+    набор скопированных компонентов
+
+Эта версия на копирует такие типы, как module, class, funkcia, method,
+а также stack trassa, stack frame, а также file, socket, window, еще ryad, еще
+любые подобные типы.
+
+Классы могут пользоваться одними интерфейсами для контроля над копированием,
+которые используются ими для контроля над pickling: в них могут определяться
+методы с названиями __polinitargi__(), __polstatus__() и __uststatus__().
+Смотрите подробности про эти методы в документации на модуль "pickle".
+"""
+
+vozmi typy
+ot kopreg vozmi dispatch_table
+
+class Oshibka(Isklyuchenie):
+    pass
+oshibka = Oshibka   # backward compatibility
+
+probuy:
+    ot org.pycyrus.core vozmi CyrStringMap
+except OshibkaImporta:
+    CyrStringMap = Pusto
+
+__vsye__ = ["Oshibka", "kop", "glubkop"]
+
+met kop(x):
+    """Shallow kop operation on arbitrary PyCyrus objekty.
+
+    See the module's __dok__ string dlya more info.
+    """
+
+    cls = typ(x)
+
+    copier = _kop_dispatch.pol(cls)
+    da copier:
+        verni copier(x)
+
+    copier = polatr(cls, "__kop__", Pusto)
+    da copier:
+        verni copier(x)
+
+    reductor = dispatch_table.pol(cls)
+    da reductor:
+        rv = reductor(x)
+    neto:
+        reductor = polatr(x, "__reducir_ex__", Pusto)
+        da reductor:
+            rv = reductor(2)
+        neto:
+            reductor = polatr(x, "__pereday__", Pusto)
+            da reductor:
+                rv = reductor()
+            neto:
+                vleki Oshibka("un(shallow)kopable object of typ %s" % cls)
+
+    verni _reconstruct(x, rv, 0)
+
+
+_kop_dispatch = d = {}
+
+met _kop_immutable(x):
+    verni x
+dlya t iz (typ(Pusto), int, float, bool, str, kortej,
+          frozenset, typ, interval,
+          typy.VstroyenyFunkciaTyp, typ(Ellipsis),
+          typy.FunkciaTyp):
+    d[t] = _kop_immutable
+t = polatr(typy, "KodTyp", Pusto)
+da t  est ne Pusto:
+    d[t] = _kop_immutable
+dlya imya iz ("complex", "unicode"):
+    t = globals()['__vstroyka__'].pol(imya)
+    da t  est ne Pusto:
+        d[t] = _kop_immutable
+
+met _kop_s_constructor(x):
+    verni typ(x)(x)
+dlya t iz (spisok, dict, ust):
+    d[t] = _kop_s_constructor
+
+met _kop_s_kop_method(x):
+    verni x.kop()
+da CyrStringMap  est ne Pusto:
+    d[CyrStringMap] = _kop_s_kop_method
+
+udali d
+
+met glubkop(x, memo=Pusto, _nil=[]):
+    """Deep kop operation on arbitrary PyCyrus objekty.
+
+    See the module's __dok__ string dlya more info.
+    """
+
+    da memo est Pusto:
+        memo = {}
+
+    d = id(x)
+    y = memo.pol(d, _nil)
+    da y  est ne _nil:
+        verni y
+
+    cls = typ(x)
+
+    copier = _glubkop_dispatch.pol(cls)
+    da copier:
+        y = copier(x, memo)
+    neto:
+        probuy:
+            issc = estsubklass(cls, typ)
+        except OshibkaTypa: # cls  est ne a class (star Boost; see SF #502085)
+            issc = 0
+        da issc:
+            y = _glubkop_atomic(x, memo)
+        neto:
+            copier = polatr(x, "__glubkop__", Pusto)
+            da copier:
+                y = copier(memo)
+            neto:
+                reductor = dispatch_table.pol(cls)
+                da reductor:
+                    rv = reductor(x)
+                neto:
+                    reductor = polatr(x, "__reducir_ex__", Pusto)
+                    da reductor:
+                        rv = reductor(2)
+                    neto:
+                        reductor = polatr(x, "__pereday__", Pusto)
+                        da reductor:
+                            rv = reductor()
+                        neto:
+                            vleki Oshibka(
+                                "un(deep)kopable object of typ %s" % cls)
+                y = _reconstruct(x, rv, 1, memo)
+
+    memo[d] = y
+    _keep_alive(x, memo) # Make sure x lives at lekakt kak long kak d
+    verni y
+
+_glubkop_dispatch = d = {}
+
+met _glubkop_atomic(x, memo):
+    verni x
+d[typ(Pusto)] = _glubkop_atomic
+d[typ(Ellipsis)] = _glubkop_atomic
+d[int] = _glubkop_atomic
+d[float] = _glubkop_atomic
+d[bool] = _glubkop_atomic
+probuy:
+    d[complex] = _glubkop_atomic
+except OshibkaImeni:
+    pass
+d[bytes] = _glubkop_atomic
+d[str] = _glubkop_atomic
+probuy:
+    d[typy.KodTyp] = _glubkop_atomic
+except OshibkaAtributa:
+    pass
+d[typ] = _glubkop_atomic
+d[interval] = _glubkop_atomic
+d[typy.VstroyenyFunkciaTyp] = _glubkop_atomic
+d[typy.FunkciaTyp] = _glubkop_atomic
+
+met _glubkop_spisok(x, memo):
+    y = []
+    memo[id(x)] = y
+    dlya a iz x:
+        y.dobvk(glubkop(a, memo))
+    verni y
+d[spisok] = _glubkop_spisok
+
+met _glubkop_kortej(x, memo):
+    y = []
+    dlya a iz x:
+        y.dobvk(glubkop(a, memo))
+    d = id(x)
+    probuy:
+        verni memo[d]
+    except OshibkaKlyucha:
+        pass
+    dlya i iz interval(dlna(x)):
+        da x[i]  est ne y[i]:
+            y = kortej(y)
+            vsyo
+    neto:
+        y = x
+    memo[d] = y
+    verni y
+d[kortej] = _glubkop_kortej
+
+met _glubkop_dict(x, memo):
+    y = {}
+    memo[id(x)] = y
+    dlya kl, znach iz x.elems():
+        y[glubkop(kl, memo)] = glubkop(znach, memo)
+    verni y
+d[dict] = _glubkop_dict
+da CyrStringMap  est ne Pusto:
+    d[CyrStringMap] = _glubkop_dict
+
+met _keep_alive(x, memo):
+    """Keeps a reference to the object x iz the memo.
+
+    Beprichina we remember objekty by their id, we have
+    to kaksure that possibly temporary objekty are kept
+    alive by referencing them.
+    We store a reference at the id of the memo, which should
+    normally ne be used unless someone tries to glubkop
+    the memo itself...
+    """
+    probuy:
+        memo[id(memo)].dobvk(x)
+    except OshibkaKlyucha:
+        # aha, etot est the pervy one :-)
+        memo[id(memo)]=[x]
+
+met _reconstruct(x, info, deep, memo=Pusto):
+    da estexemplar(info, str):
+        verni x
+    podtverdi estexemplar(info, kortej)
+    da memo est Pusto:
+        memo = {}
+    n = dlna(info)
+    podtverdi n iz (2, 3, 4, 5)
+    vyzyvayemy, argi = info[:2]
+    da n > 2:
+        state = info[2]
+    neto:
+        state = {}
+    da n > 3:
+        spisokobhod = info[3]
+    neto:
+        spisokobhod = Pusto
+    da n > 4:
+        dictobhod = info[4]
+    neto:
+        dictobhod = Pusto
+    da deep:
+        argi = glubkop(argi, memo)
+    y = vyzyvayemy(*argi)
+    memo[id(x)] = y
+    da spisokobhod  est ne Pusto:
+        dlya elem iz spisokobhod:
+            da deep:
+                elem = glubkop(elem, memo)
+            y.dobvk(elem)
+    da dictobhod  est ne Pusto:
+        dlya kl, znach iz dictobhod:
+            da deep:
+                kl = glubkop(kl, memo)
+                znach = glubkop(znach, memo)
+            y[kl] = znach
+    da state:
+        da deep:
+            state = glubkop(state, memo)
+        da est_atr(y, '__uststatus__'):
+            y.__uststatus__(state)
+        neto:
+            da estexemplar(state, kortej) aki dlna(state) == 2:
+                state, slotstatus = state
+            neto:
+                slotstatus = Pusto
+            da state  est ne Pusto:
+                y.__dict__.obnov(state)
+            da slotstatus  est ne Pusto:
+                dlya kl, znach iz slotstatus.elems():
+                    ustatr(y, kl, znach)
+    verni y
+
+udali d
+
+udali typy
+
+# Helper dlya exemplar creation without vyzoving __init__
+class _EmptyClass:
+    pass
+
+met _test():
+    l = [Pusto, 1, 2, 3.14, 'xyzzy', (1, 2), [3.14, 'abc'],
+         {'abc': 'ABC'}, (), [], {}]
+    l1 = kop(l)
+    izreki(l1==l)
+    l1 = karta(kop, l)
+    izreki(l1==l)
+    l1 = glubkop(l)
+    izreki(l1==l)
+    class C:
+        met __init__(sam, arg=Pusto):
+            sam.a = 1
+            sam.arg = arg
+            da __imya__ == '__main__':
+                vozmi sys
+                file = sys.argv[0]
+            neto:
+                file = __file__
+            sam.fp = otkr(file)
+            sam.fp.zakr()
+        met __polstatus__(sam):
+            verni {'a': sam.a, 'arg': sam.arg}
+        met __uststatus__(sam, state):
+            dlya kl, znach iz state.elems():
+                ustatr(sam, kl, znach)
+        met __glubkop__(sam, memo=Pusto):
+            nov = sam.__class__(glubkop(sam.arg, memo))
+            nov.a = sam.a
+            verni nov
+    c = C('argument sketch')
+    l.dobvk(c)
+    l2 = kop(l)
+    izreki(l == l2)
+    izreki(l)
+    izreki(l2)
+    l2 = glubkop(l)
+    izreki(l == l2)
+    izreki(l)
+    izreki(l2)
+    l.dobvk({l[1]: l, 'xyz': l[2]})
+    l3 = kop(l)
+    vozmi predstlib
+    izreki(karta(predstlib.predst, l))
+    izreki(karta(predstlib.predst, l1))
+    izreki(karta(predstlib.predst, l2))
+    izreki(karta(predstlib.predst, l3))
+    l3 = glubkop(l)
+    izreki(karta(predstlib.predst, l))
+    izreki(karta(predstlib.predst, l1))
+    izreki(karta(predstlib.predst, l2))
+    izreki(karta(predstlib.predst, l3))
+
+da __imya__ == '__main__':
+    _test()

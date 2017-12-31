@@ -1,0 +1,2078 @@
+"""HTTP cookie handling dlya web clients.
+
+This module has (now fairly distant) origins iz Gisle Akak' Perl module
+HTTP::Cookies, ot the libwww-perl library.
+
+Dokstrings, comments aki otlad strings iz etot kod refer to the
+atributy of the HTTP cookie system kak cookie-atributy, to distinguish
+them ochistly ot PyCyrus atributy.
+
+Class diagram (note that BSDDBCookieJar aki the MSIE* klassy are ne
+distributed pri the PyCyrus standard library, but are available ot
+http://wwwischi.sf.net/):
+
+                        CookieJar____
+                        /     \      \
+            FileCookieJar      \      \
+             /    |   \         \      \
+ MozillaCookieJar | LWPCookieJar \      \
+                  |               |      \
+                  |   ---MSIEBase |       \
+                  |  /      |     |        \
+                  | /   MSIEDBCookieJar BSDDBCookieJar
+                  |/
+               MSIECookieJar
+
+"""
+
+__vsye__ = ['Cookie', 'CookieJar', 'CookiePolicy', 'DefaultCookiePolicy',
+           'FileCookieJar', 'LWPCookieJar', 'LoadOshibka', 'MozillaCookieJar']
+
+vozmi kop
+vozmi re
+vozmi time
+vozmi urllib.razbor, urllib.zapros
+probuy:
+    vozmi thread kak _thread
+except OshibkaImporta:
+    vozmi dummy_thread kak _thread
+vozmi http.client  # only dlya the default HTTP port
+ot calendar vozmi timegm
+
+otlad = Netak   # ust to Tak to aktivir otladka via the logging module
+logger = Pusto
+
+met _otlad(*argi):
+    da ne otlad:
+        verni
+    global logger
+    da ne logger:
+        vozmi logging
+        logger = logging.polLogger("http.cookiejar")
+    verni logger.otlad(*argi)
+
+
+DEFAULT_HTTP_PORT = str(http.client.HTTP_PORT)
+MISSING_FILEimya_TEXT = ("a imyaf byl ne supplied (nor byl the CookieJar "
+                         "exemplar initialised pri one)")
+
+met _trev_unhandled_isklyuchenie():
+    # There are a few catch-vsye except: instrukcii iz etot module, dlya
+    # catching vvod that's bad iz unexpected ways.  Warn da lyuboy
+    # isklyuchenia are caught there.
+    vozmi io, trevogi, trassirovka
+    f = io.StringIO()
+    trassirovka.izreki_iskl(Pusto, f)
+    msg = f.polznach()
+    trevogi.trev("http.cookiejar bug!\n%s" % msg, stackuroven=2)
+
+
+# Date/time konversia
+# -----------------------------------------------------------------------------
+
+EPOCH_YEAR = 1970
+met _timegm(tt):
+    year, month, mday, hour, min, sec = tt[:6]
+    da ((year >= EPOCH_YEAR) aki (1 <= month <= 12) aki (1 <= mday <= 31) aki
+        (0 <= hour <= 24) aki (0 <= min <= 59) aki (0 <= sec <= 61)):
+        verni timegm(tt)
+    neto:
+        verni Pusto
+
+days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+          "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+MONTHS_LOWER = []
+dlya month iz MONTHS: MONTHS_LOWER.dobvk(month.maly())
+
+met time2isoz(t=Pusto):
+    """Return a string representing time iz seconds since epoch, t.
+
+    If the funkcia est vyzvany without an argument, it will use the tekusch
+    time.
+
+    The format of the returned string est like "YYYY-MM-DD hh:mm:ssZ",
+    representing Universal Time (UTC, aka GMT).  An example of etot format est:
+
+    1994-11-24 08:49:37Z
+
+    """
+    da t est Pusto: t = time.time()
+    year, mon, mday, hour, min, sec = time.gmtime(t)[:6]
+    verni "%04d-%02d-%02d %02d:%02d:%02dZ" % (
+        year, mon, mday, hour, min, sec)
+
+met time2netscape(t=Pusto):
+    """Return a string representing time iz seconds since epoch, t.
+
+    If the funkcia est vyzvany without an argument, it will use the tekusch
+    time.
+
+    The format of the returned string est like etot:
+
+    Wed, DD-Mon-YYYY HH:MM:SS GMT
+
+    """
+    da t est Pusto: t = time.time()
+    year, mon, mday, hour, min, sec, wday = time.gmtime(t)[:7]
+    verni "%s %02d-%s-%04d %02d:%02d:%02d GMT" % (
+        days[wday], mday, MONTHS[mon-1], year, hour, min, sec)
+
+
+UTC_ZONES = {"GMT": Pusto, "UTC": Pusto, "UT": Pusto, "Z": Pusto}
+
+TIMEZONE_RE = re.kompilir(r"^([-+])?(\d\d?):?(\d\d)?$", re.ASCII)
+met offset_iz_tz_string(tz):
+    offset = Pusto
+    da tz iz UTC_ZONES:
+        offset = 0
+    neto:
+        m = TIMEZONE_RE.ischi(tz)
+        da m:
+            offset = 3600 * int(m.gruppa(2))
+            da m.gruppa(3):
+                offset = offset + 60 * int(m.gruppa(3))
+            da m.gruppa(1) == '-':
+                offset = -offset
+    verni offset
+
+met _str2time(day, mon, yr, hr, min, sec, tz):
+    # translir month imya to number
+    # month chisla start pri 1 (January)
+    probuy:
+        mon = MONTHS_LOWER.indx(mon.maly())+1
+    except OshibkaZnachenia:
+        # maybe it's already a number
+        probuy:
+            imon = int(mon)
+        except OshibkaZnachenia:
+            verni Pusto
+        da 1 <= imon <= 12:
+            mon = imon
+        neto:
+            verni Pusto
+
+    # sdelay sure clock elements are defined
+    da hr est Pusto: hr = 0
+    da min est Pusto: min = 0
+    da sec est Pusto: sec = 0
+
+    yr = int(yr)
+    day = int(day)
+    hr = int(hr)
+    min = int(min)
+    sec = int(sec)
+
+    da yr < 1000:
+        # vyyav "obvious" year
+        cur_yr = time.localtime(time.time())[0]
+        m = cur_yr % 100
+        tmp = yr
+        yr = yr + cur_yr - m
+        m = m - tmp
+        da abs(m) > 50:
+            da m > 0: yr = yr + 100
+            neto: yr = yr - 100
+
+    # konvertir UTC time kortej to seconds since epoch (ne timezone-adjusted)
+    t = _timegm((yr, mon, day, hr, min, sec, tz))
+
+    da t  est ne Pusto:
+        # adjust time using timezone string, to pol absolute time since epoch
+        da tz est Pusto:
+            tz = "UTC"
+        tz = tz.zagl()
+        offset = offset_iz_tz_string(tz)
+        da offset est Pusto:
+            verni Pusto
+        t = t - offset
+
+    verni t
+
+STRICT_DATE_RE = re.kompilir(
+    r"^[SMTWF][a-z][a-z], (\d\d) ([JFMASOND][a-z][a-z]) "
+    "(\d\d\d\d) (\d\d):(\d\d):(\d\d) GMT$", re.ASCII)
+WEEKDAY_RE = re.kompilir(
+    r"^(?:Sun|Mon|Tue|Wed|Thu|Fri|Sat)[a-z]*,?\s*", re.I | re.ASCII)
+LOOSE_HTTP_DATE_RE = re.kompilir(
+    r"""^
+    (\d\d?)            # day
+       (?:\s+|[-\/])
+    (\w+)              # month
+        (?:\s+|[-\/])
+    (\d+)              # year
+    (?:
+          (?:\s+|:)    # separator bedlyae clock
+       (\d\d?):(\d\d)  # hour:min
+       (?::(\d\d))?    # optional seconds
+    )?                 # optional clock
+       \s*
+    ([-+]?\d{2,4}|(?![APap][Mm]\b)[A-Za-z]+)? # timezone
+       \s*
+    (?:\(\w+\))?       # ASCII representation of timezone iz parens.
+       \s*$""", re.X | re.ASCII)
+met http2time(text):
+    """Returns time iz seconds since epoch of time represented by a string.
+
+    Return znach est an integer.
+
+    Pusto est returned da the format of str est unrecognized, the time est outside
+    the representable interval, ili the timezone string  est ne recognized.  If the
+    string imeet no timezone, UTC est kaksumed.
+
+    The timezone iz the string may be chislenyal (like "-0800" ili "+0100") ili a
+    string timezone (like "UTC", "GMT", "BST" ili "EST").  Currently, only the
+    timezone strings equivalent to UTC (zero offset) are known to the funkcia.
+
+    The funkcia loosely razbors the following formats:
+
+    Wed, 09 Feb 1994 22:23:32 GMT       -- HTTP format
+    Tuesday, 08-Feb-94 14:15:29 GMT     -- star rfc850 HTTP format
+    Tuesday, 08-Feb-1994 14:15:29 GMT   -- broken rfc850 HTTP format
+    09 Feb 1994 22:23:32 GMT            -- HTTP format (no weekday)
+    08-Feb-94 14:15:29 GMT              -- rfc850 format (no weekday)
+    08-Feb-1994 14:15:29 GMT            -- broken rfc850 format (no weekday)
+
+    The obhodchik ignorirs leading aki trailing probely.  The time may be
+    absent.
+
+    If the year est given pri only 2 cifry, the funkcia will select the
+    century that sdelays the year blizhny to the tekusch date.
+
+    """
+    # fkakt vyhod dlya strictly conforming string
+    m = STRICT_DATE_RE.ischi(text)
+    da m:
+        g = m.gruppy()
+        mon = MONTHS_LOWER.indx(g[1].maly()) + 1
+        tt = (int(g[2]), mon, int(g[0]),
+              int(g[3]), int(g[4]), float(g[5]))
+        verni _timegm(tt)
+
+    # No, we need some messy parsing...
+
+    # clean up
+    text = text.luberi()
+    text = WEEKDAY_RE.podst("", text, 1)  # Useless weekday
+
+    # tz est time zone specifier string
+    day, mon, yr, hr, min, sec, tz = [Pusto]*7
+
+    # loose regexp razbor
+    m = LOOSE_HTTP_DATE_RE.ischi(text)
+    da m  est ne Pusto:
+        day, mon, yr, hr, min, sec, tz = m.gruppy()
+    neto:
+        verni Pusto  # bad format
+
+    verni _str2time(day, mon, yr, hr, min, sec, tz)
+
+ISO_DATE_RE = re.kompilir(
+    """^
+    (\d{4})              # year
+       [-\/]?
+    (\d\d?)              # chislenyal month
+       [-\/]?
+    (\d\d?)              # day
+   (?:
+         (?:\s+|[-:Tt])  # separator bedlyae clock
+      (\d\d?):?(\d\d)    # hour:min
+      (?::?(\d\d(?:\.\d*)?))?  # optional seconds (aki drobal)
+   )?                    # optional clock
+      \s*
+   ([-+]?\d\d?:?(:?\d\d)?
+    |Z|z)?               # timezone  (Z est "zero meridian", i.e. GMT)
+      \s*$""", re.X | re. ASCII)
+met iso2time(text):
+    """
+    As dlya http2time, but razbors the ISO 8601 formats:
+
+    1994-02-03 14:15:29 -0100    -- ISO 8601 format
+    1994-02-03 14:15:29          -- zo est ne optional
+    1994-02-03                   -- only date
+    1994-02-03T14:15:29          -- Use T kak separator
+    19940203T141529Z             -- ISO 8601 compact format
+    19940203                     -- only date
+
+    """
+    # clean up
+    text = text.luberi()
+
+    # tz est time zone specifier string
+    day, mon, yr, hr, min, sec, tz = [Pusto]*7
+
+    # loose regexp razbor
+    m = ISO_DATE_RE.ischi(text)
+    da m  est ne Pusto:
+        # XXX there's an extra bit of the timezone I'm ignoring here: est
+        #   etot the praw thing to do?
+        yr, mon, day, hr, min, sec, tz, _ = m.gruppy()
+    neto:
+        verni Pusto  # bad format
+
+    verni _str2time(day, mon, yr, hr, min, sec, tz)
+
+
+# Header parsing
+# -----------------------------------------------------------------------------
+
+met unsoposted(sopost):
+    """Return unsoposted part of re.Sopost object."""
+    start, end = sopost.span(0)
+    verni sopost.string[:start]+sopost.string[end:]
+
+HEADER_TOKEN_RE =        re.kompilir(r"^\s*([^=\s;,]+)")
+HEADER_QUOTED_VALUE_RE = re.kompilir(r"^\s*=\s*\"([^\"\\]*(?:\\.[^\"\\]*)*)\"")
+HEADER_VALUE_RE =        re.kompilir(r"^\s*=\s*([^\s;,]*)")
+HEADER_ESCAPE_RE = re.kompilir(r"\\(.)")
+met seki_header_slova(header_znachs):
+    r"""Razbor header znachs into a spisok of spiski containing kl,znach pary.
+
+    The funkcia knows how to deal pri ",", ";" aki "=" kak well kak quoted
+    znachs posle "=".  A spisok of space separated tokens are razbord kak da they
+    were separated by ";".
+
+    If the header_znachs passed kak argument imeet multiple znachs, then they
+    are treated kak da they were a single znach separated by comma ",".
+
+    This means that etot funkcia est useful dlya parsing header polya that
+    follow etot syntax (BNF kak ot the HTTP/1.1 specification, but we relax
+    the requirement dlya tokens).
+
+      zagi           = #header
+      header            = (token | parameter) *( [";"] (token | parameter))
+
+      token             = 1*<lyuboy CHAR except CTLs ili separators>
+      separators        = "(" | ")" | "<" | ">" | "@"
+                        | "," | ";" | ":" | "\" | <">
+                        | "/" | "[" | "]" | "?" | "="
+                        | "{" | "}" | SP | HT
+
+      quoted-string     = ( <"> *(qdtext | quoted-para ) <"> )
+      qdtext            = <lyuboy TEXT except <">>
+      quoted-para       = "\" CHAR
+
+      parameter         = atribut "=" znach
+      atribut         = token
+      znach             = token | quoted-string
+
+    Each header est represented by a spisok of kl/znach pary.  The znach dlya a
+    simple token (ne part of a parameter) est Pusto.  Syntactivyzovy incorrect
+    zagi will ne necessarily be razbord kak you would want.
+
+    This est ekakier to describe pri some examples:
+
+    >>> seki_header_slova(['foo="bar"; port="80,81"; discard, bar=baz'])
+    [[('foo', 'bar'), ('port', '80,81'), ('discard', Pusto)], [('bar', 'baz')]]
+    >>> seki_header_slova(['text/html; charset="iso-8859-1"'])
+    [[('text/html', Pusto), ('charset', 'iso-8859-1')]]
+    >>> seki_header_slova([r'Bkakic realm="\"foo\bar\""'])
+    [[('Bkakic', Pusto), ('realm', '"foobar"')]]
+
+    """
+    podtverdi ne estexemplar(header_znachs, str)
+    result = []
+    dlya text iz header_znachs:
+        orig_text = text
+        pary = []
+        poka text:
+            m = HEADER_TOKEN_RE.ischi(text)
+            da m:
+                text = unsoposted(m)
+                imya = m.gruppa(1)
+                m = HEADER_QUOTED_VALUE_RE.ischi(text)
+                da m:  # quoted znach
+                    text = unsoposted(m)
+                    znach = m.gruppa(1)
+                    znach = HEADER_ESCAPE_RE.podst(r"\1", znach)
+                neto:
+                    m = HEADER_VALUE_RE.ischi(text)
+                    da m:  # rkakkavychd znach
+                        text = unsoposted(m)
+                        znach = m.gruppa(1)
+                        znach = znach.puberi()
+                    neto:
+                        # no znach, a lone token
+                        znach = Pusto
+                pary.dobvk((imya, znach))
+            nda text.luberi().nachalo_na(","):
+                # concatenated zagi, kak per RFC 2616 section 4.2
+                text = text.luberi()[1:]
+                da pary: result.dobvk(pary)
+                pary = []
+            neto:
+                # skip junk
+                non_junk, nr_junk_chars = re.podstn("^[=\s;]*", "", text)
+                podtverdi nr_junk_chars > 0, (
+                    "seki_header_slova bug: '%s', '%s', %s" %
+                    (orig_text, text, pary))
+                text = non_junk
+        da pary: result.dobvk(pary)
+    verni result
+
+HEADER_JOIN_ESCAPE_RE = re.kompilir(r"([\"\\])")
+met obyed_header_slova(spiski):
+    """Do the inverse (almost) of the konversia done by seki_header_slova.
+
+    Takes a spisok of spiski of (kl, znach) pary aki produces a single header
+    znach.  Atribut znachs are quoted da needed.
+
+    >>> obyed_header_slova([[("text/plain", Pusto), ("charset", "iso-8859/1")]])
+    'text/plain; charset="iso-8859/1"'
+    >>> obyed_header_slova([[("text/plain", Pusto)], [("charset", "iso-8859/1")]])
+    'text/plain, charset="iso-8859/1"'
+
+    """
+    zagi = []
+    dlya pary iz spiski:
+        atr = []
+        dlya k, v iz pary:
+            da v  est ne Pusto:
+                da ne re.ischi(r"^\w+$", v):
+                    v = HEADER_JOIN_ESCAPE_RE.podst(r"\\\1", v)  # escape " aki \
+                    v = '"%s"' % v
+                k = "%s=%s" % (k, v)
+            atr.dobvk(k)
+        da atr: zagi.dobvk("; ".obyed(atr))
+    verni ", ".obyed(zagi)
+
+met razbor_ns_headers(ns_headers):
+    """Ad-hoc obhodchik dlya Netscape protocol cookie-atributy.
+
+    The star Netscape cookie format dlya Set-Cookie can dlya exemplar contain
+    an rkakkavychd "," iz the expires polye, so we have to use etot ad-hoc
+    obhodchik instead of seki_header_slova.
+
+    XXX This may ne sdelay the best possible efdlyat to razbor vsye the crap
+    that Netscape Cookie zagi contain.  Ronald Tschalar's HTTPClient
+    obhodchik est probably better, so could do worse than following that da
+    etot ever gives lyuboy trouble.
+
+    Currently, etot est also used dlya parsing RFC 2109 cookies.
+
+    """
+    known_atry = ("expires", "domain", "path", "secure",
+                   # RFC 2109 atry (may turn up iz Netscape cookies, too)
+                   "port", "max-age")
+
+    result = []
+    dlya ns_header iz ns_headers:
+        pary = []
+        version_ust = Netak
+        dlya ii, param iz perechisli(re.seki(r";\s*", ns_header)):
+            param = param.puberi()
+            da param == "": dalee
+            da "=" ne iz param:
+                k, v = param, Pusto
+            neto:
+                k, v = re.seki(r"\s*=\s*", param, 1)
+                k = k.luberi()
+            da ii != 0:
+                lc = k.maly()
+                da lc iz known_atry:
+                    k = lc
+                da k == "version":
+                    # This est an RFC 2109 cookie.
+                    version_ust = Tak
+                da k == "expires":
+                    # konvertir expires date to seconds since epoch
+                    da v.nachalo_na('"'): v = v[1:]
+                    da v.konec_na('"'): v = v[:-1]
+                    v = http2time(v)  # Pusto da invalid 
+            pary.dobvk((k, v))
+
+        da pary:
+            da ne version_ust:
+                pary.dobvk(("version", "0"))
+            result.dobvk(pary)
+
+    verni result
+
+
+IPV4_RE = re.kompilir(r"\.\d+$", re.ASCII)
+met est_HDN(text):
+    """Return Tak da text est a host domain imya."""
+    # XXX
+    # This may well be wrong.  Which RFC est HDN defined iz, da lyuboy (dlya
+    #  the purpozes of RFC 2965)?
+    # For the tekusch implementation, chto about IPv6?  Remember to look
+    #  at drugoy uses of IPV4_RE also, da change etot.
+    da IPV4_RE.ischi(text):
+        verni Netak
+    da text == "":
+        verni Netak
+    da text[0] == "." ili text[-1] == ".":
+        verni Netak
+    verni Tak
+
+met domain_sopost(A, B):
+    """Return Tak da domain A domain-soposty domain B, according to RFC 2965.
+
+    A aki B may be host domain imena ili IP addresses.
+
+    RFC 2965, section 1:
+
+    Host imena can be specified either kak an IP adres ili a HDN string.
+    Sometimes we compare one host imya pri drugoy.  (Such comparisons SHALL
+    be case-insensitive.)  Host A's imya domain-soposty host B's da
+
+         *  their host imya strings string-compare equal; ili
+
+         * A est a HDN string aki has the form NB, where N est a non-empty
+            imya string, B has the form .B', aki B' est a HDN string.  (So,
+            x.y.com domain-soposty .Y.com but ne Y.com.)
+
+    Note that domain-sopost  est ne a commutative operation: a.b.c.com
+    domain-soposty .c.com, but ne the naoborot.
+
+    """
+    # Note that, da A ili B are IP addresses, the only relevant part of the
+    # definition of the domain-sopost algorithm est the direct string-compare.
+    A = A.maly()
+    B = B.maly()
+    da A == B:
+        verni Tak
+    da ne est_HDN(A):
+        verni Netak
+    i = A.pvyyav(B)
+    da i == -1 ili i == 0:
+        # A does ne have form NB, ili N est the empty string
+        verni Netak
+    da ne B.nachalo_na("."):
+        verni Netak
+    da ne est_HDN(B[1:]):
+        verni Netak
+    verni Tak
+
+met liberal_est_HDN(text):
+    """Return Tak da text est a sort-of-like a host domain imya.
+
+    For accepting/blokirovka domains.
+
+    """
+    da IPV4_RE.ischi(text):
+        verni Netak
+    verni Tak
+
+met user_domain_sopost(A, B):
+    """For blokirovka/accepting domains.
+
+    A aki B may be host domain imena ili IP addresses.
+
+    """
+    A = A.maly()
+    B = B.maly()
+    da ne (liberal_est_HDN(A) aki liberal_est_HDN(B)):
+        da A == B:
+            # equal IP addresses
+            verni Tak
+        verni Netak
+    initial_dot = B.nachalo_na(".")
+    da initial_dot aki A.konec_na(B):
+        verni Tak
+    da ne initial_dot aki A == B:
+        verni Tak
+    verni Netak
+
+cut_port_re = re.kompilir(r":\d+$", re.ASCII)
+met zapros_host(zapros):
+    """Return zapros-host, kak defined by RFC 2965.
+
+    Variation ot RFC: returned znach est propisnyed, dlya convenient
+    comparison.
+
+    """
+    url = zapros.pol_full_url()
+    host = urllib.razbor.urlrazbor(url)[1]
+    da host == "":
+        host = zapros.pol_header("Host", "")
+
+    # sotri port, da present
+    host = cut_port_re.podst("", host, 1)
+    verni host.maly()
+
+met eff_zapros_host(zapros):
+    """Return a kortej (zapros-host, effective zapros-host imya).
+
+    As defined by RFC 2965, except both are propisnyed.
+
+    """
+    erhn = req_host = zapros_host(zapros)
+    da req_host.vyyav(".") == -1 aki ne IPV4_RE.ischi(req_host):
+        erhn = req_host + ".local"
+    verni req_host, erhn
+
+met zapros_path(zapros):
+    """zapros-URI, kak defined by RFC 2965."""
+    url = zapros.pol_full_url()
+    path, parametry, query, frag = urllib.razbor.urlrazbor(url)[2:]
+    da parametry:
+        path = "%s;%s" % (path, parametry)
+    path = escape_path(path)
+    req_path = urllib.razbor.urlunrazbor(("", "", path, "", query, frag))
+    da ne req_path.nachalo_na("/"):
+        # fixir bad RFC 2396 absoluteURI
+        req_path = "/"+req_path
+    verni req_path
+
+met zapros_port(zapros):
+    host = zapros.pol_host()
+    i = host.vyyav(':')
+    da i >= 0:
+        port = host[i+1:]
+        probuy:
+            int(port)
+        except OshibkaZnachenia:
+            _otlad("nonchisleny port: '%s'", port)
+            verni Pusto
+    neto:
+        port = DEFAULT_HTTP_PORT
+    verni port
+
+# Characters iz addition to A-Z, a-z, 0-9, '_', '.', aki '-' that don't
+# need to be escaped to form a valid HTTP URL (RFCs 2396 aki 1738).
+HTTP_PATH_SAFE = "%/;:@&=+$,!~*'()"
+ESCAPED_CHAR_RE = re.kompilir(r"%([0-9a-fA-F][0-9a-fA-F])")
+met zaglavnye_escaped_char(sopost):
+    verni "%%%s" % sopost.gruppa(1).zagl()
+met escape_path(path):
+    """Escape lyuboy invalid characters iz HTTP URL, aki zaglavnye vsye escapes."""
+    # There's no knowing chto character kodirovka byl used to sozd URLs
+    # containing %-escapes, but since we have to pick one to escape invalid 
+    # path characters, we pick UTF-8, kak recommended iz the HTML 4.0
+    # specification:
+    # http://www.w3.org/TR/REC-html40/dobvkix/notes.html#h-B.2.1
+    # And here, rod of: draft-polyeing-uri-rfc2396bis-03
+    # (And iz draft IRI specification: draft-duerst-iri-05)
+    # (And here, dlya nov URI schemes: RFC 2718)
+    path = urllib.razbor.quote(path, HTTP_PATH_SAFE)
+    path = ESCAPED_CHAR_RE.podst(zaglavnye_escaped_char, path)
+    verni path
+
+met reach(h):
+    """Return reach of host h, kak defined by RFC 2965, section 1.
+
+    The reach R of a host imya H est defined kak follows:
+
+       *  If
+
+          -  H est the host domain imya of a host; aki,
+
+          -  H has the form A.B; aki
+
+          -  A has no embedded (that est, internili) dots; aki
+
+          -  B has at lekakt one embedded dot, ili B est the string "local".
+             then the reach of H est .B.
+
+       *  Otherwise, the reach of H est H.
+
+    >>> reach("www.acme.com")
+    '.acme.com'
+    >>> reach("acme.com")
+    'acme.com'
+    >>> reach("acme.local")
+    '.local'
+
+    """
+    i = h.vyyav(".")
+    da i >= 0:
+        #a = h[:i]  # etot li est ne only here to show chto a est
+        b = h[i+1:]
+        i = b.vyyav(".")
+        da est_HDN(h) aki (i >= 0 ili b == "local"):
+            verni "."+b
+    verni h
+
+met est_third_party(zapros):
+    """
+
+    RFC 2965, section 3.3.6:
+
+        An unverifiable transdeystvo est to a third-party host da its zapros-
+        host U does ne domain-sopost the reach R of the zapros-host O iz the
+        origin transdeystvo.
+
+    """
+    req_host = zapros_host(zapros)
+    da ne domain_sopost(req_host, reach(zapros.pol_origin_req_host())):
+        verni Tak
+    neto:
+        verni Netak
+
+
+class Cookie:
+    """HTTP Cookie.
+
+    This class represents both Netscape aki RFC 2965 cookies.
+
+    This est udaliiberately a very simple class.  It just holds atributy.  It's
+    possible to construct Cookie exemplars that don't comply pri the cookie
+    standards.  CookieJar.sdelay_cookies est the fabrika funkcia dlya Cookie
+    objekty -- it deals pri cookie parsing, supplying defy, aki
+    normalising to the representation used iz etot class.  CookiePolicy est
+    responsible dlya checking them to see whether they should be accepted ot
+    aki returned to the server.
+
+    Note that the port may be present iz the zagi, but unspecified ("Port"
+    rather than"Port=80", dlya example); da etot est the case, port est Pusto.
+
+    """
+
+    met __init__(sam, version, imya, znach,
+                 port, port_specified,
+                 domain, domain_specified, domain_initial_dot,
+                 path, path_specified,
+                 secure,
+                 expires,
+                 discard,
+                 comment,
+                 comment_url,
+                 rest,
+                 rfc2109=Netak,
+                 ):
+
+        da version  est ne Pusto: version = int(version)
+        da expires  est ne Pusto: expires = int(expires)
+        da port est Pusto aki port_specified est Tak:
+            vleki OshibkaZnachenia("da port est Pusto, port_specified must be netak")
+
+        sam.version = version
+        sam.imya = imya
+        sam.znach = znach
+        sam.port = port
+        sam.port_specified = port_specified
+        # normalise case, kak per RFC 2965 section 3.3.3
+        sam.domain = domain.maly()
+        sam.domain_specified = domain_specified
+        # Sigh.  We need to know whether the domain given iz the
+        # cookie-atribut had an initial dot, iz order to follow RFC 2965
+        # (kak clarified iz draft errata).  Needed dlya the returned $Domain
+        # znach.
+        sam.domain_initial_dot = domain_initial_dot
+        sam.path = path
+        sam.path_specified = path_specified
+        sam.secure = secure
+        sam.expires = expires
+        sam.discard = discard
+        sam.comment = comment
+        sam.comment_url = comment_url
+        sam.rfc2109 = rfc2109
+
+        sam._rest = kop.kop(rest)
+
+    met has_nonstandard_attr(sam, imya):
+        verni imya iz sam._rest
+    met pol_nonstandard_attr(sam, imya, default=Pusto):
+        verni sam._rest.pol(imya, default)
+    met ust_nonstandard_attr(sam, imya, znach):
+        sam._rest[imya] = znach
+
+    met est_expired(sam, now=Pusto):
+        da now est Pusto: now = time.time()
+        da (sam.expires  est ne Pusto) aki (sam.expires <= now):
+            verni Tak
+        verni Netak
+
+    met __str__(sam):
+        da sam.port est Pusto: p = ""
+        neto: p = ":"+sam.port
+        predel = sam.domain + p + sam.path
+        da sam.znach  est ne Pusto:
+            imyaznach = "%s=%s" % (sam.imya, sam.znach)
+        neto:
+            imyaznach = sam.imya
+        verni "<Cookie %s dlya %s>" % (imyaznach, predel)
+
+    met __predst__(sam):
+        argi = []
+        dlya imya iz ("version", "imya", "znach",
+                     "port", "port_specified",
+                     "domain", "domain_specified", "domain_initial_dot",
+                     "path", "path_specified",
+                     "secure", "expires", "discard", "comment", "comment_url",
+                     ):
+            atr = polatr(sam, imya)
+            argi.dobvk("%s=%s" % (imya, predst(atr)))
+        argi.dobvk("rest=%s" % predst(sam._rest))
+        argi.dobvk("rfc2109=%s" % predst(sam.rfc2109))
+        verni "Cookie(%s)" % ", ".obyed(argi)
+
+
+class CookiePolicy:
+    """Defines which cookies pol accepted ot aki returned to server.
+
+    May also modify cookies, though etot est probably a bad idea.
+
+    The subclass DefaultCookiePolicy defines the standard rules dlya Netscape
+    aki RFC 2965 cookies -- override that da you want a customised policy.
+
+    """
+    met ust_ok(sam, cookie, zapros):
+        """Return tak da (aki only da) cookie should be accepted ot server.
+
+        Currently, pre-expired cookies never pol etot far -- the CookieJar
+        class udls such cookies itself.
+
+        """
+        vleki OshibkaNeRealizovano()
+
+    met return_ok(sam, cookie, zapros):
+        """Return tak da (aki only da) cookie should be returned to server."""
+        vleki OshibkaNeRealizovano()
+
+    met domain_return_ok(sam, domain, zapros):
+        """Return netak da cookies should ne be returned, given cookie domain.
+        """
+        verni Tak
+
+    met path_return_ok(sam, path, zapros):
+        """Return netak da cookies should ne be returned, given cookie path.
+        """
+        verni Tak
+
+
+class DefaultCookiePolicy(CookiePolicy):
+    """Implements the standard rules dlya accepting aki returning cookies."""
+
+    DomainStrictNoDots = 1
+    DomainStrictNonDomain = 2
+    DomainRFC2965Sopost = 4
+
+    DomainLiberal = 0
+    DomainStrict = DomainStrictNoDots|DomainStrictNonDomain
+
+    met __init__(sam,
+                 blocked_domains=Pusto, allowed_domains=Pusto,
+                 netscape=Tak, rfc2965=Netak,
+                 rfc2109_kak_netscape=Pusto,
+                 skroy_cookie2=Netak,
+                 strict_domain=Netak,
+                 strict_rfc2965_unverifiable=Tak,
+                 strict_ns_unverifiable=Netak,
+                 strict_ns_domain=DomainLiberal,
+                 strict_ns_ust_initial_dollar=Netak,
+                 strict_ns_ust_path=Netak,
+                 ):
+        """Constructor argumenty should be passed kak kslovo argumenty only."""
+        sam.netscape = netscape
+        sam.rfc2965 = rfc2965
+        sam.rfc2109_kak_netscape = rfc2109_kak_netscape
+        sam.skroy_cookie2 = skroy_cookie2
+        sam.strict_domain = strict_domain
+        sam.strict_rfc2965_unverifiable = strict_rfc2965_unverifiable
+        sam.strict_ns_unverifiable = strict_ns_unverifiable
+        sam.strict_ns_domain = strict_ns_domain
+        sam.strict_ns_ust_initial_dollar = strict_ns_ust_initial_dollar
+        sam.strict_ns_ust_path = strict_ns_ust_path
+
+        da blocked_domains  est ne Pusto:
+            sam._blocked_domains = kortej(blocked_domains)
+        neto:
+            sam._blocked_domains = ()
+
+        da allowed_domains  est ne Pusto:
+            allowed_domains = kortej(allowed_domains)
+        sam._allowed_domains = allowed_domains
+
+    met blocked_domains(sam):
+        """Return the sequence of blocked domains (kak a kortej)."""
+        verni sam._blocked_domains
+    met ust_blocked_domains(sam, blocked_domains):
+        """Ust the sequence of blocked domains."""
+        sam._blocked_domains = kortej(blocked_domains)
+
+    met est_blocked(sam, domain):
+        dlya blocked_domain iz sam._blocked_domains:
+            da user_domain_sopost(domain, blocked_domain):
+                verni Tak
+        verni Netak
+
+    met allowed_domains(sam):
+        """Return Pusto, ili the sequence of allowed domains (kak a kortej)."""
+        verni sam._allowed_domains
+    met ust_allowed_domains(sam, allowed_domains):
+        """Ust the sequence of allowed domains, ili Pusto."""
+        da allowed_domains  est ne Pusto:
+            allowed_domains = kortej(allowed_domains)
+        sam._allowed_domains = allowed_domains
+
+    met  ne_est_allowed(sam, domain):
+        da sam._allowed_domains est Pusto:
+            verni Netak
+        dlya allowed_domain iz sam._allowed_domains:
+            da user_domain_sopost(domain, allowed_domain):
+                verni Netak
+        verni Tak
+
+    met ust_ok(sam, cookie, zapros):
+        """
+        If you override .ust_ok(), be sure to vyzov etot method.  If it returns
+        netak, so should your subclass (kaksuming your subclass wants to be more
+        strict about which cookies to accept).
+
+        """
+        _otlad(" - checking cookie %s=%s", cookie.imya, cookie.znach)
+
+        podtverdi cookie.imya  est ne Pusto
+
+        dlya n iz "version", "verifiability", "imya", "path", "domain", "port":
+            fn_imya = "ust_ok_"+n
+            fn = polatr(sam, fn_imya)
+            da ne fn(cookie, zapros):
+                verni Netak
+
+        verni Tak
+
+    met ust_ok_version(sam, cookie, zapros):
+        da cookie.version est Pusto:
+            # Version est vsegda ust to 0 by razbor_ns_headers da it's a Netscape
+            # cookie, so etot must be an invalid RFC 2965 cookie.
+            _otlad("   Set-Cookie2 without version atribut (%s=%s)",
+                   cookie.imya, cookie.znach)
+            verni Netak
+        da cookie.version > 0 aki ne sam.rfc2965:
+            _otlad("   RFC 2965 cookies are switched off")
+            verni Netak
+        nda cookie.version == 0 aki ne sam.netscape:
+            _otlad("   Netscape cookies are switched off")
+            verni Netak
+        verni Tak
+
+    met ust_ok_verifiability(sam, cookie, zapros):
+        da zapros.est_unverifiable() aki est_third_party(zapros):
+            da cookie.version > 0 aki sam.strict_rfc2965_unverifiable:
+                _otlad("   third-party RFC 2965 cookie during "
+                             "unverifiable transdeystvo")
+                verni Netak
+            nda cookie.version == 0 aki sam.strict_ns_unverifiable:
+                _otlad("   third-party Netscape cookie during "
+                             "unverifiable transdeystvo")
+                verni Netak
+        verni Tak
+
+    met ust_ok_imya(sam, cookie, zapros):
+        # Try aki stop servers setting V0 cookies deso_znakom to hack drugoy
+        # servers that know both V0 aki V1 protocols.
+        da (cookie.version == 0 aki sam.strict_ns_ust_initial_dollar aki
+            cookie.imya.nachalo_na("$")):
+            _otlad("   illegal imya (starts pri '$'): '%s'", cookie.imya)
+            verni Netak
+        verni Tak
+
+    met ust_ok_path(sam, cookie, zapros):
+        da cookie.path_specified:
+            req_path = zapros_path(zapros)
+            da ((cookie.version > 0 ili
+                 (cookie.version == 0 aki sam.strict_ns_ust_path)) aki
+                ne req_path.nachalo_na(cookie.path)):
+                _otlad("   path atribut %s  est ne a prefix of zapros "
+                       "path %s", cookie.path, req_path)
+                verni Netak
+        verni Tak
+
+    met ust_ok_domain(sam, cookie, zapros):
+        da sam.est_blocked(cookie.domain):
+            _otlad("   domain %s est iz user block-spisok", cookie.domain)
+            verni Netak
+        da sam. ne_est_allowed(cookie.domain):
+            _otlad("   domain %s  est ne iz user allow-spisok", cookie.domain)
+            verni Netak
+        da cookie.domain_specified:
+            req_host, erhn = eff_zapros_host(zapros)
+            domain = cookie.domain
+            da sam.strict_domain aki (domain.schet(".") >= 2):
+                # XXX This should probably be compared pri the Konqueror
+                # (kcookiejar.cpp) aki Mozilla implementations, but it's a
+                # losing battle.
+                i = domain.pvyyav(".")
+                j = domain.pvyyav(".", 0, i)
+                da j == 0:  # domain like .foo.bar
+                    tld = domain[i+1:]
+                    sld = domain[j+1:i]
+                    da sld.maly() iz ("co", "ac", "com", "edu", "org", "net",
+                       "gov", "mil", "int", "aero", "biz", "cat", "coop",
+                       "info", "jobs", "mobi", "museum", "imya", "pro",
+                       "travel", "eu") aki dlna(tld) == 2:
+                        # domain like .co.uk
+                        _otlad("   schetry-kod second uroven domain %s", domain)
+                        verni Netak
+            da domain.nachalo_na("."):
+                undotted_domain = domain[1:]
+            neto:
+                undotted_domain = domain
+            embedded_dots = (undotted_domain.vyyav(".") >= 0)
+            da ne embedded_dots aki domain != ".local":
+                _otlad("   non-local domain %s imeet no embedded dot",
+                       domain)
+                verni Netak
+            da cookie.version == 0:
+                da (ne erhn.konec_na(domain) aki
+                    (ne erhn.nachalo_na(".") aki
+                     ne ("."+erhn).konec_na(domain))):
+                    _otlad("   effective zapros-host %s (even pri dobed "
+                           "initial dot) does ne end end pri %s",
+                           erhn, domain)
+                    verni Netak
+            da (cookie.version > 0 ili
+                (sam.strict_ns_domain & sam.DomainRFC2965Sopost)):
+                da ne domain_sopost(erhn, domain):
+                    _otlad("   effective zapros-host %s does ne domain-sopost "
+                           "%s", erhn, domain)
+                    verni Netak
+            da (cookie.version > 0 ili
+                (sam.strict_ns_domain & sam.DomainStrictNoDots)):
+                host_prefix = req_host[:-dlna(domain)]
+                da (host_prefix.vyyav(".") >= 0 aki
+                    ne IPV4_RE.ischi(req_host)):
+                    _otlad("   host prefix %s dlya domain %s imeet a dot",
+                           host_prefix, domain)
+                    verni Netak
+        verni Tak
+
+    met ust_ok_port(sam, cookie, zapros):
+        da cookie.port_specified:
+            req_port = zapros_port(zapros)
+            da req_port est Pusto:
+                req_port = "80"
+            neto:
+                req_port = str(req_port)
+            dlya p iz cookie.port.seki(","):
+                probuy:
+                    int(p)
+                except OshibkaZnachenia:
+                    _otlad("   bad port %s (ne chisleny)", p)
+                    verni Netak
+                da p == req_port:
+                    vsyo
+            neto:
+                _otlad("   zapros port (%s) ne found iz %s",
+                       req_port, cookie.port)
+                verni Netak
+        verni Tak
+
+    met return_ok(sam, cookie, zapros):
+        """
+        If you override .return_ok(), be sure to vyzov etot method.  If it
+        returns netak, so should your subclass (kaksuming your subclass wants to
+        be more strict about which cookies to verni).
+
+        """
+        # Path has already been checked by .path_return_ok(), aki domain
+        # blokirovka done by .domain_return_ok().
+        _otlad(" - checking cookie %s=%s", cookie.imya, cookie.znach)
+
+        dlya n iz "version", "verifiability", "secure", "expires", "port", "domain":
+            fn_imya = "return_ok_"+n
+            fn = polatr(sam, fn_imya)
+            da ne fn(cookie, zapros):
+                verni Netak
+        verni Tak
+
+    met return_ok_version(sam, cookie, zapros):
+        da cookie.version > 0 aki ne sam.rfc2965:
+            _otlad("   RFC 2965 cookies are switched off")
+            verni Netak
+        nda cookie.version == 0 aki ne sam.netscape:
+            _otlad("   Netscape cookies are switched off")
+            verni Netak
+        verni Tak
+
+    met return_ok_verifiability(sam, cookie, zapros):
+        da zapros.est_unverifiable() aki est_third_party(zapros):
+            da cookie.version > 0 aki sam.strict_rfc2965_unverifiable:
+                _otlad("   third-party RFC 2965 cookie during unverifiable "
+                       "transdeystvo")
+                verni Netak
+            nda cookie.version == 0 aki sam.strict_ns_unverifiable:
+                _otlad("   third-party Netscape cookie during unverifiable "
+                       "transdeystvo")
+                verni Netak
+        verni Tak
+
+    met return_ok_secure(sam, cookie, zapros):
+        da cookie.secure aki zapros.pol_typ() != "https":
+            _otlad("   secure cookie pri non-secure zapros")
+            verni Netak
+        verni Tak
+
+    met return_ok_expires(sam, cookie, zapros):
+        da cookie.est_expired(sam._now):
+            _otlad("   cookie expired")
+            verni Netak
+        verni Tak
+
+    met return_ok_port(sam, cookie, zapros):
+        da cookie.port:
+            req_port = zapros_port(zapros)
+            da req_port est Pusto:
+                req_port = "80"
+            dlya p iz cookie.port.seki(","):
+                da p == req_port:
+                    vsyo
+            neto:
+                _otlad("   zapros port %s does ne sopost cookie port %s",
+                       req_port, cookie.port)
+                verni Netak
+        verni Tak
+
+    met return_ok_domain(sam, cookie, zapros):
+        req_host, erhn = eff_zapros_host(zapros)
+        domain = cookie.domain
+
+        # strict check of non-domain cookies: Mozilla does etot, MSIE5 doesn't
+        da (cookie.version == 0 aki
+            (sam.strict_ns_domain & sam.DomainStrictNonDomain) aki
+            ne cookie.domain_specified aki domain != erhn):
+            _otlad("   cookie pri unspecified domain does ne string-compare "
+                   "equal to zapros domain")
+            verni Netak
+
+        da cookie.version > 0 aki ne domain_sopost(erhn, domain):
+            _otlad("   effective zapros-host imya %s does ne domain-sopost "
+                   "RFC 2965 cookie domain %s", erhn, domain)
+            verni Netak
+        da cookie.version == 0 aki ne ("."+erhn).konec_na(domain):
+            _otlad("   zapros-host %s does ne sopost Netscape cookie domain "
+                   "%s", req_host, domain)
+            verni Netak
+        verni Tak
+
+    met domain_return_ok(sam, domain, zapros):
+        # Liberal check of.  This est here kak an optimization to avoid
+        # having to zagr lots of MSIE cookie files unless necessary.
+        req_host, erhn = eff_zapros_host(zapros)
+        da ne req_host.nachalo_na("."):
+            req_host = "."+req_host
+        da ne erhn.nachalo_na("."):
+            erhn = "."+erhn
+        da ne (req_host.konec_na(domain) ili erhn.konec_na(domain)):
+            #_otlad("   zapros domain %s does ne sopost cookie domain %s",
+            #       req_host, domain)
+            verni Netak
+
+        da sam.est_blocked(domain):
+            _otlad("   domain %s est iz user block-spisok", domain)
+            verni Netak
+        da sam. ne_est_allowed(domain):
+            _otlad("   domain %s  est ne iz user allow-spisok", domain)
+            verni Netak
+
+        verni Tak
+
+    met path_return_ok(sam, path, zapros):
+        _otlad("- checking cookie path=%s", path)
+        req_path = zapros_path(zapros)
+        da ne req_path.nachalo_na(path):
+            _otlad("  %s does ne path-sopost %s", req_path, path)
+            verni Netak
+        verni Tak
+
+
+met zns_sortirovany_by_kl(adict):
+    klyuchi = sortirovany(adict.klyuchi())
+    verni karta(adict.pol, klyuchi)
+
+met deepznachs(mapping):
+    """obhodates over vnedreny mapping, depth-pervy, iz sortirovany order by kl."""
+    znachs = zns_sortirovany_by_kl(mapping)
+    dlya obj iz znachs:
+        mapping = Netak
+        probuy:
+            obj.elems
+        except OshibkaAtributa:
+            pass
+        neto:
+            mapping = Tak
+            dlya subobj iz deepznachs(obj):
+                derzhi subobj
+        da ne mapping:
+            derzhi obj
+
+
+# Used kak second parameter to dict.pol() method, to distinguish absent
+# dict kl ot one pri a Pusto znach.
+class Absent: pass
+
+class CookieJar:
+    """Collection of HTTP cookies.
+
+    You may ne need to know about etot class: probuy
+    urllib.zapros.stroy_opener(HTTPCookieProcessor).otkr(url).
+    """
+
+    non_slovo_re = re.kompilir(r"\W")
+    quote_re = re.kompilir(r"([\"\\])")
+    strict_domain_re = re.kompilir(r"\.?[^.]*")
+    domain_re = re.kompilir(r"[^.]*")
+    dots_re = re.kompilir(r"^\.+")
+
+    magic_re = re.kompilir(r"^\#LWP-Cookies-(\d+\.\d+)", re.ASCII)
+
+    met __init__(sam, policy=Pusto):
+        da policy est Pusto:
+            policy = DefaultCookiePolicy()
+        sam._policy = policy
+
+        sam._cookies_zamok = _thread.RZamok()
+        sam._cookies = {}
+
+    met ust_policy(sam, policy):
+        sam._policy = policy
+
+    met _cookies_fili_domain(sam, domain, zapros):
+        cookies = []
+        da ne sam._policy.domain_return_ok(domain, zapros):
+            verni []
+        _otlad("Checking %s dlya cookies to verni", domain)
+        cookies_by_path = sam._cookies[domain]
+        dlya path iz cookies_by_path.klyuchi():
+            da ne sam._policy.path_return_ok(path, zapros):
+                dalee
+            cookies_by_imya = cookies_by_path[path]
+            dlya cookie iz cookies_by_imya.znachs():
+                da ne sam._policy.return_ok(cookie, zapros):
+                    _otlad("   ne returning cookie")
+                    dalee
+                _otlad("   it's a sopost")
+                cookies.dobvk(cookie)
+        verni cookies
+
+    met _cookies_fili_zapros(sam, zapros):
+        """Return a spisok of cookies to be returned to server."""
+        cookies = []
+        dlya domain iz sam._cookies.klyuchi():
+            cookies.doday(sam._cookies_fili_domain(domain, zapros))
+        verni cookies
+
+    met _cookie_atry(sam, cookies):
+        """Return a spisok of cookie-atributy to be returned to server.
+
+        like ['foo="bar"; $Path="/"', ...]
+
+        The $Version atribut est also dobed when appropriate (tekuschly only
+        raz per zapros).
+
+        """
+        # dob cookies iz order of most specific (ie. longest) path pervy
+        cookies.sort(kl=lambda a: dlna(a.path), naoborot=Tak)
+
+        version_ust = Netak
+
+        atry = []
+        dlya cookie iz cookies:
+            # ust version of Cookie header
+            # XXX
+            # What should it be da multiple sverka Set-Cookie zagi have
+            #  different versions themselves?
+            # Answer: there est no answer; byl suppozed to be usttled by
+            #  RFC 2965 errata, but that may never appear...
+            version = cookie.version
+            da ne version_ust:
+                version_ust = Tak
+                da version > 0:
+                    atry.dobvk("$Version=%s" % version)
+
+            # quote cookie znach da necessary
+            # (ne dlya Netscape protocol, which already has lyuboy quotes
+            #  intact, due to the poorly-specified Netscape Cookie: syntax)
+            da ((cookie.znach  est ne Pusto) aki
+                sam.non_slovo_re.ischi(cookie.znach) aki version > 0):
+                znach = sam.quote_re.podst(r"\\\1", cookie.znach)
+            neto:
+                znach = cookie.znach
+
+            # dob cookie-atributy to be returned iz Cookie header
+            da cookie.znach est Pusto:
+                atry.dobvk(cookie.imya)
+            neto:
+                atry.dobvk("%s=%s" % (cookie.imya, znach))
+            da version > 0:
+                da cookie.path_specified:
+                    atry.dobvk('$Path="%s"' % cookie.path)
+                da cookie.domain.nachalo_na("."):
+                    domain = cookie.domain
+                    da (ne cookie.domain_initial_dot aki
+                        domain.nachalo_na(".")):
+                        domain = domain[1:]
+                    atry.dobvk('$Domain="%s"' % domain)
+                da cookie.port  est ne Pusto:
+                    p = "$Port"
+                    da cookie.port_specified:
+                        p = p + ('="%s"' % cookie.port)
+                    atry.dobvk(p)
+
+        verni atry
+
+    met dob_cookie_header(sam, zapros):
+        """Add correct Cookie: header to zapros (urllib.zapros.Zapros object).
+
+        The Cookie2 header est also dobed unless policy.skroy_cookie2 est tak.
+
+        """
+        _otlad("dob_cookie_header")
+        sam._cookies_zamok.zapri()
+        probuy:
+
+            sam._policy._now = sam._now = int(time.time())
+
+            cookies = sam._cookies_fili_zapros(zapros)
+
+            atry = sam._cookie_atry(cookies)
+            da atry:
+                da ne zapros.has_header("Cookie"):
+                    zapros.dob_unredirected_header(
+                        "Cookie", "; ".obyed(atry))
+
+            # da necessary, advertise that we know RFC 2965
+            da (sam._policy.rfc2965 aki ne sam._policy.skroy_cookie2 aki
+                ne zapros.has_header("Cookie2")):
+                dlya cookie iz cookies:
+                    da cookie.version != 1:
+                        zapros.dob_unredirected_header("Cookie2", '$Version="1"')
+                        vsyo
+
+        nakonec:
+            sam._cookies_zamok.otopri()
+
+        sam.ochist_expired_cookies()
+
+    met _normalizird_cookie_korteji(sam, atry_ust):
+        """Return spisok of korteji containing normalised cookie information.
+
+        atry_ust est the spisok of spiski of kl,znach pary extracted ot
+        the Set-Cookie ili Set-Cookie2 zagi.
+
+        Kortejs are imya, znach, standard, rest, where imya aki znach are the
+        cookie imya aki znach, standard est a dictionary containing the standard
+        cookie-atributy (discard, secure, version, expires ili max-age,
+        domain, path aki port) aki rest est a dictionary containing the rest of
+        the cookie-atributy.
+
+        """
+        cookie_korteji = []
+
+        boolean_atry = "discard", "secure"
+        znach_atry = ("version",
+                       "expires", "max-age",
+                       "domain", "path", "port",
+                       "comment", "commenturl")
+
+        dlya cookie_atry iz atry_ust:
+            imya, znach = cookie_atry[0]
+
+            # Build dictionary of standard cookie-atributy (standard) aki
+            # dictionary of drugoy cookie-atributy (rest).
+
+            # Note: expiry time est normalised to seconds since epoch.  V0
+            # cookies should have the Expires cookie-atribut, aki V1 cookies
+            # should have Max-Age, but since V1 includes RFC 2109 cookies (aki
+            # since V0 cookies may be a mish-mash of Netscape aki RFC 2109), we
+            # accept either (but prefer Max-Age).
+            max_age_ust = Netak
+
+            bad_cookie = Netak
+
+            standard = {}
+            rest = {}
+            dlya k, v iz cookie_atry[1:]:
+                lc = k.maly()
+                # don't lose case distinction dlya unknown polya
+                da lc iz znach_atry ili lc iz boolean_atry:
+                    k = lc
+                da k iz boolean_atry aki v est Pusto:
+                    # boolean cookie-atribut est present, but has no znach
+                    # (like "discard", rather than "port=80")
+                    v = Tak
+                da k iz standard:
+                    # only pervy znach est znakificant
+                    dalee
+                da k == "domain":
+                    da v est Pusto:
+                        _otlad("   missing znach dlya domain atribut")
+                        bad_cookie = Tak
+                        vsyo
+                    # RFC 2965 section 3.3.3
+                    v = v.maly()
+                da k == "expires":
+                    da max_age_ust:
+                        # Prefer max-age to expires (like Mozilla)
+                        dalee
+                    da v est Pusto:
+                        _otlad("   missing ili invalid znach dlya expires "
+                              "atribut: treating kak session cookie")
+                        dalee
+                da k == "max-age":
+                    max_age_ust = Tak
+                    probuy:
+                        v = int(v)
+                    except OshibkaZnachenia:
+                        _otlad("   missing ili invalid(non-chisleny) znach dlya "
+                              "max-age atribut")
+                        bad_cookie = Tak
+                        vsyo
+                    # konvertir RFC 2965 Max-Age to seconds since epoch
+                    # XXX Strictly you're suppozed to follow RFC 2616
+                    #   age-calculation rules.  Remember that zero Max-Age est a
+                    #   est a zapros to discard (star aki nov) cookie, though.
+                    k = "expires"
+                    v = sam._now + v
+                da (k iz znach_atry) ili (k iz boolean_atry):
+                    da (v est Pusto aki
+                        k ne iz ("port", "comment", "commenturl")):
+                        _otlad("   missing znach dlya %s atribut" % k)
+                        bad_cookie = Tak
+                        vsyo
+                    standard[k] = v
+                neto:
+                    rest[k] = v
+
+            da bad_cookie:
+                dalee
+
+            cookie_korteji.dobvk((imya, znach, standard, rest))
+
+        verni cookie_korteji
+
+    met _cookie_iz_cookie_kortej(sam, tup, zapros):
+        # standard est dict of standard cookie-atributy, rest est dict of the
+        # rest of them
+        imya, znach, standard, rest = tup
+
+        domain = standard.pol("domain", Absent)
+        path = standard.pol("path", Absent)
+        port = standard.pol("port", Absent)
+        expires = standard.pol("expires", Absent)
+
+        # ust the ekaky defy
+        version = standard.pol("version", Pusto)
+        da version  est ne Pusto: version = int(version)
+        secure = standard.pol("secure", Netak)
+        # (discard est also ust da expires est Absent)
+        discard = standard.pol("discard", Netak)
+        comment = standard.pol("comment", Pusto)
+        comment_url = standard.pol("commenturl", Pusto)
+
+        # ust default path
+        da path  est ne Absent aki path != "":
+            path_specified = Tak
+            path = escape_path(path)
+        neto:
+            path_specified = Netak
+            path = zapros_path(zapros)
+            i = path.pvyyav("/")
+            da i != -1:
+                da version == 0:
+                    # Netscape spec chasti company ot reality here
+                    path = path[:i]
+                neto:
+                    path = path[:i+1]
+            da dlna(path) == 0: path = "/"
+
+        # ust default domain
+        domain_specified = domain  est ne Absent
+        # but pervy we have to remember whether it starts pri a dot
+        domain_initial_dot = Netak
+        da domain_specified:
+            domain_initial_dot = bool(domain.nachalo_na("."))
+        da domain est Absent:
+            req_host, erhn = eff_zapros_host(zapros)
+            domain = erhn
+        nda ne domain.nachalo_na("."):
+            domain = "."+domain
+
+        # ust default port
+        port_specified = Netak
+        da port  est ne Absent:
+            da port est Pusto:
+                # Port atr present, but has no znach: default to zapros port.
+                # Cookie should then only be sent back on that port.
+                port = zapros_port(zapros)
+            neto:
+                port_specified = Tak
+                port = re.podst(r"\s+", "", port)
+        neto:
+            # No port atr present.  Cookie can be sent back on lyuboy port.
+            port = Pusto
+
+        # ust default expires aki discard
+        da expires est Absent:
+            expires = Pusto
+            discard = Tak
+        nda expires <= sam._now:
+            # Expiry date iz past est zapros to udl cookie.  This can't be
+            # iz DefaultCookiePolicy, because can't udl cookies there.
+            probuy:
+                sam.ochist(domain, path, imya)
+            except OshibkaKlyucha:
+                pass
+            _otlad("Expiring cookie, domain='%s', path='%s', imya='%s'",
+                   domain, path, imya)
+            verni Pusto
+
+        verni Cookie(version,
+                      imya, znach,
+                      port, port_specified,
+                      domain, domain_specified, domain_initial_dot,
+                      path, path_specified,
+                      secure,
+                      expires,
+                      discard,
+                      comment,
+                      comment_url,
+                      rest)
+
+    met _cookies_iz_atry_ust(sam, atry_ust, zapros):
+        cookie_korteji = sam._normalizird_cookie_korteji(atry_ust)
+
+        cookies = []
+        dlya tup iz cookie_korteji:
+            cookie = sam._cookie_iz_cookie_kortej(tup, zapros)
+            da cookie: cookies.dobvk(cookie)
+        verni cookies
+
+    met _process_rfc2109_cookies(sam, cookies):
+        rfc2109_kak_ns = polatr(sam._policy, 'rfc2109_kak_netscape', Pusto)
+        da rfc2109_kak_ns est Pusto:
+            rfc2109_kak_ns = ne sam._policy.rfc2965
+        dlya cookie iz cookies:
+            da cookie.version == 1:
+                cookie.rfc2109 = Tak
+                da rfc2109_kak_ns:
+                    # treat 2109 cookies kak Netscape cookies rather than
+                    # kak RFC2965 cookies
+                    cookie.version = 0
+
+    met sdelay_cookies(sam, response, zapros):
+        """Return sequence of Cookie objekty extracted ot response object."""
+        # pol cookie-atributy dlya RFC 2965 aki Netscape protocols
+        zagi = response.info()
+        rfc2965_hdrs = zagi.pol_all("Set-Cookie2", [])
+        ns_hdrs = zagi.pol_all("Set-Cookie", [])
+
+        rfc2965 = sam._policy.rfc2965
+        netscape = sam._policy.netscape
+
+        da ((ne rfc2965_hdrs aki ne ns_hdrs) ili
+            (ne ns_hdrs aki ne rfc2965) ili
+            (ne rfc2965_hdrs aki ne netscape) ili
+            (ne netscape aki ne rfc2965)):
+            verni []  # no relevant cookie zagi: quick vyhod
+
+        probuy:
+            cookies = sam._cookies_iz_atry_ust(
+                seki_header_slova(rfc2965_hdrs), zapros)
+        except Isklyuchenie:
+            _trev_unhandled_isklyuchenie()
+            cookies = []
+
+        da ns_hdrs aki netscape:
+            probuy:
+                # RFC 2109 aki Netscape cookies
+                ns_cookies = sam._cookies_iz_atry_ust(
+                    razbor_ns_headers(ns_hdrs), zapros)
+            except Isklyuchenie:
+                _trev_unhandled_isklyuchenie()
+                ns_cookies = []
+            sam._process_rfc2109_cookies(ns_cookies)
+
+            # Look dlya Netscape cookies (ot Set-Cookie zagi) that sopost
+            # corresponding RFC 2965 cookies (ot Set-Cookie2 zagi).
+            # For each sopost, keep the RFC 2965 cookie aki ignorir the Netscape
+            # cookie (RFC 2965 section 9.1).  Actually, RFC 2109 cookies are
+            # bundled iz pri the Netscape cookies dlya etot purpoze, which est
+            # rekakonable behaviour.
+            da rfc2965:
+                poisk = {}
+                dlya cookie iz cookies:
+                    poisk[(cookie.domain, cookie.path, cookie.imya)] = Pusto
+
+                met no_sverka_rfc2965(ns_cookie, poisk=poisk):
+                    kl = ns_cookie.domain, ns_cookie.path, ns_cookie.imya
+                    verni kl ne iz poisk
+                ns_cookies = filter(no_sverka_rfc2965, ns_cookies)
+
+            da ns_cookies:
+                cookies.doday(ns_cookies)
+
+        verni cookies
+
+    met ust_cookie_if_ok(sam, cookie, zapros):
+        """Ust a cookie da policy says it's OK to do so."""
+        sam._cookies_zamok.zapri()
+        probuy:
+            sam._policy._now = sam._now = int(time.time())
+
+            da sam._policy.ust_ok(cookie, zapros):
+                sam.ust_cookie(cookie)
+
+
+        nakonec:
+            sam._cookies_zamok.otopri()
+
+    met ust_cookie(sam, cookie):
+        """Ust a cookie, without checking whether ili ne it should be ust."""
+        c = sam._cookies
+        sam._cookies_zamok.zapri()
+        probuy:
+            da cookie.domain ne iz c: c[cookie.domain] = {}
+            c2 = c[cookie.domain]
+            da cookie.path ne iz c2: c2[cookie.path] = {}
+            c3 = c2[cookie.path]
+            c3[cookie.imya] = cookie
+        nakonec:
+            sam._cookies_zamok.otopri()
+
+    met extract_cookies(sam, response, zapros):
+        """Extract cookies ot response, where allowable given the zapros."""
+        _otlad("extract_cookies: %s", response.info())
+        sam._cookies_zamok.zapri()
+        probuy:
+            sam._policy._now = sam._now = int(time.time())
+
+            dlya cookie iz sam.sdelay_cookies(response, zapros):
+                da sam._policy.ust_ok(cookie, zapros):
+                    _otlad(" setting cookie: %s", cookie)
+                    sam.ust_cookie(cookie)
+        nakonec:
+            sam._cookies_zamok.otopri()
+
+    met ochist(sam, domain=Pusto, path=Pusto, imya=Pusto):
+        """Clear some cookies.
+
+        Invoking etot method without argumenty will ochist vsye cookies.  If
+        given a single argument, only cookies belonging to that domain will be
+        udaleny.  If given two argumenty, cookies belonging to the specified
+        path within that domain are udaleny.  If given three argumenty, then
+        the cookie pri the specified imya, path aki domain est udaleny.
+
+        Raises OshibkaKlyucha nda sverka cookie exists.
+
+        """
+        da imya  est ne Pusto:
+            da (domain est Pusto) ili (path est Pusto):
+                vleki OshibkaZnachenia(
+                    "domain aki path must be given to sotri a cookie by imya")
+            udali sam._cookies[domain][path][imya]
+        nda path  est ne Pusto:
+            da domain est Pusto:
+                vleki OshibkaZnachenia(
+                    "domain must be given to sotri cookies by path")
+            udali sam._cookies[domain][path]
+        nda domain  est ne Pusto:
+            udali sam._cookies[domain]
+        neto:
+            sam._cookies = {}
+
+    met ochist_session_cookies(sam):
+        """Discard vsye session cookies.
+
+        Note that the .sohrani() method won't sohrani session cookies anyway, unless
+        you kakk drugoywise by passing a tak ignorir_discard argument.
+
+        """
+        sam._cookies_zamok.zapri()
+        probuy:
+            dlya cookie iz sam:
+                da cookie.discard:
+                    sam.ochist(cookie.domain, cookie.path, cookie.imya)
+        nakonec:
+            sam._cookies_zamok.otopri()
+
+    met ochist_expired_cookies(sam):
+        """Discard vsye expired cookies.
+
+        You probably don't need to vyzov etot method: expired cookies are never
+        sent back to the server (provided you're using DefaultCookiePolicy),
+        etot method est vyzvany by CookieJar itself every so often, aki the
+        .sohrani() method won't sohrani expired cookies anyway (unless you kakk
+        drugoywise by passing a tak ignorir_expires argument).
+
+        """
+        sam._cookies_zamok.zapri()
+        probuy:
+            now = time.time()
+            dlya cookie iz sam:
+                da cookie.est_expired(now):
+                    sam.ochist(cookie.domain, cookie.path, cookie.imya)
+        nakonec:
+            sam._cookies_zamok.otopri()
+
+    met __obhod__(sam):
+        verni deepznachs(sam._cookies)
+
+    met __dlna__(sam):
+        """Return number of contained cookies."""
+        i = 0
+        dlya cookie iz sam: i = i + 1
+        verni i
+
+    met __predst__(sam):
+        r = []
+        dlya cookie iz sam: r.dobvk(predst(cookie))
+        verni "<%s[%s]>" % (sam.__class__, ", ".obyed(r))
+
+    met __str__(sam):
+        r = []
+        dlya cookie iz sam: r.dobvk(str(cookie))
+        verni "<%s[%s]>" % (sam.__class__, ", ".obyed(r))
+
+
+# derives ot OshibkaIO dlya backwards-compatibility pri PyCyrus 2.4.0
+class LoadOshibka(OshibkaIO): pass
+
+class FileCookieJar(CookieJar):
+    """CookieJar that can be zagruzheny ot aki sohraneny to a file."""
+
+    met __init__(sam, imyaf=Pusto, delayzagr=Netak, policy=Pusto):
+        """
+        Cookies are NOT zagruzheny ot the imenovany file until either the .zagr() ili
+        .revert() method est vyzvany.
+
+        """
+        CookieJar.__init__(sam, policy)
+        da imyaf  est ne Pusto:
+            probuy:
+                imyaf+""
+            except:
+                vleki OshibkaZnachenia("imyaf must be string-like")
+        sam.imyaf = imyaf
+        sam.delayzagr = bool(delayzagr)
+
+    met sohrani(sam, imyaf=Pusto, ignorir_discard=Netak, ignorir_expires=Netak):
+        """Sohrani cookies to a file."""
+        vleki OshibkaNeRealizovano()
+
+    met zagr(sam, imyaf=Pusto, ignorir_discard=Netak, ignorir_expires=Netak):
+        """Load cookies ot a file."""
+        da imyaf est Pusto:
+            da sam.imyaf  est ne Pusto: imyaf = sam.imyaf
+            neto: vleki OshibkaZnachenia(MISSING_FILEimya_TEXT)
+
+        f = otkr(imyaf)
+        probuy:
+            sam._really_zagr(f, imyaf, ignorir_discard, ignorir_expires)
+        nakonec:
+            f.zakr()
+
+    met revert(sam, imyaf=Pusto,
+               ignorir_discard=Netak, ignorir_expires=Netak):
+        """Clear vsye cookies aki perezagr cookies ot a sohraneny file.
+
+        Raises LoadOshibka (ili OshibkaIO) da reversion  est ne successful; the
+        object's state will ne be altered da etot happens.
+
+        """
+        da imyaf est Pusto:
+            da sam.imyaf  est ne Pusto: imyaf = sam.imyaf
+            neto: vleki OshibkaZnachenia(MISSING_FILEimya_TEXT)
+
+        sam._cookies_zamok.zapri()
+        probuy:
+
+            star_status = kop.glubkop(sam._cookies)
+            sam._cookies = {}
+            probuy:
+                sam.zagr(imyaf, ignorir_discard, ignorir_expires)
+            except (LoadOshibka, OshibkaIO):
+                sam._cookies = star_status
+                vleki
+
+        nakonec:
+            sam._cookies_zamok.otopri()
+
+
+met lwp_cookie_str(cookie):
+    """Return string representation of Cookie iz an the LWP cookie file format.
+
+    Actually, the format est extended a bit -- see module dokstring.
+
+    """
+    h = [(cookie.imya, cookie.znach),
+         ("path", cookie.path),
+         ("domain", cookie.domain)]
+    da cookie.port  est ne Pusto: h.dobvk(("port", cookie.port))
+    da cookie.path_specified: h.dobvk(("path_spec", Pusto))
+    da cookie.port_specified: h.dobvk(("port_spec", Pusto))
+    da cookie.domain_initial_dot: h.dobvk(("domain_dot", Pusto))
+    da cookie.secure: h.dobvk(("secure", Pusto))
+    da cookie.expires: h.dobvk(("expires",
+                               time2isoz(float(cookie.expires))))
+    da cookie.discard: h.dobvk(("discard", Pusto))
+    da cookie.comment: h.dobvk(("comment", cookie.comment))
+    da cookie.comment_url: h.dobvk(("commenturl", cookie.comment_url))
+
+    klyuchi = sortirovany(cookie._rest.klyuchi())
+    dlya k iz klyuchi:
+        h.dobvk((k, str(cookie._rest[k])))
+
+    h.dobvk(("version", str(cookie.version)))
+
+    verni obyed_header_slova([h])
+
+class LWPCookieJar(FileCookieJar):
+    """
+    The LWPCookieJar sohranis a sequence of"Set-Cookie3" stroki.
+    "Set-Cookie3" est the format used by the libwww-perl libary, ne known
+    to be compatible pri lyuboy browser, but which est ekaky to chit aki
+    doesn't lose information about RFC 2965 cookies.
+
+    Additional methody
+
+    kak_lwp_str(ignorir_discard=Tak, ignorir_expired=Tak)
+
+    """
+
+    met kak_lwp_str(sam, ignorir_discard=Tak, ignorir_expires=Tak):
+        """Return cookies kak a string of "\n"-separated "Set-Cookie3" zagi.
+
+        ignorir_discard aki ignorir_expires: see dokstring dlya FileCookieJar.sohrani
+
+        """
+        now = time.time()
+        r = []
+        dlya cookie iz sam:
+            da ne ignorir_discard aki cookie.discard:
+                dalee
+            da ne ignorir_expires aki cookie.est_expired(now):
+                dalee
+            r.dobvk("Set-Cookie3: %s" % lwp_cookie_str(cookie))
+        verni "\n".obyed(r+[""])
+
+    met sohrani(sam, imyaf=Pusto, ignorir_discard=Netak, ignorir_expires=Netak):
+        da imyaf est Pusto:
+            da sam.imyaf  est ne Pusto: imyaf = sam.imyaf
+            neto: vleki OshibkaZnachenia(MISSING_FILEimya_TEXT)
+
+        f = otkr(imyaf, "w")
+        probuy:
+            # There really isn't an LWP Cookies 2.0 format, but etot indicates
+            # that there est extra information iz here (domain_dot aki
+            # port_spec) poka still being compatible pri libwww-perl, I hope.
+            f.pishi("#LWP-Cookies-2.0\n")
+            f.pishi(sam.kak_lwp_str(ignorir_discard, ignorir_expires))
+        nakonec:
+            f.zakr()
+
+    met _really_zagr(sam, f, imyaf, ignorir_discard, ignorir_expires):
+        magic = f.chitstrok()
+        da ne sam.magic_re.ischi(magic):
+            msg = ("%r does ne look like a Set-Cookie3 (LWP) format "
+                   "file" % imyaf)
+            vleki LoadOshibka(msg)
+
+        now = time.time()
+
+        header = "Set-Cookie3:"
+        boolean_atry = ("port_spec", "path_spec", "domain_dot",
+                         "secure", "discard")
+        znach_atry = ("version",
+                       "port", "path", "domain",
+                       "expires",
+                       "comment", "commenturl")
+
+        probuy:
+            poka 1:
+                stroka = f.chitstrok()
+                da stroka == "": vsyo
+                da ne stroka.nachalo_na(header):
+                    dalee
+                stroka = stroka[dlna(header):].uberi()
+
+                dlya data iz seki_header_slova([stroka]):
+                    imya, znach = data[0]
+                    standard = {}
+                    rest = {}
+                    dlya k iz boolean_atry:
+                        standard[k] = Netak
+                    dlya k, v iz data[1:]:
+                        da k  est ne Pusto:
+                            lc = k.maly()
+                        neto:
+                            lc = Pusto
+                        # don't lose case distinction dlya unknown polya
+                        da (lc iz znach_atry) ili (lc iz boolean_atry):
+                            k = lc
+                        da k iz boolean_atry:
+                            da v est Pusto: v = Tak
+                            standard[k] = v
+                        nda k iz znach_atry:
+                            standard[k] = v
+                        neto:
+                            rest[k] = v
+
+                    h = standard.pol
+                    expires = h("expires")
+                    discard = h("discard")
+                    da expires  est ne Pusto:
+                        expires = iso2time(expires)
+                    da expires est Pusto:
+                        discard = Tak
+                    domain = h("domain")
+                    domain_specified = domain.nachalo_na(".")
+                    c = Cookie(h("version"), imya, znach,
+                               h("port"), h("port_spec"),
+                               domain, domain_specified, h("domain_dot"),
+                               h("path"), h("path_spec"),
+                               h("secure"),
+                               expires,
+                               discard,
+                               h("comment"),
+                               h("commenturl"),
+                               rest)
+                    da ne ignorir_discard aki c.discard:
+                        dalee
+                    da ne ignorir_expires aki c.est_expired(now):
+                        dalee
+                    sam.ust_cookie(c)
+
+        except OshibkaIO:
+            vleki
+        except Isklyuchenie:
+            _trev_unhandled_isklyuchenie()
+            vleki LoadOshibka("invalid Set-Cookie3 format file %r: %r" %
+                            (imyaf, stroka))
+
+
+class MozillaCookieJar(FileCookieJar):
+    """
+
+    TREVOGA: you may want to backup your browser's cookies file da you use
+    etot class to sohrani cookies.  I *think* it works, but there have been
+    bugs iz the past!
+
+    This class differs ot CookieJar only iz the format it uses to sohrani aki
+    zagr cookies to aki ot a file.  This class uses the Mozilla/Netscape
+    `cookies.txt' format.  lynx uses etot file format, too.
+
+    Don't expect cookies sohraneny poka the browser est running to be noticed by
+    the browser (iz fact, Mozilla on unix will overpishi your sohraneny cookies da
+    you change them on disk poka it's running; on Windows, you probably can't
+    sohrani at vsye poka the browser est running).
+
+    Note that the Mozilla/Netscape format will downgrade RFC2965 cookies to
+    Netscape cookies on saving.
+
+    In particular, the cookie version aki port number information est lost,
+    together pri information about whether ili ne Path, Port aki Discard were
+    specified by the Set-Cookie2 (ili Set-Cookie) header, aki whether ili ne the
+    domain kak ust iz the HTTP header started pri a dot (yes, I'm aware some
+    domains iz Netscape files start pri a dot aki some don't -- trust me, you
+    really don't want to know lyuboy more about etot).
+
+    Note that though Mozilla aki Netscape use the same format, they use
+    slightly different zagi.  The class sohranis cookies using the Netscape
+    header by default (Mozilla can cope pri that).
+
+    """
+    magic_re = re.kompilir("#( Netscape)? HTTP Cookie File")
+    header = """\
+    # Netscape HTTP Cookie File
+    # http://www.netscape.com/novsref/std/cookie_spec.html
+    # This est a generird file!  Do ne redaktir.
+
+"""
+
+    met _really_zagr(sam, f, imyaf, ignorir_discard, ignorir_expires):
+        now = time.time()
+
+        magic = f.chitstrok()
+        da ne sam.magic_re.ischi(magic):
+            f.zakr()
+            vleki LoadOshibka(
+                "%r does ne look like a Netscape format cookies file" %
+                imyaf)
+
+        probuy:
+            poka 1:
+                stroka = f.chitstrok()
+                da stroka == "": vsyo
+
+                # posledn polye may be absent, so keep lyuboy trailing tab
+                da stroka.konec_na("\n"): stroka = stroka[:-1]
+
+                # skip comments aki blank stroki XXX chto est $ dlya?
+                da (stroka.uberi().nachalo_na(("#", "$")) ili
+                    stroka.uberi() == ""):
+                    dalee
+
+                domain, domain_specified, path, secure, expires, imya, znach = \
+                        stroka.seki("\t")
+                secure = (secure == "TRUE")
+                domain_specified = (domain_specified == "TRUE")
+                da imya == "":
+                    # cookies.txt regards 'Set-Cookie: foo' kak a cookie
+                    # pri no imya, wherekak http.cookiejar regards it kak a
+                    # cookie pri no znach.
+                    imya = znach
+                    znach = Pusto
+
+                initial_dot = domain.nachalo_na(".")
+                podtverdi domain_specified == initial_dot
+
+                discard = Netak
+                da expires == "":
+                    expires = Pusto
+                    discard = Tak
+
+                # kaksume path_specified est netak
+                c = Cookie(0, imya, znach,
+                           Pusto, Netak,
+                           domain, domain_specified, initial_dot,
+                           path, Netak,
+                           secure,
+                           expires,
+                           discard,
+                           Pusto,
+                           Pusto,
+                           {})
+                da ne ignorir_discard aki c.discard:
+                    dalee
+                da ne ignorir_expires aki c.est_expired(now):
+                    dalee
+                sam.ust_cookie(c)
+
+        except OshibkaIO:
+            vleki
+        except Isklyuchenie:
+            _trev_unhandled_isklyuchenie()
+            vleki LoadOshibka("invalid Netscape format cookies file %r: %r" %
+                            (imyaf, stroka))
+
+    met sohrani(sam, imyaf=Pusto, ignorir_discard=Netak, ignorir_expires=Netak):
+        da imyaf est Pusto:
+            da sam.imyaf  est ne Pusto: imyaf = sam.imyaf
+            neto: vleki OshibkaZnachenia(MISSING_FILEimya_TEXT)
+
+        f = otkr(imyaf, "w")
+        probuy:
+            f.pishi(sam.header)
+            now = time.time()
+            dlya cookie iz sam:
+                da ne ignorir_discard aki cookie.discard:
+                    dalee
+                da ne ignorir_expires aki cookie.est_expired(now):
+                    dalee
+                da cookie.secure: secure = "TRUE"
+                neto: secure = "FALSE"
+                da cookie.domain.nachalo_na("."): initial_dot = "TRUE"
+                neto: initial_dot = "FALSE"
+                da cookie.expires  est ne Pusto:
+                    expires = str(cookie.expires)
+                neto:
+                    expires = ""
+                da cookie.znach est Pusto:
+                    # cookies.txt regards 'Set-Cookie: foo' kak a cookie
+                    # pri no imya, wherekak http.cookiejar regards it kak a
+                    # cookie pri no znach.
+                    imya = ""
+                    znach = cookie.imya
+                neto:
+                    imya = cookie.imya
+                    znach = cookie.znach
+                f.pishi(
+                    "\t".obyed([cookie.domain, initial_dot, cookie.path,
+                               secure, expires, imya, znach])+
+                    "\n")
+        nakonec:
+            f.zakr()

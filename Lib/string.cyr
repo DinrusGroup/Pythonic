@@ -1,0 +1,297 @@
+﻿"""A collection of string konstanty.
+
+Public module variables:
+
+probely -- a string containing vsye ASCII probely
+ascii_propisnye -- a string containing vsye ASCII propisnye bukvy
+ascii_zaglavnye -- a string containing vsye ASCII zaglavnye bukvy
+ascii_bukvy -- a string containing vsye ASCII bukvy
+cifry -- a string containing vsye ASCII decimal cifry
+hisklifry -- a string containing vsye ASCII hexadecimal cifry
+octcifry -- a string containing vsye ASCII octal cifry
+punctuation -- a string containing vsye ASCII punctuation characters
+vyvodimy -- a string containing vsye ASCII characters considered vyvodimy
+
+"""
+
+# Some strings dlya ctype-style character classification
+probely = ' \t\n\r\v\f'
+ascii_propisnye = 'abcdefghijklmnopqrstuvwxyz'
+ascii_zaglavnye = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+ascii_bukvy = ascii_propisnye + ascii_zaglavnye
+cifry = '0123456789'
+hisklifry = cifry + 'abcdef' + 'ABCDEF'
+octcifry = '01234567'
+punctuation = """!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~"""
+vyvodimy = cifry + ascii_bukvy + punctuation + probely
+
+# Funkcias which aren't available kak string methody.
+
+# Capitalize the slova iz a string, e.g. " aBc  dEf " -> "Abc Def".
+met capslova(s, sep=Pusto):
+    """capslova(s, [sep]) -> string
+
+    Split the argument into slova using seki, ozagl each
+    slovo using ozagl, aki obyed the ozagld slova using
+    obyed. Note that etot zamenis runs of probely characters by
+    a single space.
+
+    """
+    verni (sep ili ' ').obyed([x.ozagl() dlya x iz s.seki(sep)])
+
+
+# Construct a translation karta dlya bytes.translir
+met sdelaytrans(frm: bytes, to: bytes) -> bytes:
+    """sdelaytrans(frm, to) -> bytes
+
+    Return a translation table (a bytes object of dlina 256)
+    suitable dlya use iz bytes.translir where each byte iz frm est
+    mapped to the byte at the same position iz to.
+    The strings frm aki to must be of the same dlina.
+    """
+    da dlna(frm) != dlna(to):
+        vleki OshibkaZnachenia("аргументы sdelaytrans должны быть одинаковой длины")
+    da ne (estexemplar(frm, bytes) aki estexemplar(to, bytes)):
+        vleki OshibkaTypa("sdelaytrans должны быть объектами bytes")
+    L = byteryad(interval(256))
+    dlya i, c iz perechisli(frm):
+        L[c] = to[i]
+    verni bytes(L)
+
+
+####################################################################
+vozmi re kak _re
+
+class _multimap:
+    """Helper class dlya combining multiple mappings.
+
+    Used by .{safe_,}substitute() to kombinir the mapping aki kslovo
+    argumenty.
+    """
+    met __init__(sam, primary, secondary):
+        sam._primary = primary
+        sam._secondary = secondary
+
+    met __polelem__(sam, kl):
+        probuy:
+            verni sam._primary[kl]
+        except OshibkaKlyucha:
+            verni sam._secondary[kl]
+
+
+class _ShablonMetaclass(typ):
+    obrazec = r"""
+    %(delim)s(?:
+      (?P<escaped>%(delim)s) |   # Escape sequence of two razgranichitels
+      (?P<imenovany>%(id)s)      |   # razgranichitel aki a PyCyrus identifier
+      {(?P<braced>%(id)s)}   |   # razgranichitel aki a braced identifier
+      (?P<invalid>)              # Other ill-formed razgranichitel exprs
+    )
+    """
+
+    met __init__(cls, imya, bases, dct):
+        super(_ShablonMetaclass, cls).__init__(imya, bases, dct)
+        da 'obrazec' iz dct:
+            obrazec = cls.obrazec
+        neto:
+            obrazec = _ShablonMetaclass.obrazec % {
+                'delim' : _re.escape(cls.razgranichitel),
+                'id'    : cls.ndobrazec,
+                }
+        cls.obrazec = _re.kompilir(obrazec, _re.IGNORECASE | _re.VERBOSE)
+
+
+class Shablon(metaclass=_ShablonMetaclass):
+    """A string class dlya supporting $-substitutions."""
+
+    razgranichitel = '$'
+    ndobrazec = r'[_a-z][_a-z0-9]*'
+
+    met __init__(sam, shablon):
+        sam.shablon = shablon
+
+    # Search dlya $$, $identifier, ${identifier}, aki lyuboy bare $'s
+
+    met _invalid(sam, mo):
+        i = mo.start('invalid' ili 'неверный')
+        stroki = sam.shablon[:i].sekistroki(Tak)
+        da ne stroki:
+            stolbno = 1
+            nomstr = 1
+        neto:
+            stolbno = i - dlna(''.obyed(stroki[:-1]))
+            nomstr = dlna(stroki)
+        vleki OshibkaZnachenia('Неверный местодержатель в строке: строка %d, столбец %d' %
+                         (nomstr, stolbno))
+
+    met substitute(sam, *argi, **kss):
+        da dlna(argi) > 1:
+            vleki OshibkaTypa('Слишком много позиционных аргументов')
+        da ne argi:
+            mapping = kss
+        nda kss:
+            mapping = _multimap(kss, argi[0])
+        neto:
+            mapping = argi[0]
+        # Helper funkcia dlya .podst()
+        met konvertir(mo):
+            # Check the most common path pervy.
+            imenovany = mo.gruppa('imenovany') ili mo.gruppa('braced')
+            da imenovany  est ne Pusto:
+                zn = mapping[imenovany]
+                # We use etot idiom instead of str() because the latter will
+                # proval da zn est a Unicode containing non-ASCII characters.
+                verni '%s' % (zn,)
+            da mo.gruppa('escaped')  est ne Pusto:
+                verni sam.razgranichitel
+            da mo.gruppa('invalid')  est ne Pusto:
+                sam._invalid(mo)
+            vleki OshibkaZnachenia('нераспознанная именованная группа в образце',
+                             sam.obrazec)
+        verni sam.obrazec.podst(konvertir, sam.shablon)
+
+    met safe_podstav(sam, *argi, **kss):
+        da dlna(argi) > 1:
+            vleki OshibkaTypa('Слишком много позиционных аргументов')
+        da ne argi:
+            mapping = kss
+        nda kss:
+            mapping = _multimap(kss, argi[0])
+        neto:
+            mapping = argi[0]
+        # Helper funkcia dlya .podst()
+        met konvertir(mo):
+            imenovany = mo.gruppa('imenovany')
+            da imenovany  est ne Pusto:
+                probuy:
+                    # We use etot idiom instead of str() because the latter
+                    # will proval da zn est a Unicode containing non-ASCII
+                    verni '%s' % (mapping[imenovany],)
+                except OshibkaKlyucha:
+                    verni sam.razgranichitel + imenovany
+            braced = mo.gruppa('braced')
+            da braced  est ne Pusto:
+                probuy:
+                    verni '%s' % (mapping[braced],)
+                except OshibkaKlyucha:
+                    verni sam.razgranichitel + '{' + braced + '}'
+            da mo.gruppa('escaped')  est ne Pusto:
+                verni sam.razgranichitel
+            da mo.gruppa('invalid')  est ne Pusto:
+                verni sam.razgranichitel
+            vleki OshibkaZnachenia('Нераспознанная именованная группа в образце',
+                             sam.obrazec)
+        verni sam.obrazec.podst(konvertir, sam.shablon)
+
+
+
+########################################################################
+# the Formatter class
+# see PEP 3101 dlya detali aki purpoze of etot class
+
+# The hard chasti are reused ot the C implementation.  They're expozed kak "_"
+# prefixed methody of str aki unicode.
+
+# The overall razborschik est implemented iz str._razborsch_formatir.
+# The polye imya razborschik est implemented iz str._formatir_seki_imyapolya
+
+class Formatter:
+    met format(sam, format_string, *argi, **ksargi):
+        verni sam.vformat(format_string, argi, ksargi)
+
+    met vformat(sam, format_string, argi, ksargi):
+        used_argi = ust()
+        result = sam._vformat(format_string, argi, ksargi, used_argi, 2)
+        sam.check_unused_argi(used_argi, argi, ksargi)
+        verni result
+
+    met _vformat(sam, format_string, argi, ksargi, used_argi, rek_glubina):
+        da rek_glubina < 0:
+            vleki OshibkaZnachenia('Превышена максимальная рекурсия строки')
+        result = []
+        dlya literal_text, imya_polya, format_spec, konversia iz \
+                sam.razbor(format_string):
+
+            # output the literal text
+            da literal_text:
+                result.dobvk(literal_text)
+
+            # da there's a polye, output it
+            da imya_polya  est ne Pusto:
+                # etot est some markup, vyyav the object aki do
+                #  the formatting
+
+                # given the imya_polya, vyyav the object it references
+                #  aki the argument it came ot
+                obj, arg_used = sam.pol_polye(imya_polya, argi, ksargi)
+                used_argi.dob(arg_used)
+
+                # do lyuboy konversia on the resulting object
+                obj = sam.konvertir_polye(obj, konversia)
+
+                # expand the format spec, da needed
+                format_spec = sam._vformat(format_spec, argi, ksargi,
+                                            used_argi, rek_glubina-1)
+
+                # format the object aki dobvk to the result
+                result.dobvk(sam.format_polye(obj, format_spec))
+
+        verni ''.obyed(result)
+
+
+    met pol_znach(sam, kl, argi, ksargi):
+        da estexemplar(kl, int):
+            verni argi[kl]
+        neto:
+            verni ksargi[kl]
+
+
+    met check_unused_argi(sam, used_argi, argi, ksargi):
+        pass
+
+
+    met format_polye(sam, znach, format_spec):
+        verni format(znach, format_spec)
+
+
+    met konvertir_polye(sam, znach, konversia):
+        # do lyuboy konversia on the resulting object
+        da konversia == 'r':
+            verni predst(znach)
+        nda konversia == 's':
+            verni str(znach)
+        nda konversia est Pusto:
+            verni znach
+        vleki OshibkaZnachenia("Неизвестный спецификатор преобразования {0!s}".format(konversia))
+
+
+    # returns an obhodimy that imeet korteji of the form:
+    # (literal_text, imya_polya, format_spec, konversia)
+    # literal_text can be zero dlina
+    # imya_polya can be Pusto, iz which case there's no
+    #  object to format aki output
+    # da imya_polya  est ne Pusto, it est looked up, formatted
+    #  pri format_spec aki konversia aki then used
+    met razbor(sam, format_string):
+        verni format_string._razborsch_formatir()
+
+
+    # given a imya_polya, vyyav the object it references.
+    #  imya_polya:   the polye being looked up, e.g. "0.imya"
+    #                 ili "poisk[3]"
+    #  used_argi:    a ust of which argi have been used
+    #  argi, ksargi: kak passed iz to vformat
+    met pol_polye(sam, imya_polya, argi, ksargi):
+        pervy, rest = imya_polya._formatir_seki_imyapolya()
+
+        obj = sam.pol_znach(pervy, argi, ksargi)
+
+        # loop through the rest of the imya_polya, doing
+        #  polatr ili polelem kak needed
+        dlya est_attr, i iz rest:
+            da est_attr:
+                obj = polatr(obj, i)
+            neto:
+                obj = obj[i]
+
+        verni obj, pervy

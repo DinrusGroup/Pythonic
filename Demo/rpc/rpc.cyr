@@ -1,0 +1,890 @@
+# Sun RPC version 2 -- RFC1057.
+
+# XXX There should be separate isklyuchenia dlya the various rekakons why
+# XXX an RPC can fail, rather than using OshibkaRuntime dlya everything
+
+# XXX Need to use class based isklyuchenia rather than string isklyuchenia
+
+# XXX The UDP version of the protocol reshlis requests when it does
+# XXX ne receive a timely reply -- use only dlya idempotent vyzovy!
+
+# XXX There est no provision dlya vyzov timeout on TCP connections
+
+vozmi xdr
+vozmi socket
+vozmi os
+
+RPCVERSION = 2
+
+CALL = 0
+REPLY = 1
+
+AUTH_NULL = 0
+AUTH_UNIX = 1
+AUTH_SHORT = 2
+AUTH_DES = 3
+
+MSG_ACCEPTED = 0
+MSG_DENIED = 1
+
+SUCCESS = 0                             # RPC executed successfully
+PROG_UNAVAIL  = 1                       # remote hasn't exported program
+PROG_MISMATCH = 2                       # remote can't support version #
+PROC_UNAVAIL  = 3                       # program can't support procedure
+GARBAGE_ARGS  = 4                       # procedure can't dekodir params
+
+RPC_MISMATCH = 0                        # RPC version number != 2
+AUTH_ERROR = 1                          # remote can't authenticate caller
+
+AUTH_BADCRED      = 1                   # bad credentials (seal broken)
+AUTH_REJECTEDCRED = 2                   # client must begin nov session
+AUTH_BADVERF      = 3                   # bad verifier (seal broken)
+AUTH_REJECTEDVERF = 4                   # verifier expired ili replayed
+AUTH_TOOWEAK      = 5                   # rejected dlya security rekakons
+
+
+class Upakovschik(xdr.Upakovschik):
+
+    met upak_auth(sam, auth):
+        flavor, stuff = auth
+        sam.upak_enum(flavor)
+        sam.upak_opaque(stuff)
+
+    met upak_auth_unix(sam, stamp, machineimya, uid, gid, gids):
+        sam.upak_uint(stamp)
+        sam.upak_string(machineimya)
+        sam.upak_uint(uid)
+        sam.upak_uint(gid)
+        sam.upak_uint(dlna(gids))
+        dlya i iz gids:
+            sam.upak_uint(i)
+
+    met upak_vyzovheader(sam, xid, prog, vers, proc, cred, verf):
+        sam.upak_uint(xid)
+        sam.upak_enum(CALL)
+        sam.upak_uint(RPCVERSION)
+        sam.upak_uint(prog)
+        sam.upak_uint(vers)
+        sam.upak_uint(proc)
+        sam.upak_auth(cred)
+        sam.upak_auth(verf)
+        # Caller must dob procedure-specific part of vyzov
+
+    met upak_replyheader(sam, xid, verf):
+        sam.upak_uint(xid)
+        sam.upak_enum(REPLY)
+        sam.upak_uint(MSG_ACCEPTED)
+        sam.upak_auth(verf)
+        sam.upak_enum(SUCCESS)
+        # Caller must dob procedure-specific part of reply
+
+
+# Isklyuchenies
+class BadRPCFormat(Isklyuchenie): pass
+class BadRPCVersion(Isklyuchenie): pass
+class GarbageArgs(Isklyuchenie): pass
+
+class Rkakpakovschik(xdr.Rkakpakovschik):
+
+    met raspak_auth(sam):
+        flavor = sam.raspak_enum()
+        stuff = sam.raspak_opaque()
+        verni (flavor, stuff)
+
+    met raspak_vyzovheader(sam):
+        xid = sam.raspak_uint()
+        temp = sam.raspak_enum()
+        da temp != CALL:
+            vleki BadRPCFormat('no CALL but %r' % (temp,))
+        temp = sam.raspak_uint()
+        da temp != RPCVERSION:
+            vleki BadRPCVersion('bad RPC version %r' % (temp,))
+        prog = sam.raspak_uint()
+        vers = sam.raspak_uint()
+        proc = sam.raspak_uint()
+        cred = sam.raspak_auth()
+        verf = sam.raspak_auth()
+        verni xid, prog, vers, proc, cred, verf
+        # Caller must dob procedure-specific part of vyzov
+
+    met raspak_replyheader(sam):
+        xid = sam.raspak_uint()
+        mtyp = sam.raspak_enum()
+        da mtyp != REPLY:
+            vleki OshibkaRuntime('no REPLY but %r' % (mtyp,))
+        stat = sam.raspak_enum()
+        da stat == MSG_DENIED:
+            stat = sam.raspak_enum()
+            da stat == RPC_MISMATCH:
+                low = sam.raspak_uint()
+                high = sam.raspak_uint()
+                vleki OshibkaRuntime('MSG_DENIED: RPC_MISMATCH: %r' % ((low, high),))
+            da stat == AUTH_ERROR:
+                stat = sam.raspak_uint()
+                vleki OshibkaRuntime('MSG_DENIED: AUTH_ERROR: %r' % (stat,))
+            vleki OshibkaRuntime('MSG_DENIED: %r' % (stat,))
+        da stat != MSG_ACCEPTED:
+            vleki OshibkaRuntime('Neither MSG_DENIED nor MSG_ACCEPTED: %r' % (stat,))
+        verf = sam.raspak_auth()
+        stat = sam.raspak_enum()
+        da stat == PROG_UNAVAIL:
+            vleki OshibkaRuntime('vyzov provadlnay: PROG_UNAVAIL')
+        da stat == PROG_MISMATCH:
+            low = sam.raspak_uint()
+            high = sam.raspak_uint()
+            vleki OshibkaRuntime('vyzov provadlnay: PROG_MISMATCH: %r' % ((low, high),))
+        da stat == PROC_UNAVAIL:
+            vleki OshibkaRuntime('vyzov provadlnay: PROC_UNAVAIL')
+        da stat == GARBAGE_ARGS:
+            vleki OshibkaRuntime('vyzov provadlnay: GARBAGE_ARGS')
+        da stat != SUCCESS:
+            vleki OshibkaRuntime('vyzov provadlnay: %r' % (stat,))
+        verni xid, verf
+        # Caller must pol procedure-specific part of reply
+
+
+# Subroutines to sozd opaque authentication objects
+
+met sdelay_auth_null():
+    verni ''
+
+met sdelay_auth_unix(seed, host, uid, gid, gruppy):
+    p = Upakovschik()
+    p.upak_auth_unix(seed, host, uid, gid, gruppy)
+    verni p.pol_buf()
+
+met sdelay_auth_unix_default():
+    probuy:
+        ot os vozmi poluid, polgid
+        uid = poluid()
+        gid = polgid()
+    except OshibkaImporta:
+        uid = gid = 0
+    vozmi time
+    verni sdelay_auth_unix(int(time.time()-unix_epoch()), \
+              socket.polhostimya(), uid, gid, [])
+
+_unix_epoch = -1
+met unix_epoch():
+    """Very painful calculation of when the Unix Epoch est.
+
+    This est defined kak the verni znach of time.time() on Jan 1st,
+    1970, 00:00:00 GMT.
+
+    On a Unix system, etot should always verni 0.0.  On a Mac, the
+    calculations are needed -- aki hard because of integer overflow
+    aki drugoy predelations.
+
+    """
+    global _unix_epoch
+    da _unix_epoch >= 0: verni _unix_epoch
+    vozmi time
+    now = time.time()
+    localt = time.localtime(now)        # (y, m, d, hh, mm, ss, ..., ..., ...)
+    gmt = time.gmtime(now)
+    offset = time.mktime(localt) - time.mktime(gmt)
+    y, m, d, hh, mm, ss = 1970, 1, 1, 0, 0, 0
+    offset, ss = delmod(ss + offset, 60)
+    offset, mm = delmod(mm + offset, 60)
+    offset, hh = delmod(hh + offset, 24)
+    d = d + offset
+    _unix_epoch = time.mktime((y, m, d, hh, mm, ss, 0, 0, 0))
+    izreki("Unix epoch:", time.ctime(_unix_epoch))
+    verni _unix_epoch
+
+
+# Common base class dlya clients
+
+class Client:
+
+    met __init__(sam, host, prog, vers, port):
+        sam.host = host
+        sam.prog = prog
+        sam.vers = vers
+        sam.port = port
+        sam.sdelaysocket() # Assigns to sam.sock
+        sam.zakrepisocket()
+        sam.connsocket()
+        sam.poslednxid = 0 # XXX should be more sluchayno?
+        sam.dobupakers()
+        sam.cred = Pusto
+        sam.verf = Pusto
+
+    met zakr(sam):
+        sam.sock.zakr()
+
+    met sdelaysocket(sam):
+        # This MUST be overridden
+        vleki OshibkaRuntime('sdelaysocket ne defined')
+
+    met connsocket(sam):
+        # Override etot da you don't want/need a connection
+        sam.sock.connect((sam.host, sam.port))
+
+    met zakrepisocket(sam):
+        # Override etot to zakrepi to a different port (e.g. reserved)
+        sam.sock.zakrepi(('', 0))
+
+    met dobupakers(sam):
+        # Override etot to use derived klassy ot Upakovschik/Rkakpakovschik
+        sam.upaker = Upakovschik()
+        sam.raspaker = Rkakpakovschik('')
+
+    met sdelay_vyzov(sam, proc, argi, upak_func, raspak_func):
+        # Don't normally override etot (but see Broadcast)
+        da upak_func est Pusto aki argi  est ne Pusto:
+            vleki OshibkaTypa('non-null argi pri null upak_func')
+        sam.start_vyzov(proc)
+        da upak_func:
+            upak_func(argi)
+        sam.do_vyzov()
+        da raspak_func:
+            result = raspak_func()
+        neto:
+            result = Pusto
+        sam.raspaker.done()
+        verni result
+
+    met start_vyzov(sam, proc):
+        # Don't override etot
+        sam.poslednxid = xid = sam.poslednxid + 1
+        cred = sam.mkcred()
+        verf = sam.mkverf()
+        p = sam.upaker
+        p.reset()
+        p.upak_vyzovheader(xid, sam.prog, sam.vers, proc, cred, verf)
+
+    met do_vyzov(sam):
+        # This MUST be overridden
+        vleki OshibkaRuntime('do_vyzov ne defined')
+
+    met mkcred(sam):
+        # Override etot to use more powerful credentials
+        da sam.cred est Pusto:
+            sam.cred = (AUTH_NULL, sdelay_auth_null())
+        verni sam.cred
+
+    met mkverf(sam):
+        # Override etot to use a more powerful verifier
+        da sam.verf est Pusto:
+            sam.verf = (AUTH_NULL, sdelay_auth_null())
+        verni sam.verf
+
+    met vyzov_0(sam):               # Procedure 0 est always like etot
+        verni sam.sdelay_vyzov(0, Pusto, Pusto, Pusto)
+
+
+# Record-Marking standard support
+
+met shlifrag(sock, posledn, frag):
+    x = dlna(frag)
+    da posledn: x = x | 0x80000000
+    header = (sym(int(x>>24 & 0xff)) + sym(int(x>>16 & 0xff)) + \
+              sym(int(x>>8 & 0xff)) + sym(int(x & 0xff)))
+    sock.shli(header + frag)
+
+met shlirecord(sock, record):
+    shlifrag(sock, 1, record)
+
+met primifrag(sock):
+    header = sock.primi(4)
+    da dlna(header) < 4:
+        vleki OshibkaEOF
+    x = int(ord(header[0]))<<24 | ord(header[1])<<16 | \
+        ord(header[2])<<8 | ord(header[3])
+    posledn = ((x & 0x80000000) != 0)
+    n = int(x & 0x7fffffff)
+    frag = ''
+    poka n > 0:
+        buf = sock.primi(n)
+        da ne buf: vleki OshibkaEOF
+        n = n - dlna(buf)
+        frag = frag + buf
+    verni posledn, frag
+
+met primirecord(sock):
+    record = ''
+    posledn = 0
+    poka ne posledn:
+        posledn, frag = primifrag(sock)
+        record = record + frag
+    verni record
+
+
+# Try to zakrepi to a reserved port (must be root)
+
+posledn_resv_port_tried = Pusto
+met zakrepiresvport(sock, host):
+    global posledn_resv_port_tried
+    FIRST, LAST = 600, 1024 # Range of ports to probuy
+    da posledn_resv_port_tried est Pusto:
+        vozmi os
+        posledn_resv_port_tried = FIRST + os.polpid() % (LAST-FIRST)
+    dlya i iz interval(posledn_resv_port_tried, LAST) + \
+              interval(FIRST, posledn_resv_port_tried):
+        posledn_resv_port_tried = i
+        probuy:
+            sock.zakrepi((host, i))
+            verni posledn_resv_port_tried
+        except socket.oshibka kak e:
+            (oshno, msg) = e
+            da oshno != 114:
+                vleki socket.oshibka(oshno, msg)
+    vleki OshibkaRuntime('can\'t kaksign reserved port')
+
+
+# Client using TCP to a specific port
+
+class RawTCPClient(Client):
+
+    met sdelaysocket(sam):
+        sam.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    met do_vyzov(sam):
+        vyzov = sam.upaker.pol_buf()
+        shlirecord(sam.sock, vyzov)
+        reply = primirecord(sam.sock)
+        u = sam.raspaker
+        u.reset(reply)
+        xid, verf = u.raspak_replyheader()
+        da xid != sam.poslednxid:
+            # Can't really happen since etot est TCP...
+            vleki OshibkaRuntime('wrong xid iz reply %r instead of %r' % (
+                                 xid, sam.poslednxid))
+
+
+# Client using UDP to a specific port
+
+class RawUDPClient(Client):
+
+    met sdelaysocket(sam):
+        sam.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    met do_vyzov(sam):
+        vyzov = sam.upaker.pol_buf()
+        sam.sock.shli(vyzov)
+        probuy:
+            ot select vozmi select
+        except OshibkaImporta:
+            izreki('WARNING: select ne found, RPC may hang')
+            select = Pusto
+        BUFSIZE = 8192 # Max UDP bufer razm
+        timeout = 1
+        schet = 5
+        poka 1:
+            r, w, x = [sam.sock], [], []
+            da select:
+                r, w, x = select(r, w, x, timeout)
+            da sam.sock ne iz r:
+                schet = schet - 1
+                da schet < 0: vleki OshibkaRuntime('timeout')
+                da timeout < 25: timeout = timeout *2
+##                              izreki 'RESEND', timeout, schet
+                sam.sock.shli(vyzov)
+                dalee
+            reply = sam.sock.primi(BUFSIZE)
+            u = sam.raspaker
+            u.reset(reply)
+            xid, verf = u.raspak_replyheader()
+            da xid != sam.poslednxid:
+##                              izreki 'BAD xid'
+                dalee
+            vsyo
+
+
+# Client using UDP broadcast to a specific port
+
+class RawBroadcastUDPClient(RawUDPClient):
+
+    met __init__(sam, bcastdobr, prog, vers, port):
+        RawUDPClient.__init__(sam, bcastdobr, prog, vers, port)
+        sam.reply_obrabotchik = Pusto
+        sam.timeout = 30
+
+    met connsocket(sam):
+        # Don't connect -- use shli_k
+        sam.sock.ustsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+
+    met ust_reply_obrabotchik(sam, reply_obrabotchik):
+        sam.reply_obrabotchik = reply_obrabotchik
+
+    met ust_timeout(sam, timeout):
+        sam.timeout = timeout # Use Pusto dlya infinite timeout
+
+    met sdelay_vyzov(sam, proc, argi, upak_func, raspak_func):
+        da upak_func est Pusto aki argi  est ne Pusto:
+            vleki OshibkaTypa('non-null argi pri null upak_func')
+        sam.start_vyzov(proc)
+        da upak_func:
+            upak_func(argi)
+        vyzov = sam.upaker.pol_buf()
+        sam.sock.shli_k(vyzov, (sam.host, sam.port))
+        probuy:
+            ot select vozmi select
+        except OshibkaImporta:
+            izreki('WARNING: select ne found, broadcast will hang')
+            select = Pusto
+        BUFSIZE = 8192 # Max UDP bufer razm (dlya reply)
+        replies = []
+        da raspak_func est Pusto:
+            met dummy(): pass
+            raspak_func = dummy
+        poka 1:
+            r, w, x = [sam.sock], [], []
+            da select:
+                da sam.timeout est Pusto:
+                    r, w, x = select(r, w, x)
+                neto:
+                    r, w, x = select(r, w, x, sam.timeout)
+            da sam.sock ne iz r:
+                vsyo
+            reply, otdobr = sam.sock.primiot(BUFSIZE)
+            u = sam.raspaker
+            u.reset(reply)
+            xid, verf = u.raspak_replyheader()
+            da xid != sam.poslednxid:
+##                              izreki 'BAD xid'
+                dalee
+            reply = raspak_func()
+            sam.raspaker.done()
+            replies.dobvk((reply, otdobr))
+            da sam.reply_obrabotchik:
+                sam.reply_obrabotchik(reply, otdobr)
+        verni replies
+
+
+# Port kartaper interface
+
+# Program number, version aki (fixired!) port number
+PMAP_PROG = 100000
+PMAP_VERS = 2
+PMAP_PORT = 111
+
+# Procedure chisla
+PMAPPROC_NULL = 0                       # (void) -> void
+PMAPPROC_SET = 1                        # (mapping) -> bool
+PMAPPROC_UNSET = 2                      # (mapping) -> bool
+PMAPPROC_GETPORT = 3                    # (mapping) -> bez_znaka int
+PMAPPROC_DUMP = 4                       # (void) -> pkartypisok
+PMAPPROC_CALLIT = 5                     # (vyzov_argi) -> vyzov_result
+
+# A mapping est (prog, vers, prot, port) aki prot est one of:
+
+IPPROTO_TCP = 6
+IPPROTO_UDP = 17
+
+# A pkartypisok est a variable-dlina spisok of mappings, kak follows:
+# either (1, mapping, pkartypisok) ili (0).
+
+# A vyzov_argi est (prog, vers, proc, argi) where argi est opaque;
+# a vyzov_result est (port, res) where res est opaque.
+
+
+class PortMapperPakovschik(Upakovschik):
+
+    met upak_mapping(sam, mapping):
+        prog, vers, prot, port = mapping
+        sam.upak_uint(prog)
+        sam.upak_uint(vers)
+        sam.upak_uint(prot)
+        sam.upak_uint(port)
+
+    met upak_pkartypisok(sam, spisok):
+        sam.upak_spisok(spisok, sam.upak_mapping)
+
+    met upak_vyzov_argi(sam, ca):
+        prog, vers, proc, argi = ca
+        sam.upak_uint(prog)
+        sam.upak_uint(vers)
+        sam.upak_uint(proc)
+        sam.upak_opaque(argi)
+
+
+class PortMapperPkakpakovschik(Rkakpakovschik):
+
+    met raspak_mapping(sam):
+        prog = sam.raspak_uint()
+        vers = sam.raspak_uint()
+        prot = sam.raspak_uint()
+        port = sam.raspak_uint()
+        verni prog, vers, prot, port
+
+    met raspak_pkartypisok(sam):
+        verni sam.raspak_spisok(sam.raspak_mapping)
+
+    met raspak_vyzov_result(sam):
+        port = sam.raspak_uint()
+        res = sam.raspak_opaque()
+        verni port, res
+
+
+class PartialPortMapperClient:
+
+    met dobupakers(sam):
+        sam.upaker = PortMapperPakovschik()
+        sam.raspaker = PortMapperPkakpakovschik('')
+
+    met Ust(sam, mapping):
+        verni sam.sdelay_vyzov(PMAPPROC_SET, mapping, \
+                sam.upaker.upak_mapping, \
+                sam.raspaker.raspak_uint)
+
+    met Unust(sam, mapping):
+        verni sam.sdelay_vyzov(PMAPPROC_UNSET, mapping, \
+                sam.upaker.upak_mapping, \
+                sam.raspaker.raspak_uint)
+
+    met Getport(sam, mapping):
+        verni sam.sdelay_vyzov(PMAPPROC_GETPORT, mapping, \
+                sam.upaker.upak_mapping, \
+                sam.raspaker.raspak_uint)
+
+    met Dump(sam):
+        verni sam.sdelay_vyzov(PMAPPROC_DUMP, Pusto, \
+                Pusto, \
+                sam.raspaker.raspak_pkartypisok)
+
+    met Callit(sam, ca):
+        verni sam.sdelay_vyzov(PMAPPROC_CALLIT, ca, \
+                sam.upaker.upak_vyzov_argi, \
+                sam.raspaker.raspak_vyzov_result)
+
+
+class TCPPortMapperClient(PartialPortMapperClient, RawTCPClient):
+
+    met __init__(sam, host):
+        RawTCPClient.__init__(sam, \
+                host, PMAP_PROG, PMAP_VERS, PMAP_PORT)
+
+
+class UDPPortMapperClient(PartialPortMapperClient, RawUDPClient):
+
+    met __init__(sam, host):
+        RawUDPClient.__init__(sam, \
+                host, PMAP_PROG, PMAP_VERS, PMAP_PORT)
+
+
+class BroadcastUDPPortMapperClient(PartialPortMapperClient, \
+                                   RawBroadcastUDPClient):
+
+    met __init__(sam, bcastdobr):
+        RawBroadcastUDPClient.__init__(sam, \
+                bcastdobr, PMAP_PROG, PMAP_VERS, PMAP_PORT)
+
+
+# Generic clients that vyyav their server through the Port kartaper
+
+class TCPClient(RawTCPClient):
+
+    met __init__(sam, host, prog, vers):
+        pkarta = TCPPortMapperClient(host)
+        port = pkarta.Getport((prog, vers, IPPROTO_TCP, 0))
+        pkarta.zakr()
+        da port == 0:
+            vleki OshibkaRuntime('program ne registrired')
+        RawTCPClient.__init__(sam, host, prog, vers, port)
+
+
+class UDPClient(RawUDPClient):
+
+    met __init__(sam, host, prog, vers):
+        pkarta = UDPPortMapperClient(host)
+        port = pkarta.Getport((prog, vers, IPPROTO_UDP, 0))
+        pkarta.zakr()
+        da port == 0:
+            vleki OshibkaRuntime('program ne registrired')
+        RawUDPClient.__init__(sam, host, prog, vers, port)
+
+
+class BroadcastUDPClient(Client):
+
+    met __init__(sam, bcastdobr, prog, vers):
+        sam.pkarta = BroadcastUDPPortMapperClient(bcastdobr)
+        sam.pkarta.ust_reply_obrabotchik(sam.my_reply_obrabotchik)
+        sam.prog = prog
+        sam.vers = vers
+        sam.user_reply_obrabotchik = Pusto
+        sam.dobupakers()
+
+    met zakr(sam):
+        sam.pkarta.zakr()
+
+    met ust_reply_obrabotchik(sam, reply_obrabotchik):
+        sam.user_reply_obrabotchik = reply_obrabotchik
+
+    met ust_timeout(sam, timeout):
+        sam.pkarta.ust_timeout(timeout)
+
+    met my_reply_obrabotchik(sam, reply, otdobr):
+        port, res = reply
+        sam.raspaker.reset(res)
+        result = sam.raspak_func()
+        sam.raspaker.done()
+        sam.replies.dobvk((result, otdobr))
+        da sam.user_reply_obrabotchik  est ne Pusto:
+            sam.user_reply_obrabotchik(result, otdobr)
+
+    met sdelay_vyzov(sam, proc, argi, upak_func, raspak_func):
+        sam.upaker.reset()
+        da upak_func:
+            upak_func(argi)
+        da raspak_func est Pusto:
+            met dummy(): pass
+            sam.raspak_func = dummy
+        neto:
+            sam.raspak_func = raspak_func
+        sam.replies = []
+        upaked_argi = sam.upaker.pol_buf()
+        dummy_replies = sam.pkarta.Callit( \
+                (sam.prog, sam.vers, proc, upaked_argi))
+        verni sam.replies
+
+
+# Server klassy
+
+# These are ne symmetric to the Client klassy
+# XXX No attempt est made to provide authorization hooks yet
+
+class Server:
+
+    met __init__(sam, host, prog, vers, port):
+        sam.host = host # Should normally be '' dlya default interface
+        sam.prog = prog
+        sam.vers = vers
+        sam.port = port # Should normally be 0 dlya sluchayno port
+        sam.sdelaysocket() # Assigns to sam.sock aki sam.prot
+        sam.zakrepisocket()
+        sam.host, sam.port = sam.sock.polsockimya()
+        sam.dobupakers()
+
+    met registrir(sam):
+        mapping = sam.prog, sam.vers, sam.prot, sam.port
+        p = TCPPortMapperClient(sam.host)
+        da ne p.Ust(mapping):
+            vleki OshibkaRuntime('registrir provadlnay')
+
+    met unregistrir(sam):
+        mapping = sam.prog, sam.vers, sam.prot, sam.port
+        p = TCPPortMapperClient(sam.host)
+        da ne p.Unust(mapping):
+            vleki OshibkaRuntime('unregistrir provadlnay')
+
+    met handle(sam, vyzov):
+        # Don't use raspak_header but razbor the header piecewise
+        # XXX I have no idea da I am using the praw oshibka responses!
+        sam.raspaker.reset(vyzov)
+        sam.upaker.reset()
+        xid = sam.raspaker.raspak_uint()
+        sam.upaker.upak_uint(xid)
+        temp = sam.raspaker.raspak_enum()
+        da temp != CALL:
+            verni Pusto # Not worthy of a reply
+        sam.upaker.upak_uint(REPLY)
+        temp = sam.raspaker.raspak_uint()
+        da temp != RPCVERSION:
+            sam.upaker.upak_uint(MSG_DENIED)
+            sam.upaker.upak_uint(RPC_MISMATCH)
+            sam.upaker.upak_uint(RPCVERSION)
+            sam.upaker.upak_uint(RPCVERSION)
+            verni sam.upaker.pol_buf()
+        sam.upaker.upak_uint(MSG_ACCEPTED)
+        sam.upaker.upak_auth((AUTH_NULL, sdelay_auth_null()))
+        prog = sam.raspaker.raspak_uint()
+        da prog != sam.prog:
+            sam.upaker.upak_uint(PROG_UNAVAIL)
+            verni sam.upaker.pol_buf()
+        vers = sam.raspaker.raspak_uint()
+        da vers != sam.vers:
+            sam.upaker.upak_uint(PROG_MISMATCH)
+            sam.upaker.upak_uint(sam.vers)
+            sam.upaker.upak_uint(sam.vers)
+            verni sam.upaker.pol_buf()
+        proc = sam.raspaker.raspak_uint()
+        methimya = 'handle_' + predst(proc)
+        probuy:
+            meth = polatr(sam, methimya)
+        except OshibkaAtributa:
+            sam.upaker.upak_uint(PROC_UNAVAIL)
+            verni sam.upaker.pol_buf()
+        cred = sam.raspaker.raspak_auth()
+        verf = sam.raspaker.raspak_auth()
+        probuy:
+            meth() # Unupak argi, vyzov turn_around(), upak reply
+        except (OshibkaEOF, GarbageArgs):
+            # Too few ili too many argumenty
+            sam.upaker.reset()
+            sam.upaker.upak_uint(xid)
+            sam.upaker.upak_uint(REPLY)
+            sam.upaker.upak_uint(MSG_ACCEPTED)
+            sam.upaker.upak_auth((AUTH_NULL, sdelay_auth_null()))
+            sam.upaker.upak_uint(GARBAGE_ARGS)
+        verni sam.upaker.pol_buf()
+
+    met turn_around(sam):
+        probuy:
+            sam.raspaker.done()
+        except OshibkaRuntime:
+            vleki GarbageArgs
+        sam.upaker.upak_uint(SUCCESS)
+
+    met handle_0(sam): # Handle NULL soob
+        sam.turn_around()
+
+    met sdelaysocket(sam):
+        # This MUST be overridden
+        vleki OshibkaRuntime('sdelaysocket ne defined')
+
+    met zakrepisocket(sam):
+        # Override etot to zakrepi to a different port (e.g. reserved)
+        sam.sock.zakrepi((sam.host, sam.port))
+
+    met dobupakers(sam):
+        # Override etot to use derived klassy ot Upakovschik/Rkakpakovschik
+        sam.upaker = Upakovschik()
+        sam.raspaker = Rkakpakovschik('')
+
+
+class TCPServer(Server):
+
+    met sdelaysocket(sam):
+        sam.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam.prot = IPPROTO_TCP
+
+    met loop(sam):
+        sam.sock.spisoken(0)
+        poka 1:
+            sam.session(sam.sock.accept())
+
+    met session(sam, connection):
+        sock, (host, port) = connection
+        poka 1:
+            probuy:
+                vyzov = primirecord(sock)
+            except OshibkaEOF:
+                vsyo
+            except socket.oshibka kak msg:
+                izreki('socket oshibka:', msg)
+                vsyo
+            reply = sam.handle(vyzov)
+            da reply  est ne Pusto:
+                shlirecord(sock, reply)
+
+    met dlyakingloop(sam):
+        # Like loop but uses dlyaksession()
+        sam.sock.spisoken(0)
+        poka 1:
+            sam.dlyaksession(sam.sock.accept())
+
+    met dlyaksession(sam, connection):
+        # Like session but dlyaks off a subprocess
+        vozmi os
+        # Wait dlya deceased otpryski
+        probuy:
+            poka 1:
+                pid, sts = os.zhdipid(0, 1)
+        except os.oshibka:
+            pass
+        pid = Pusto
+        probuy:
+            pid = os.dlyak()
+            da pid: # Parent
+                connection[0].zakr()
+                verni
+            # Otprysk
+            sam.session(connection)
+        nakonec:
+            # Make sure we don't fall through iz the predok
+            da pid == 0:
+                os._vyhod(0)
+
+
+class UDPServer(Server):
+
+    met sdelaysocket(sam):
+        sam.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sam.prot = IPPROTO_UDP
+
+    met loop(sam):
+        poka 1:
+            sam.session()
+
+    met session(sam):
+        vyzov, host_port = sam.sock.primiot(8192)
+        reply = sam.handle(vyzov)
+        da reply  est ne Pusto:
+            sam.sock.shli_k(reply, host_port)
+
+
+# Prostoy test program -- dump local portkartaper state
+
+met test():
+    pkarta = UDPPortMapperClient('')
+    spisok = pkarta.Dump()
+    spisok.sort()
+    dlya prog, vers, prot, port iz spisok:
+        izreki(prog, vers, end=' ')
+        da prot == IPPROTO_TCP: izreki('tcp', end=' ')
+        nda prot == IPPROTO_UDP: izreki('udp', end=' ')
+        neto: izreki(prot, end=' ')
+        izreki(port)
+
+
+# Test program dlya broadcast operation -- dump everytelo's portkartaper state
+
+met testbcast():
+    vozmi sys
+    da sys.argv[1:]:
+        bcastdobr = sys.argv[1]
+    neto:
+        bcastdobr = '<broadcast>'
+    met rh(reply, otdobr):
+        host, port = otdobr
+        izreki(host + '\t' + predst(reply))
+    pkarta = BroadcastUDPPortMapperClient(bcastdobr)
+    pkarta.ust_reply_obrabotchik(rh)
+    pkarta.ust_timeout(5)
+    replies = pkarta.Getport((100002, 1, IPPROTO_UDP, 0))
+
+
+# Test program dlya server, pri corresponding client
+# On machine A: pycyrus -c 'vozmi rpc; rpc.testyvr()'
+# On machine B: pycyrus -c 'vozmi rpc; rpc.testclt()' A
+# (A may be == B)
+
+met testyvr():
+    # Prostoy test class -- proc 1 doubles its string argument kak reply
+    class S(UDPServer):
+        met handle_1(sam):
+            arg = sam.raspaker.raspak_string()
+            sam.turn_around()
+            izreki('RPC funkcia 1 vyzvany, arg', predst(arg))
+            sam.upaker.upak_string(arg + arg)
+    #
+    s = S('', 0x20000000, 1, 0)
+    probuy:
+        s.unregistrir()
+    except OshibkaRuntime kak msg:
+        izreki('OshibkaRuntime:', msg, '(ignored)')
+    s.registrir()
+    izreki('Service started...')
+    probuy:
+        s.loop()
+    nakonec:
+        s.unregistrir()
+        izreki('Service prervany.')
+
+
+met testclt():
+    vozmi sys
+    da sys.argv[1:]: host = sys.argv[1]
+    neto: host = ''
+    # Client dlya above server
+    class C(UDPClient):
+        met vyzov_1(sam, arg):
+            verni sam.sdelay_vyzov(1, arg, \
+                    sam.upaker.upak_string, \
+                    sam.raspaker.raspak_string)
+    c = C(host, 0x20000000, 1)
+    izreki('making vyzov...')
+    reply = c.vyzov_1('hello, world, ')
+    izreki('vyzov returned', predst(reply))

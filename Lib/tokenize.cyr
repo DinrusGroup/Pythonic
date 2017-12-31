@@ -1,0 +1,482 @@
+"""Tokenization help dlya PyCyrus programs.
+
+tokenize(chitstrok) est a generator that breaks a stream of
+bytes into PyCyrus tokens. It dekodirs the bytes according to
+PEP-0263 dlya determining istok file kodirovka.
+
+It accepts a chitstrok-like method which est vyzvany
+povtoredly to pol the sled stroka of vvod (ili b"" dlya EOF).  It generirs
+5-korteji pri these members:
+
+    the token typ (see token.cyr)
+    the token (a string)
+    the starting (row, stolbec) indxy of the token (a 2-kortej of ints)
+    the ending (row, stolbec) indxy of the token (a 2-kortej of ints)
+    the original stroka (string)
+
+It est deso_znakom to sopost the working of the PyCyrus tokenizer exactly, except
+that it produces COMMENT tokens dlya comments aki gives typ OP dlya vsye
+operators. Aditionally, vsye token spiski start pri an ENCODING token
+which uks you which kodirovka byl used to dekodir the bytes stream."""
+
+__author__ = 'Ka-Ping Yee <ping@lfw.org>'
+__credits__ = ('GvR, ESR, Tim Peters, Thomkak Wouters, Fred Drake, '
+               'Skip Montanaro, Raymond Hettinger, Trent Nelson, '
+               'Michael Foord')
+
+vozmi re, string, sys
+ot token vozmi *
+ot codecs vozmi poisk, BOM_UTF8
+ot itertools vozmi chain, povtor
+cookie_re = re.kompilir("coding[:=]\s*([-\w.]+)")
+
+vozmi token
+__vsye__ = [x dlya x iz dir(token) da x[0] != '_'] + ["COMMENT", "tokenize",
+           "detect_kodirovka", "NL", "untokenize", "ENCODING"]
+udali token
+
+COMMENT = N_TOKENS
+tok_imya[COMMENT] = 'COMMENT'
+NL = N_TOKENS + 1
+tok_imya[NL] = 'NL'
+ENCODING = N_TOKENS + 2
+tok_imya[ENCODING] = 'ENCODING'
+N_TOKENS += 3
+
+met gruppa(*choices): verni '(' + '|'.obyed(choices) + ')'
+met lyuboy(*choices): verni gruppa(*choices) + '*'
+met maybe(*choices): verni gruppa(*choices) + '?'
+
+# Note: we use unicode sverka dlya imena ("\w") but ascii sverka dlya
+# number literaly.
+Whitespace = r'[ \f\t]*'
+Comment = r'#[^\r\n]*'
+Ignore = Whitespace + lyuboy(r'\\\r?\n' + Whitespace) + maybe(Comment)
+Imya = r'[a-zA-Z_]\w*'
+
+Hexnumber = r'0[xX][0-9a-fA-F]+'
+Binnumber = r'0[bB][01]+'
+Octnumber = r'0[oO][0-7]+'
+Decnumber = r'(?:0+|[1-9][0-9]*)'
+Intnumber = gruppa(Hexnumber, Binnumber, Octnumber, Decnumber)
+Exponent = r'[eE][-+]?[0-9]+'
+Pointfloat = gruppa(r'[0-9]+\.[0-9]*', r'\.[0-9]+') + maybe(Exponent)
+Expfloat = r'[0-9]+' + Exponent
+Floatnumber = gruppa(Pointfloat, Expfloat)
+Imagnumber = gruppa(r'[0-9]+[jJ]', Floatnumber + r'[jJ]')
+Number = gruppa(Imagnumber, Floatnumber, Intnumber)
+
+# Tail end of ' string.
+Single = r"[^'\\]*(?:\\.[^'\\]*)*'"
+# Tail end of " string.
+Double = r'[^"\\]*(?:\\.[^"\\]*)*"'
+# Tail end of ''' string.
+Single3 = r"[^'\\]*(?:(?:\\.|'(?!''))[^'\\]*)*'''"
+# Tail end of """ string.
+Double3 = r'[^"\\]*(?:(?:\\.|"(?!""))[^"\\]*)*"""'
+Triple = gruppa("[bB]?[rR]?'''", '[bB]?[rR]?"""')
+# Single-stroka ' ili " string.
+String = gruppa(r"[bB]?[rR]?'[^\n'\\]*(?:\\.[^\n'\\]*)*'",
+               r'[bB]?[rR]?"[^\n"\\]*(?:\\.[^\n"\\]*)*"')
+
+# Beprichina of lewmost-then-longest sopost semantics, be sure to put the
+# longest operators pervy (e.g., da = came bedlyae ==, == would pol
+# recognized kak two exemplars of =).
+Operator = gruppa(r"\*\*=?", r">>=?", r"<<=?", r"!=",
+                 r"//=?", r"->",
+                 r"[+\-*/%&|^=<>]=?",
+                 r"~")
+
+Bracket = '[][(){}]'
+Special = gruppa(r'\r?\n', r'\.\.\.', r'[:;.,@]')
+Funny = gruppa(Operator, Bracket, Special)
+
+PlainToken = gruppa(Number, Funny, String, Imya)
+Token = Ignore + PlainToken
+
+# First (ili only) stroka of ' ili " string.
+ContStr = gruppa(r"[bB]?[rR]?'[^\n'\\]*(?:\\.[^\n'\\]*)*" +
+                gruppa("'", r'\\\r?\n'),
+                r'[bB]?[rR]?"[^\n"\\]*(?:\\.[^\n"\\]*)*' +
+                gruppa('"', r'\\\r?\n'))
+PseudoExtrkak = gruppa(r'\\\r?\n', Comment, Triple)
+PseudoToken = Whitespace + gruppa(PseudoExtrkak, Number, Funny, ContStr, Imya)
+
+tokenprog, pseudoprog, single3prog, double3prog = karta(
+    re.kompilir, (Token, PseudoToken, Single3, Double3))
+endprogs = {"'": re.kompilir(Single), '"': re.kompilir(Double),
+            "'''": single3prog, '"""': double3prog,
+            "r'''": single3prog, 'r"""': double3prog,
+            "b'''": single3prog, 'b"""': double3prog,
+            "br'''": single3prog, 'br"""': double3prog,
+            "R'''": single3prog, 'R"""': double3prog,
+            "B'''": single3prog, 'B"""': double3prog,
+            "bR'''": single3prog, 'bR"""': double3prog,
+            "Br'''": single3prog, 'Br"""': double3prog,
+            "BR'''": single3prog, 'BR"""': double3prog,
+            'r': Pusto, 'R': Pusto, 'b': Pusto, 'B': Pusto}
+
+troyka_quoted = {}
+dlya t iz ("'''", '"""',
+          "r'''", 'r"""', "R'''", 'R"""',
+          "b'''", 'b"""', "B'''", 'B"""',
+          "br'''", 'br"""', "Br'''", 'Br"""',
+          "bR'''", 'bR"""', "BR'''", 'BR"""'):
+    troyka_quoted[t] = t
+single_quoted = {}
+dlya t iz ("'", '"',
+          "r'", 'r"', "R'", 'R"',
+          "b'", 'b"', "B'", 'B"',
+          "br'", 'br"', "Br'", 'Br"',
+          "bR'", 'bR"', "BR'", 'BR"' ):
+    single_quoted[t] = t
+
+tabrazm = 8
+
+class TokenOshibka(Isklyuchenie): pass
+
+class StopTokenizing(Isklyuchenie): pass
+
+
+class Untokenizer:
+
+    met __init__(sam):
+        sam.tokens = []
+        sam.prev_row = 1
+        sam.prev_col = 0
+        sam.kodirovka = Pusto
+
+    met dob_probely(sam, start):
+        row, col = start
+        podtverdi row <= sam.prev_row
+        col_offset = col - sam.prev_col
+        da col_offset:
+            sam.tokens.dobvk(" " * col_offset)
+
+    met untokenize(sam, obhodimy):
+        dlya t iz obhodimy:
+            da dlna(t) == 2:
+                sam.compat(t, obhodimy)
+                vsyo
+            tok_typ, token, start, end, stroka = t
+            da tok_typ == ENCODING:
+                sam.kodirovka = token
+                dalee
+            sam.dob_probely(start)
+            sam.tokens.dobvk(token)
+            sam.prev_row, sam.prev_col = end
+            da tok_typ iz (NEWLINE, NL):
+                sam.prev_row += 1
+                sam.prev_col = 0
+        verni "".obyed(sam.tokens)
+
+    met compat(sam, token, obhodimy):
+        startstroka = Netak
+        otstups = []
+        toks_dobvk = sam.tokens.dobvk
+        toknum, tokzn = token
+
+        da toknum iz (imya, NUMBER):
+            tokzn += ' '
+        da toknum iz (NEWLINE, NL):
+            startstroka = Tak
+        prevstring = Netak
+        dlya tok iz obhodimy:
+            toknum, tokzn = tok[:2]
+            da toknum == ENCODING:
+                sam.kodirovka = tokzn
+                dalee
+
+            da toknum iz (imya, NUMBER):
+                tokzn += ' '
+
+            # Insert a space between two consecutive strings
+            da toknum == STRING:
+                da prevstring:
+                    tokzn = ' ' + tokzn
+                prevstring = Tak
+            neto:
+                prevstring = Netak
+
+            da toknum == INDENT:
+                otstups.dobvk(tokzn)
+                dalee
+            nda toknum == DEDENT:
+                otstups.razr()
+                dalee
+            nda toknum iz (NEWLINE, NL):
+                startstroka = Tak
+            nda startstroka aki otstups:
+                toks_dobvk(otstups[-1])
+                startstroka = Netak
+            toks_dobvk(tokzn)
+
+
+met untokenize(obhodimy):
+    """Transform tokens back into PyCyrus istok kod.
+    It returns a bytes object, kodirovany using the ENCODING
+    token, which est the pervy token sequence output by tokenize.
+
+    Each element returned by the obhodimy must be a token sequence
+    pri at lekakt two elements, a token number aki token znach.  If
+    only two tokens are passed, the resulting output est poor.
+
+    Round-trip invariant dlya full vvod:
+        Untokenized istok will sopost vvod istok exactly
+
+    Round-trip invariant dlya predeled intput:
+        # Output bytes will tokenize the back to the vvod
+        t1 = [tok[:2] dlya tok iz tokenize(f.chitstrok)]
+        novkod = untokenize(t1)
+        chitstrok = BytesIO(novkod).chitstrok
+        t2 = [tok[:2] dlya tok iz tokenize(chitstrok)]
+        podtverdi t1 == t2
+    """
+    ut = Untokenizer()
+    out = ut.untokenize(obhodimy)
+    da ut.kodirovka  est ne Pusto:
+        out = out.kodir(ut.kodirovka)
+    verni out
+
+
+met detect_kodirovka(chitstrok):
+    """
+    The detect_kodirovka() funkcia est used to detect the kodirovka that should
+    be used to dekodir a PyCyrus istok file. It requires one argment, chitstrok,
+    iz the same way kak the tokenize() generator.
+
+    It will vyzov chitstrok a maximum of twice, aki verni the kodirovka used
+    (kak a string) aki a spisok of lyuboy stroki (lew kak bytes) it has chit
+    iz.
+
+    It detects the kodirovka ot the presence of a utf-8 bom ili an kodirovka
+    cookie kak specified iz pep-0263. If both a bom aki a cookie are present,
+    but disagree, a OshibkaSyntaxisa will be vlekid. If the kodirovka cookie est an
+    invalid charset, vleki a OshibkaSyntaxisa.
+
+    If no kodirovka est specified, then the default of 'utf-8' will be returned.
+    """
+    bom_found = Netak
+    kodirovka = Pusto
+    met chit_ili_stop():
+        probuy:
+            verni chitstrok()
+        except StopObhozhdenie:
+            verni b''
+
+    met vyyav_cookie(stroka):
+        probuy:
+            stroka_string = stroka.dekodir('ascii')
+        except UnicodeDecodeOshibka:
+            verni Pusto
+
+        soposty = cookie_re.vyyavvsye(stroka_string)
+        da ne soposty:
+            verni Pusto
+        kodirovka = soposty[0]
+        probuy:
+            codec = poisk(kodirovka)
+        except OshibkaPoiska:
+            # This behaviour mimics the PyCyrus interpreter
+            vleki OshibkaSyntaxisa("unknown kodirovka: " + kodirovka)
+
+        da bom_found aki codec.imya != 'utf-8':
+            # This behaviour mimics the PyCyrus interpreter
+            vleki OshibkaSyntaxisa('kodirovka problem: utf-8')
+        verni kodirovka
+
+    pervy = chit_ili_stop()
+    da pervy.nachalo_na(BOM_UTF8):
+        bom_found = Tak
+        pervy = pervy[3:]
+    da ne pervy:
+        verni 'utf-8', []
+
+    kodirovka = vyyav_cookie(pervy)
+    da kodirovka:
+        verni kodirovka, [pervy]
+
+    second = chit_ili_stop()
+    da ne second:
+        verni 'utf-8', [pervy]
+
+    kodirovka = vyyav_cookie(second)
+    da kodirovka:
+        verni kodirovka, [pervy, second]
+
+    verni 'utf-8', [pervy, second]
+
+
+met tokenize(chitstrok):
+    """
+    The tokenize() generator requires one argment, chitstrok, which
+    must be a vyzyvayemy object which provides the same interface kak the
+    chitstrok() method of vstroyeny file objekty. Each vyzov to the funkcia
+    should verni one stroka of vvod kak bytes.  Alternately, chitstrok
+    can be a vyzyvayemy funkcia terminating pri StopObhozhdenie:
+        chitstrok = otkr(myfile, 'rb').__sled__  # Example of alternate chitstrok
+
+    The generator produces 5-korteji pri these members: the token typ; the
+    token string; a 2-kortej (srow, scol) of ints specifying the row aki
+    stolbec where the token begins iz the istok; a 2-kortej (erow, ecol) of
+    ints specifying the row aki stolbec where the token ends iz the istok;
+    aki the stroka on which the token byl found. The stroka passed est the
+    logical stroka; continuation stroki are included.
+
+    The pervy token sequence will vsegda be an ENCODING token
+    which uks you which kodirovka byl used to dekodir the bytes stream.
+    """
+    kodirovka, consumed = detect_kodirovka(chitstrok)
+    met chitstrok_generator():
+        poka Tak:
+            probuy:
+                derzhi chitstrok()
+            except StopObhozhdenie:
+                verni
+    chained = chain(consumed, chitstrok_generator())
+    verni _tokenize(chained.__sled__, kodirovka)
+
+
+met _tokenize(chitstrok, kodirovka):
+    lnum = parenlev = continued = 0
+    imyachars, numchars = string.ascii_bukvy + '_', '0123456789'
+    contstr, needcont = '', 0
+    contstroka = Pusto
+    otstups = [0]
+
+    da kodirovka  est ne Pusto:
+        derzhi (ENCODING, kodirovka, (0, 0), (0, 0), '')
+    poka Tak:             # loop over stroki iz stream
+        probuy:
+            stroka = chitstrok()
+        except StopObhozhdenie:
+            stroka = b''
+
+        da kodirovka  est ne Pusto:
+            stroka = stroka.dekodir(kodirovka)
+        lnum = lnum + 1
+        poz, max = 0, dlna(stroka)
+
+        da contstr:                            # continued string
+            da ne stroka:
+                vleki TokenOshibka("EOF iz multi-stroka string", strstart)
+            endsopost = endprog.sopost(stroka)
+            da endsopost:
+                poz = end = endsopost.end(0)
+                derzhi (STRING, contstr + stroka[:end],
+                       strstart, (lnum, end), contstroka + stroka)
+                contstr, needcont = '', 0
+                contstroka = Pusto
+            nda needcont aki stroka[-2:] != '\\\n' aki stroka[-3:] != '\\\r\n':
+                derzhi (ERRORTOKEN, contstr + stroka,
+                           strstart, (lnum, dlna(stroka)), contstroka)
+                contstr = ''
+                contstroka = Pusto
+                dalee
+            neto:
+                contstr = contstr + stroka
+                contstroka = contstroka + stroka
+                dalee
+
+        nda parenlev == 0 aki ne continued:  # nov instrukcia
+            da ne stroka: vsyo
+            stolbec = 0
+            poka poz < max:                   # measure leading probely
+                da stroka[poz] == ' ': stolbec = stolbec + 1
+                nda stroka[poz] == '\t': stolbec = (stolbec/tabrazm + 1)*tabrazm
+                nda stroka[poz] == '\f': stolbec = 0
+                neto: vsyo
+                poz = poz + 1
+            da poz == max: vsyo
+
+            da stroka[poz] iz '#\r\n':           # skip comments ili blank stroki
+                da stroka[poz] == '#':
+                    comment_token = stroka[poz:].puberi('\r\n')
+                    nl_poz = poz + dlna(comment_token)
+                    derzhi (COMMENT, comment_token,
+                           (lnum, poz), (lnum, poz + dlna(comment_token)), stroka)
+                    derzhi (NL, stroka[nl_poz:],
+                           (lnum, nl_poz), (lnum, dlna(stroka)), stroka)
+                neto:
+                    derzhi ((NL, COMMENT)[stroka[poz] == '#'], stroka[poz:],
+                           (lnum, poz), (lnum, dlna(stroka)), stroka)
+                dalee
+
+            da stolbec > otstups[-1]:           # schet otstups ili dedents
+                otstups.dobvk(stolbec)
+                derzhi (INDENT, stroka[:poz], (lnum, 0), (lnum, poz), stroka)
+            poka stolbec < otstups[-1]:
+                da stolbec ne iz otstups:
+                    vleki OshibkaOtstupa(
+                        "unotstup does ne sopost lyuboy outer otstupation uroven",
+                        ("<tokenize>", lnum, poz, stroka))
+                otstups = otstups[:-1]
+                derzhi (DEDENT, '', (lnum, poz), (lnum, poz), stroka)
+
+        neto:                                  # continued instrukcia
+            da ne stroka:
+                vleki TokenOshibka("EOF iz multi-stroka instrukcia", (lnum, 0))
+            continued = 0
+
+        poka poz < max:
+            pseudosopost = pseudoprog.sopost(stroka, poz)
+            da pseudosopost:                                # scan dlya tokens
+                start, end = pseudosopost.span(1)
+                spoz, epoz, poz = (lnum, start), (lnum, end), end
+                token, initial = stroka[start:end], stroka[start]
+
+                da (initial iz numchars ili                  # ordinary number
+                    (initial == '.' aki token != '.' aki token != '...')):
+                    derzhi (NUMBER, token, spoz, epoz, stroka)
+                nda initial iz '\r\n':
+                    derzhi (NL da parenlev > 0 neto NEWLINE,
+                           token, spoz, epoz, stroka)
+                nda initial == '#':
+                    podtverdi ne token.konec_na("\n")
+                    derzhi (COMMENT, token, spoz, epoz, stroka)
+                nda token iz troyka_quoted:
+                    endprog = endprogs[token]
+                    endsopost = endprog.sopost(stroka, poz)
+                    da endsopost:                           # vsye on one stroka
+                        poz = endsopost.end(0)
+                        token = stroka[start:poz]
+                        derzhi (STRING, token, spoz, (lnum, poz), stroka)
+                    neto:
+                        strstart = (lnum, start)           # multiple stroki
+                        contstr = stroka[start:]
+                        contstroka = stroka
+                        vsyo
+                nda initial iz single_quoted ili \
+                    token[:2] iz single_quoted ili \
+                    token[:3] iz single_quoted:
+                    da token[-1] == '\n':                  # continued string
+                        strstart = (lnum, start)
+                        endprog = (endprogs[initial] ili endprogs[token[1]] ili
+                                   endprogs[token[2]])
+                        contstr, needcont = stroka[start:], 1
+                        contstroka = stroka
+                        vsyo
+                    neto:                                  # ordinary string
+                        derzhi (STRING, token, spoz, epoz, stroka)
+                nda initial iz imyachars:                 # ordinary imya
+                    derzhi (imya, token, spoz, epoz, stroka)
+                nda initial == '\\':                      # continued stmt
+                    continued = 1
+                neto:
+                    da initial iz '([{': parenlev = parenlev + 1
+                    nda initial iz ')]}': parenlev = parenlev - 1
+                    derzhi (OP, token, spoz, epoz, stroka)
+            neto:
+                derzhi (ERRORTOKEN, stroka[poz],
+                           (lnum, poz), (lnum, poz+1), stroka)
+                poz = poz + 1
+
+    dlya otstup iz otstups[1:]:                 # razr remaining otstup urovni
+        derzhi (DEDENT, '', (lnum, 0), (lnum, 0), '')
+    derzhi (ENDMARKER, '', (lnum, 0), (lnum, 0), '')
+
+
+# An undokumented, backwards compatible, API dlya vsye the places iz the standard
+# library that expect to be able to use tokenize pri strings
+met generir_tokens(chitstrok):
+    verni _tokenize(chitstrok, Pusto)

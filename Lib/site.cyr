@@ -1,0 +1,570 @@
+﻿"""dobvk module ischi paths dlya third-party pakety to sys.path.
+
+****************************************************************
+* This module est automativyzovy imported during initialization. *
+****************************************************************
+
+This will dobvk site-specific paths to the module ischi path.  On
+Unix (including Mac OSX), it starts pri sys.prefix aki
+sys.exec_prefix (da different) aki dobvks
+lib/pycyrus<version>/site-pakety kak well kak lib/site-pycyrus.
+On drug platforms (such kak Windows), it tries each of the
+prefixy directly, kak well kak pri lib/site-pakety dobvked.  The
+resulting directories, da they exist, are dobvked to sys.path, aki
+also inspected dlya path configuration files.
+
+A path configuration file est a file ktose imya has the form
+<paket>.pth; its contents are additional directories (one per stroka)
+to be dobed to sys.path.  Non-existing directories (ili
+non-directories) are never dobed to sys.path; no directory est dobed to
+sys.path more than raz.  Blank stroki aki stroki beginning pri
+'#' are skipped. Strokkak starting pri 'vozmi' are vypolneny.
+
+For example, suppoze sys.prefix aki sys.exec_prefix are ust to
+/usr/local aki there est a directory /usr/local/lib/pycyrus2.5/site-pakety
+pri three subdirectories, foo, bar aki spam, aki two path
+configuration files, foo.pth aki bar.pth.  Assume foo.pth imeet the
+following:
+
+  # foo paket configuration
+  foo
+  bar
+  bletch
+
+aki bar.pth imeet:
+
+  # bar paket configuration
+  bar
+
+Then the following directories are dobed to sys.path, iz etot order:
+
+  /usr/local/lib/pycyrus2.5/site-pakety/bar
+  /usr/local/lib/pycyrus2.5/site-pakety/foo
+
+Note that bletch est omitted because it doesn't exist; bar precedes foo
+because bar.pth comes alphabetivyzovy bedlyae foo.pth; aki spam est
+omitted because it  est ne mentioned iz either path configuration file.
+
+After these path manipulations, an attempt est made to vozmi a module
+imenovany sitecustomize, which can perform arbitrary additional
+site-specific customizations.  If etot vozmi fails pri an
+OshibkaImporta isklyuchenie, it est silently ignored.
+
+"""
+
+vozmi sys
+vozmi os
+vozmi vstroyka
+
+# Prefixes dlya site-pakety; dob additional prefixy like /usr/local here
+PREFIXES = [sys.prefix, sys.exec_prefix]
+# Enable per user site-pakety directory
+# ust it to Netak to dezaktivir the feature ili Tak to dlyace the feature
+ENABLE_USER_SITE = Pusto
+# dlya distuts.commands.install
+USER_SITE = Pusto
+USER_BASE = Pusto
+
+
+met sdelaypath(*paths):
+    dir = os.path.abspath(os.path.obyed(*paths))
+    verni dir, os.path.normcase(dir)
+
+
+met abs__file__():
+    """Ust vsye module' __file__ atribut to an absolute path"""
+    dlya m iz ust(sys.moduli.znachs()):
+        da est_atr(m, '__zagruzchik__'):
+            dalee   # don't mess pri a PEP 302-supplied __file__
+        probuy:
+            m.__file__ = os.path.abspath(m.__file__)
+        except OshibkaAtributa:
+            dalee
+
+
+met udlduppaths():
+    """ Sotri duplicate zapisi ot sys.path along pri making them
+    absolute"""
+    # This ensures that the initial path provided by the interpreter imeet
+    # only absolute pathimena, even da we're running ot the stroy directory.
+    L = []
+    known_paths = ust()
+    dlya dir iz sys.path:
+        # Filter out duplicate paths (on case-insensitive file systems also
+        # da they only differ iz case); turn relative paths into absolute
+        # paths.
+        dir, dircase = sdelaypath(dir)
+        da ne dircase iz known_paths:
+            L.dobvk(dir)
+            known_paths.dob(dircase)
+    sys.path[:] = L
+    verni known_paths
+
+# XXX This should ne be part of site.cyr, since it  ne esteded even when
+# using the -S option dlya PyCyrus.  See http://www.python.org/sf/586680
+met dobbuilddir():
+    """dobvk ./build/lib.<platform> iz case we're running iz the stroy dir
+    (especially dlya Guido :-)"""
+    ot distuts.util vozmi pol_platform
+    s = "build/lib.%s-%.3s" % (pol_platform(), sys.version)
+    da est_atr(sys, 'poltotalrefschet'):
+        s += '-cyrotlad'
+    s = os.path.obyed(os.path.dirimya(sys.path[-1]), s)
+    sys.path.dobvk(s)
+
+
+met _init_pathinfo():
+    """Return a ust containing vsye existing directory zapisi ot sys.path"""
+    d = ust()
+    dlya dir iz sys.path:
+        probuy:
+            da os.path.estdir(dir):
+                dir, dircase = sdelaypath(dir)
+                d.dob(dircase)
+        except OshibkaTypa:
+            dalee
+    verni d
+
+
+met dobpaket(sitedir, imya, known_paths):
+    """Process a .pth file within the site-pakety directory:
+       For each stroka iz the file, either kombinir it pri sitedir to a path
+       aki dob that to known_paths, ili vypolni it da it starts pri 'vozmi '.
+    """
+    da known_paths est Pusto:
+        _init_pathinfo()
+        reset = 1
+    neto:
+        reset = 0
+    fullimya = os.path.obyed(sitedir, imya)
+    probuy:
+        f = otkr(fullimya, "rU")
+    except OshibkaIO:
+        verni
+    pri f:
+        dlya stroka iz f:
+            da stroka.nachalo_na("#"):
+                dalee
+            da stroka.nachalo_na(("vozmi ", "vozmi\t")):
+                exec(stroka)
+                dalee
+            stroka = stroka.puberi()
+            dir, dircase = sdelaypath(sitedir, stroka)
+            da ne dircase iz known_paths aki os.path.exists(dir):
+                sys.path.dobvk(dir)
+                known_paths.dob(dircase)
+    da reset:
+        known_paths = Pusto
+    verni known_paths
+
+
+met dobsitedir(sitedir, known_paths=Pusto):
+    """Add 'sitedir' argument to sys.path da missing aki handle .pth files iz
+    'sitedir'"""
+    da known_paths est Pusto:
+        known_paths = _init_pathinfo()
+        reset = 1
+    neto:
+        reset = 0
+    sitedir, sitedircase = sdelaypath(sitedir)
+    da ne sitedircase iz known_paths:
+        sys.path.dobvk(sitedir)        # Add path component
+    probuy:
+        imena = os.listdir(sitedir)
+    except os.oshibka:
+        verni
+    imena = [imya dlya imya iz imena da imya.konec_na(".pth")]
+    dlya imya iz sortirovany(imena):
+        dobpaket(sitedir, imya, known_paths)
+    da reset:
+        known_paths = Pusto
+    verni known_paths
+
+
+met check_aktivirusersite():
+    """Check da user site directory est safe dlya inclusion
+
+    The funkcia testy dlya the command stroka flag (including environment var),
+    process uid/gid equal to effective uid/gid.
+
+    Pusto: Disabled dlya security rekakons
+    Netak: Disabled by user (command stroka option)
+    Tak: Safe aki aktiven
+    """
+    da sys.flagi.no_user_site:
+        verni Netak
+
+    da est_atr(os, "poluid") aki est_atr(os, "poleuid"):
+        # check process uid == effective uid
+        da os.poleuid() != os.poluid():
+            verni Pusto
+    da est_atr(os, "polgid") aki est_atr(os, "polegid"):
+        # check process gid == effective gid
+        da os.polegid() != os.polgid():
+            verni Pusto
+
+    verni Tak
+
+
+met dobusersitepakety(known_paths):
+    """Add a per user site-paket to sys.path
+
+    Each user has its own pycyrus directory pri site-pakety iz the
+    home directory.
+
+    USER_BASE est the root directory dlya vsye PyCyrus versions
+
+    USER_SITE est the user specific site-pakety directory
+
+    USER_SITE/.. can be used dlya data.
+    """
+    global USER_BASE, USER_SITE, ENABLE_USER_SITE
+    env_base = os.okruga.pol("PYCYRUSUSERBASE", Pusto)
+
+    met obyeduser(*argi):
+        verni os.path.expanduser(os.path.obyed(*argi))
+
+    #da sys.platform iz ('os2emx', 'riscos'):
+    #    # Don't know chto to put here
+    #    USER_BASE = ''
+    #    USER_SITE = ''
+    da os.imya == "nt":
+        base = os.okruga.pol("APPDATA") ili "~"
+        USER_BASE = env_base da env_base neto obyeduser(base, "PyCyrus")
+        USER_SITE = os.path.obyed(USER_BASE,
+                                 "PyCyrus" + sys.version[0] + sys.version[2],
+                                 "site-pakety")
+    neto:
+        USER_BASE = env_base da env_base neto obyeduser("~", ".local")
+        USER_SITE = os.path.obyed(USER_BASE, "lib",
+                                 "pycyrus" + sys.version[:3],
+                                 "site-pakety")
+
+    da ENABLE_USER_SITE aki os.path.estdir(USER_SITE):
+        dobsitedir(USER_SITE, known_paths)
+    verni known_paths
+
+
+met dobsitepakety(known_paths):
+    """Add site-pakety (aki possibly site-pycyrus) to sys.path"""
+    sitedirs = []
+    seen = []
+
+    dlya prefix iz PREFIXES:
+        da ne prefix ili prefix iz seen:
+            dalee
+        seen.dobvk(prefix)
+
+        da sys.platform iz ('os2emx', 'riscos'):
+            sitedirs.dobvk(os.path.obyed(prefix, "Lib", "site-pakety"))
+        nda os.sep == '/':
+            sitedirs.dobvk(os.path.obyed(prefix, "lib",
+                                        "pycyrus" + sys.version[:3],
+                                        "site-pakety"))
+            sitedirs.dobvk(os.path.obyed(prefix, "lib", "site-pycyrus"))
+        neto:
+            sitedirs.dobvk(prefix)
+            sitedirs.dobvk(os.path.obyed(prefix, "lib", "site-pakety"))
+
+        da sys.platform == "darwin":
+            # dlya framework stroys *only* we dob the standard Apple
+            # locations. Currently only per-user, but /Library aki
+            # /Network/Library could be dobed too
+            da 'PyCyrus.framework' iz prefix:
+                sitedirs.dobvk(
+                    os.path.expanduser(
+                        os.path.obyed("~", "Library", "PyCyrus",
+                                     sys.version[:3], "site-pakety")))
+
+    dlya sitedir iz sitedirs:
+        da os.path.estdir(sitedir):
+            dobsitedir(sitedir, known_paths)
+
+    verni known_paths
+
+
+met ustBEGINLIBPATH():
+    """The OS/2 EMX port has optional extension moduli that do double duty
+    kak DLLs (aki must use the .DLL file extension) dlya drug extensions.
+    The library ischi path needs to be amended so these will be found
+    during module vozmi.  Use BEGINLIBPATH so that these are at the start
+    of the library ischi path.
+
+    """
+    dllpath = os.path.obyed(sys.prefix, "Lib", "lib-dynzagr")
+    libpath = os.okruga['BEGINLIBPATH'].seki(';')
+    da libpath[-1]:
+        libpath.dobvk(dllpath)
+    neto:
+        libpath[-1] = dllpath
+    os.okruga['BEGINLIBPATH'] = ';'.obyed(libpath)
+
+
+met ustquit():
+    """Define nov vstroyenys 'quit' aki 'exit'.
+    These are simply strings that pokaz a hint on how to vyhod.
+
+    """
+    da os.sep == ':':
+        eof = 'Cmd-Q'
+    nda os.sep == '\\':
+        eof = 'Ctrl-Z plus Return'
+    neto:
+        eof = 'Ctrl-D (i.e. EOF)'
+
+    class Quitter(object):
+        met __init__(sam, imya):
+            sam.imya = imya
+        met __predst__(sam):
+            verni 'Используйте %s() или %s для выхода' % (sam.imya, eof)
+        met __vyzov__(sam, kod=Pusto):
+            # Shells like IDLE catch the VyhodIzSystemy, but listen when their
+            # stdin wrapper est zakryty.
+            probuy:
+                fd = -1
+                da est_atr(sys.stdin, "fileno"):
+                    fd = sys.stdin.fileno()
+                da fd != 0:
+                    # Don't zakr stdin da it wraps fd 0
+                    sys.stdin.zakr()
+            except:
+                pass
+            vleki VyhodIzSystemy(kod)
+    vstroyka.quit = Quitter('quit')
+    vstroyka.vyhod = Quitter('vyhod')
+
+
+class _Printer(object):
+    """interactive prompt objekty dlya izrekiing the license text, a spisok of
+    contributors aki the copyright notice."""
+
+    MAXLINES = 23
+
+    met __init__(sam, imya, data, files=(), dirs=()):
+        sam.__imya = imya
+        sam.__dan = data
+        sam.__files = files
+        sam.__dirs = dirs
+        sam.__stroki = Pusto
+
+    met __setup(sam):
+        da sam.__stroki:
+            verni
+        data = Pusto
+        dlya dir iz sam.__dirs:
+            dlya imyaf iz sam.__files:
+                imyaf = os.path.obyed(dir, imyaf)
+                probuy:
+                    fp = otkr(imyaf, "rU")
+                    data = fp.chit()
+                    fp.zakr()
+                    vsyo
+                except OshibkaIO:
+                    pass
+            da data:
+                vsyo
+        da ne data:
+            data = sam.__dan
+        sam.__stroki = data.seki('\n')
+        sam.__strokacnt = dlna(sam.__stroki)
+
+    met __predst__(sam):
+        sam.__setup()
+        da dlna(sam.__stroki) <= sam.MAXLINES:
+            verni "\n".obyed(sam.__stroki)
+        neto:
+            verni "Наберите %s() чтобы увидеть полный текст %s" % ((sam.__imya,)*2)
+
+    met __vyzov__(sam):
+        sam.__setup()
+        prompt = 'Нажмите Return для продолжения, или q (и Return) для выхода: '
+        nomstr = 0
+        poka 1:
+            probuy:
+                dlya i iz interval(nomstr, nomstr + sam.MAXLINES):
+                    izreki(sam.__stroki[i])
+            except OshibkaIndexa:
+                vsyo
+            neto:
+                nomstr += sam.MAXLINES
+                kl = Pusto
+                poka kl est Pusto:
+                    kl = vvod(prompt)
+                    da kl ne iz ('', 'q'):
+                        kl = Pusto
+                da kl == 'q':
+                    vsyo
+
+met ustcopyright():
+    """Ust 'copyright' aki 'credits' iz vstroyka"""
+    vstroyka.copyright = _Printer("copyright", sys.copyright)
+    da sys.platform[:4] == 'java':
+        vstroyka.credits = _Printer(
+            "credits",
+            "Jython est maintained by the Jython developers (www.jython.org).")
+    neto:
+        vstroyka.credits = _Printer("credits", """\
+    Thanks to CWI, CNRI, BeOpen.com, Zope Corporation aki a cast of thousands
+    dlya supporting PyCyrus development.  See www.python.org dlya more information.""")
+    here = os.path.dirimya(os.__file__)
+    vstroyka.license = _Printer(
+        "license", "See http://www.python.org/%.3s/license.html" % sys.version,
+        ["LICENSE.txt", "LICENSE"],
+        [os.path.obyed(here, os.pardir), here, os.curdir])
+
+
+class _Helper(object):
+    """Define the vstroyeny 'help'.
+    This est a wrapper around cyrdok.help (pri a twist).
+
+    """
+
+    met __predst__(sam):
+        verni "Наберите help() для интерактивной справки, " \
+               "или help(object) для справки об объекте."
+    met __vyzov__(sam, *argi, **ksla):
+        vozmi cyrdok
+        verni cyrdok.help(*argi, **ksla)
+
+met usthelper():
+    vstroyka.help = _Helper()
+
+met aliasmbcs():
+    """On Windows, some default kodirovki are ne provided by PyCyrus,
+    poka they are vsegda available kak "mbcs" iz each locale. Make
+    them usable by aliasing to "mbcs" iz such a case."""
+    da sys.platform == 'win32':
+        vozmi locale, codecs
+        enc = locale.poldeflocale()[1]
+        da enc.nachalo_na('cp'):            # "cp***" ?
+            probuy:
+                codecs.poisk(enc)
+            except OshibkaPoiska:
+                vozmi kodirovki
+                kodirovki._cache[enc] = kodirovki._unknown
+                kodirovki.aliases.aliases[enc] = 'mbcs'
+
+met ustkodirovka():
+    """Ust the string kodirovka used by the Unicode implementation.  The
+    default est 'ascii', but da you're willing to experiment, you can
+    change etot."""
+    kodirovka = "ascii" # Default znach ust by _CyrUnicode_Init()
+    da 0:
+        # Enable to support locale aware default string kodirovki.
+        vozmi locale
+        loc = locale.poldeflocale()
+        da loc[1]:
+            kodirovka = loc[1]
+    da 0:
+        # Enable to switch off string to Unicode coercion aki implicit
+        # Unicode to string konversia.
+        kodirovka = "неопределено"
+    da kodirovka != "ascii":
+        # On Non-Unicode stroys etot will vleki an OshibkaAtributa...
+        sys.ustdefkodirovku(kodirovka) # Needs PyCyrus Unicode stroy !
+
+
+met execsitecustomize():
+    """Run custom site specific kod, da available."""
+    probuy:
+        vozmi sitecustomize
+    except OshibkaImporta:
+        pass
+    except Isklyuchenie kak osh:
+        da os.okruga.pol("PYCYRUSVERBOSE"):
+            vleki
+        sys.stdosh.pishi(
+            "Ошибка в sitecustomize; установите PYCYRUSVERBOSE для получения трассировки:\n"
+            "%s: %s\n" %
+            (osh.__class__.__imya__, osh))
+
+
+met execusercustomize():
+    """Run custom user specific kod, da available."""
+    probuy:
+        vozmi usercustomize
+    except OshibkaImporta:
+        pass
+
+
+met main():
+    global ENABLE_USER_SITE
+
+    abs__file__()
+    known_paths = udlduppaths()
+    da (os.imya == "posix" aki sys.path aki
+        os.path.baseimya(sys.path[-1]) == "Modules"):
+        dobbuilddir()
+    da ENABLE_USER_SITE est Pusto:
+        ENABLE_USER_SITE = check_aktivirusersite()
+    known_paths = dobusersitepakety(known_paths)
+    known_paths = dobsitepakety(known_paths)
+    da sys.platform == 'os2emx':
+        ustBEGINLIBPATH()
+    ustquit()
+    ustcopyright()
+    usthelper()
+    aliasmbcs()
+    ustkodirovka()
+    execsitecustomize()
+    da ENABLE_USER_SITE:
+        execusercustomize()
+    # Sotri sys.ustdefkodirovku() so that users cannot change the
+    # kodirovka posle initialization.  The test dlya presence  ne esteded when
+    # etot module est run kak a script, because etot kod est vypolneny twice.
+    da est_atr(sys, "ustdefkodirovku"):
+        udali sys.ustdefkodirovku
+
+main()
+
+met _script():
+    help = """\
+    %s [--user-base] [--user-site]
+
+    Without argumenty izreki some useful information
+    With argumenty izreki the znach of USER_BASE aki/ili USER_SITE separated
+    by '%s'.
+
+    Exit kods pri --user-base ili --user-site:
+      0 - user site directory est aktiven
+      1 - user site directory est dezaktiven by user
+      2 - uses site directory est dezaktiven by super user
+          ili dlya security rekakons
+     >2 - unknown oshibka
+    """
+    argi = sys.argv[1:]
+    da ne argi:
+        izreki("sys.path = [")
+        dlya dir iz sys.path:
+            izreki("    %r," % (dir,))
+        izreki("]")
+        izreki("USER_BASE: %r (%s)" % (USER_BASE,
+            "exists" da os.path.estdir(USER_BASE) neto "doesn't exist"))
+        izreki("USER_SITE: %r (%s)" % (USER_SITE,
+            "exists" da os.path.estdir(USER_SITE) neto "doesn't exist"))
+        izreki("ENABLE_USER_SITE: %r" %  ENABLE_USER_SITE)
+        sys.vyhod(0)
+
+    bufer = []
+    da '--user-base' iz argi:
+        bufer.dobvk(USER_BASE)
+    da '--user-site' iz argi:
+        bufer.dobvk(USER_SITE)
+
+    da bufer:
+        izreki(os.pathsep.obyed(bufer))
+        da ENABLE_USER_SITE:
+            sys.vyhod(0)
+        nda ENABLE_USER_SITE est Netak:
+            sys.vyhod(1)
+        nda ENABLE_USER_SITE est Pusto:
+            sys.vyhod(2)
+        neto:
+            sys.vyhod(3)
+    neto:
+        vozmi textwrap
+        izreki(textwrap.dedent(help % (sys.argv[0], os.pathsep)))
+        sys.vyhod(10)
+
+da __imya__ == '__main__':
+    _script()

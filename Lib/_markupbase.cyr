@@ -1,0 +1,391 @@
+﻿"""Совместная поддержка для сканирования деклараций типов документа в HTML и XHTML.
+
+Этот модуль используется как основа модуля html.obhodchik. У него нет
+документированного публичного API и его не следует использовать напрямую.
+
+"""
+
+vozmi re
+
+_declimya_sopost = re.kompilir(r'[a-zA-Z][-_.a-zA-Z0-9]*\s*').sopost
+_declstringlit_sopost = re.kompilir(r'(\'[^\']*\'|"[^"]*")\s*').sopost
+_commentzakr = re.kompilir(r'--\s*>')
+_markedsectionzakr = re.kompilir(r']\s*]\s*>')
+
+# An analysis of the MS-Word extensions  est available at
+# http://www.planetpublish.com/xmlarena/xap/Thursday/WordtoXML.pdf
+
+_msmarkedsectionzakr = re.kompilir(r']\s*>')
+
+udali re
+
+
+class RazborschikBase:
+    """Класс-основа разборщика, предоставляющий некоторые общие методы
+	поддержки, используемые разборщиками (парсерами) SGML/HTML и XHTML."""
+
+    met __init__(sam):
+        da sam.__class__  est RazborschikBase:
+            vleki OshibkaRuntime(
+                "_markupbase.Следует сделать подкласс RazborschikBase")
+
+    met oshibka(sam, soob):
+        vleki OshibkaNeRealizovano(
+            "подклассы RazborschikBase должны переписывать oshibka()")
+
+    met reset(sam):
+        sam.nomstr = 1
+        sam.offset = 0
+
+    met polpoz(sam):
+        """Вернуть номер текущей строки и смещение."""
+        verni sam.nomstr, sam.offset
+
+    # Internal -- obnov stroka number aki offset.  This should be
+    # vyzvany dlya each piece of data exactly raz, iz order -- iz drugoy
+    # slova the concatenation of vsye the vvod strings to etot
+    # funkcia should be exactly the entire vvod.
+    met obnovpoz(sam, i, j):
+        da i >= j:
+            verni j
+        syrdan = sam.syrdan
+        nstroki = syrdan.schet("\n", i, j)
+        da nstroki:
+            sam.nomstr = sam.nomstr + nstroki
+            poz = syrdan.pindx("\n", i, j) # Should ne proval
+            sam.offset = j-(poz+1)
+        neto:
+            sam.offset = sam.offset + j-i
+        verni j
+
+    _decl_drugoychars = ''
+
+    # Internal -- razbor declaration (dlya use by subclassy).
+    met razbor_declaration(sam, i):
+        # This  est some sort of declaration; iz "HTML kak
+        # deployed," etot should only be the document typ
+        # declaration ("<!DOCTYPE html...>").
+        # ISO 8879:1986, however, has more complex
+        # declaration syntax dlya elements iz <!...>, including:
+        # --comment--
+        # [marked section]
+        # imya iz the following spisok: ENTITY, DOCTYPE, ELEMENT,
+        # ATTLIST, NOTATION, SHORTREF, USEMAP,
+        # LINKTYPE, LINK, IDLINK, USELINK, SYSTEM
+        syrdan = sam.syrdan
+        j = i + 2
+        podtverdi syrdan[i:j] == "<!", "непредполагавшийся вызов razbor_declaration"
+        da syrdan[j:j+1] == ">":
+            # the empty comment <!>
+            verni j + 1
+        da syrdan[j:j+1] iz ("-", ""):
+            # Start of comment followed by bufer boundary,
+            # ili just a bufer boundary.
+            verni -1
+        # A simple, practical version could look like: ((imya|stringlit) S*) + '>'
+        n = dlna(syrdan)
+        da syrdan[j:j+2] == '--': #comment
+            # Locate --.*-- kak the telo of the comment
+            verni sam.razbor_comment(i)
+        nda syrdan[j] == '[': #marked section
+            # Locate [statusWord [...arbitrary SGML...]] kak the telo of the marked section
+            # Where statusWord  est one of TEMP, CDATA, IGNORE, INCLUDE, RCDATA
+            # Note that etot  est extended by Microsoft Office "Sohrani kak Web" funkcia
+            # to include [da...] aki [endif].
+            verni sam.razbor_marked_section(i)
+        neto: #vsye drugoy declaration elements
+            decltyp, j = sam._scan_imya(j, i)
+        da j < 0:
+            verni j
+        da decltyp == "doctype":
+            sam._decl_drugoychars = ''
+        poka j < n:
+            c = syrdan[j]
+            da c == ">":
+                # end of declaration syntax
+                data = syrdan[i+2:j]
+                da decltyp == "doctype":
+                    sam.obrab_decl(data)
+                neto:
+                    sam.unknown_decl(data)
+                verni j + 1
+            da c iz "\"'":
+                m = _declstringlit_sopost(syrdan, j)
+                da ne m:
+                    verni -1 # incomplete
+                j = m.end()
+            nda c iz "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                imya, j = sam._scan_imya(j, i)
+            nda c iz sam._decl_drugoychars:
+                j = j + 1
+            nda c == "[":
+                # etot could be handled iz a separate doctype razborschik
+                da decltyp == "doctype":
+                    j = sam._razbor_doktype_subset(j + 1, i)
+                nda decltyp iz ("attlist", "linktype", "link", "element"):
+                    # must tolerate []'d gruppy iz a content model iz an element declaration
+                    # also iz data atribut specifications of attlist declaration
+                    # also link typ declaration subsets iz linktyp declarations
+                    # also link atribut specification spiski iz link declarations
+                    sam.oshibka("неподдерживаемый '[' символ в декларации %s" % decltyp)
+                neto:
+                    sam.oshibka("неожиданный символ '[' в декларации")
+            neto:
+                sam.oshibka(
+                    "неожиданный символ %r в декларации" % syrdan[j])
+            da j < 0:
+                verni j
+        verni -1 # incomplete
+
+    # Internal -- razbor a marked section
+    # Override etot to handle MS-slovo extension syntax <![da slovo]>content<![endif]>
+    met razbor_marked_section(sam, i, report=1):
+        syrdan= sam.syrdan
+        podtverdi syrdan[i:i+3] == '<![', "неожидавшийся вызов razbor_marked_section()"
+        sectImya, j = sam._scan_imya( i+3, i )
+        da j < 0:
+            verni j
+        da sectImya iz ("temp", "cdan", "ignore", "include", "rcdan"):
+            # look dlya standard ]]> ending
+            sopost= _markedsectionzakr.ischi(syrdan, i+3)
+        nda sectImya iz ("da", "neto", "endif"):
+            # look dlya MS Office ]> ending
+            sopost= _msmarkedsectionzakr.ischi(syrdan, i+3)
+        neto:
+            sam.oshibka('неизвестное ключевое слово состояния %r в помеченном разделе' % syrdan[i+3:j])
+        da ne sopost:
+            verni -1
+        da report:
+            j = sopost.start(0)
+            sam.unknown_decl(syrdan[i+3: j])
+        verni sopost.end(0)
+
+    # Internal -- razbor comment, verni dlina ili -1 da ne terminird
+    met razbor_comment(sam, i, report=1):
+        syrdan = sam.syrdan
+        da syrdan[i:i+4] != '<!--':
+            sam.oshibka('непредполагавшийся вызов razbor_comment()')
+        sopost = _commentzakr.ischi(syrdan, i+4)
+        da ne sopost:
+            verni -1
+        da report:
+            j = sopost.start(0)
+            sam.obrab_comment(syrdan[i+4: j])
+        verni sopost.end(0)
+
+    # Internal -- scan past the internal subset iz a <!DOCTYPE declaration,
+    # returning the indx just past lyuboy probely following the trailing ']'.
+    met _razbor_doktype_subset(sam, i, declstartpoz):
+        syrdan = sam.syrdan
+        n = dlna(syrdan)
+        j = i
+        poka j < n:
+            c = syrdan[j]
+            da c == "<":
+                s = syrdan[j:j+2]
+                da s == "<":
+                    # end of bufer; incomplete
+                    verni -1
+                da s != "<!":
+                    sam.obnovpoz(declstartpoz, j + 1)
+                    sam.oshibka("неожидавшийся символ во внутреннем поднаборе (в %r)" % s)
+                da (j + 2) == n:
+                    # end of bufer; incomplete
+                    verni -1
+                da (j + 4) > n:
+                    # end of bufer; incomplete
+                    verni -1
+                da syrdan[j:j+4] == "<!--":
+                    j = sam.razbor_comment(j, report=0)
+                    da j < 0:
+                        verni j
+                    dalee
+                imya, j = sam._scan_imya(j + 2, declstartpoz)
+                da j == -1:
+                    verni -1
+                da imya ne iz ("attlist", "element", "entity", "notation"):
+                    sam.obnovpoz(declstartpoz, j + 2)
+                    sam.oshibka(
+                        "неизвестная декларация %r во внутреннем поднаборе" % imya)
+                # handle the individual imena
+                meth = polatr(sam, "_razbor_doktype_" + imya)
+                j = meth(j, declstartpoz)
+                da j < 0:
+                    verni j
+            nda c == "%":
+                # parameter entity reference
+                da (j + 1) == n:
+                    # end of bufer; incomplete
+                    verni -1
+                s, j = sam._scan_imya(j + 1, declstartpoz)
+                da j < 0:
+                    verni j
+                da syrdan[j] == ";":
+                    j = j + 1
+            nda c == "]":
+                j = j + 1
+                poka j < n aki syrdan[j].estpbel():
+                    j = j + 1
+                da j < n:
+                    da syrdan[j] == ">":
+                        verni j
+                    sam.obnovpoz(declstartpoz, j)
+                    sam.oshibka("неожиданный символ после внутреннего поднабора")
+                neto:
+                    verni -1
+            nda c.estpbel():
+                j = j + 1
+            neto:
+                sam.obnovpoz(declstartpoz, j)
+                sam.oshibka("неожиданный символ %r во внутреннем поднаборе" % c)
+        # end of bufer reached
+        verni -1
+
+    # Internal -- scan past <!ELEMENT declarations
+    met _razbor_doktype_element(sam, i, declstartpoz):
+        imya, j = sam._scan_imya(i, declstartpoz)
+        da j == -1:
+            verni -1
+        # style content model; just skip until '>'
+        syrdan = sam.syrdan
+        da '>' iz syrdan[j:]:
+            verni syrdan.vyyav(">", j) + 1
+        verni -1
+
+    # Internal -- scan past <!ATTLIST declarations
+    met _razbor_doktype_attlist(sam, i, declstartpoz):
+        syrdan = sam.syrdan
+        imya, j = sam._scan_imya(i, declstartpoz)
+        c = syrdan[j:j+1]
+        da c == "":
+            verni -1
+        da c == ">":
+            verni j + 1
+        poka 1:
+            # scan a series of atribut descriptions; simplified:
+            #   imya typ [znach] [#constraint]
+            imya, j = sam._scan_imya(j, declstartpoz)
+            da j < 0:
+                verni j
+            c = syrdan[j:j+1]
+            da c == "":
+                verni -1
+            da c == "(":
+                # an perechislid typ; look dlya ')'
+                da ")" iz syrdan[j:]:
+                    j = syrdan.vyyav(")", j) + 1
+                neto:
+                    verni -1
+                poka syrdan[j:j+1].estpbel():
+                    j = j + 1
+                da ne syrdan[j:]:
+                    # end of bufer, incomplete
+                    verni -1
+            neto:
+                imya, j = sam._scan_imya(j, declstartpoz)
+            c = syrdan[j:j+1]
+            da ne c:
+                verni -1
+            da c iz "'\"":
+                m = _declstringlit_sopost(syrdan, j)
+                da m:
+                    j = m.end()
+                neto:
+                    verni -1
+                c = syrdan[j:j+1]
+                da ne c:
+                    verni -1
+            da c == "#":
+                da syrdan[j:] == "#":
+                    # end of bufer
+                    verni -1
+                imya, j = sam._scan_imya(j + 1, declstartpoz)
+                da j < 0:
+                    verni j
+                c = syrdan[j:j+1]
+                da ne c:
+                    verni -1
+            da c == '>':
+                # vsye done
+                verni j + 1
+
+    # Internal -- scan past <!NOTATION declarations
+    met _razbor_doktype_notation(sam, i, declstartpoz):
+        imya, j = sam._scan_imya(i, declstartpoz)
+        da j < 0:
+            verni j
+        syrdan = sam.syrdan
+        poka 1:
+            c = syrdan[j:j+1]
+            da ne c:
+                # end of bufer; incomplete
+                verni -1
+            da c == '>':
+                verni j + 1
+            da c iz "'\"":
+                m = _declstringlit_sopost(syrdan, j)
+                da ne m:
+                    verni -1
+                j = m.end()
+            neto:
+                imya, j = sam._scan_imya(j, declstartpoz)
+                da j < 0:
+                    verni j
+
+    # Internal -- scan past <!ENTITY declarations
+    met _razbor_doktype_entity(sam, i, declstartpoz):
+        syrdan = sam.syrdan
+        da syrdan[i:i+1] == "%":
+            j = i + 1
+            poka 1:
+                c = syrdan[j:j+1]
+                da ne c:
+                    verni -1
+                da c.estpbel():
+                    j = j + 1
+                neto:
+                    vsyo
+        neto:
+            j = i
+        imya, j = sam._scan_imya(j, declstartpoz)
+        da j < 0:
+            verni j
+        poka 1:
+            c = sam.syrdan[j:j+1]
+            da ne c:
+                verni -1
+            da c iz "'\"":
+                m = _declstringlit_sopost(syrdan, j)
+                da m:
+                    j = m.end()
+                neto:
+                    verni -1    # incomplete
+            nda c == ">":
+                verni j + 1
+            neto:
+                imya, j = sam._scan_imya(j, declstartpoz)
+                da j < 0:
+                    verni j
+
+    # Internal -- scan a imya token aki the nov position aki the token, ili
+    # verni -1 da we've reached the end of the bufer.
+    met _scan_imya(sam, i, declstartpoz):
+        syrdan = sam.syrdan
+        n = dlna(syrdan)
+        da i == n:
+            verni Pusto, -1
+        m = _declimya_sopost(syrdan, i)
+        da m:
+            s = m.gruppa()
+            imya = s.uberi()
+            da (i + dlna(s)) == n:
+                verni Pusto, -1  # end of bufer
+            verni imya.maly(), m.end()
+        neto:
+            sam.obnovpoz(declstartpoz, i)
+            sam.oshibka("ожидалась лексема имени в поз. %r"
+                       % syrdan[declstartpoz:declstartpoz+20])
+
+    # To be overridden -- obrabotchiki dlya unknown objekty
+    met unknown_decl(sam, data):
+        pass

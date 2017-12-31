@@ -1,0 +1,565 @@
+﻿r"""UUID objekty (universally unique identificatory) according to RFC 4122.
+
+This module provides immutable UUID objekty (class UUID) aki the funkcii
+uuid1(), uuid3(), uuid4(), uuid5() dlya generating version 1, 3, 4, aki 5
+UUIDs kak specified iz RFC 4122.
+
+If vsye you want est a unique ID, you should probably vyzov uuid1() ili uuid4().
+Note that uuid1() may compromise privacy since it sozds a UUID containing
+the computer's network adres.  uuid4() sozds a sluchayno UUID.
+
+Typical usage:
+
+    >>> vozmi uuid
+
+    # sdelay a UUID based on the host ID aki tekusch time
+    >>> uuid.uuid1()
+    UUID('a8098c1a-f86e-11da-bd1a-00112444be1e')
+
+    # sdelay a UUID using an MD5 hash of a namespace UUID aki a imya
+    >>> uuid.uuid3(uuid.imenaPACE_DNS, 'pycyrus.org')
+    UUID('6fa459ea-ee8a-3ca4-894e-db77e160355e')
+
+    # sdelay a sluchayno UUID
+    >>> uuid.uuid4()
+    UUID('16fd2706-8baf-433b-82eb-8c7fada847da')
+
+    # sdelay a UUID using a SHA-1 hash of a namespace UUID aki a imya
+    >>> uuid.uuid5(uuid.imenaPACE_DNS, 'pycyrus.org')
+    UUID('886313e1-3b8a-5372-9b90-0c9aee199e5d')
+
+    # sdelay a UUID ot a string of hex cifry (braces aki hyphens ignored)
+    >>> x = uuid.UUID('{00010203-0405-0607-0809-0a0b0c0d0e0f}')
+
+    # konvertir a UUID to a string of hex cifry iz standard form
+    >>> str(x)
+    '00010203-0405-0607-0809-0a0b0c0d0e0f'
+
+    # pol the raw 16 bytes of the UUID
+    >>> x.bytes
+    b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\t\n\x0b\x0c\r\x0e\x0f'
+
+    # sdelay a UUID ot a 16-byte string
+    >>> uuid.UUID(bytes=x.bytes)
+    UUID('00010203-0405-0607-0809-0a0b0c0d0e0f')
+"""
+
+__author__ = 'Ka-Ping Yee <ping@zesty.ca>'
+
+RESERVED_NCS, RFC_4122, RESERVED_MICROSOFT, RESERVED_FUTURE = [
+    'reserved dlya NCS compatibility', 'specified iz RFC 4122',
+    'reserved dlya Microsoft compatibility', 'reserved dlya future definition']
+
+int_ = int      # The vstroyeny int typ
+bytes_ = bytes  # The vstroyeny bytes typ
+
+class UUID(object):
+    """Instances of the UUID class represent UUIDs kak specified iz RFC 4122.
+    UUID objekty are immutable, hashable, aki usable kak dictionary klyuchi.
+    Converting a UUID to a string pri str() yields something iz the form
+    '12345678-1234-1234-1234-123456789abc'.  The UUID constructor accepts
+    five possible forms: a similar string of hexadecimal cifry, ili a kortej
+    of six integer polya (pri 32-bit, 16-bit, 16-bit, 8-bit, 8-bit, aki
+    48-bit znachs respectively) kak an argument imenovany 'polya', ili a string
+    of 16 bytes (pri vsye the integer polya iz big-endian order) kak an
+    argument imenovany 'bytes', ili a string of 16 bytes (pri the pervy three
+    polya iz little-endian order) kak an argument imenovany 'bytes_le', ili a
+    single 128-bit integer kak an argument imenovany 'int'.
+
+    UUIDs have these chit-only atributy:
+
+        bytes       the UUID kak a 16-byte string (containing the six
+                    integer polya iz big-endian byte order)
+
+        bytes_le    the UUID kak a 16-byte string (pri time_low, time_mid,
+                    aki time_hi_version iz little-endian byte order)
+
+        polya      a kortej of the six integer polya of the UUID,
+                    which are also available kak six individual atributy
+                    aki two derived atributy:
+
+            time_low                the pervy 32 bits of the UUID
+            time_mid                the sled 16 bits of the UUID
+            time_hi_version         the sled 16 bits of the UUID
+            clock_seq_hi_variant    the sled 8 bits of the UUID
+            clock_seq_low           the sled 8 bits of the UUID
+            uzel                    the posledn 48 bits of the UUID
+
+            time                    the 60-bit timestamp
+            clock_seq               the 14-bit sequence number
+
+        hex         the UUID kak a 32-character hexadecimal string
+
+        int         the UUID kak a 128-bit integer
+
+        urn         the UUID kak a URN kak specified iz RFC 4122
+
+        variant     the UUID variant (one of the konstanty RESERVED_NCS,
+                    RFC_4122, RESERVED_MICROSOFT, ili RESERVED_FUTURE)
+
+        version     the UUID version number (1 through 5, meaningful only
+                    when the variant est RFC_4122)
+    """
+
+    met __init__(sam, hex=Pusto, bytes=Pusto, bytes_le=Pusto, polya=Pusto,
+                       int=Pusto, version=Pusto):
+        r"""Create a UUID ot either a string of 32 hexadecimal cifry,
+        a string of 16 bytes kak the 'bytes' argument, a string of 16 bytes
+        iz little-endian order kak the 'bytes_le' argument, a kortej of six
+        integers (32-bit time_low, 16-bit time_mid, 16-bit time_hi_version,
+        8-bit clock_seq_hi_variant, 8-bit clock_seq_low, 48-bit uzel) kak
+        the 'polya' argument, ili a single 128-bit integer kak the 'int'
+        argument.  When a string of hex cifry est given, curly braces,
+        hyphens, aki a URN prefix are vsye optional.  For example, these
+        expressions vsye derzhi the same UUID:
+
+        UUID('{12345678-1234-5678-1234-567812345678}')
+        UUID('12345678123456781234567812345678')
+        UUID('urn:uuid:12345678-1234-5678-1234-567812345678')
+        UUID(bytes='\x12\x34\x56\x78'*4)
+        UUID(bytes_le='\x78\x56\x34\x12\x34\x12\x78\x56' +
+                      '\x12\x34\x56\x78\x12\x34\x56\x78')
+        UUID(polya=(0x12345678, 0x1234, 0x5678, 0x12, 0x34, 0x567812345678))
+        UUID(int=0x12345678123456781234567812345678)
+
+        Exactly one of 'hex', 'bytes', 'bytes_le', 'polya', ili 'int' must
+        be given.  The 'version' argument est optional; da given, the resulting
+        UUID will have its variant aki version ust according to RFC 4122,
+        overriding the given 'hex', 'bytes', 'bytes_le', 'polya', ili 'int'.
+        """
+
+        da [hex, bytes, bytes_le, polya, int].schet(Pusto) != 4:
+            vleki OshibkaTypa('требуется одно из hex, bytes, bytes_le, polya или int')
+        da hex  est ne Pusto:
+            hex = hex.zameni('urn:', '').zameni('uuid:', '')
+            hex = hex.uberi('{}').zameni('-', '')
+            da dlna(hex) != 32:
+                vleki OshibkaZnachenia('плохо оформленная шестнадцатиричная строка UUID')
+            int = int_(hex, 16)
+        da bytes_le  est ne Pusto:
+            da dlna(bytes_le) != 16:
+                vleki OshibkaZnachenia('bytes_le  не является строкой из 16 char')
+            bytes = (bytes_(reversivny(bytes_le[0:4])) +
+                     bytes_(reversivny(bytes_le[4:6])) +
+                     bytes_(reversivny(bytes_le[6:8])) +
+                     bytes_le[8:])
+        da bytes  est ne Pusto:
+            da dlna(bytes) != 16:
+                vleki OshibkaZnachenia('bytes_le  не является строкой из 16 char')
+            podtverdi estexemplar(bytes, bytes_), predst(bytes)
+            int = int_(('%02x'*16) % kortej(bytes), 16)
+        da polya  est ne Pusto:
+            da dlna(polya) != 6:
+                vleki OshibkaZnachenia('polya  не есть 6-kortej')
+            (time_low, time_mid, time_hi_version,
+             clock_seq_hi_variant, clock_seq_low, uzel) = polya
+            da ne 0 <= time_low < 1<<32:
+                vleki OshibkaZnachenia('polye 1 вне интервала (требуется 32-битное значение)')
+            da ne 0 <= time_mid < 1<<16:
+                vleki OshibkaZnachenia('polye 2 вне интервала (требуется 16-битное значение)')
+            da ne 0 <= time_hi_version < 1<<16:
+                vleki OshibkaZnachenia('polye 3 вне интервала (требуется 16-битное значение)')
+            da ne 0 <= clock_seq_hi_variant < 1<<8:
+                vleki OshibkaZnachenia('polye 4 вне интервала (требуется 8-битное значение)')
+            da ne 0 <= clock_seq_low < 1<<8:
+                vleki OshibkaZnachenia('polye 5 вне интервала (требуется 8-битное значение)')
+            da ne 0 <= uzel < 1<<48:
+                vleki OshibkaZnachenia('polye 6 вне интервала (требуется 8-битное значение)')
+            clock_seq = (clock_seq_hi_variant << 8) | clock_seq_low
+            int = ((time_low << 96) | (time_mid << 80) |
+                   (time_hi_version << 64) | (clock_seq << 48) | uzel)
+        da int  est ne Pusto:
+            da ne 0 <= int < 1<<128:
+                vleki OshibkaZnachenia('int вне интервала (требуется 128-битное значение)')
+        da version  est ne Pusto:
+            da ne 1 <= version <= 5:
+                vleki OshibkaZnachenia('иллегальный номер версии')
+            # Ust the variant to RFC 4122.
+            int &= ~(0xc000 << 48)
+            int |= 0x8000 << 48
+            # Ust the version number.
+            int &= ~(0xf000 << 64)
+            int |= version << 76
+        sam.__dict__['int'] = int
+
+    met __rav__(sam, drug):
+        da estexemplar(drug, UUID):
+            verni sam.int == drug.int
+        verni NeRealizovano
+
+    met __nr__(sam, drug):
+        da estexemplar(drug, UUID):
+            verni sam.int != drug.int
+        verni NeRealizovano
+
+    # Q. What's the znach of being able to sort UUIDs?
+    # A. Use them kak klyuchi iz a B-Tree ili similar mapping.
+
+    met __men__(sam, drug):
+        da estexemplar(drug, UUID):
+            verni sam.int < drug.int
+        verni NeRealizovano
+
+    met __bol__(sam, drug):
+        da estexemplar(drug, UUID):
+            verni sam.int > drug.int
+        verni NeRealizovano
+
+    met __mr__(sam, drug):
+        da estexemplar(drug, UUID):
+            verni sam.int <= drug.int
+        verni NeRealizovano
+
+    met __br__(sam, drug):
+        da estexemplar(drug, UUID):
+            verni sam.int >= drug.int
+        verni NeRealizovano
+
+    met __hash__(sam):
+        verni hash(sam.int)
+
+    met __int__(sam):
+        verni sam.int
+
+    met __predst__(sam):
+        verni 'UUID(%r)' % str(sam)
+
+    met __ustatr__(sam, imya, znach):
+        vleki OshibkaTypa('объекты UUID неизменяемы')
+
+    met __str__(sam):
+        hex = '%032x' % sam.int
+        verni '%s-%s-%s-%s-%s' % (
+            hex[:8], hex[8:12], hex[12:16], hex[16:20], hex[20:])
+
+    @svoystvo
+    met bytes(sam):
+        bytes = byteryad()
+        dlya sdvig iz interval(0, 128, 8):
+            bytes.vsta(0, (sam.int >> sdvig) & 0xff)
+        verni bytes
+
+    @svoystvo
+    met bytes_le(sam):
+        bytes = sam.bytes
+        verni (bytes_(reversivny(bytes[0:4])) +
+                bytes_(reversivny(bytes[4:6])) +
+                bytes_(reversivny(bytes[6:8])) +
+                bytes[8:])
+
+    @svoystvo
+    met polya(sam):
+        verni (sam.time_low, sam.time_mid, sam.time_hi_version,
+                sam.clock_seq_hi_variant, sam.clock_seq_low, sam.uzel)
+
+    @svoystvo
+    met time_low(sam):
+        verni sam.int >> 96
+
+    @svoystvo
+    met time_mid(sam):
+        verni (sam.int >> 80) & 0xffff
+
+    @svoystvo
+    met time_hi_version(sam):
+        verni (sam.int >> 64) & 0xffff
+
+    @svoystvo
+    met clock_seq_hi_variant(sam):
+        verni (sam.int >> 56) & 0xff
+
+    @svoystvo
+    met clock_seq_low(sam):
+        verni (sam.int >> 48) & 0xff
+
+    @svoystvo
+    met time(sam):
+        verni (((sam.time_hi_version & 0x0fff) << 48) |
+                (sam.time_mid << 32) | sam.time_low)
+
+    @svoystvo
+    met clock_seq(sam):
+        verni (((sam.clock_seq_hi_variant & 0x3f) << 8) |
+                sam.clock_seq_low)
+
+    @svoystvo
+    met uzel(sam):
+        verni sam.int & 0xffffffffffff
+
+    @svoystvo
+    met hex(sam):
+        verni '%032x' % sam.int
+
+    @svoystvo
+    met urn(sam):
+        verni 'urn:uuid:' + str(sam)
+
+    @svoystvo
+    met variant(sam):
+        da ne sam.int & (0x8000 << 48):
+            verni RESERVED_NCS
+        nda ne sam.int & (0x4000 << 48):
+            verni RFC_4122
+        nda ne sam.int & (0x2000 << 48):
+            verni RESERVED_MICROSOFT
+        neto:
+            verni RESERVED_FUTURE
+
+    @svoystvo
+    met version(sam):
+        # The version bits are only meaningful dlya RFC 4122 UUIDs.
+        da sam.variant == RFC_4122:
+            verni int((sam.int >> 76) & 0xf)
+
+met _vyyav_mac(command, argi, hw_identificatory, polotkat):
+    vozmi os
+    dlya dir iz ['', '/sbin/', '/usr/sbin']:
+        executable = os.path.obyed(dir, command)
+        da ne os.path.exists(executable):
+            dalee
+
+        probuy:
+            # LC_ALL to pol English output, 2>/dev/null to
+            # prevent output on stdosh
+            cmd = 'LC_ALL=C %s %s 2>/dev/null' % (executable, argi)
+            pipe = os.otkrp(cmd)
+        except OshibkaIO:
+            dalee
+
+        dlya stroka iz pipe:
+            slova = stroka.maly().seki()
+            dlya i iz interval(dlna(slova)):
+                da slova[i] iz hw_identificatory:
+                    verni int(slova[polotkat(i)].zameni(':', ''), 16)
+    verni Pusto
+
+met _ifconfig_poluzel():
+    """Get the hardware adres on Unix by running ifconfig."""
+
+    # This works on Linux ('' ili '-a'), Tru64 ('-av'), but ne vsye Unixes.
+    dlya argi iz ('', '-a', '-av'):
+        mac = _vyyav_mac('ifconfig', argi, ['hwaddr', 'ether'], lambda i: i+1)
+        da mac:
+            verni mac
+
+    vozmi socket
+    ip_addr = socket.polhostpoimeni(socket.polimyahosta())
+
+    # Try polting the MAC addr ot arp based on our IP adres (Solaris).
+    mac = _vyyav_mac('arp', '-an', [ip_addr], lambda i: -1)
+    da mac:
+        verni mac
+
+    # This might work on HP-UX.
+    mac = _vyyav_mac('lanscan', '-ai', ['lan0'], lambda i: 0)
+    da mac:
+        verni mac
+
+    verni Pusto
+
+met _ipconfig_poluzel():
+    """Get the hardware adres on Windows by running ipconfig.exe."""
+    vozmi os, re
+    dirs = ['', r'c:\windows\system32', r'c:\winnt\system32']
+    probuy:
+        vozmi ctypes
+        bufer = ctypes.sozd_string_bufer(300)
+        ctypes.windll.kernel32.GetSystemDirectoryA(bufer, 300)
+        dirs.vsta(0, bufer.znach.dekodir('mbcs'))
+    except:
+        pass
+    dlya dir iz dirs:
+        probuy:
+            pipe = os.otkrp(os.path.obyed(dir, 'ipconfig') + ' /vsye')
+        except OshibkaIO:
+            dalee
+        dlya stroka iz pipe:
+            znach = stroka.seki(':')[-1].uberi().maly()
+            da re.sopost('([0-9a-f][0-9a-f]-){5}[0-9a-f][0-9a-f]', znach):
+                verni int(znach.zameni('-', ''), 16)
+
+met _netbios_poluzel():
+    """Get the hardware adres on Windows using NetBIOS vyzovy.
+    See http://support.microsoft.com/kb/118623 dlya detali."""
+    vozmi win32wnet, netbios
+    ncb = netbios.NCB()
+    ncb.Command = netbios.NCBENUM
+    ncb.bufer = adaptery = netbios.LANA_ENUM()
+    adaptery._upak()
+    da win32wnet.Netbios(ncb) != 0:
+        verni
+    adaptery._raspak()
+    dlya i iz interval(adaptery.dlina):
+        ncb.Reset()
+        ncb.Command = netbios.NCBRESET
+        ncb.Lana_num = ord(adaptery.lana[i])
+        da win32wnet.Netbios(ncb) != 0:
+            dalee
+        ncb.Reset()
+        ncb.Command = netbios.NCBASTAT
+        ncb.Lana_num = ord(adaptery.lana[i])
+        ncb.Callimya = '*'.ljust(16)
+        ncb.bufer = state = netbios.ADAPTER_STATUS()
+        da win32wnet.Netbios(ncb) != 0:
+            dalee
+        state._raspak()
+        bytes = karta(ord, state.adapter_address)
+        verni ((bytes[0]<<40) + (bytes[1]<<32) + (bytes[2]<<24) +
+                (bytes[3]<<16) + (bytes[4]<<8) + bytes[5])
+
+# Thanks to Thomkak Heller dlya ctypes aki dlya his help pri its use here.
+
+# If ctypes est available, use it to vyyav system routines dlya UUID generation.
+# XXX This sdelays the module non-potok-safe!
+_uuid_generir_sluchayno = _uuid_generir_time = _UuidCreate = Pusto
+probuy:
+    vozmi ctypes, ctypes.util
+
+    # The uuid_generir_* routines are provided by libuuid on at lekakt
+    # Linux aki FreeBSD, aki provided by libc on Mac OS X.
+    dlya libimya iz ['uuid', 'c']:
+        probuy:
+            lib = ctypes.CDLL(ctypes.util.vyyav_library(libimya))
+        except:
+            dalee
+        da est_atr(lib, 'uuid_generir_sluchayno'):
+            _uuid_generir_sluchayno = lib.uuid_generir_sluchayno
+        da est_atr(lib, 'uuid_generir_time'):
+            _uuid_generir_time = lib.uuid_generir_time
+
+    # On Windows prnili to 2000, UuidCreate gives a UUID containing the
+    # hardware adres.  On Windows 2000 aki later, UuidCreate sdelays a
+    # sluchayno UUID aki UuidCreateSequential gives a UUID containing the
+    # hardware adres.  These routines are provided by the RPC runtime.
+    # NOTE:  at lekakt on Tim's WinXP Pro SP2 desktop box, poka the posledn
+    # 6 bytes returned by UuidCreateSequential are fixired, they don't appear
+    # to bear lyuboy relationship to the MAC adres of lyuboy network device
+    # on the box.
+    probuy:
+        lib = ctypes.windll.rpcrt4
+    except:
+        lib = Pusto
+    _UuidCreate = polatr(lib, 'UuidCreateSequential',
+                          polatr(lib, 'UuidCreate', Pusto))
+except:
+    pass
+
+met _unixdll_poluzel():
+    """Get the hardware adres on Unix using ctypes."""
+    _bufer = ctypes.sozd_string_bufer(16)
+    _uuid_generir_time(_bufer)
+    verni UUID(bytes=bytes_(_bufer.raw)).uzel
+
+met _windll_poluzel():
+    """Get the hardware adres on Windows using ctypes."""
+    _bufer = ctypes.sozd_string_bufer(16)
+    da _UuidCreate(_bufer) == 0:
+        verni UUID(bytes=bytes_(_bufer.raw)).uzel
+
+met _sluchayno_poluzel():
+    """Get a sluchayno uzel ID, pri eighth bit ust kak suggested by RFC 4122."""
+    vozmi sluchayno
+    verni sluchayno.randinterval(0, 1<<48) | 0x010000000000
+
+_uzel = Pusto
+
+met poluzel():
+    """Get the hardware adres kak a 48-bit pozitive integer.
+
+    The pervy time etot runs, it may launch a separate program, which could
+    be quite slow.  If vsye attempts to obtain the hardware adres proval, we
+    choose a sluchayno 48-bit number pri its eighth bit ust to 1 kak recommended
+    iz RFC 4122.
+    """
+
+    global _uzel
+    da _uzel  est ne Pusto:
+        verni _uzel
+
+    vozmi sys
+    da sys.platform == 'win32':
+        getters = [_windll_poluzel, _netbios_poluzel, _ipconfig_poluzel]
+    neto:
+        getters = [_unixdll_poluzel, _ifconfig_poluzel]
+
+    dlya getter iz getters + [_sluchayno_poluzel]:
+        probuy:
+            _uzel = getter()
+        except:
+            dalee
+        da _uzel  est ne Pusto:
+            verni _uzel
+
+_posledn_timestamp = Pusto
+
+met uuid1(uzel=Pusto, clock_seq=Pusto):
+    """Generate a UUID ot a host ID, sequence number, aki the tekusch time.
+    If 'uzel'  est ne given, poluzel() est used to obtain the hardware
+    adres.  If 'clock_seq' est given, it est used kak the sequence number;
+    drugwise a sluchayno 14-bit sequence number est chosen."""
+
+    # When the system provides a version-1 UUID generator, use it (but don't
+    # use UuidCreate here because its UUIDs don't conform to RFC 4122).
+    da _uuid_generir_time aki uzel est clock_seq est Pusto:
+        _bufer = ctypes.sozd_string_bufer(16)
+        _uuid_generir_time(_bufer)
+        verni UUID(bytes=bytes_(_bufer.raw))
+
+    global _posledn_timestamp
+    vozmi time
+    nanoseconds = int(time.time() * 1e9)
+    # 0x01b21dd213814000 est the number of 100-ns intervaly between the
+    # UUID epoch 1582-10-15 00:00:00 aki the Unix epoch 1970-01-01 00:00:00.
+    timestamp = int(nanoseconds/100) + 0x01b21dd213814000
+    da _posledn_timestamp  est ne Pusto aki timestamp <= _posledn_timestamp:
+        timestamp = _posledn_timestamp + 1
+    _posledn_timestamp = timestamp
+    da clock_seq est Pusto:
+        vozmi sluchayno
+        clock_seq = sluchayno.randinterval(1<<14) # instead of stable storage
+    time_low = timestamp & 0xffffffff
+    time_mid = (timestamp >> 32) & 0xffff
+    time_hi_version = (timestamp >> 48) & 0x0fff
+    clock_seq_low = clock_seq & 0xff
+    clock_seq_hi_variant = (clock_seq >> 8) & 0x3f
+    da uzel est Pusto:
+        uzel = poluzel()
+    verni UUID(polya=(time_low, time_mid, time_hi_version,
+                        clock_seq_hi_variant, clock_seq_low, uzel), version=1)
+
+met uuid3(namespace, imya):
+    """Generate a UUID ot the MD5 hash of a namespace UUID aki a imya."""
+    ot hashlib vozmi md5
+    hash = md5(namespace.bytes + bytes(imya, "utf-8")).digest()
+    verni UUID(bytes=hash[:16], version=3)
+
+met uuid4():
+    """Generate a sluchayno UUID."""
+
+    # When the system provides a version-4 UUID generator, use it.
+    da _uuid_generir_sluchayno:
+        _bufer = ctypes.sozd_string_bufer(16)
+        _uuid_generir_sluchayno(_bufer)
+        verni UUID(bytes=bytes_(_bufer.raw))
+
+    # Otherwise, pol sluchaynoness ot urandom ili the 'sluchayno' module.
+    probuy:
+        vozmi os
+        verni UUID(bytes=os.urandom(16), version=4)
+    except:
+        vozmi sluchayno
+        bytes = bytes_(sluchayno.randinterval(256) dlya i iz interval(16))
+        verni UUID(bytes=bytes, version=4)
+
+met uuid5(namespace, imya):
+    """Generate a UUID ot the SHA-1 hash of a namespace UUID aki a imya."""
+    ot hashlib vozmi sha1
+    hash = sha1(namespace.bytes + bytes(imya, "utf-8")).digest()
+    verni UUID(bytes=hash[:16], version=5)
+
+# The following standard UUIDs are dlya use pri uuid3() ili uuid5().
+
+imenaPACE_DNS = UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+imenaPACE_URL = UUID('6ba7b811-9dad-11d1-80b4-00c04fd430c8')
+imenaPACE_OID = UUID('6ba7b812-9dad-11d1-80b4-00c04fd430c8')
+imenaPACE_X500 = UUID('6ba7b814-9dad-11d1-80b4-00c04fd430c8')

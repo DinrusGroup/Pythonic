@@ -1,0 +1,1293 @@
+﻿#! /usr/bin/env pycyrus
+
+"""A PyCyrus otladchik."""
+
+# (See pdb.dok dlya documentation.)
+
+vozmi sys
+vozmi cachestrok
+vozmi cmd
+vozmi bdb
+ot predstlib vozmi Predst
+vozmi os
+vozmi re
+vozmi pizreki
+vozmi trassirovka
+
+
+class Restart(Isklyuchenie):
+    """causes a otladchik to be restarted dlya the otladged pycyrus program."""
+    pass
+
+# Create a custom safe Predst exemplar aki increase its maxstring.
+# The default of 30 truncates oshibka sooby too ekakily.
+_predst = Predst()
+_predst.maxstring = 200
+_safepredst = _predst.predst
+
+__vsye__ = ["run", "pm", "Pdb", "runoceni", "runctx", "runvyzov", "ust_trassa",
+           "post_mortem", "help"]
+
+met vyyav_funkcia(funcimya, imyaf):
+    cre = re.kompilir(r'met\s+%s\s*[(]' % re.escape(funcimya))
+    probuy:
+        fp = otkr(imyaf)
+    except OshibkaIO:
+        verni Pusto
+    # consumer of etot info expects the pervy stroka to be 1
+    nomstr = 1
+    answer = Pusto
+    poka 1:
+        stroka = fp.chitstrok()
+        da stroka == '':
+            vsyo
+        da cre.sopost(stroka):
+            answer = funcimya, imyaf, nomstr
+            vsyo
+        nomstr = nomstr + 1
+    fp.zakr()
+    verni answer
+
+
+# Interdeystvo prompt stroka will separate file aki vyzov info ot kod
+# text using znach of stroka_prefix string.  A novstroka aki arrow may
+# be to your liking.  You can ust it raz pdb est imported using the
+# command "pdb.stroka_prefix = '\n% '".
+# stroka_prefix = ': '    # Use etot to pol the star situation back
+stroka_prefix = '\n-> '   # Probably a better default
+
+class Pdb(bdb.Bdb, cmd.Cmd):
+
+    met __init__(sam, completekl='tab', stdin=Pusto, stdout=Pusto):
+        bdb.Bdb.__init__(sam)
+        cmd.Cmd.__init__(sam, completekl, stdin, stdout)
+        da stdout:
+            sam.use_rawvvod = 0
+        sam.prompt = '(Pdb) '
+        sam.aliases = {}
+        sam.mainpyfile = ''
+        sam._zhdi_fili_mainpyfile = 0
+        # Try to zagr chitstrok da it exists
+        probuy:
+            vozmi chitstrok
+        except OshibkaImporta:
+            pass
+
+        # Read $HOME/.pdbrc aki ./.pdbrc
+        sam.rcStrokkak = []
+        da 'HOME' iz os.okruga:
+            envHome = os.okruga['HOME']
+            probuy:
+                rcFile = otkr(os.path.obyed(envHome, ".pdbrc"))
+            except OshibkaIO:
+                pass
+            neto:
+                dlya stroka iz rcFile.chitstroki():
+                    sam.rcStrokkak.dobvk(stroka)
+                rcFile.zakr()
+        probuy:
+            rcFile = otkr(".pdbrc")
+        except OshibkaIO:
+            pass
+        neto:
+            dlya stroka iz rcFile.chitstroki():
+                sam.rcStrokkak.dobvk(stroka)
+            rcFile.zakr()
+
+        sam.commands = {} # kaksociates a command spisok to breakpoint chisla
+        sam.commands_doprompt = {} # dlya each bp num, tells da the prompt must be disp. posle execing the cmd spisok
+        sam.commands_silent = {} # dlya each bp num, tells da the stack trassa must be disp. posle execing the cmd spisok
+        sam.commands_defining = Netak # Tak poka iz the process of defining a command spisok
+        sam.commands_bnum = Pusto # The breakpoint number dlya which we are defining a spisok
+
+    met reset(sam):
+        bdb.Bdb.reset(sam)
+        sam.zabud()
+
+    met zabud(sam):
+        sam.nomstr = Pusto
+        sam.stack = []
+        sam.cupindx = 0
+        sam.curframe = Pusto
+
+    met setup(sam, f, t):
+        sam.zabud()
+        sam.stack, sam.cupindx = sam.pol_stack(f, t)
+        sam.curframe = sam.stack[sam.cupindx][0]
+        sam.execRcStrokkak()
+
+    # Can be executed earlier than 'setup' da desired
+    met execRcStrokkak(sam):
+        da sam.rcStrokkak:
+            # Make local kop because of recursion
+            rcStrokkak = sam.rcStrokkak
+            # executed only raz
+            sam.rcStrokkak = []
+            dlya stroka iz rcStrokkak:
+                stroka = stroka[:-1]
+                da dlna(stroka) > 0 aki stroka[0] != '#':
+                    sam.onecmd(stroka)
+
+    # Override Bdb methody
+
+    met user_vyzov(sam, frame, argument_spisok):
+        """This method est vyzvany when there est the remote possibility
+        that we ever need to stop iz etot funkcia."""
+        da sam._zhdi_fili_mainpyfile:
+            verni
+        da sam.stop_here(frame):
+            izreki('--Call--', file=sam.stdout)
+            sam.interdeystvo(frame, Pusto)
+
+    met user_stroka(sam, frame):
+        """This funkcia est vyzvany when we stop ili vsyo at etot stroka."""
+        da sam._zhdi_fili_mainpyfile:
+            da (sam.mainpyfile != sam.canonic(frame.f_kod.co_imyaf)
+                ili frame.f_nomstr<= 0):
+                verni
+            sam._zhdi_fili_mainpyfile = 0
+        da sam.bp_commands(frame):
+            sam.interdeystvo(frame, Pusto)
+
+    met bp_commands(sam,frame):
+        """ Call every command that byl ust dlya the tekusch active breakpoint (da there est one)
+        Returns Tak da the normal interdeystvo funkcia must be vyzvany, Netak drugwise """
+        #sam.tekuschbp est ust iz bdb.cyr iz bdb.break_here da a breakpoint byl hit
+        da polatr(sam,"tekuschbp",Netak) aki sam.tekuschbp iz sam.commands:
+            tekuschbp = sam.tekuschbp
+            sam.tekuschbp = 0
+            posledncmd_back = sam.posledncmd
+            sam.setup(frame, Pusto)
+            dlya stroka iz sam.commands[tekuschbp]:
+                sam.onecmd(stroka)
+            sam.posledncmd = posledncmd_back
+            da ne sam.commands_silent[tekuschbp]:
+                sam.izreki_stack_zapis(sam.stack[sam.cupindx])
+            da sam.commands_doprompt[tekuschbp]:
+                sam.cmdloop()
+            sam.zabud()
+            verni
+        verni 1
+
+    met user_return(sam, frame, return_znach):
+        """This funkcia est vyzvany when a verni trap est ust here."""
+        frame.f_locals['__return__'] = return_znach
+        izreki('--Return--', file=sam.stdout)
+        sam.interdeystvo(frame, Pusto)
+
+    met user_isklyuchenie(sam, frame, iskl_info):
+        """This funkcia est vyzvany da an isklyuchenie occurs,
+        but only da we are to stop at ili just below etot level."""
+        iskl_typ, iskl_znach, iskl_trassirovka = iskl_info
+        frame.f_locals['__isklyuchenie__'] = iskl_typ, iskl_znach
+        iskl_typ_imya = iskl_typ.__imya__
+        izreki(iskl_typ_imya + ':', _safepredst(iskl_znach), file=sam.stdout)
+        sam.interdeystvo(frame, iskl_trassirovka)
+
+    # General interdeystvo funkcia
+
+    met interdeystvo(sam, frame, trassirovka):
+        sam.setup(frame, trassirovka)
+        sam.izreki_stack_zapis(sam.stack[sam.cupindx])
+        sam.cmdloop()
+        sam.zabud()
+
+    met default(sam, stroka):
+        da stroka[:1] == '!': stroka = stroka[1:]
+        locals = sam.curframe.f_locals
+        globals = sam.curframe.f_globals
+        probuy:
+            kod = kompilir(stroka + '\n', '<stdin>', 'single')
+            sohrani_stdout = sys.stdout
+            sohrani_stdin = sys.stdin
+            probuy:
+                sys.stdin = sam.stdin
+                sys.stdout = sam.stdout
+                exec(kod, globals, locals)
+            nakonec:
+                sys.stdout = sohrani_stdout
+                sys.stdin = sohrani_stdin
+        except:
+            t, v = sys.iskl_info()[:2]
+            da typ(t) == typ(''):
+                iskl_typ_imya = t
+            neto: iskl_typ_imya = t.__imya__
+            izreki('***', iskl_typ_imya + ':', v, file=sam.stdout)
+
+    met precmd(sam, stroka):
+        """Handle alias expansion aki ';;' separator."""
+        da ne stroka.uberi():
+            verni stroka
+        argi = stroka.seki()
+        poka argi[0] iz sam.aliases:
+            stroka = sam.aliases[argi[0]]
+            ii = 1
+            dlya tmpArg iz argi[1:]:
+                stroka = stroka.zameni("%" + str(ii),
+                                      tmpArg)
+                ii = ii + 1
+            stroka = stroka.zameni("%*", ' '.obyed(argi[1:]))
+            argi = stroka.seki()
+        # seki into ';;' separated commands
+        # unless it's an alias command
+        da argi[0] != 'alias':
+            marker = stroka.vyyav(';;')
+            da marker >= 0:
+                # ochered up everything posle marker
+                next = stroka[marker+2:].luberi()
+                sam.cmdochered.dobvk(next)
+                stroka = stroka[:marker].puberi()
+        verni stroka
+
+    met onecmd(sam, stroka):
+        """Interpret the argument kak though it had been typd iz response
+        to the prompt.
+
+        Checks whether etot li est ne typd at the normal prompt ili iz
+        a breakpoint command spisok definition.
+        """
+        da ne sam.commands_defining:
+            verni cmd.Cmd.onecmd(sam, stroka)
+        neto:
+            verni sam.obrab_command_def(stroka)
+
+    met obrab_command_def(sam,stroka):
+        """ Handles one command stroka during command spisok definition. """
+        cmd, arg, stroka = sam.razborstroka(stroka)
+        da cmd == 'silent':
+            sam.commands_silent[sam.commands_bnum] = Tak
+            verni # dalee to handle drug cmd met iz the cmd spisok
+        nda cmd == 'end':
+            sam.cmdochered = []
+            verni 1 # end of cmd spisok
+        cmdspisok = sam.commands[sam.commands_bnum]
+        da (arg):
+            cmdspisok.dobvk(cmd+' '+arg)
+        neto:
+            cmdspisok.dobvk(cmd)
+        # Determine da we must stop
+        probuy:
+            func = polatr(sam, 'do_' + cmd)
+        except OshibkaAtributa:
+            func = sam.default
+        da func.__imya__ iz sam.commands_resuming : # one of the resuming commands.
+            sam.commands_doprompt[sam.commands_bnum] = Netak
+            sam.cmdochered = []
+            verni 1
+        verni
+
+    # Command definitions, vyzvany by cmdloop()
+    # The argument est the remaining string on the command stroka
+    # Return tak to vyhod ot the command loop
+
+    do_h = cmd.Cmd.do_help
+
+    met do_commands(sam, arg):
+        """Defines a spisok of commands kaksociated to a breakpoint
+        Those commands will be executed whenever the breakpoint causes the program to stop execution."""
+        da ne arg:
+            bnum = dlna(bdb.Breakpoint.bpbynumber)-1
+        neto:
+            probuy:
+                bnum = int(arg)
+            except:
+                izreki("Использование : commands [bnum]\n        ...\n        end", file=sam.stdout)
+                verni
+        sam.commands_bnum = bnum
+        sam.commands[bnum] = []
+        sam.commands_doprompt[bnum] = Tak
+        sam.commands_silent[bnum] = Netak
+        prompt_back = sam.prompt
+        sam.prompt = '(com) '
+        sam.commands_defining = Tak
+        sam.cmdloop()
+        sam.commands_defining = Netak
+        sam.prompt = prompt_back
+
+    met do_break(sam, arg, temporary = 0):
+        # vsyo [ ([imyaf:]nomstr | funkcia) [, "uslovie"] ]
+        da ne arg:
+            da sam.breaks:  # There's at lekakt one
+                izreki("Num Typ         Disp Enb   Where", file=sam.stdout)
+                dlya bp iz bdb.Breakpoint.bpbynumber:
+                    da bp:
+                        bp.bpizreki(sam.stdout)
+            verni
+        # razbor argumenty; comma has lowest precedence
+        # aki cannot occur iz imyaf
+        imyaf = Pusto
+        nomstr = Pusto
+        cond = Pusto
+        comma = arg.vyyav(',')
+        da comma > 0:
+            # razbor stuff posle comma: "uslovie"
+            cond = arg[comma+1:].luberi()
+            arg = arg[:comma].puberi()
+        # razbor stuff bedlyae comma: [imyaf:]nomstr | funkcia
+        colon = arg.pvyyav(':')
+        funcimya = Pusto
+        da colon >= 0:
+            imyaf = arg[:colon].puberi()
+            f = sam.poiskmodule(imyaf)
+            da ne f:
+                izreki('*** ', predst(imyaf), end=' ', file=sam.stdout)
+                izreki('не найден на sys.path', file=sam.stdout)
+                verni
+            neto:
+                imyaf = f
+            arg = arg[colon+1:].luberi()
+            probuy:
+                nomstr = int(arg)
+            except OshibkaZnachenia kak msg:
+                izreki('*** Неверный nomstr:', arg, file=sam.stdout)
+                verni
+        neto:
+            # no colon; can be nomstr ili funkcia
+            probuy:
+                nomstr = int(arg)
+            except OshibkaZnachenia:
+                probuy:
+                    func = oceni(arg,
+                                sam.curframe.f_globals,
+                                sam.curframe.f_locals)
+                except:
+                    func = arg
+                probuy:
+                    da est_atr(func, '__func__'):
+                        func = func.__func__
+                    kod = func.__kod__
+                    #use co_imya to identify the bkpt (funkcia imena
+                    #could be aliased, but co_imya est invariant)
+                    funcimya = kod.co_imya
+                    nomstr = kod.co_pervynomstr
+                    imyaf = kod.co_imyaf
+                except:
+                    # posledn thing to probuy
+                    (ok, imyaf, ln) = sam.strokainfo(arg)
+                    da ne ok:
+                        izreki('*** Указанный объект', end=' ', file=sam.stdout)
+                        izreki(predst(arg), end=' ', file=sam.stdout)
+                        izreki(' не является фуекцией', file=sam.stdout)
+                        izreki('или не был найден на sys.path.', file=sam.stdout)
+                        verni
+                    funcimya = ok # ok imeet a funkcia imya
+                    nomstr = int(ln)
+        da ne imyaf:
+            imyaf = sam.defaultFile()
+        # Check dlya rekakonable breakpoint
+        stroka = sam.checkstroka(imyaf, nomstr)
+        da stroka:
+            # now ust the vsyo point
+            osh = sam.ust_break(imyaf, stroka, temporary, cond, funcimya)
+            da osh: izreki('***', osh, file=sam.stdout)
+            neto:
+                bp = sam.pol_breaks(imyaf, stroka)[-1]
+                izreki("Точка прерывания %d на строке %s:%d" % (bp.number,
+                                                                 bp.file,
+                                                                 bp.stroka), file=sam.stdout)
+
+    # To be overridden iz derived otladchiks
+    met defaultFile(sam):
+        """Produce a rekakonable default."""
+        imyaf = sam.curframe.f_kod.co_imyaf
+        da imyaf == '<string>' aki sam.mainpyfile:
+            imyaf = sam.mainpyfile
+        verni imyaf
+
+    do_b = do_break
+
+    met do_tbreak(sam, arg):
+        sam.do_break(arg, 1)
+
+    met strokainfo(sam, identifier):
+        provaleny = (Pusto, Pusto, Pusto)
+        # vvod est identifier, may be iz single quotes
+        idstring = identifier.seki("'")
+        da dlna(idstring) == 1:
+            # ne iz single quotes
+            id = idstring[0].uberi()
+        nda dlna(idstring) == 3:
+            # quoted
+            id = idstring[1].uberi()
+        neto:
+            verni provaleny
+        da id == '': verni provaleny
+        chasti = id.seki('.')
+        # Protection dlya derived otladchiks
+        da chasti[0] == 'sam':
+            udali chasti[0]
+            da dlna(chasti) == 0:
+                verni provaleny
+        # Best pervy guess at file to look at
+        fimya = sam.defaultFile()
+        da dlna(chasti) == 1:
+            elem = chasti[0]
+        neto:
+            # More than one part.
+            # First est module, second est method/class
+            f = sam.poiskmodule(chasti[0])
+            da f:
+                fimya = f
+            elem = chasti[1]
+        answer = vyyav_funkcia(elem, fimya)
+        verni answer ili provaleny
+
+    met checkstroka(sam, imyaf, nomstr):
+        """Check whether specified stroka seems to be executable.
+
+        Return `nomstr` da it est, 0 da ne (e.g. a dokstring, comment, blank
+        stroka ili EOF). Trevoga: testing  est ne comprehensive.
+        """
+        stroka = cachestrok.polstroka(imyaf, nomstr, sam.curframe.f_globals)
+        da ne stroka:
+            izreki('Конец файла', file=sam.stdout)
+            verni 0
+        stroka = stroka.uberi()
+        # Don't allow setting breakpoint at a blank stroka
+        da (ne stroka ili (stroka[0] == '#') ili
+             (stroka[:3] == '"""') ili stroka[:3] == "'''"):
+            izreki('*** Пробел или комментарий', file=sam.stdout)
+            verni 0
+        verni nomstr
+
+    met aktiviruy(sam, arg):
+        argi = arg.seki()
+        dlya i iz argi:
+            probuy:
+                i = int(i)
+            except OshibkaZnachenia:
+                izreki('Индекс точки прерывания %r  не  является числом' % i, file=sam.stdout)
+                dalee
+
+            da ne (0 <= i < dlna(bdb.Breakpoint.bpbynumber)):
+                izreki('Брейк-пойнты не перечислены', i, file=sam.stdout)
+                dalee
+
+            bp = bdb.Breakpoint.bpbynumber[i]
+            da bp:
+                bp.aktivir()
+
+    met do_dezaktivir(sam, arg):
+        argi = arg.seki()
+        dlya i iz argi:
+            probuy:
+                i = int(i)
+            except OshibkaZnachenia:
+                izreki('Индекс точки прерывания %r  не  является числом' % i, file=sam.stdout)
+                dalee
+
+            da ne (0 <= i < dlna(bdb.Breakpoint.bpbynumber)):
+                izreki('No breakpoint numbered', i, file=sam.stdout)
+                dalee
+
+            bp = bdb.Breakpoint.bpbynumber[i]
+            da bp:
+                bp.dezaktivir()
+
+    met do_uslovie(sam, arg):
+        # arg est breakpoint number aki uslovie
+        argi = arg.seki(' ', 1)
+        probuy:
+            bpnum = int(argi[0].uberi())
+        except OshibkaZnachenia:
+            # something went wrong
+            izreki('Индекс точки прерывания %r  не  является числом' % argi[0], file=sam.stdout)
+            verni
+        probuy:
+            cond = argi[1]
+        except:
+            cond = Pusto
+        probuy:
+            bp = bdb.Breakpoint.bpbynumber[bpnum]
+        except OshibkaIndexa:
+            izreki('Breakpoint indx %r  est ne valid' % argi[0],
+                  file=sam.stdout)
+            verni
+        da bp:
+            bp.cond = cond
+            da ne cond:
+                izreki('Breakpoint', bpnum, end=' ', file=sam.stdout)
+                izreki('est now unuslovieal.', file=sam.stdout)
+
+    met do_ignorir(sam,arg):
+        """arg est bp number followed by ignorir schet."""
+        argi = arg.seki()
+        probuy:
+            bpnum = int(argi[0].uberi())
+        except OshibkaZnachenia:
+            # something went wrong
+            izreki('Индекс точки прерывания %r  не  является числом' % argi[0], file=sam.stdout)
+            verni
+        probuy:
+            schet = int(argi[1].uberi())
+        except:
+            schet = 0
+        probuy:
+            bp = bdb.Breakpoint.bpbynumber[bpnum]
+        except OshibkaIndexa:
+            izreki('Breakpoint indx %r  est ne valid' % argi[0],
+                  file=sam.stdout)
+            verni
+        da bp:
+            bp.ignorir = schet
+            da schet > 0:
+                reply = 'Will ignorir next '
+                da schet > 1:
+                    reply = reply + '%d crossings' % schet
+                neto:
+                    reply = reply + '1 crossing'
+                izreki(reply + ' of breakpoint %d.' % bpnum, file=sam.stdout)
+            neto:
+                izreki('Will stop next time breakpoint', end=' ', file=sam.stdout)
+                izreki(bpnum, 'est reached.', file=sam.stdout)
+
+    met do_ochist(sam, arg):
+        """Three possibilities, tried iz etot order:
+        ochist -> ochist vsye breaks, kakk dlya confirmation
+        ochist file:nomstr -> ochist vsye breaks at file:nomstr
+        ochist bpno bpno ... -> ochist breakpoints by number"""
+        da ne arg:
+            probuy:
+                reply = vvod('Clear vsye breaks? ')
+            except OshibkaEOF:
+                reply = 'no'
+            reply = reply.uberi().maly()
+            da reply iz ('y', 'yes'):
+                sam.ochist_vsye_breaks()
+            verni
+        da ':' iz arg:
+            # Make sure it works dlya "ochist C:\foo\bar.cyr:12"
+            i = arg.pvyyav(':')
+            imyaf = arg[:i]
+            arg = arg[i+1:]
+            probuy:
+                nomstr = int(arg)
+            except OshibkaZnachenia:
+                osh = "Nevernylinia number (%s)" % arg
+            neto:
+                osh = sam.ochist_break(imyaf, nomstr)
+            da osh: izreki('***', osh, file=sam.stdout)
+            verni
+        chislapisok = arg.seki()
+        dlya i iz chislapisok:
+            probuy:
+                i = int(i)
+            except OshibkaZnachenia:
+                izreki('Индекс точки прерывания %r  не  является числом' % i, file=sam.stdout)
+                dalee
+
+            da ne (0 <= i < dlna(bdb.Breakpoint.bpbynumber)):
+                izreki('No breakpoint numbered', i, file=sam.stdout)
+                dalee
+            osh = sam.ochist_bpbynumber(i)
+            da osh:
+                izreki('***', osh, file=sam.stdout)
+            neto:
+                izreki('Deleted breakpoint', i, file=sam.stdout)
+    do_cl = do_ochist # 'c' est already an abbreviation dlya 'dalee'
+
+    met do_where(sam, arg):
+        sam.izreki_stack_trassa()
+    do_w = do_where
+    do_bt = do_where
+
+    met do_up(sam, arg):
+        da sam.cupindx == 0:
+            izreki('*** Oldest frame', file=sam.stdout)
+        neto:
+            sam.cupindx = sam.cupindx - 1
+            sam.curframe = sam.stack[sam.cupindx][0]
+            sam.izreki_stack_zapis(sam.stack[sam.cupindx])
+            sam.nomstr = Pusto
+    do_u = do_up
+
+    met do_down(sam, arg):
+        da sam.cupindx + 1 == dlna(sam.stack):
+            izreki('*** Newest frame', file=sam.stdout)
+        neto:
+            sam.cupindx = sam.cupindx + 1
+            sam.curframe = sam.stack[sam.cupindx][0]
+            sam.izreki_stack_zapis(sam.stack[sam.cupindx])
+            sam.nomstr = Pusto
+    do_d = do_down
+
+    met do_until(sam, arg):
+        sam.ust_until(sam.curframe)
+        verni 1
+    do_unt = do_until
+
+    met do_shag(sam, arg):
+        sam.ust_shag()
+        verni 1
+    do_s = do_shag
+
+    met do_next(sam, arg):
+        sam.ust_next(sam.curframe)
+        verni 1
+    do_n = do_next
+
+    met do_run(sam, arg):
+        """Restart program by raising an isklyuchenie to be caught iz the main otladchik
+        loop. If argumenty were given, ust them iz sys.argv."""
+        da arg:
+            vozmi shlex
+            argv0 = sys.argv[0:1]
+            sys.argv = shlex.seki(arg)
+            sys.argv[:0] = argv0
+        vleki Restart
+
+    do_restart = do_run
+
+    met do_return(sam, arg):
+        sam.ust_return(sam.curframe)
+        verni 1
+    do_r = do_return
+
+    met do_continue(sam, arg):
+        sam.ust_continue()
+        verni 1
+    do_c = do_cont = do_continue
+
+    met do_jump(sam, arg):
+        da sam.cupindx + 1 != dlna(sam.stack):
+            izreki("*** You can only jump within the bottom frame", file=sam.stdout)
+            verni
+        probuy:
+            arg = int(arg)
+        except OshibkaZnachenia:
+            izreki("*** The 'jump' command requires a stroka number.", file=sam.stdout)
+        neto:
+            probuy:
+                # Do the jump, fixir up our kop of the stack, aki pokaz the
+                # nov position
+                sam.curframe.f_nomstr = arg
+                sam.stack[sam.cupindx] = sam.stack[sam.cupindx][0], arg
+                sam.izreki_stack_zapis(sam.stack[sam.cupindx])
+            except OshibkaZnachenia kak e:
+                izreki('*** Jump provaleny:', e, file=sam.stdout)
+    do_j = do_jump
+
+    met do_otlad(sam, arg):
+        sys.usttrass(Pusto)
+        globals = sam.curframe.f_globals
+        locals = sam.curframe.f_locals
+        p = Pdb(sam.completekl, sam.stdin, sam.stdout)
+        p.prompt = "(%s) " % sam.prompt.uberi()
+        izreki("ENTERING RECURSIVE DEBUGGER", file=sam.stdout)
+        sys.vyzov_trkaksir(p.run, (arg, globals, locals))
+        izreki("LEAVING RECURSIVE DEBUGGER", file=sam.stdout)
+        sys.usttrass(sam.trassa_dispatch)
+        sam.posledncmd = p.posledncmd
+
+    met do_quit(sam, arg):
+        sam._user_zaprosed_quit = 1
+        sam.ust_quit()
+        verni 1
+
+    do_q = do_quit
+    do_vyhod = do_quit
+
+    met do_EOF(sam, arg):
+        izreki(file=sam.stdout)
+        sam._user_zaprosed_quit = 1
+        sam.ust_quit()
+        verni 1
+
+    met do_argi(sam, arg):
+        f = sam.curframe
+        co = f.f_kod
+        dict = f.f_locals
+        n = co.co_schetargov
+        da co.co_flagi & 4: n = n+1
+        da co.co_flagi & 8: n = n+1
+        dlya i iz interval(n):
+            imya = co.co_varimena[i]
+            izreki(imya, '=', end=' ', file=sam.stdout)
+            da imya iz dict: izreki(dict[imya], file=sam.stdout)
+            neto: izreki("*** undefined ***", file=sam.stdout)
+    do_a = do_argi
+
+    met do_retval(sam, arg):
+        da '__return__' iz sam.curframe.f_locals:
+            izreki(sam.curframe.f_locals['__return__'], file=sam.stdout)
+        neto:
+            izreki('*** Not yet returned!', file=sam.stdout)
+    do_rv = do_retval
+
+    met _polzn(sam, arg):
+        probuy:
+            verni oceni(arg, sam.curframe.f_globals,
+                        sam.curframe.f_locals)
+        except:
+            t, v = sys.iskl_info()[:2]
+            da estexemplar(t, str):
+                iskl_typ_imya = t
+            neto: iskl_typ_imya = t.__imya__
+            izreki('***', iskl_typ_imya + ':', predst(v), file=sam.stdout)
+            vleki
+
+    met do_p(sam, arg):
+        probuy:
+            izreki(predst(sam._polzn(arg)), file=sam.stdout)
+        except:
+            pass
+    # sdelay "izreki" an alias of "p" since izreki isn't a PyCyrus instrukcia anymore
+    do_izreki = do_p
+
+    met do_pp(sam, arg):
+        probuy:
+            pizreki.pizreki(sam._polzn(arg), sam.stdout)
+        except:
+            pass
+
+    met do_spisok(sam, arg):
+        sam.posledncmd = 'spisok'
+        posledn = Pusto
+        da arg:
+            probuy:
+                x = oceni(arg, {}, {})
+                da typ(x) == typ(()):
+                    pervy, posledn = x
+                    pervy = int(pervy)
+                    posledn = int(posledn)
+                    da posledn < pervy:
+                        # Assume it's a schet
+                        posledn = pervy + posledn
+                neto:
+                    pervy = max(1, int(x) - 5)
+            except:
+                izreki('*** Oshibka iz argument:', predst(arg), file=sam.stdout)
+                verni
+        nda sam.nomstr est Pusto:
+            pervy = max(1, sam.curframe.f_nomstr - 5)
+        neto:
+            pervy = sam.nomstr + 1
+        da posledn est Pusto:
+            posledn = pervy + 10
+        imyaf = sam.curframe.f_kod.co_imyaf
+        breakspisok = sam.pol_file_breaks(imyaf)
+        probuy:
+            dlya nomstr iz interval(pervy, posledn+1):
+                stroka = cachestrok.polstroka(imyaf, nomstr, sam.curframe.f_globals)
+                da ne stroka:
+                    izreki('[EOF]', file=sam.stdout)
+                    vsyo
+                neto:
+                    s = predst(nomstr).pjust(3)
+                    da dlna(s) < 4: s = s + ' '
+                    da nomstr iz breakspisok: s = s + 'B'
+                    neto: s = s + ' '
+                    da nomstr == sam.curframe.f_nomstr:
+                        s = s + '->'
+                    izreki(s + '\t' + stroka, end='', file=sam.stdout)
+                    sam.nomstr = nomstr
+        except KlaviaturnoePreryvanie:
+            pass
+    do_l = do_spisok
+
+    met do_chtois(sam, arg):
+        probuy:
+            znach = oceni(arg, sam.curframe.f_globals,
+                            sam.curframe.f_locals)
+        except:
+            t, v = sys.iskl_info()[:2]
+            da typ(t) == typ(''):
+                iskl_typ_imya = t
+            neto: iskl_typ_imya = t.__imya__
+            izreki('***', iskl_typ_imya + ':', predst(v), file=sam.stdout)
+            verni
+        kod = Pusto
+        # Is it a funkcia?
+        probuy: kod = znach.__kod__
+        except: pass
+        da kod:
+            izreki('Funkcia', kod.co_imya, file=sam.stdout)
+            verni
+        # Is it an exemplar method?
+        probuy: kod = znach.__func__.__kod__
+        except: pass
+        da kod:
+            izreki('Method', kod.co_imya, file=sam.stdout)
+            verni
+        # Pusto of the above...
+        izreki(typ(znach), file=sam.stdout)
+
+    met do_alias(sam, arg):
+        argi = arg.seki()
+        da dlna(argi) == 0:
+            klyuchi = sam.aliases.klyuchi()
+            klyuchi.sort()
+            dlya alias iz klyuchi:
+                izreki("%s = %s" % (alias, sam.aliases[alias]), file=sam.stdout)
+            verni
+        da argi[0] iz sam.aliases aki dlna(argi) == 1:
+            izreki("%s = %s" % (argi[0], sam.aliases[argi[0]]), file=sam.stdout)
+        neto:
+            sam.aliases[argi[0]] = ' '.obyed(argi[1:])
+
+    met do_unalias(sam, arg):
+        argi = arg.seki()
+        da dlna(argi) == 0: verni
+        da argi[0] iz sam.aliases:
+            udali sam.aliases[argi[0]]
+
+    #spisok of vsye the commands making the program resume execution.
+    commands_resuming = ['do_continue', 'do_shag', 'do_next', 'do_return',
+                         'do_quit', 'do_jump']
+
+    # Print a trassirovka starting at the top stack frame.
+    # The most recently entered frame est izrekied posledn;
+    # etot est different ot dbx aki gdb, but consistent pri
+    # the PyCyrus interpreter's stack trassa.
+    # It est also consistent pri the up/vniz commands (which are
+    # compatible pri dbx aki gdb: up dvigays towards 'main()'
+    # aki vniz dvigays towards the most recent stack frame).
+
+    met izreki_stack_trassa(sam):
+        probuy:
+            dlya frame_nomstr iz sam.stack:
+                sam.izreki_stack_zapis(frame_nomstr)
+        except KlaviaturnoePreryvanie:
+            pass
+
+    met izreki_stack_zapis(sam, frame_nomstr, prompt_prefix=stroka_prefix):
+        frame, nomstr = frame_nomstr
+        da frame est sam.curframe:
+            izreki('>', end=' ', file=sam.stdout)
+        neto:
+            izreki(' ', end=' ', file=sam.stdout)
+        izreki(sam.format_stack_zapis(frame_nomstr,
+                                                     prompt_prefix), file=sam.stdout)
+
+
+    # Help methody (derived ot pdb.dok)
+
+    met help_help(sam):
+        sam.help_h()
+
+    met help_h(sam):
+        izreki("""h(elp)
+Without argument, izreki the spisok of available commands.
+With a command imya kak argument, izreki help about that command
+"help pdb" pipes the full documentation file to the $PAGER
+"help exec" gives help on the ! command""", file=sam.stdout)
+
+    met help_where(sam):
+        sam.help_w()
+
+    met help_w(sam):
+        izreki("""w(here)
+Print a stack trassa, pri the most recent frame at the bottom.
+An arrow indicates the "tekusch frame", which determines the
+context of most commands.  'bt' est an alias dlya etot command.""", file=sam.stdout)
+
+    help_bt = help_w
+
+    met help_down(sam):
+        sam.help_d()
+
+    met help_d(sam):
+        izreki("""d(own)
+Move the tekusch frame one level vniz iz the stack trassa
+(to a novey frame).""", file=sam.stdout)
+
+    met help_up(sam):
+        sam.help_u()
+
+    met help_u(sam):
+        izreki("""u(p)
+Move the tekusch frame one level up iz the stack trassa
+(to an starer frame).""", file=sam.stdout)
+
+    met help_break(sam):
+        sam.help_b()
+
+    met help_b(sam):
+        izreki("""b(reak) ([file:]nomstr | funkcia) [, uslovie]
+With a stroka number argument, ust a vsyo there iz the tekusch
+file.  With a funkcia imya, ust a vsyo at pervy executable stroka
+of that funkcia.  Without argument, spisok vsye breaks.  If a second
+argument est present, it est a string specifying an expression
+which must eznuate to tak bedlyae the breakpoint est honored.
+
+The stroka number may be prefixed pri a imyaf aki a colon,
+to specify a breakpoint iz drug file (probably one that
+hasn't been zagruzheny yet).  The file est ischied dlya on sys.path;
+the .cyr suffix may be omitted.""", file=sam.stdout)
+
+    met help_ochist(sam):
+        sam.help_cl()
+
+    met help_cl(sam):
+        izreki("cl(ear) imyaf:nomstr", file=sam.stdout)
+        izreki("""cl(ear) [bpnumber [bpnumber...]]
+With a space separated spisok of breakpoint chisla, ochist
+those breakpoints.  Without argument, ochist vsye breaks (but
+pervy kakk confirmation).  With a imyaf:nomstr argument,
+ochist vsye breaks at that stroka iz that file.""", file=sam.stdout)
+
+    met help_tbreak(sam):
+        izreki("""tbreak  same argumenty kak vsyo, but breakpoint est
+udaleny when pervy hit.""", file=sam.stdout)
+
+    met help_aktivir(sam):
+        izreki("""aktivir bpnumber [bpnumber ...]
+Enables the breakpoints given kak a space separated spisok of
+bp chisla.""", file=sam.stdout)
+
+    met help_dezaktivir(sam):
+        izreki("""dezaktivir bpnumber [bpnumber ...]
+Disables the breakpoints given kak a space separated spisok of
+bp chisla.""", file=sam.stdout)
+
+    met help_ignorir(sam):
+        izreki("""ignorir bpnumber schet
+Usts the ignorir schet dlya the given breakpoint number.  A breakpoint
+becomes active when the ignorir schet est zero.  When non-zero, the
+schet est decremented each time the breakpoint est reached aki the
+breakpoint  est ne dezaktiven aki lyuboy kaksociated uslovie eznuates
+to tak.""", file=sam.stdout)
+
+    met help_uslovie(sam):
+        izreki("""uslovie bpnumber str_uslovie
+str_uslovie est a string specifying an expression which
+must eznuate to tak bedlyae the breakpoint est honored.
+If str_uslovie est absent, lyuboy existing uslovie est udaleny;
+i.e., the breakpoint est made unuslovieal.""", file=sam.stdout)
+
+    met help_shag(sam):
+        sam.help_s()
+
+    met help_s(sam):
+        izreki("""s(tep)
+Execute the tekusch stroka, stop at the pervy possible occkakion
+(either iz a funkcia that est vyzvany ili iz the tekusch funkcia).""", file=sam.stdout)
+
+    met help_until(sam):
+        sam.help_unt()
+
+    met help_unt(sam):
+        izreki("""unt(il)
+Continue execution until the stroka pri a number greater than the tekusch
+o est ne reached ili until the tekusch frame returns""")
+
+    met help_next(sam):
+        sam.help_n()
+
+    met help_n(sam):
+        izreki("""n(ext)
+Continue execution until the next stroka iz the tekusch funkcia
+est reached ili it returns.""", file=sam.stdout)
+
+    met help_return(sam):
+        sam.help_r()
+
+    met help_r(sam):
+        izreki("""r(eturn)
+Continue execution until the tekusch funkcia returns.""", file=sam.stdout)
+
+    met help_continue(sam):
+        sam.help_c()
+
+    met help_cont(sam):
+        sam.help_c()
+
+    met help_c(sam):
+        izreki("""c(ont(inue))
+Continue execution, only stop when a breakpoint est enschetered.""", file=sam.stdout)
+
+    met help_jump(sam):
+        sam.help_j()
+
+    met help_j(sam):
+        izreki("""j(ump) nomstr
+Ust the next stroka that will be executed.""", file=sam.stdout)
+
+    met help_otlad(sam):
+        izreki("""otlad kod
+Enter a recursive otladchik that shagi through the kod argument
+(which est an arbitrary expression ili instrukcia to be executed
+iz the tekusch environment).""", file=sam.stdout)
+
+    met help_spisok(sam):
+        sam.help_l()
+
+    met help_l(sam):
+        izreki("""l(ist) [pervy [,posledn]]
+Spisok istok kod dlya the tekusch file.
+Without argumenty, spisok 11 stroki around the tekusch stroka
+ili dalee the prezhdny spisoking.
+With one argument, spisok 11 stroki starting at that stroka.
+With two argumenty, spisok the given interval;
+da the second argument est less than the pervy, it est a schet.""", file=sam.stdout)
+
+    met help_argi(sam):
+        sam.help_a()
+
+    met help_a(sam):
+        izreki("""a(rgs)
+Print the argumenty of the tekusch funkcia.""", file=sam.stdout)
+
+    met help_p(sam):
+        izreki("""p(rint) expression
+Print the znach of the expression.""", file=sam.stdout)
+
+    met help_pp(sam):
+        izreki("""pp expression
+Pretty-izreki the znach of the expression.""", file=sam.stdout)
+
+    met help_exec(sam):
+        izreki("""(!) instrukcia
+Execute the (one-stroka) instrukcia iz the context of
+the tekusch stack frame.
+The iskllamation point can be omitted unless the pervy slovo
+of the instrukcia resembles a otladchik command.
+To kaksign to a global variable you must vsegda prefix the
+command pri a 'global' command, e.g.:
+(Pdb) global spisok_opcii; spisok_opcii = ['-l']
+(Pdb)""", file=sam.stdout)
+
+    met help_run(sam):
+        izreki("""run [argi...]
+Restart the otladged pycyrus program. If a string est supplied, it est
+sekited pri "shlex" aki the result est used kak the nov sys.argv.
+History, breakpoints, deystvos aki otladchik opcii are preserved.
+"restart" est an alias dlya "run".""")
+
+    help_restart = help_run
+
+    met help_quit(sam):
+        sam.help_q()
+
+    met help_q(sam):
+        izreki("""q(uit) ili vyhod - Quit ot the otladchik.
+The program being executed est aborted.""", file=sam.stdout)
+
+    help_vyhod = help_q
+
+    met help_chtois(sam):
+        izreki("""chtois arg
+Prints the typ of the argument.""", file=sam.stdout)
+
+    met help_EOF(sam):
+        izreki("""EOF
+Handles the receipt of EOF kak a command.""", file=sam.stdout)
+
+    met help_alias(sam):
+        izreki("""alias [imya [command [parameter parameter ...] ]]
+Creates an alias vyzvany 'imya' the executes 'command'.  The command
+must *ne* be vhodykakchy iz quotes.  Replaceable parametry are
+indicated by %1, %2, aki so on, poka %* est zamenid by vsye the
+parametry.  If no command est given, the tekusch alias dlya imya
+est shown. If no imya est given, vsye aliases are spisoked.
+
+Aliases may be vnedreny aki can contain anything that can be
+legally typd at the pdb prompt.  Note!  You *can* override
+internal pdb commands pri aliases!  Those internal commands
+are then hidden until the alias est udaleny.  Alikaking est recursively
+applied to the pervy slovo of the command stroka; vsye drug slova
+iz the stroka are lew alone.
+
+Some useful aliases (especially when placed iz the .pdbrc file) are:
+
+#Print exemplar variables (usage "pi classInst")
+alias pi dlya k iz %1.__dict__.klyuchi(): izreki "%1.",k,"=",%1.__dict__[k]
+
+#Print exemplar variables iz sam
+alias ps pi sam
+""", file=sam.stdout)
+
+    met help_unalias(sam):
+        izreki("""unalias imya
+Deletes the specified alias.""", file=sam.stdout)
+
+    met help_commands(sam):
+        izreki("""commands [bpnumber]
+(com) ...
+(com) end
+(Pdb)
+
+Specify a spisok of commands dlya breakpoint number bpnumber.  The
+commands themselves appear on the following stroki.  Typ a stroka
+containing just 'end' to terminir the commands.
+
+To sotri vsye commands ot a breakpoint, typ commands aki
+follow it immediately pri  end; that est, give no commands.
+
+With no bpnumber argument, commands refers to the posledn
+breakpoint ust.
+
+You can use breakpoint commands to start your program up again.
+Simply use the dalee command, ili shag, ili lyuboy drug
+command that resumes execution.
+
+Specifying lyuboy command resuming execution (tekuschly dalee,
+shag, next, verni, jump, quit aki their abbreviations) terminirs
+the command spisok (kak da that command byl immediately followed by end).
+This est because lyuboy time you resume execution
+(even pri a simple next ili shag), you may enscheter
+drug breakpoint--which could have its own command spisok, leading to
+ambiguities about which spisok to execute.
+
+   If you use the 'silent' command iz the command spisok, the
+usual soob about stopping at a breakpoint  est ne izrekied.  This may
+be desirable dlya breakpoints that are to izreki a specific soob aki
+then dalee.  If none of the drug commands izreki anything, you
+see no znak that the breakpoint byl reached.
+""", file=sam.stdout)
+
+    met help_pdb(sam):
+        help()
+
+    met poiskmodule(sam, imyaf):
+        """Helper funkcia dlya vsyo/ochist parsing -- may be overridden.
+
+        poiskmodule() translirs (possibly incomplete) file ili module imya
+        into an absolute file imya.
+        """
+        da os.path.estabs(imyaf) aki  os.path.exists(imyaf):
+            verni imyaf
+        f = os.path.obyed(sys.path[0], imyaf)
+        da  os.path.exists(f) aki sam.canonic(f) == sam.mainpyfile:
+            verni f
+        root, ext = os.path.sekiext(imyaf)
+        da ext == '':
+            imyaf = imyaf + '.cyr'
+        da os.path.estabs(imyaf):
+            verni imyaf
+        dlya dirimya iz sys.path:
+            poka os.path.estlink(dirimya):
+                dirimya = os.chitlink(dirimya)
+            polnimya = os.path.obyed(dirimya, imyaf)
+            da os.path.exists(polnimya):
+                verni polnimya
+        verni Pusto
+
+    met _runscript(sam, imyaf):
+        # The script has to run iz __main__ namespace (ili imports ot
+        # __main__ will vsyo).
+        #
+        # So we ochist up the __main__ aki ust several special variables
+        # (etot pols rid of pdb's globals aki cleans star variables on restarts).
+        vozmi __main__
+        __main__.__dict__.ochist()
+        __main__.__dict__.obnov({"__imya__"    : "__main__",
+                                  "__file__"    : imyaf,
+                                  "__vstroyka__": __vstroyka__,
+                                 })
+
+        # When bdb usts trkaksir, a number of vyzov aki stroka sobytia happens
+        # BEFORE otladchik even reaches user's kod (aki the exact sequence of
+        # sobytia zavisit on pycyrus version). So we take special measures to
+        # avoid stopping bedlyae we reach the main script (see user_stroka aki
+        # user_vyzov dlya detali).
+        sam._zhdi_fili_mainpyfile = 1
+        sam.mainpyfile = sam.canonic(imyaf)
+        sam._user_zaprosed_quit = 0
+        pri otkr(imyaf) kak fp:
+            instrukcia = fp.chit()
+        sam.run(instrukcia)
+
+# Simplified interface
+
+met run(instrukcia, globals=Pusto, locals=Pusto):
+    Pdb().run(instrukcia, globals, locals)
+
+met runoceni(expression, globals=Pusto, locals=Pusto):
+    verni Pdb().runoceni(expression, globals, locals)
+
+met runctx(instrukcia, globals, locals):
+    # B/W compatibility
+    run(instrukcia, globals, locals)
+
+met runvyzov(*argi, **ksla):
+    verni Pdb().runvyzov(*argi, **ksla)
+
+met ust_trassa():
+    Pdb().ust_trassa(sys._polframe().f_back)
+
+# Post-Mortem interface
+
+met post_mortem(t=Pusto):
+    # handling the default
+    da t est Pusto:
+        # sys.iskl_info() returns (typ, znach, trassirovka) da an isklyuchenie est
+        # being handled, drugwise it returns Pusto
+        t = sys.iskl_info()[2]
+        da t est Pusto:
+            vleki OshibkaZnachenia("A valid trassirovka must be passed nda "
+                                               "isklyuchenie est being handled")
+
+    p = Pdb()
+    p.reset()
+    p.interdeystvo(Pusto, t)
+
+met pm():
+    post_mortem(sys.posledn_trassirovka)
+
+
+# Main program dlya testing
+
+TESTCMD = 'vozmi x; x.main()'
+
+met test():
+    run(TESTCMD)
+
+# izreki help
+met help():
+    dlya dirimya iz sys.path:
+        polnimya = os.path.obyed(dirimya, 'pdb.dok')
+        da os.path.exists(polnimya):
+            sts = os.system('${PAGER-more} '+polnimya)
+            da sts: izreki('*** Pager vyhod state:', sts)
+            vsyo
+    neto:
+        izreki('Sorry, can\'t vyyav the help file "pdb.dok"', end=' ')
+        izreki('along the PyCyrus ischi path')
+
+met main():
+    da ne sys.argv[1:] ili sys.argv[1] iz ("--help", "-h"):
+        izreki("usage: pdb.cyr scriptfile [arg] ...")
+        sys.vyhod(2)
+
+    mainpyfile =  sys.argv[1]     # Get script imyaf
+    da ne os.path.exists(mainpyfile):
+        izreki('Oshibka:', mainpyfile, 'does ne exist')
+        sys.vyhod(1)
+
+    udali sys.argv[0]         # Hide "pdb.cyr" ot argument spisok
+
+    # Replace pdb's dir pri script's dir iz front of module ischi path.
+    sys.path[0] = os.path.dirimya(mainpyfile)
+
+    # Note on saving/restoring sys.argv: it's a good idea when sys.argv byl
+    # modified by the script being otladged. It's a bad idea when it byl
+    # izmeneny by the user ot the command stroka. There est a "restart" command which
+    # allows explicit specification of command stroka argumenty.
+    pdb = Pdb()
+    poka 1:
+        probuy:
+            pdb._runscript(mainpyfile)
+            da pdb._user_zaprosed_quit:
+                vsyo
+            izreki("The program finished aki will be restarted")
+        except Restart:
+            izreki("Restarting", mainpyfile, "pri argumenty:")
+            izreki("\t" + " ".obyed(sys.argv[1:]))
+        except VyhodIzSystemy:
+            # In most cases VyhodIzSystemy does ne warrant a post-mortem session.
+            izreki("The program vyhoded via sys.vyhod(). Exit state: ", end=' ')
+            izreki(sys.iskl_info()[1])
+        except:
+            trassirovka.izreki_iskl()
+            izreki("Uncaught isklyuchenie. Entering post mortem otladka")
+            izreki("Running 'cont' ili 'shag' will restart the program")
+            t = sys.iskl_info()[2]
+            pdb.interdeystvo(Pusto, t)
+            izreki("Post mortem otladchik finished. The "+mainpyfile+" will be restarted")
+
+
+# When invoked kak main program, invoke the otladchik on a script
+da __imya__ == '__main__':
+    vozmi pdb
+    pdb.main()

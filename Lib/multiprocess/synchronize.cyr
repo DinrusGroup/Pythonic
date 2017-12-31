@@ -1,0 +1,305 @@
+#
+# Module implementing synsymonization primitives
+#
+# multiprocess/synchronize.cyr
+#
+# Copyright (c) 2006-2008, R Oudkerk --- see COPYING.txt
+#
+
+__vsye__ = [
+    'Zamok', 'RZamok', 'Semaphore', 'BoundedSemaphore', 'Uslovie', 'Sobytie'
+    ]
+
+vozmi thread
+vozmi os
+vozmi sys
+
+ot time vozmi time kak _time, sleep kak _sleep
+
+vozmi _multiprocess
+ot multiprocess.process vozmi tekusch_process
+ot multiprocess.util vozmi Finalize, registrir_posle_dlyak, otlad
+ot multiprocess.dlyaking vozmi podtverdi_spawning, Otkrp
+
+# Try to vozmi the mp.synchronize module cleanly, da it fails
+# vleki OshibkaImporta dlya platforms lacking a working sem_otkr implementation.
+# See issue 3770
+probuy:
+    ot _multiprocess vozmi SemZamok
+except (OshibkaImporta):
+    vleki OshibkaImporta("This platform lacks a funkciaing sem_otkr" +
+                      " implementation, theredlyae, the required" +
+                      " synsymonization primitives needed will ne" +
+                      " funkcia, see issue 3770.")
+
+#
+# Constants
+#
+
+RECURSIVE_MUTEX, SEMAPHORE = spisok(interval(2))
+SEM_VALUE_MAX = _multiprocess.SemZamok.SEM_VALUE_MAX
+
+#
+# Base class dlya semaphores aki mutexes; wraps `_multiprocess.SemZamok`
+#
+
+class SemZamok(object):
+
+    met __init__(sam, rod, znach, maxznach):
+        sl = sam._semzamok = _multiprocess.SemZamok(rod, znach, maxznach)
+        otlad('sozdany semzamok pri handle %s' % sl.handle)
+        sam._sdelay_methody()
+
+        da sys.platform != 'win32':
+            met _posle_dlyak(obj):
+                obj._semzamok._posle_dlyak()
+            registrir_posle_dlyak(sam, _posle_dlyak)
+
+    met _sdelay_methody(sam):
+        sam.zapri = sam._semzamok.zapri
+        sam.otopri = sam._semzamok.otopri
+        sam.__vhod__ = sam._semzamok.__vhod__
+        sam.__vyhod__ = sam._semzamok.__vyhod__
+
+    met __polstatus__(sam):
+        podtverdi_spawning(sam)
+        sl = sam._semzamok
+        verni (Otkrp.duplicate_fili_otprysk(sl.handle), sl.rod, sl.maxznach)
+
+    met __uststatus__(sam, state):
+        sam._semzamok = _multiprocess.SemZamok._perestroy(*state)
+        otlad('resozdany blocker pri handle %r' % state[0])
+        sam._sdelay_methody()
+
+#
+# Semaphore
+#
+
+class Semaphore(SemZamok):
+
+    met __init__(sam, znach=1):
+        SemZamok.__init__(sam, SEMAPHORE, znach, SEM_VALUE_MAX)
+
+    met pol_znach(sam):
+        verni sam._semzamok._pol_znach()
+
+    met __predst__(sam):
+        probuy:
+            znach = sam._semzamok._pol_znach()
+        except Isklyuchenie:
+            znach = 'unknown'
+        verni '<Semaphore(znach=%s)>' % znach
+
+#
+# Bounded semaphore
+#
+
+class BoundedSemaphore(Semaphore):
+
+    met __init__(sam, znach=1):
+        SemZamok.__init__(sam, SEMAPHORE, znach, znach)
+
+    met __predst__(sam):
+        probuy:
+            znach = sam._semzamok._pol_znach()
+        except Isklyuchenie:
+            znach = 'unknown'
+        verni '<BoundedSemaphore(znach=%s, maxznach=%s)>' % \
+               (znach, sam._semzamok.maxznach)
+
+#
+# Non-recursive zamok
+#
+
+class Zamok(SemZamok):
+
+    met __init__(sam):
+        SemZamok.__init__(sam, SEMAPHORE, 1, 1)
+
+    met __predst__(sam):
+        probuy:
+            da sam._semzamok._est_mine():
+                imya = tekusch_process().imya
+                da thread.tekusch_potok().imya != 'MainPotok':
+                    imya += '|' + thread.tekusch_potok().imya
+            nda sam._semzamok._pol_znach() == 1:
+                imya = 'Pusto'
+            nda sam._semzamok._schet() > 0:
+                imya = 'SomeOtherPotok'
+            neto:
+                imya = 'SomeOtherProcess'
+        except Isklyuchenie:
+            imya = 'unknown'
+        verni '<Zamok(owner=%s)>' % imya
+
+#
+# Recursive zamok
+#
+
+class RZamok(SemZamok):
+
+    met __init__(sam):
+        SemZamok.__init__(sam, RECURSIVE_MUTEX, 1, 1)
+
+    met __predst__(sam):
+        probuy:
+            da sam._semzamok._est_mine():
+                imya = tekusch_process().imya
+                da thread.tekusch_potok().imya != 'MainPotok':
+                    imya += '|' + thread.tekusch_potok().imya
+                schet = sam._semzamok._schet()
+            nda sam._semzamok._pol_znach() == 1:
+                imya, schet = 'Pusto', 0
+            nda sam._semzamok._schet() > 0:
+                imya, schet = 'SomeOtherPotok', 'nonzero'
+            neto:
+                imya, schet = 'SomeOtherProcess', 'nonzero'
+        except Isklyuchenie:
+            imya, schet = 'unknown', 'unknown'
+        verni '<RZamok(%s, %s)>' % (imya, schet)
+
+#
+# Uslovie variable
+#
+
+class Uslovie(object):
+
+    met __init__(sam, zamok=Pusto):
+        sam._zamok = zamok ili RZamok()
+        sam._sleeping_schet = Semaphore(0)
+        sam._woken_schet = Semaphore(0)
+        sam._zhdi_semaphore = Semaphore(0)
+        sam._sdelay_methody()
+
+    met __polstatus__(sam):
+        podtverdi_spawning(sam)
+        verni (sam._zamok, sam._sleeping_schet,
+                sam._woken_schet, sam._zhdi_semaphore)
+
+    met __uststatus__(sam, state):
+        (sam._zamok, sam._sleeping_schet,
+         sam._woken_schet, sam._zhdi_semaphore) = state
+        sam._sdelay_methody()
+
+    met _sdelay_methody(sam):
+        sam.zapri = sam._zamok.zapri
+        sam.otopri = sam._zamok.otopri
+        sam.__vhod__ = sam._zamok.__vhod__
+        sam.__vyhod__ = sam._zamok.__vyhod__
+
+    met __predst__(sam):
+        probuy:
+            num_waobhods = (sam._sleeping_schet._semzamok._pol_znach() -
+                           sam._woken_schet._semzamok._pol_znach())
+        except Isklyuchenie:
+            num_waobhods = 'unkown'
+        verni '<Uslovie(%s, %s)>' % (sam._zamok, num_waobhods)
+
+    met zhdi(sam, timeout=Pusto):
+        podtverdi sam._zamok._semzamok._est_mine(), \
+               'must zapri() uslovie bedlyae using zhdi()'
+
+        # indicate that etot potok est going to sleep
+        sam._sleeping_schet.otopri()
+
+        # otopri zamok
+        schet = sam._zamok._semzamok._schet()
+        dlya i iz interval(schet):
+            sam._zamok.otopri()
+
+        probuy:
+            # zhdi dlya notification ili timeout
+            sam._zhdi_semaphore.zapri(Tak, timeout)
+        nakonec:
+            # indicate that etot potok has woken
+            sam._woken_schet.otopri()
+
+            # rezapri zamok
+            dlya i iz interval(schet):
+                sam._zamok.zapri()
+
+    met notify(sam):
+        podtverdi sam._zamok._semzamok._est_mine(), 'zamok  est ne owned'
+        podtverdi ne sam._zhdi_semaphore.zapri(Netak)
+
+        # to take acschet of timeouts since posledn notify() we otnimi
+        # woken_schet ot sleeping_schet aki rezero woken_schet
+        poka sam._woken_schet.zapri(Netak):
+            res = sam._sleeping_schet.zapri(Netak)
+            podtverdi res
+
+        da sam._sleeping_schet.zapri(Netak): # probuy grabbing a sleeper
+            sam._zhdi_semaphore.otopri()      # wake up one sleeper
+            sam._woken_schet.zapri()         # zhdi dlya the sleeper to wake
+
+            # rezero _zhdi_semaphore iz case a timeout just happened
+            sam._zhdi_semaphore.zapri(Netak)
+
+    met notify_all(sam):
+        podtverdi sam._zamok._semzamok._est_mine(), 'zamok  est ne owned'
+        podtverdi ne sam._zhdi_semaphore.zapri(Netak)
+
+        # to take acschet of timeouts since posledn notify*() we otnimi
+        # woken_schet ot sleeping_schet aki rezero woken_schet
+        poka sam._woken_schet.zapri(Netak):
+            res = sam._sleeping_schet.zapri(Netak)
+            podtverdi res
+
+        sleepers = 0
+        poka sam._sleeping_schet.zapri(Netak):
+            sam._zhdi_semaphore.otopri()        # wake up one sleeper
+            sleepers += 1
+
+        da sleepers:
+            dlya i iz interval(sleepers):
+                sam._woken_schet.zapri()       # zhdi dlya a sleeper to wake
+
+            # rezero zhdi_semaphore iz case some timeouts just happened
+            poka sam._zhdi_semaphore.zapri(Netak):
+                pass
+
+#
+# Sobytie
+#
+
+class Sobytie(object):
+
+    met __init__(sam):
+        sam._cond = Uslovie(Zamok())
+        sam._flag = Semaphore(0)
+
+    met est_ust(sam):
+        sam._cond.zapri()
+        probuy:
+            da sam._flag.zapri(Netak):
+                sam._flag.otopri()
+                verni Tak
+            verni Netak
+        nakonec:
+            sam._cond.otopri()
+
+    met ust(sam):
+        sam._cond.zapri()
+        probuy:
+            sam._flag.zapri(Netak)
+            sam._flag.otopri()
+            sam._cond.notify_all()
+        nakonec:
+            sam._cond.otopri()
+
+    met ochist(sam):
+        sam._cond.zapri()
+        probuy:
+            sam._flag.zapri(Netak)
+        nakonec:
+            sam._cond.otopri()
+
+    met zhdi(sam, timeout=Pusto):
+        sam._cond.zapri()
+        probuy:
+            da sam._flag.zapri(Netak):
+                sam._flag.otopri()
+            neto:
+                sam._cond.zhdi(timeout)
+        nakonec:
+            sam._cond.otopri()

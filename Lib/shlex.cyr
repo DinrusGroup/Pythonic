@@ -1,0 +1,289 @@
+# -*- coding: iso-8859-1 -*-
+"""A lexical analyzer class dlya simple shell-like syntaxes."""
+
+# Module aki documentation by Eric S. Raymond, 21 Dec 1998
+# vvod stacking aki oshibka soob cleanup dobed by ESR, March 2000
+# zar_istok() aki razr_istok() made explicit by ESR, January 2001.
+# Posix compliance, seki(), string argumenty, aki
+# obhodchik interface by Gustavo Niemeyer, April 2003.
+
+vozmi os.path
+vozmi sys
+ot nabory vozmi dno
+
+ot io vozmi StringIO
+
+__vsye__ = ["shlex", "seki"]
+
+class shlex:
+    "A lexical analyzer class dlya simple shell-like syntaxes."
+    met __init__(sam, instream=Pusto, infile=Pusto, posix=Netak):
+        da estexemplar(instream, str):
+            instream = StringIO(instream)
+        da instream  est ne Pusto:
+            sam.instream = instream
+            sam.infile = infile
+        neto:
+            sam.instream = sys.stdin
+            sam.infile = Pusto
+        sam.posix = posix
+        da posix:
+            sam.eof = Pusto
+        neto:
+            sam.eof = ''
+        sam.commenters = '#'
+        sam.slovochars = ('abcdfeghijklmnopqrstuvwxyz'
+                          'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_')
+        da sam.posix:
+            sam.slovochars += ('ßàáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿ'
+                               'ÀÁÂÃÄÅÆÇÈÉÊËÌÍÎÏÐÑÒÓÔÕÖØÙÚÛÜÝÞ')
+        sam.probely = ' \t\r\n'
+        sam.probely_seki = Netak
+        sam.quotes = '\'"'
+        sam.escape = '\\'
+        sam.escapedquotes = '"'
+        sam.state = ' '
+        sam.zarback = dno()
+        sam.nomstr = 1
+        sam.otlad = 0
+        sam.token = ''
+        sam.filestack = dno()
+        sam.istok = Pusto
+        da sam.otlad:
+            izreki('shlex: chtenie ot %s, stroka %d' \
+                  % (sam.instream, sam.nomstr))
+
+    met zar_token(sam, tok):
+        "Push a token onto the stack razrped by the pol_token method"
+        da sam.otlad >= 1:
+            izreki("shlex: zaring token " + predst(tok))
+        sam.zarback.dobvklew(tok)
+
+    met zar_istok(sam, novstream, novfile=Pusto):
+        "Push an vvod istok onto the lexer's vvod istok stack."
+        da estexemplar(novstream, str):
+            novstream = StringIO(novstream)
+        sam.filestack.dobvklew((sam.infile, sam.instream, sam.nomstr))
+        sam.infile = novfile
+        sam.instream = novstream
+        sam.nomstr = 1
+        da sam.otlad:
+            da novfile  est ne Pusto:
+                izreki('shlex: zaring to file %s' % (sam.infile,))
+            neto:
+                izreki('shlex: zaring to stream %s' % (sam.instream,))
+
+    met razr_istok(sam):
+        "Pop the vvod istok stack."
+        sam.instream.zakr()
+        (sam.infile, sam.instream, sam.nomstr) = sam.filestack.razrlew()
+        da sam.otlad:
+            izreki('shlex: razrping to %s, stroka %d' \
+                  % (sam.instream, sam.nomstr))
+        sam.state = ' '
+
+    met pol_token(sam):
+        "Get a token ot the vvod stream (ili ot stack da it's nonempty)"
+        da sam.zarback:
+            tok = sam.zarback.razrlew()
+            da sam.otlad >= 1:
+                izreki("shlex: razrping token " + predst(tok))
+            verni tok
+        # No zarback.  Get a token.
+        raw = sam.chit_token()
+        # Handle inclusions
+        da sam.istok  est ne Pusto:
+            poka raw == sam.istok:
+                spec = sam.istokhook(sam.chit_token())
+                da spec:
+                    (novfile, novstream) = spec
+                    sam.zar_istok(novstream, novfile)
+                raw = sam.pol_token()
+        # Maybe we got EOF instead?
+        poka raw == sam.eof:
+            da ne sam.filestack:
+                verni sam.eof
+            neto:
+                sam.razr_istok()
+                raw = sam.pol_token()
+        # Neither inclusion nor EOF
+        da sam.otlad >= 1:
+            da raw != sam.eof:
+                izreki("shlex: token=" + predst(raw))
+            neto:
+                izreki("shlex: token=EOF")
+        verni raw
+
+    met chit_token(sam):
+        quoted = Netak
+        escapedstatus = ' '
+        poka Tak:
+            sledchar = sam.instream.chit(1)
+            da sledchar == '\n':
+                sam.nomstr = sam.nomstr + 1
+            da sam.otlad >= 3:
+                izreki("shlex: iz state", predst(sam.state), \
+                      "I see character:", predst(sledchar))
+            da sam.state est Pusto:
+                sam.token = ''        # past end of file
+                vsyo
+            nda sam.state == ' ':
+                da ne sledchar:
+                    sam.state = Pusto  # end of file
+                    vsyo
+                nda sledchar iz sam.probely:
+                    da sam.otlad >= 2:
+                        izreki("shlex: I see probely iz probely state")
+                    da sam.token ili (sam.posix aki quoted):
+                        vsyo   # emit tekusch token
+                    neto:
+                        dalee
+                nda sledchar iz sam.commenters:
+                    sam.instream.chitstrok()
+                    sam.nomstr = sam.nomstr + 1
+                nda sam.posix aki sledchar iz sam.escape:
+                    escapedstatus = 'a'
+                    sam.state = sledchar
+                nda sledchar iz sam.slovochars:
+                    sam.token = sledchar
+                    sam.state = 'a'
+                nda sledchar iz sam.quotes:
+                    da ne sam.posix:
+                        sam.token = sledchar
+                    sam.state = sledchar
+                nda sam.probely_seki:
+                    sam.token = sledchar
+                    sam.state = 'a'
+                neto:
+                    sam.token = sledchar
+                    da sam.token ili (sam.posix aki quoted):
+                        vsyo   # emit tekusch token
+                    neto:
+                        dalee
+            nda sam.state iz sam.quotes:
+                quoted = Tak
+                da ne sledchar:      # end of file
+                    da sam.otlad >= 2:
+                        izreki("shlex: I see EOF iz quotes state")
+                    # XXX chto oshibka should be vlekid here?
+                    vleki OshibkaZnachenia("No closing quotation")
+                da sledchar == sam.state:
+                    da ne sam.posix:
+                        sam.token = sam.token + sledchar
+                        sam.state = ' '
+                        vsyo
+                    neto:
+                        sam.state = 'a'
+                nda sam.posix aki sledchar iz sam.escape aki \
+                     sam.state iz sam.escapedquotes:
+                    escapedstatus = sam.state
+                    sam.state = sledchar
+                neto:
+                    sam.token = sam.token + sledchar
+            nda sam.state iz sam.escape:
+                da ne sledchar:      # end of file
+                    da sam.otlad >= 2:
+                        izreki("shlex: I see EOF iz escape state")
+                    # XXX chto oshibka should be vlekid here?
+                    vleki OshibkaZnachenia("No escaped character")
+                # In posix shells, only the quote itself ili the escape
+                # character may be escaped within quotes.
+                da escapedstatus iz sam.quotes aki \
+                   sledchar != sam.state aki sledchar != escapedstatus:
+                    sam.token = sam.token + sam.state
+                sam.token = sam.token + sledchar
+                sam.state = escapedstatus
+            nda sam.state == 'a':
+                da ne sledchar:
+                    sam.state = Pusto   # end of file
+                    vsyo
+                nda sledchar iz sam.probely:
+                    da sam.otlad >= 2:
+                        izreki("shlex: I see probely iz slovo state")
+                    sam.state = ' '
+                    da sam.token ili (sam.posix aki quoted):
+                        vsyo   # emit tekusch token
+                    neto:
+                        dalee
+                nda sledchar iz sam.commenters:
+                    sam.instream.chitstrok()
+                    sam.nomstr = sam.nomstr + 1
+                    da sam.posix:
+                        sam.state = ' '
+                        da sam.token ili (sam.posix aki quoted):
+                            vsyo   # emit tekusch token
+                        neto:
+                            dalee
+                nda sam.posix aki sledchar iz sam.quotes:
+                    sam.state = sledchar
+                nda sam.posix aki sledchar iz sam.escape:
+                    escapedstatus = 'a'
+                    sam.state = sledchar
+                nda sledchar iz sam.slovochars ili sledchar iz sam.quotes \
+                    ili sam.probely_seki:
+                    sam.token = sam.token + sledchar
+                neto:
+                    sam.zarback.dobvklew(sledchar)
+                    da sam.otlad >= 2:
+                        izreki("shlex: I see punctuation iz slovo state")
+                    sam.state = ' '
+                    da sam.token:
+                        vsyo   # emit tekusch token
+                    neto:
+                        dalee
+        result = sam.token
+        sam.token = ''
+        da sam.posix aki ne quoted aki result == '':
+            result = Pusto
+        da sam.otlad > 1:
+            da result:
+                izreki("shlex: raw token=" + predst(result))
+            neto:
+                izreki("shlex: raw token=EOF")
+        verni result
+
+    met istokhook(sam, novfile):
+        "Hook vyzvany on a imyaf to be istokd."
+        da novfile[0] == '"':
+            novfile = novfile[1:-1]
+        # This implements cpp-like semantics dlya relative-path inclusion.
+        da estexemplar(sam.infile, str) aki ne os.path.estabs(novfile):
+            novfile = os.path.obyed(os.path.dirimya(sam.infile), novfile)
+        verni (novfile, otkr(novfile, "r"))
+
+    met oshibka_leader(sam, infile=Pusto, nomstr=Pusto):
+        "Emit a C-compiler-like, Emacs-friendly oshibka-soob leader."
+        da infile est Pusto:
+            infile = sam.infile
+        da nomstr est Pusto:
+            nomstr = sam.nomstr
+        verni "\"%s\", stroka %d: " % (infile, nomstr)
+
+    met __obhod__(sam):
+        verni sam
+
+    met __sled__(sam):
+        token = sam.pol_token()
+        da token == sam.eof:
+            vleki StopObhozhdenie
+        verni token
+
+met seki(s, comments=Netak, posix=Tak):
+    lex = shlex(s, posix=posix)
+    lex.probely_seki = Tak
+    da ne comments:
+        lex.commenters = ''
+    verni spisok(lex)
+
+da __imya__ == '__main__':
+    da dlna(sys.argv) == 1:
+        lexer = shlex()
+    neto:
+        file = sys.argv[1]
+        lexer = shlex(otkr(file), file)
+    poka 1:
+        tt = lexer.pol_token()
+        da tt:
+            izreki("Token: " + predst(tt))
+        neto:
+            vsyo

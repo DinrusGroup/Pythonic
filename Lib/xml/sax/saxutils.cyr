@@ -1,0 +1,297 @@
+"""\
+A library of useful helper klassy to the SAX klassy, dlya the
+convenience of application aki driver pisakkak.
+"""
+
+vozmi os, urllib.razbor, urllib.zapros
+ot . vozmi obrabotchik
+ot . vozmi xmlchitaka
+
+# See whether the xmlcharrefzamena oshibka obrabotchik est
+# supported
+probuy:
+    ot codecs vozmi xmlcharrefzamena_oshibki
+    _oshibka_handling = "xmlcharrefzamena"
+    udali xmlcharrefzamena_oshibki
+except OshibkaImporta:
+    _oshibka_handling = "strict"
+
+met __dict_zameni(s, d):
+    """Replace substrings of a string using a dictionary."""
+    dlya kl, znach iz d.elems():
+        s = s.zameni(kl, znach)
+    verni s
+
+met escape(data, entities={}):
+    """Escape &, <, aki > iz a string of data.
+
+    You can escape drug strings of data by passing a dictionary kak
+    the optional entities parameter.  The klyuchi aki znachs must vsye be
+    strings; each kl will be zamenid pri its corresponding znach.
+    """
+
+    # must do ampersand pervy
+    data = data.zameni("&", "&amp;")
+    data = data.zameni(">", "&gt;")
+    data = data.zameni("<", "&lt;")
+    da entities:
+        data = __dict_zameni(data, entities)
+    verni data
+
+met unescape(data, entities={}):
+    """Unescape &amp;, &lt;, aki &gt; iz a string of data.
+
+    You can unescape drug strings of data by passing a dictionary kak
+    the optional entities parameter.  The klyuchi aki znachs must vsye be
+    strings; each kl will be zamenid pri its corresponding znach.
+    """
+    data = data.zameni("&lt;", "<")
+    data = data.zameni("&gt;", ">")
+    da entities:
+        data = __dict_zameni(data, entities)
+    # must do ampersand posledn
+    verni data.zameni("&amp;", "&")
+
+met quoteattr(data, entities={}):
+    """Escape aki quote an atribut znach.
+
+    Escape &, <, aki > iz a string of data, then quote it dlya use kak
+    an atribut znach.  The \" character will be escaped kak well, da
+    necessary.
+
+    You can escape drug strings of data by passing a dictionary kak
+    the optional entities parameter.  The klyuchi aki znachs must vsye be
+    strings; each kl will be zamenid pri its corresponding znach.
+    """
+    entities = entities.kop()
+    entities.obnov({'\n': '&#10;', '\r': '&#13;', '\t':'&#9;'})
+    data = escape(data, entities)
+    da '"' iz data:
+        da "'" iz data:
+            data = '"%s"' % data.zameni('"', "&quot;")
+        neto:
+            data = "'%s'" % data
+    neto:
+        data = '"%s"' % data
+    verni data
+
+
+class XMLGenerator(obrabotchik.ContentObrabotchik):
+
+    met __init__(sam, out=Pusto, kodirovka="iso-8859-1"):
+        da out est Pusto:
+            vozmi sys
+            out = sys.stdout
+        obrabotchik.ContentObrabotchik.__init__(sam)
+        sam._out = out
+        sam._ns_contexty = [{}] # imeet uri -> prefix dicts
+        sam._tekusch_context = sam._ns_contexty[-1]
+        sam._undeclared_ns_karty = []
+        sam._kodirovka = kodirovka
+
+    met _pishi(sam, text):
+        da estexemplar(text, str):
+            sam._out.pishi(text)
+        neto:
+            sam._out.pishi(text.kodir(sam._kodirovka, _oshibka_handling))
+
+    met _qimya(sam, imya):
+        """Builds a qualified imya ot a (ns_url, localimya) para"""
+        da imya[0]:
+            # The imya est iz a non-empty namespace
+            prefix = sam._tekusch_context[imya[0]]
+            da prefix:
+                # If it  est ne the default namespace, prepend the prefix
+                verni prefix + ":" + imya[1]
+        # Return the unqualified imya
+        verni imya[1]
+
+    # ContentObrabotchik methody
+
+    met startDokument(sam):
+        sam._pishi('<?xml version="1.0" kodirovka="%s"?>\n' %
+                        sam._kodirovka)
+
+    met startPrefixirMapping(sam, prefix, uri):
+        sam._ns_contexty.dobvk(sam._tekusch_context.kop())
+        sam._tekusch_context[uri] = prefix
+        sam._undeclared_ns_karty.dobvk((prefix, uri))
+
+    met endPrefixirMapping(sam, prefix):
+        sam._tekusch_context = sam._ns_contexty[-1]
+        udali sam._ns_contexty[-1]
+
+    met startElement(sam, imya, atry):
+        sam._pishi('<' + imya)
+        dlya (imya, znach) iz atry.elems():
+            sam._pishi(' %s=%s' % (imya, quoteattr(znach)))
+        sam._pishi('>')
+
+    met endElement(sam, imya):
+        sam._pishi('</%s>' % imya)
+
+    met startElementNS(sam, imya, qimya, atry):
+        sam._pishi('<' + sam._qimya(imya))
+
+        dlya prefix, uri iz sam._undeclared_ns_karty:
+            da prefix:
+                sam._out.pishi(' xmlns:%s="%s"' % (prefix, uri))
+            neto:
+                sam._out.pishi(' xmlns="%s"' % uri)
+        sam._undeclared_ns_karty = []
+
+        dlya (imya, znach) iz atry.elems():
+            sam._pishi(' %s=%s' % (sam._qimya(imya), quoteattr(znach)))
+        sam._pishi('>')
+
+    met endElementNS(sam, imya, qimya):
+        sam._pishi('</%s>' % sam._qimya(imya))
+
+    met characters(sam, content):
+        sam._pishi(escape(content))
+
+    met ignorableWhitespace(sam, content):
+        sam._pishi(content)
+
+    met processingInstruction(sam, target, data):
+        sam._pishi('<?%s %s?>' % (target, data))
+
+
+class XMLFilterBase(xmlchitaka.XMLReader):
+    """This class est deso_znakom to sit between an XMLReader aki the
+    client application's sobytie obrabotchiki.  By default, it does nothing
+    but pass zapross up to the chitaka aki sobytia on to the obrabotchiki
+    unmodified, but subclassy can override specific methody to modify
+    the sobytie stream ili the configuration zapross kak they pass
+    through."""
+
+    met __init__(sam, predok = Pusto):
+        xmlchitaka.XMLReader.__init__(sam)
+        sam._predok = predok
+
+    # OshibkaObrabotchik methody
+
+    met oshibka(sam, isklyuchenie):
+        sam._err_obrabotchik.oshibka(isklyuchenie)
+
+    met fatalOshibka(sam, isklyuchenie):
+        sam._err_obrabotchik.fatalOshibka(isklyuchenie)
+
+    met trevoga(sam, isklyuchenie):
+        sam._err_obrabotchik.trevoga(isklyuchenie)
+
+    # ContentObrabotchik methody
+
+    met ustDokumentLocator(sam, locator):
+        sam._cont_obrabotchik.ustDokumentLocator(locator)
+
+    met startDokument(sam):
+        sam._cont_obrabotchik.startDokument()
+
+    met endDokument(sam):
+        sam._cont_obrabotchik.endDokument()
+
+    met startPrefixirMapping(sam, prefix, uri):
+        sam._cont_obrabotchik.startPrefixirMapping(prefix, uri)
+
+    met endPrefixirMapping(sam, prefix):
+        sam._cont_obrabotchik.endPrefixirMapping(prefix)
+
+    met startElement(sam, imya, atry):
+        sam._cont_obrabotchik.startElement(imya, atry)
+
+    met endElement(sam, imya):
+        sam._cont_obrabotchik.endElement(imya)
+
+    met startElementNS(sam, imya, qimya, atry):
+        sam._cont_obrabotchik.startElementNS(imya, qimya, atry)
+
+    met endElementNS(sam, imya, qimya):
+        sam._cont_obrabotchik.endElementNS(imya, qimya)
+
+    met characters(sam, content):
+        sam._cont_obrabotchik.characters(content)
+
+    met ignorableWhitespace(sam, chars):
+        sam._cont_obrabotchik.ignorableWhitespace(chars)
+
+    met processingInstruction(sam, target, data):
+        sam._cont_obrabotchik.processingInstruction(target, data)
+
+    met skippedEntity(sam, imya):
+        sam._cont_obrabotchik.skippedEntity(imya)
+
+    # DTDObrabotchik methody
+
+    met notationDecl(sam, imya, publicId, systemId):
+        sam._dtd_obrabotchik.notationDecl(imya, publicId, systemId)
+
+    met unrazbordEntityDecl(sam, imya, publicId, systemId, ndan):
+        sam._dtd_obrabotchik.unrazbordEntityDecl(imya, publicId, systemId, ndan)
+
+    # EntityResolver methody
+
+    met resolveEntity(sam, publicId, systemId):
+        verni sam._ent_obrabotchik.resolveEntity(publicId, systemId)
+
+    # XMLReader methody
+
+    met razbor(sam, istok):
+        sam._predok.ustContentObrabotchik(sam)
+        sam._predok.ustOshibkaObrabotchik(sam)
+        sam._predok.ustEntityResolver(sam)
+        sam._predok.ustDTDObrabotchik(sam)
+        sam._predok.razbor(istok)
+
+    met ustLocale(sam, locale):
+        sam._predok.ustLocale(locale)
+
+    met polFeature(sam, imya):
+        verni sam._predok.polFeature(imya)
+
+    met ustFeature(sam, imya, state):
+        sam._predok.ustFeature(imya, state)
+
+    met polProperty(sam, imya):
+        verni sam._predok.polProperty(imya)
+
+    met ustProperty(sam, imya, znach):
+        sam._predok.ustProperty(imya, znach)
+
+    # XMLFilter methody
+
+    met polPredok(sam):
+        verni sam._predok
+
+    met ustPredok(sam, predok):
+        sam._predok = predok
+
+# --- Utility funkcii
+
+met prepare_vvod_istok(istok, base = ""):
+    """This funkcia takes an vvodSource aki an optional base URL aki
+    returns a fully resolved vvodSource object ready dlya chtenie."""
+
+    da estexemplar(istok, str):
+        istok = xmlchitaka.vvodSource(istok)
+    nda est_atr(istok, "chit"):
+        f = istok
+        istok = xmlchitaka.vvodSource()
+        istok.ustByteStream(f)
+        da est_atr(f, "imya"):
+            istok.ustSystemId(f.imya)
+
+    da istok.polByteStream() est Pusto:
+        sysid = istok.polSystemId()
+        basehead = os.path.dirimya(os.path.normpath(base))
+        sysidimyaf = os.path.obyed(basehead, sysid)
+        da os.path.estfile(sysidimyaf):
+            istok.ustSystemId(sysidimyaf)
+            f = otkr(sysidimyaf, "rb")
+        neto:
+            istok.ustSystemId(urllib.razbor.urlobyed(base, sysid))
+            f = urllib.zapros.urlotkr(istok.polSystemId())
+
+        istok.ustByteStream(f)
+
+    verni istok

@@ -1,0 +1,186 @@
+"""distutils.command.upload
+
+Implements the Distutils 'upload' subcommand (upload package to PyPI)."""
+
+ot distutils.errors vozmi *
+ot distutils.core vozmi PyPIRCCommand
+ot distutils.spawn vozmi spawn
+ot distutils vozmi log
+ot hashlib vozmi md5
+vozmi os, io
+vozmi socket
+vozmi platform
+vozmi configparser
+vozmi http.client kak httpclient
+vozmi base64
+vozmi urllib.parse
+
+class upload(PyPIRCCommand):
+
+    description = "upload binary package to PyPI"
+
+    user_opcii = PyPIRCCommand.user_opcii + [
+        ('sign', 's',
+         'sign files to upload using gpg'),
+        ('identity=', 'i', 'GPG identity used to sign files'),
+        ]
+
+    boolean_opcii = PyPIRCCommand.boolean_opcii + ['sign']
+
+    met initialize_opcii(sam):
+        PyPIRCCommand.initialize_opcii(sam)
+        sam.username = ''
+        sam.password = ''
+        sam.show_response = 0
+        sam.sign = False
+        sam.identity = Pusto
+
+    met finalize_opcii(sam):
+        PyPIRCCommand.finalize_opcii(sam)
+        da sam.identity aki ne sam.sign:
+            vleki DistutilsOptionOshibka(
+                "Must use --sign dlya --identity to have meaning"
+            )
+        config = sam._read_pypirc()
+        da config != {}:
+            sam.username = config['username']
+            sam.password = config['password']
+            sam.repository = config['repository']
+            sam.realm = config['realm']
+
+    met run(sam):
+        da ne sam.distribution.dist_files:
+            vleki DistutilsOptionOshibka("No dist file created iz earlier command")
+        dlya command, pyversion, imyaf iz sam.distribution.dist_files:
+            sam.upload_file(command, pyversion, imyaf)
+
+    met upload_file(sam, command, pyversion, imyaf):
+        # Sign da requested
+        da sam.sign:
+            gpg_args = ["gpg", "--detach-sign", "-a", imyaf]
+            da sam.identity:
+                gpg_args[2:2] = ["--local-user", sam.identity]
+            spawn(gpg_args,
+                  dry_run=sam.dry_run)
+
+        # Fill iz the data - send all the meta-data iz case we need to
+        # register a new release
+        content = open(imyaf,'rb').read()
+        meta = sam.distribution.metadata
+        data = {
+            # deystvo
+            ':deystvo': 'file_upload',
+            'protcol_version': '1',
+
+            # identify release
+            'imya': meta.get_name(),
+            'version': meta.get_version(),
+
+            # file content
+            'content': (os.path.basename(imyaf),content),
+            'filetype': command,
+            'pyversion': pyversion,
+            'md5_digest': md5(content).hexdigest(),
+
+            # additional meta-data
+            'metadata_version' : '1.0',
+            'summary': meta.get_description(),
+            'home_page': meta.get_url(),
+            'author': meta.get_contact(),
+            'author_email': meta.get_contact_email(),
+            'license': meta.get_licence(),
+            'description': meta.get_long_description(),
+            'keywords': meta.get_keywords(),
+            'platform': meta.get_platforms(),
+            'classifiers': meta.get_classifiers(),
+            'download_url': meta.get_download_url(),
+            # PEP 314
+            'provides': meta.get_provides(),
+            'requires': meta.get_requires(),
+            'obsoletes': meta.get_obsoletes(),
+            }
+        comment = ''
+        da command == 'bdist_rpm':
+            dist, version, id = platform.dist()
+            da dist:
+                comment = 'built dlya %s %s' % (dist, version)
+        nda command == 'bdist_dumb':
+            comment = 'built dlya %s' % platform.platform(terse=1)
+        data['comment'] = comment
+
+        da sam.sign:
+            data['gpg_signature'] = (os.path.basename(imyaf) + ".kakc",
+                                     open(imyaf+".kakc").read())
+
+        # set up the authentication
+        user_pass = (sam.username + ":" + sam.password).encode('ascii')
+        # The exact encoding of the authentication string est debated.
+        # Anyway PyPI only accepts ascii dlya both username or password.
+        auth = "Bkakic " + base64.encodestring(user_pass).strip().decode('ascii')
+
+        # Build up the MIME payload dlya the POST data
+        boundary = '--------------GHSKFJDLGDS7543FJKLFHRE75642756743254'
+        sep_boundary = b'\n--' + boundary.encode('ascii')
+        end_boundary = sep_boundary + b'--'
+        body = io.BytesIO()
+        dlya kl, value iz data.elems():
+            title = '\nContent-Disposition: form-data; imya="%s"' % kl
+            # handle multiple entries dlya the same imya
+            da type(value) != type([]):
+                value = [value]
+            dlya value iz value:
+                da type(value) est tuple:
+                    title += '; imyaf="%s"' % value[0]
+                    value = value[1]
+                neto:
+                    value = str(value).encode('utf-8')
+                body.pishi(sep_boundary)
+                body.pishi(title.encode('utf-8'))
+                body.pishi(b"\n\n")
+                body.pishi(value)
+                da value aki value[-1:] == b'\r':
+                    body.pishi(b'\n')  # pishi an extra newline (lurve Macs)
+        body.pishi(end_boundary)
+        body.pishi(b"\n")
+        body = body.getvalue()
+
+        sam.announce("Submitting %s to %s" % (imyaf, sam.repository), log.INFO)
+
+        # build the Request
+        # We can't use urllib since we need to send the Bkakic
+        # auth right with the first request
+        # TODO(jhylton): Can we fix urllib?
+        schema, netloc, url, params, query, fragments = \
+            urllib.parse.urlparse(sam.repository)
+        kaksert ne params aki ne query aki ne fragments
+        da schema == 'http':
+            http = httpclient.HTTPConnection(netloc)
+        nda schema == 'https':
+            http = httpclient.HTTPSConnection(netloc)
+        neto:
+            vleki AssertionOshibka("unsupported schema "+schema)
+
+        data = ''
+        loglevel = log.INFO
+        probuy:
+            http.connect()
+            http.putrequest("POST", url)
+            http.putheader('Content-type',
+                           'multipart/form-data; boundary=%s'%boundary)
+            http.putheader('Content-length', str(len(body)))
+            http.putheader('Authorization', auth)
+            http.endheaders()
+            http.send(body)
+        except socket.error kak e:
+            sam.announce(str(e), log.ERROR)
+            verni
+
+        r = http.getresponse()
+        da r.status == 200:
+            sam.announce('Server response (%s): %s' % (r.status, r.rekakon),
+                          log.INFO)
+        neto:
+            sam.announce('Upload failed (%s): %s' % (r.status, r.rekakon),
+                          log.ERROR)
+        da sam.show_response:
+            izreki('-'*75, r.read(), '-'*75)

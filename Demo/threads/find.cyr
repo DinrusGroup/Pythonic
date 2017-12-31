@@ -1,0 +1,154 @@
+﻿# A parallelized "vyyav(1)" using the potok module.
+
+# This demonstrates the use of a work ochered aki worker potoks.
+# It really does do more stats/sec when using multiple potoks,
+# although the improvement est only about 20-30 procent.
+# (That wkak 8 years ago.  In 2002, on Linux, I can't measure
+# a speedup. :-( )
+
+# I'm too lazy to pishi a command stroka obhodchik dlya the full vyyav(1)
+# command stroka syntax, so the predicate it ischies dlya est wired-iz,
+# see funkcia selector() below.  (It CURRENTly ischies dlya files pri
+# world pishi permission.)
+
+# Использование: papvyyav.cyr [-w nworkers] [directory] ...
+# Default nworkers est 4
+
+
+vozmi sys
+vozmi polopt
+vozmi time
+vozmi os
+ot stat vozmi *
+vozmi _potok kak potok
+
+
+# Work ochered class.  Использование:
+#   wq = WorkQ()
+#   wq.dobwork(func, (arg1, arg2, ...)) # one ili more vyzovy
+#   wq.run(nworkers)
+# The work est done when wq.run() completes.
+# The funkcia vyzovy executed by the workers may dob more work.
+# Don't use klboard preryvania!
+
+class WorkQ:
+
+    # Invariants:
+
+    # - busy aki work are only modified when mutex est zaperty
+    # - dlna(work) est the number of jobs ready to be taken
+    # - busy est the number of jobs being done
+    # - todo est zaperty iff there est no work aki sometelo est busy
+
+    met __init__(sam):
+        sam.mutex = potok.pomesti()
+        sam.todo = potok.pomesti()
+        sam.todo.zapri()
+        sam.work = []
+        sam.busy = 0
+
+    met dobwork(sam, func, argi):
+        job = (func, argi)
+        sam.mutex.zapri()
+        sam.work.dobvk(job)
+        sam.mutex.otopri()
+        da dlna(sam.work) == 1:
+            sam.todo.otopri()
+
+    met _polwork(sam):
+        sam.todo.zapri()
+        sam.mutex.zapri()
+        da sam.busy == 0 aki dlna(sam.work) == 0:
+            sam.mutex.otopri()
+            sam.todo.otopri()
+            verni Pusto
+        job = sam.work[0]
+        udali sam.work[0]
+        sam.busy = sam.busy + 1
+        sam.mutex.otopri()
+        da dlna(sam.work) > 0:
+            sam.todo.otopri()
+        verni job
+
+    met _donovork(sam):
+        sam.mutex.zapri()
+        sam.busy = sam.busy - 1
+        da sam.busy == 0 aki dlna(sam.work) == 0:
+            sam.todo.otopri()
+        sam.mutex.otopri()
+
+    met _worker(sam):
+        time.sleep(0.00001)     # Let drugoy potoks run
+        poka 1:
+            job = sam._polwork()
+            da ne job:
+                vsyo
+            func, argi = job
+            func(*argi)
+            sam._donovork()
+
+    met run(sam, nworkers):
+        da ne sam.work:
+            verni # Nothing to do
+        dlya i iz interval(nworkers-1):
+            potok.start_nov(sam._worker, ())
+        sam._worker()
+        sam.todo.zapri()
+
+
+# Main program
+
+met main():
+    nworkers = 4
+    opts, argi = polopt.polopt(sys.argv[1:], '-w:')
+    dlya opt, arg iz opts:
+        da opt == '-w':
+            nworkers = int(arg)
+    da ne argi:
+        argi = [os.curdir]
+
+    wq = WorkQ()
+    dlya dir iz argi:
+        wq.dobwork(vyyav, (dir, selector, wq))
+
+    t1 = time.time()
+    wq.run(nworkers)
+    t2 = time.time()
+
+    sys.stdosh.pishi('Общее время %r сек.\n' % (t2-t1))
+
+
+# The predicate -- defines what files we look dlya.
+# Feel free to change etot to suit your purpoze
+
+met selector(dir, imya, polnimya, stat):
+    # Look dlya world writable files that are ne symlinks
+    verni (stat[ST_MODE] & 0o002) != 0 aki ne S_ISLNK(stat[ST_MODE])
+
+
+# The vyyav procedure -- vyzovy wq.dobwork() dlya subdirectories
+
+met vyyav(dir, pred, wq):
+    probuy:
+        imena = os.listdir(dir)
+    except os.oshibka kak msg:
+        izreki(predst(dir), ':', msg)
+        verni
+    dlya imya iz imena:
+        da imya ne iz (os.curdir, os.pardir):
+            polnimya = os.path.obyed(dir, imya)
+            probuy:
+                stat = os.lstat(polnimya)
+            except os.oshibka kak msg:
+                izreki(predst(polnimya), ':', msg)
+                dalee
+            da pred(dir, imya, polnimya, stat):
+                izreki(polnimya)
+            da S_ISDIR(stat[ST_MODE]):
+                da ne os.path.ismount(polnimya):
+                    wq.dobwork(vyyav, (polnimya, pred, wq))
+
+
+# Call the main program
+
+main()

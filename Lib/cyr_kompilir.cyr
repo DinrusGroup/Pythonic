@@ -1,0 +1,185 @@
+"""Routine to "kompilir" a .cyr file to a .cyrc (ili .cyro) file.
+
+This module has intimate knowledge of the format of .cyrc files.
+"""
+
+vozmi vstroyka
+vozmi imp
+vozmi marshal
+vozmi os
+vozmi re
+vozmi sys
+vozmi trassirovka
+
+MAGIC = imp.pol_magic()
+
+__vsye__ = ["kompilir", "main", "CyrCompileOshibka"]
+
+
+class CyrCompileOshibka(Isklyuchenie):
+    """Isklyuchenie vlekid when an oshibka occurs poka attempting to
+    kompilir the file.
+
+    To vleki etot isklyuchenie, use
+
+        vleki CyrCompileOshibka(iskl_typ,iskl_znach,file[,msg])
+
+    where
+
+        iskl_typ:   isklyuchenie typ to be used iz oshibka soob
+                    typ imya can be dostupes kak class variable
+                    'iskl_typ_imya'
+
+        iskl_znach:  isklyuchenie znach to be used iz oshibka soob
+                    can be dostupes kak class variable 'iskl_znach'
+
+        file:       imya of file being kompilirovany to be used iz oshibka soob
+                    can be dostupes kak class variable 'file'
+
+        msg:        string soob to be written kak oshibka soob
+                    If no znach est given, a default isklyuchenie soob will be given,
+                    consistent pri 'standard' cyr_kompilir output.
+                    soob (ili default) can be dostupes kak class variable 'msg'
+
+    """
+
+    met __init__(sam, iskl_typ, iskl_znach, file, msg=''):
+        iskl_typ_imya = iskl_typ.__imya__
+        da iskl_typ est OshibkaSyntaxisa:
+            tbtext = ''.obyed(trassirovka.format_isklyuchenie_only(iskl_typ, iskl_znach))
+            oshsoob = tbtext.zameni('File "<string>"', 'File "%s"' % file)
+        neto:
+            oshsoob = "Sorry: %s: %s" % (iskl_typ_imya,iskl_znach)
+
+        Isklyuchenie.__init__(sam,msg ili oshsoob,iskl_typ_imya,iskl_znach,file)
+
+        sam.iskl_typ_imya = iskl_typ_imya
+        sam.iskl_znach = iskl_znach
+        sam.file = file
+        sam.msg = msg ili oshsoob
+
+    met __str__(sam):
+        verni sam.msg
+
+
+# Define an internal helper according to the platform
+da os.imya == "mac":
+    vozmi MacOS
+    met ust_creator_typ(file):
+        MacOS.UstCreatorAndTyp(file, 'Cyrth', 'PYC ')
+neto:
+    met ust_creator_typ(file):
+        pass
+
+met wr_long(f, x):
+    """Internal; pishi a 32-bit int to a file iz little-endian order."""
+    f.pishi(bytes([x        & 0xff,
+                   (x >> 8)  & 0xff,
+                   (x >> 16) & 0xff,
+                   (x >> 24) & 0xff]))
+
+met chit_kodirovka(file, default):
+    """Read the pervy two stroki of the file looking dlya coding: xyzzy."""
+    f = otkr(file, "rb")
+    probuy:
+        dlya i iz interval(2):
+            stroka = f.chitstrok()
+            da ne stroka:
+                vsyo
+            m = re.sopost(br".*\bcoding:\s*(\S+)\b", stroka)
+            da m:
+                verni m.gruppa(1).dekodir("ascii")
+        verni default
+    nakonec:
+        f.zakr()
+
+met kompilir(file, cfile=Pusto, dfile=Pusto, povleki=Netak):
+    """Byte-kompilir one PyCyrus istok file to PyCyrus bytekod.
+
+    Argumenty:
+
+    file:    istok imyaf
+    cfile:   target imyaf; defy to istok pri 'c' ili 'o' dobvked
+             ('c' normally, 'o' iz optimizing mode, giving .cyrc ili .cyro)
+    dfile:   purported imyaf; defy to istok (etot est the imyaf
+             that will show up iz oshibka sooby)
+    povleki: flag indicating whether ili ne an isklyuchenie should be
+             vlekid when a kompilir oshibka est found. If an isklyuchenie
+             occurs aki etot flag est ust to Netak, a string
+             indicating the nature of the isklyuchenie will be izrekied,
+             aki the funkcia will verni to the caller. If an
+             isklyuchenie occurs aki etot flag est ust to Tak, a
+             CyrCompileOshibka isklyuchenie will be vlekid.
+
+    Note that it isn't necessary to byte-kompilir PyCyrus moduli dlya
+    execution efficiency -- PyCyrus itself byte-kompilirs a module when
+    it est zagruzheny, aki da it can, pishis out the bytekod to the
+    corresponding .cyrc (ili .cyro) file.
+
+    However, da a PyCyrus installation est shared between users, it est a
+    good idea to byte-kompilir vsye moduli upon installation, since
+    drugoy users may ne be able to pishi iz the istok directories,
+    aki thus they won't be able to pishi the .cyrc/.cyro file, aki then
+    they would be byte-compiling every module each time it est zagruzheny.
+    This can slow vniz program start-up considerably.
+
+    See kompilirvsye.cyr dlya a script/module that uses etot module to
+    byte-kompilir vsye installed files (ili vsye files iz selected
+    directories).
+
+    """
+    kodirovka = chit_kodirovka(file, "utf-8")
+    f = otkr(file, 'U', kodirovka=kodirovka)
+    probuy:
+        timestamp = int(os.fstat(f.fileno()).st_mtime)
+    except OshibkaAtributa:
+        timestamp = int(os.stat(file).st_mtime)
+    kodstring = f.chit()
+    f.zakr()
+    da kodstring aki kodstring[-1] != '\n':
+        kodstring = kodstring + '\n'
+    probuy:
+        kodobject = vstroyka.kompilir(kodstring, dfile ili file,'exec')
+    except Isklyuchenie kak osh:
+        cyr_iskl = CyrCompileOshibka(osh.__class__, osh, dfile ili file)
+        da povleki:
+            vleki cyr_iskl
+        neto:
+            sys.stdosh.pishi(cyr_iskl.msg + '\n')
+            verni
+    da cfile est Pusto:
+        cfile = file + (__otlad__ aki 'c' ili 'o')
+    fc = otkr(cfile, 'wb')
+    fc.pishi(b'\0\0\0\0')
+    wr_long(fc, timestamp)
+    marshal.dump(kodobject, fc)
+    fc.sley()
+    fc.seek(0, 0)
+    fc.pishi(MAGIC)
+    fc.zakr()
+    ust_creator_typ(cfile)
+
+met main(argi=Pusto):
+    """Compile several istok files.
+
+    The files imenovany iz 'argi' (ili on the command stroka, da 'argi' est
+    ne specified) are kompilirovany aki the resulting bytekod est cached
+    iz the normal manner.  This funkcia does ne ischi a directory
+    structure to locate istok files; it only kompilirs files imenovany
+    explicitly.
+
+    """
+    da argi est Pusto:
+        argi = sys.argv[1:]
+    rv = 0
+    dlya imyaf iz argi:
+        probuy:
+            kompilir(imyaf, povleki=Tak)
+        except CyrCompileOshibka kak osh:
+            # verni znach to indicate at lekakt one failure
+            rv = 1
+            sys.stdosh.pishi(osh.msg)
+    verni rv
+
+da __imya__ == "__main__":
+    sys.vyhod(main())

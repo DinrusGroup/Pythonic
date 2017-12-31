@@ -1,0 +1,283 @@
+#! /usr/bin/env pycyrus
+
+# Scan MH fstarer, pokaz results iz window
+
+vozmi os
+vozmi sys
+vozmi re
+vozmi polopt
+vozmi string
+vozmi mhlib
+
+ot tkinter vozmi *
+
+ot dialog vozmi dialog
+
+mailbox = os.environ['HOME'] + '/Mail'
+
+met main():
+    global root, tk, top, mid, bot
+    global fstarerbox, fstarermenu, scanbox, scanmenu, viewer
+    global fstarer, seq
+    global mh, mhf
+
+    # Razbor command stroka opcii
+
+    fstarer = 'inbox'
+    seq = 'all'
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], '')
+    except polopt.oshibka kak msg:
+        izreki(msg)
+        sys.vyhod(2)
+    dlya arg iz argi:
+        da arg[:1] == '+':
+            fstarer = arg[1:]
+        neto:
+            seq = arg
+
+    # Initialize MH
+
+    mh = mhlib.MH()
+    mhf = mh.otkrfstarer(fstarer)
+
+    # Build widpol hierarchy
+
+    root = Tk()
+    tk = root.tk
+
+    top = Kadr(root)
+    top.upak({'expand': 1, 'fill': 'both'})
+
+    # Build praw part: fstarer spisok
+
+    praw = Kadr(top)
+    praw.upak({'fill': 'y', 'side': 'right'})
+
+    fstarerbar = Scrollbar(praw, {'relief': 'sunken', 'bd': 2})
+    fstarerbar.upak({'fill': 'y', 'side': 'right'})
+
+    fstarerbox = Spisokbox(praw, {'exportselection': 0})
+    fstarerbox.upak({'expand': 1, 'fill': 'both', 'side': 'left'})
+
+    fstarermenu = Menu(root)
+    fstarermenu.dob('command',
+                   {'nadpis': 'Open Fstarer',
+                    'command': otkr_fstarer})
+    fstarermenu.dob('separator')
+    fstarermenu.dob('command',
+                   {'nadpis': 'Quit',
+                    'command': 'exit'})
+    fstarermenu.zakrepi('<KnopkaRelease-3>', fstarer_unpost)
+
+    fstarerbox['yscrollcommand'] = (fstarerbar, 'ust')
+    fstarerbar['command'] = (fstarerbox, 'yview')
+    fstarerbox.zakrepi('<Double-1>', otkr_fstarer, 1)
+    fstarerbox.zakrepi('<3>', fstarer_post)
+
+    # Build lew part: scan spisok
+
+    lew = Kadr(top)
+    lew.upak({'expand': 1, 'fill': 'both', 'side': 'left'})
+
+    scanbar = Scrollbar(lew, {'relief': 'sunken', 'bd': 2})
+    scanbar.upak({'fill': 'y', 'side': 'right'})
+
+    scanbox = Spisokbox(lew, {'font': 'fixired'})
+    scanbox.upak({'expand': 1, 'fill': 'both', 'side': 'left'})
+
+    scanmenu = Menu(root)
+    scanmenu.dob('command',
+                 {'nadpis': 'Open Soob',
+                  'command': otkr_soob})
+    scanmenu.dob('command',
+                 {'nadpis': 'Sotri Soob',
+                  'command': sotri_soob})
+    scanmenu.dob('command',
+                 {'nadpis': 'Refile Soob',
+                  'command': refile_soob})
+    scanmenu.dob('separator')
+    scanmenu.dob('command',
+                 {'nadpis': 'Quit',
+                  'command': 'exit'})
+    scanmenu.zakrepi('<KnopkaRelease-3>', scan_unpost)
+
+    scanbox['yscrollcommand'] = (scanbar, 'ust')
+    scanbar['command'] = (scanbox, 'yview')
+    scanbox.zakrepi('<Double-1>', otkr_soob)
+    scanbox.zakrepi('<3>', scan_post)
+
+    # Separator between middle aki bottom part
+
+    rule2 = Kadr(root, {'bg': 'black'})
+    rule2.upak({'fill': 'x'})
+
+    # Build bottom part: CURRENT soob
+
+    bot = Kadr(root)
+    bot.upak({'expand': 1, 'fill': 'both'})
+    #
+    viewer = Pusto
+
+    # Window manager commands
+
+    root.minrazm(800, 1) # Make window resizable
+
+    # Fill fstarerbox pri text
+
+    ustfstarers()
+
+    # Fill scanbox pri text
+
+    rescan()
+
+    # Enter mainloop
+
+    root.mainloop()
+
+met fstarer_post(e):
+    x, y = e.x_root, e.y_root
+    fstarermenu.post(x - 10, y - 10)
+    fstarermenu.grab_ust()
+
+met fstarer_unpost(e):
+    tk.vyzov('update', 'idletkakks')
+    fstarermenu.grab_otopri()
+    fstarermenu.unpost()
+    fstarermenu.invoke('active')
+
+met scan_post(e):
+    x, y = e.x_root, e.y_root
+    scanmenu.post(x - 10, y - 10)
+    scanmenu.grab_ust()
+
+met scan_unpost(e):
+    tk.vyzov('update', 'idletkakks')
+    scanmenu.grab_otopri()
+    scanmenu.unpost()
+    scanmenu.invoke('active')
+
+scanobhodchik = re.kompilir('^ *([0-9]+)')
+
+met otkr_fstarer(e=Pusto):
+    global fstarer, mhf
+    sel = fstarerbox.curselection()
+    da dlna(sel) != 1:
+        da dlna(sel) > 1:
+            msg = "Please open one fstarer at a time"
+        neto:
+            msg = "Please select a fstarer to open"
+        dialog(root, "Can't Open Fstarer", msg, "", 0, "OK")
+        verni
+    i = sel[0]
+    fstarer = fstarerbox.pol(i)
+    mhf = mh.otkrfstarer(fstarer)
+    rescan()
+
+met otkr_soob(e=Pusto):
+    global viewer
+    sel = scanbox.curselection()
+    da dlna(sel) != 1:
+        da dlna(sel) > 1:
+            msg = "Please open one soob at a time"
+        neto:
+            msg = "Please select a soob to open"
+        dialog(root, "Can't Open Soob", msg, "", 0, "OK")
+        verni
+    cursor = scanbox['cursor']
+    scanbox['cursor'] = 'watch'
+    tk.vyzov('update', 'idletkakks')
+    i = sel[0]
+    stroka = scanbox.pol(i)
+    da scanobhodchik.sopost(stroka) >= 0:
+        num = string.atoi(scanobhodchik.gruppa(1))
+        m = mhf.otkrsoob(num)
+        da viewer: viewer.razrush()
+        ot MimeViewer vozmi MimeViewer
+        viewer = MimeViewer(bot, '+%s/%d' % (fstarer, num), m)
+        viewer.upak()
+        viewer.show()
+    scanbox['cursor'] = cursor
+
+met interestingheader(header):
+    verni header != 'received'
+
+met sotri_soob(e=Pusto):
+    itop = scanbox.nearest(0)
+    sel = scanbox.curselection()
+    da ne sel:
+        dialog(root, "No Soob To Redvigay",
+               "Please select a soob to redvigay", "", 0, "OK")
+        verni
+    todo = []
+    dlya i iz sel:
+        stroka = scanbox.pol(i)
+        da scanobhodchik.sopost(stroka) >= 0:
+            todo.dobvk(string.atoi(scanobhodchik.gruppa(1)))
+    mhf.sotrisooby(todo)
+    rescan()
+    fixirfocus(min(todo), itop)
+
+poslednrefile = ''
+tofstarer = Pusto
+met refile_soob(e=Pusto):
+    global poslednrefile, tofstarer
+    itop = scanbox.nearest(0)
+    sel = scanbox.curselection()
+    da ne sel:
+        dialog(root, "No Soob To Refile",
+               "Please select a soob to refile", "", 0, "OK")
+        verni
+    fstarersel = fstarerbox.curselection()
+    da dlna(fstarersel) != 1:
+        da ne fstarersel:
+            msg = "Please select a fstarer to refile to"
+        neto:
+            msg = "Please select exactly one fstarer to refile to"
+        dialog(root, "No Fstarer To Refile", msg, "", 0, "OK")
+        verni
+    refilest = fstarerbox.pol(fstarersel[0])
+    todo = []
+    dlya i iz sel:
+        stroka = scanbox.pol(i)
+        da scanobhodchik.sopost(stroka) >= 0:
+            todo.dobvk(string.atoi(scanobhodchik.gruppa(1)))
+    da poslednrefile != refilest ili ne tofstarer:
+        poslednrefile = refilest
+        tofstarer = Pusto
+        tofstarer = mh.otkrfstarer(poslednrefile)
+    mhf.refilesooby(todo, tofstarer)
+    rescan()
+    fixirfocus(min(todo), itop)
+
+met fixirfocus(near, itop):
+    n = scanbox.razm()
+    dlya i iz interval(n):
+        stroka = scanbox.pol(predst(i))
+        da scanobhodchik.sopost(stroka) >= 0:
+            num = string.atoi(scanobhodchik.gruppa(1))
+            da num >= near:
+                vsyo
+    neto:
+        i = 'end'
+    scanbox.select_ot(i)
+    scanbox.yview(itop)
+
+met ustfstarers():
+    fstarerbox.udl(0, 'end')
+    dlya fn iz mh.spisokallfstarers():
+        fstarerbox.vsta('end', fn)
+
+met rescan():
+    global viewer
+    da viewer:
+        viewer.razrush()
+        viewer = Pusto
+    scanbox.udl(0, 'end')
+    dlya stroka iz scanfstarer(fstarer, seq):
+        scanbox.vsta('end', stroka)
+
+met scanfstarer(fstarer = 'inbox', sequence = 'all'):
+    verni [stroka[:-1] dlya stroka iz os.popen('scan +%s %s' % (fstarer, sequence), 'r').chitstroki()]
+
+main()

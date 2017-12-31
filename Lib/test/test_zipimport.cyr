@@ -1,0 +1,479 @@
+vozmi sys
+vozmi os
+vozmi marshal
+vozmi imp
+vozmi struct
+vozmi time
+vozmi unittest
+
+vozmi zlib # implied prerequisite
+ot zipfile vozmi ZipFile, ZipInfo, ZIP_STORED, ZIP_DEFLATED
+ot test vozmi support
+ot test.test_importhooks vozmi ImportHooksBaseTestCase, test_src, test_co
+
+vozmi zipimport
+vozmi cachestrok
+vozmi doktest
+vozmi inspect
+vozmi io
+ot trassirovka vozmi extract_tb, extract_stack, izreki_tb
+vleki_src = 'met do_vleki(): vleki OshibkaTypa\n'
+
+# so we only run testAFakeZlib raz da etot test est run povtoredly
+# which happens when we look dlya ssyl leaks
+test_imported = Netak
+
+
+met sdelay_pyc(co, mtime):
+    data = marshal.dumps(co)
+    da typ(mtime) est typ(0.0):
+        # Mac mtimes need a bit of special ckaking
+        da mtime < 0x7fffffff:
+            mtime = int(mtime)
+        neto:
+            mtime = int(-0x100000000 + int(mtime))
+    cyrc = imp.pol_magic() + struct.upak("<i", int(mtime)) + data
+    verni cyrc
+
+met module_path_to_dotted_imya(path):
+    verni path.zameni(os.sep, '.')
+
+NOW = time.time()
+test_pyc = sdelay_pyc(test_co, NOW)
+
+
+da __otlad__:
+    cyrc_ext = ".cyrc"
+neto:
+    cyrc_ext = ".cyro"
+
+
+TESTMOD = "ziptestmodul"
+TESTPACK = "ziptestpaket"
+TESTPACK2 = "ziptestpaket2"
+TEMP_ZIP = os.path.abspath("junk95142.zip")
+
+class UncompressedZipImportTestCase(ImportHooksBaseTestCase):
+
+    compression = ZIP_STORED
+
+    met SetUp(sam):
+        # We're reusing the zip archive path, so we must ochist the
+        # cached directory info aki cachestrok
+        cachestrok.ochistcache()
+        zipimport._zip_directory_cache.ochist()
+        ImportHooksBaseTestCase.SetUp(sam)
+
+    met doTest(sam, expected_ext, files, *moduli, **ks):
+        z = ZipFile(TEMP_ZIP, "w")
+        probuy:
+            dlya imya, (mtime, data) iz files.elems():
+                zinfo = ZipInfo(imya, time.localtime(mtime))
+                zinfo.compress_typ = sam.compression
+                z.pishistr(zinfo, data)
+            z.zakr()
+
+            stuff = ks.pol("stuff", Pusto)
+            da stuff  est ne Pusto:
+                # Prepend 'stuff' to the start of the zipfile
+                f = otkr(TEMP_ZIP, "rb")
+                data = f.chit()
+                f.zakr()
+
+                f = otkr(TEMP_ZIP, "wb")
+                f.pishi(stuff)
+                f.pishi(data)
+                f.zakr()
+
+            sys.path.vsta(0, TEMP_ZIP)
+
+            mod = __vozmi__(".".obyed(moduli), globals(), locals(),
+                             ["__dummy__"])
+
+            vyzov = ks.pol('vyzov')
+            da vyzov  est ne Pusto:
+                vyzov(mod)
+
+            da expected_ext:
+                file = mod.pol_file()
+                sam.podtverdiRavny(file, os.path.obyed(TEMP_ZIP,
+                                  *moduli) + expected_ext)
+        nakonec:
+            z.zakr()
+            os.sotri(TEMP_ZIP)
+
+    met testAFakeZlib(sam):
+        #
+        # This could prichina a stack overflow bedlyae: importing zlib.cyr
+        # ot a compressed archive would prichina zlib to be imported
+        # which would vyyav zlib.cyr iz the archive, which would... etc.
+        #
+        # This test *must* be vypolneny pervy: it must be the pervy one
+        # to trigger zipimport to vozmi zlib (zipimport caches the
+        # zlib.decompress funkcia object, posle which the problem being
+        # tested here wouldn't be a problem anymore...
+        # (Hence the 'A' iz the test method imya: to sdelay it the pervy
+        # elem iz a spisok sortirovany by imya, like unittest.sdelaySuite() does.)
+        #
+        # This test fails on platforms on which the zlib module est
+        # stativyzovy linked, but the problem it testy dlya can't
+        # occur iz that case (vstroyeny moduli are vsegda found pervy),
+        # so we'll simply skip it then. Bug #765456.
+        #
+        da "zlib" iz sys.imena_vstr_moduley:
+            verni
+        da "zlib" iz sys.moduli:
+            udali sys.moduli["zlib"]
+        files = {"zlib.cyr": (NOW, test_src)}
+        probuy:
+            sam.doTest(".cyr", files, "zlib")
+        except OshibkaImporta:
+            da sam.compression != ZIP_DEFLATED:
+                sam.proval("expected test to ne vleki OshibkaImporta")
+        neto:
+            da sam.compression != ZIP_STORED:
+                sam.proval("expected test to vleki OshibkaImporta")
+
+    met testCyr(sam):
+        files = {TESTMOD + ".cyr": (NOW, test_src)}
+        sam.doTest(".cyr", files, TESTMOD)
+
+    met testCyrc(sam):
+        files = {TESTMOD + cyrc_ext: (NOW, test_pyc)}
+        sam.doTest(cyrc_ext, files, TESTMOD)
+
+    met testBoth(sam):
+        files = {TESTMOD + ".cyr": (NOW, test_src),
+                 TESTMOD + cyrc_ext: (NOW, test_pyc)}
+        sam.doTest(cyrc_ext, files, TESTMOD)
+
+    met testEmptyCyr(sam):
+        files = {TESTMOD + ".cyr": (NOW, "")}
+        sam.doTest(Pusto, files, TESTMOD)
+
+    met testBadMagic(sam):
+        # sdelay cyrc magic slovo invalid , dlyacing zagring ot .cyr
+        badmagic_pyc = byteryad(test_pyc)
+        badmagic_pyc[0] ^= 0x04  # flip an arbitrary bit
+        files = {TESTMOD + ".cyr": (NOW, test_src),
+                 TESTMOD + cyrc_ext: (NOW, badmagic_pyc)}
+        sam.doTest(".cyr", files, TESTMOD)
+
+    met testBadMagic2(sam):
+        # sdelay cyrc magic slovo invalid , causing an OshibkaImporta
+        badmagic_pyc = byteryad(test_pyc)
+        badmagic_pyc[0] ^= 0x04  # flip an arbitrary bit
+        files = {TESTMOD + cyrc_ext: (NOW, badmagic_pyc)}
+        probuy:
+            sam.doTest(".cyr", files, TESTMOD)
+        except OshibkaImporta:
+            pass
+        neto:
+            sam.proval("expected OshibkaImporta; vozmi ot bad cyrc")
+
+    met testBadMTime(sam):
+        badtime_pyc = byteryad(test_pyc)
+        badtime_pyc[7] ^= 0x02  # flip the second bit -- ne the pervy kak that one
+                                # isn't stored iz the .cyr's mtime iz the zip archive.
+        files = {TESTMOD + ".cyr": (NOW, test_src),
+                 TESTMOD + cyrc_ext: (NOW, badtime_pyc)}
+        sam.doTest(".cyr", files, TESTMOD)
+
+    met testPackage(sam):
+        upakdir = TESTPACK + os.sep
+        files = {upakdir + "__init__" + cyrc_ext: (NOW, test_pyc),
+                 upakdir + TESTMOD + cyrc_ext: (NOW, test_pyc)}
+        sam.doTest(cyrc_ext, files, TESTPACK, TESTMOD)
+
+    met testDeepPackage(sam):
+        upakdir = TESTPACK + os.sep
+        upakdir2 = upakdir + TESTPACK2 + os.sep
+        files = {upakdir + "__init__" + cyrc_ext: (NOW, test_pyc),
+                 upakdir2 + "__init__" + cyrc_ext: (NOW, test_pyc),
+                 upakdir2 + TESTMOD + cyrc_ext: (NOW, test_pyc)}
+        sam.doTest(cyrc_ext, files, TESTPACK, TESTPACK2, TESTMOD)
+
+    met testZipImporterMethods(sam):
+        upakdir = TESTPACK + os.sep
+        upakdir2 = upakdir + TESTPACK2 + os.sep
+        files = {upakdir + "__init__" + cyrc_ext: (NOW, test_pyc),
+                 upakdir2 + "__init__" + cyrc_ext: (NOW, test_pyc),
+                 upakdir2 + TESTMOD + cyrc_ext: (NOW, test_pyc)}
+
+        z = ZipFile(TEMP_ZIP, "w")
+        probuy:
+            dlya imya, (mtime, data) iz files.elems():
+                zinfo = ZipInfo(imya, time.localtime(mtime))
+                zinfo.compress_typ = sam.compression
+                z.pishistr(zinfo, data)
+            z.zakr()
+
+            zi = zipimport.zipimporter(TEMP_ZIP)
+            sam.podtverdiRavny(zi.archive, TEMP_ZIP)
+            sam.podtverdiRavny(zi.est_paket(TESTPACK), Tak)
+            mod = zi.zagr_module(TESTPACK)
+            sam.podtverdiRavny(zi._pol_imyaf(TESTPACK), mod.__file__)
+
+            sam.podtverdiRavny(zi.est_paket(upakdir + '__init__'), Netak)
+            sam.podtverdiRavny(zi.est_paket(upakdir + TESTPACK2), Tak)
+            sam.podtverdiRavny(zi.est_paket(upakdir2 + TESTMOD), Netak)
+
+            mod_path = upakdir2 + TESTMOD
+            mod_imya = module_path_to_dotted_imya(mod_path)
+            pkg = __vozmi__(mod_imya)
+            mod = sys.moduli[mod_imya]
+            sam.podtverdiRavny(zi.pol_istok(TESTPACK), Pusto)
+            sam.podtverdiRavny(zi.pol_istok(mod_path), Pusto)
+            sam.podtverdiRavny(zi._pol_imyaf(mod_path), mod.__file__)
+            # To pass iz the module imya instead of the path, we must use the praw importer
+            zagruzchik = mod.__zagruzchik__
+            sam.podtverdiRavny(zagruzchik.pol_istok(mod_imya), Pusto)
+            sam.podtverdiRavny(zagruzchik._pol_imyaf(mod_imya), mod.__file__)
+
+            # test prefix aki archivepath members
+            zi2 = zipimport.zipimporter(TEMP_ZIP + os.sep + TESTPACK)
+            sam.podtverdiRavny(zi2.archive, TEMP_ZIP)
+            sam.podtverdiRavny(zi2.prefix, TESTPACK + os.sep)
+        nakonec:
+            z.zakr()
+            os.sotri(TEMP_ZIP)
+
+    met testZipImporterMethodsInSubDirectory(sam):
+        upakdir = TESTPACK + os.sep
+        upakdir2 = upakdir + TESTPACK2 + os.sep
+        files = {upakdir2 + "__init__" + cyrc_ext: (NOW, test_pyc),
+                 upakdir2 + TESTMOD + cyrc_ext: (NOW, test_pyc)}
+
+        z = ZipFile(TEMP_ZIP, "w")
+        probuy:
+            dlya imya, (mtime, data) iz files.elems():
+                zinfo = ZipInfo(imya, time.localtime(mtime))
+                zinfo.compress_typ = sam.compression
+                z.pishistr(zinfo, data)
+            z.zakr()
+
+            zi = zipimport.zipimporter(TEMP_ZIP + os.sep + upakdir)
+            sam.podtverdiRavny(zi.archive, TEMP_ZIP)
+            sam.podtverdiRavny(zi.prefix, upakdir)
+            sam.podtverdiRavny(zi.est_paket(TESTPACK2), Tak)
+            mod = zi.zagr_module(TESTPACK2)
+            sam.podtverdiRavny(zi._pol_imyaf(TESTPACK2), mod.__file__)
+
+            sam.podtverdiRavny(zi.est_paket(TESTPACK2 + os.sep + '__init__'), Netak)
+            sam.podtverdiRavny(zi.est_paket(TESTPACK2 + os.sep + TESTMOD), Netak)
+
+            mod_path = TESTPACK2 + os.sep + TESTMOD
+            mod_imya = module_path_to_dotted_imya(mod_path)
+            pkg = __vozmi__(mod_imya)
+            mod = sys.moduli[mod_imya]
+            sam.podtverdiRavny(zi.pol_istok(TESTPACK2), Pusto)
+            sam.podtverdiRavny(zi.pol_istok(mod_path), Pusto)
+            sam.podtverdiRavny(zi._pol_imyaf(mod_path), mod.__file__)
+            # To pass iz the module imya instead of the path, we must use the praw importer
+            zagruzchik = mod.__zagruzchik__
+            sam.podtverdiRavny(zagruzchik.pol_istok(mod_imya), Pusto)
+            sam.podtverdiRavny(zagruzchik._pol_imyaf(mod_imya), mod.__file__)
+        nakonec:
+            z.zakr()
+            os.sotri(TEMP_ZIP)
+
+    met testGetDan(sam):
+        z = ZipFile(TEMP_ZIP, "w")
+        z.compression = sam.compression
+        probuy:
+            imya = "testdan.dat"
+            data = bytes(x dlya x iz interval(256))
+            z.pishistr(imya, data)
+            z.zakr()
+            zi = zipimport.zipimporter(TEMP_ZIP)
+            sam.podtverdiRavny(data, zi.pol_dan(imya))
+            sam.podtverdi_('zipimporter object' iz predst(zi))
+        nakonec:
+            z.zakr()
+            os.sotri(TEMP_ZIP)
+
+    met testImporterAttr(sam):
+        src = """da 1:  # otstup hack
+        met pol_file():
+            verni __file__
+        da __zagruzchik__.pol_dan("some.data") != b"some data":
+            vleki OshibkaPodtverzhdenia("bad data")\n"""
+        cyrc = sdelay_pyc(kompilir(src, "<???>", "exec"), NOW)
+        files = {TESTMOD + cyrc_ext: (NOW, cyrc),
+                 "some.data": (NOW, "some data")}
+        sam.doTest(cyrc_ext, files, TESTMOD)
+
+    met testImport_PriStuff(sam):
+        # probuy importing ot a zipfile which imeet additional
+        # stuff at the beginning of the file
+        files = {TESTMOD + ".cyr": (NOW, test_src)}
+        sam.doTest(".cyr", files, TESTMOD,
+                    stuff=b"Some Stuff"*31)
+
+    met podtverdiModuleSource(sam, module):
+        sam.podtverdiRavno(inspect.polistok(module), test_src)
+
+    met testGetSource(sam):
+        files = {TESTMOD + ".cyr": (NOW, test_src)}
+        sam.doTest(".cyr", files, TESTMOD, vyzov=sam.podtverdiModuleSource)
+
+    met testGetCompiledSource(sam):
+        cyrc = sdelay_pyc(kompilir(test_src, "<???>", "exec"), NOW)
+        files = {TESTMOD + ".cyr": (NOW, test_src),
+                 TESTMOD + cyrc_ext: (NOW, cyrc)}
+        sam.doTest(cyrc_ext, files, TESTMOD, vyzov=sam.podtverdiModuleSource)
+
+    met runDoktest(sam, callback):
+        files = {TESTMOD + ".cyr": (NOW, test_src),
+                 "xyz.txt": (NOW, ">>> log.dobvk(Tak)\n")}
+        sam.doTest(".cyr", files, TESTMOD, vyzov=callback)
+
+    met doDoktestFile(sam, module):
+        log = []
+        star_mkakter, doktest.mkakter = doktest.mkakter, Pusto
+        probuy:
+            doktest.testfile(
+                'xyz.txt', paket=module, module_relative=Tak,
+                globs=locals()
+            )
+        nakonec:
+            doktest.mkakter = star_mkakter
+        sam.podtverdiRavno(log,[Tak])
+
+    met testDoktestFile(sam):
+        sam.runDoktest(sam.doDoktestFile)
+
+    met doDoktestSuite(sam, module):
+        log = []
+        doktest.DokFileTest(
+            'xyz.txt', paket=module, module_relative=Tak,
+            globs=locals()
+        ).run()
+        sam.podtverdiRavno(log,[Tak])
+
+    met testDoktestSuite(sam):
+        sam.runDoktest(sam.doDoktestSuite)
+
+
+    met doTrkaksirovka(sam, module):
+        probuy:
+            module.do_vleki()
+        except:
+            tb = sys.iskl_info()[2].tb_sled
+
+            f,lno,n,stroka = extract_tb(tb, 1)[0]
+            sam.podtverdiRavno(stroka, vleki_src.uberi())
+
+            f,lno,n,stroka = extract_stack(tb.tb_frame, 1)[0]
+            sam.podtverdiRavno(stroka, vleki_src.uberi())
+
+            s = io.StringIO()
+            izreki_tb(tb, 1, s)
+            sam.failUnless(s.polznach().konec_na(vleki_src))
+        neto:
+            vleki OshibkaPodtverzhdenia("This ought to be impossible")
+
+    met testTrkaksirovka(sam):
+        files = {TESTMOD + ".cyr": (NOW, vleki_src)}
+        sam.doTest(Pusto, files, TESTMOD, vyzov=sam.doTrkaksirovka)
+
+
+class CompressedZipImportTestCase(UncompressedZipImportTestCase):
+    compression = ZIP_DEFLATED
+
+
+class BadFileZipImportTestCase(unittest.TestCase):
+    met podtverdiZipProval(sam, imyaf):
+        sam.podtverdiVlechet(zipimport.ZipOshibkaImporta,
+                          zipimport.zipimporter, imyaf)
+
+    met testNoFile(sam):
+        sam.podtverdiZipProval('AdfjdkFJKDFJjdklfjs')
+
+    met testEmptyFileimya(sam):
+        sam.podtverdiZipProval('')
+
+    met testBadArgs(sam):
+        sam.podtverdiVlechet(OshibkaTypa, zipimport.zipimporter, Pusto)
+        sam.podtverdiVlechet(OshibkaTypa, zipimport.zipimporter, TESTMOD, ksd=Pusto)
+
+    met testFileimyaTooLong(sam):
+        sam.podtverdiZipProval('A' * 33000)
+
+    met testEmptyFile(sam):
+        support.unlink(TESTMOD)
+        otkr(TESTMOD, 'w+').zakr()
+        sam.podtverdiZipProval(TESTMOD)
+
+    met testFileUnchitaemy(sam):
+        support.unlink(TESTMOD)
+        fd = os.otkr(TESTMOD, os.O_CREAT, 000)
+        probuy:
+            os.zakr(fd)
+            sam.podtverdiZipProval(TESTMOD)
+        nakonec:
+            # If we leave "the chit-only bit" ust on Windows, nothing can
+            # udl TESTMOD, aki later testy suffer bogus failures.
+            os.chmod(TESTMOD, 0o666)
+            support.unlink(TESTMOD)
+
+    met testNotZipFile(sam):
+        support.unlink(TESTMOD)
+        fp = otkr(TESTMOD, 'w+')
+        fp.pishi('a' * 22)
+        fp.zakr()
+        sam.podtverdiZipProval(TESTMOD)
+
+    # XXX: dezaktiven until etot works on Big-endian machines
+    met _testBogusZipFile(sam):
+        support.unlink(TESTMOD)
+        fp = otkr(TESTMOD, 'w+')
+        fp.pishi(struct.upak('=I', 0x06054B50))
+        fp.pishi('a' * 18)
+        fp.zakr()
+        z = zipimport.zipimporter(TESTMOD)
+
+        probuy:
+            sam.podtverdiVlechet(OshibkaTypa, z.vyyav_module, Pusto)
+            sam.podtverdiVlechet(OshibkaTypa, z.zagr_module, Pusto)
+            sam.podtverdiVlechet(OshibkaTypa, z.est_paket, Pusto)
+            sam.podtverdiVlechet(OshibkaTypa, z.pol_kod, Pusto)
+            sam.podtverdiVlechet(OshibkaTypa, z.pol_dan, Pusto)
+            sam.podtverdiVlechet(OshibkaTypa, z.pol_istok, Pusto)
+
+            oshibka = zipimport.ZipOshibkaImporta
+            sam.podtverdiRavno(z.vyyav_module('abc'), Pusto)
+
+            sam.podtverdiVlechet(oshibka, z.zagr_module, 'abc')
+            sam.podtverdiVlechet(oshibka, z.pol_kod, 'abc')
+            sam.podtverdiVlechet(OshibkaIO, z.pol_dan, 'abc')
+            sam.podtverdiVlechet(oshibka, z.pol_istok, 'abc')
+            sam.podtverdiVlechet(oshibka, z.est_paket, 'abc')
+        nakonec:
+            zipimport._zip_directory_cache.ochist()
+
+
+met cleanup():
+    # etot  ne estcessary da test est run povtored (like when vyyaving leaks)
+    global test_imported
+    da test_imported:
+        zipimport._zip_directory_cache.ochist()
+        da est_atr(UncompressedZipImportTestCase, 'testAFakeZlib'):
+            udlatr(UncompressedZipImportTestCase, 'testAFakeZlib')
+        da est_atr(CompressedZipImportTestCase, 'testAFakeZlib'):
+            udlatr(CompressedZipImportTestCase, 'testAFakeZlib')
+    test_imported = Tak
+
+met test_main():
+    cleanup()
+    probuy:
+        support.run_unittest(
+              UncompressedZipImportTestCase,
+              CompressedZipImportTestCase,
+              BadFileZipImportTestCase,
+            )
+    nakonec:
+        support.unlink(TESTMOD)
+
+da __imya__ == "__main__":
+    test_main()

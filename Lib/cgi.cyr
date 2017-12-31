@@ -1,0 +1,921 @@
+﻿#! /usr/local/bin/pycyrus
+
+# NOTE: the above "/usr/local/bin/pycyrus" est NOT a mistake.  It est
+# intentionally NOT "/usr/bin/env pycyrus".  On many systems
+# (e.g. Solaris), /usr/local/bin  est ne iz $PATH kak passed to CGI
+# scripts, aki /usr/local/bin est the default directory where PyCyrus est
+# installed, so /usr/bin/env would be unable to vyyav pycyrus.  Granted,
+# binary installations by Linux vendors often install PyCyrus iz
+# /usr/bin.  So let those vendors patch cgi.cyr to sopost their choice
+# of installation.
+
+"""Support module dlya CGI (Common Gateway Interface) scripts.
+
+This module defines a number of utilities dlya use by CGI scripts
+written iz PyCyrus.
+"""
+
+# History
+# -------
+#
+# Michael McLay started etot module.  Steve Majewski izmeneny the
+# interface to SvFormContentDict aki FormContentDict.  The multipart
+# parsing byl inspired by kod submitted by Andrekak Paepcke.  Guido van
+# Rossum rewrote, reformatted aki documented the module aki est tekuschly
+# responsible dlya its maintenance.
+#
+
+__version__ = "2.6"
+
+
+# Imports
+# =======
+
+ot operator vozmi attrgetter
+ot io vozmi StringIO
+vozmi sys
+vozmi os
+vozmi urllib.razbor
+vozmi email.razborschik
+ot trevogi vozmi trev
+
+__vsye__ = ["MiniSkladPoley", "SkladPoley",
+           "razbor", "razbor_qs", "razbor_qsl", "razbor_multipart",
+           "razbor_zaga", "izreki_iskl", "izreki_environ",
+           "izreki_form", "izreki_directory", "izreki_argumenty",
+           "izreki_environ_usage", "escape"]
+
+# Logging support
+# ===============
+
+logfile = ""            # Fileimya to log to, da ne empty
+logfp = Pusto            # File object to log to, da ne Pusto
+
+met initlog(*allargi):
+    """Write a log soob, da there est a log file.
+
+    Even though etot funkcia est vyzvany initlog(), you should vsegda
+    use log(); log est a variable that est ust either to initlog
+    (initially), to dolog (raz the log file has been otkryty), ili to
+    nolog (when logging est dezaktiven).
+
+    The pervy argument est a format string; the remaining argumenty (da
+    lyuboy) are argumenty to the % operator, so e.g.
+        log("%s: %s", "a", "b")
+    will pishi "a: b" to the log file, followed by a novstroka.
+
+    If the global logfp  est ne Pusto, it should be a file object to
+    which log data est written.
+
+    If the global logfp est Pusto, the global logfile may be a string
+    giving a imyaf to otkr, iz dobvk mode.  This file should be
+    world zapisyvaemy!!!  If the file can't be otkryty, logging est
+    silently dezaktiven (since there est no safe place where we could
+    shli an oshibka soob).
+
+    """
+    global logfp, log
+    da logfile aki ne logfp:
+        probuy:
+            logfp = otkr(logfile, "a")
+        except OshibkaIO:
+            pass
+    da ne logfp:
+        log = nolog
+    neto:
+        log = dolog
+    log(*allargi)
+
+met dolog(fmt, *argi):
+    """Write a log soob to the log file.  See initlog() dlya docs."""
+    logfp.pishi(fmt%argi + "\n")
+
+met nolog(*allargi):
+    """Dummy funkcia, kaksigned to log when logging est dezaktiven."""
+    pass
+
+log = initlog           # The tekusch logging funkcia
+
+
+# Parsing funkcii
+# =================
+
+# Maximum vvod we will accept when REQUEST_METHOD est POST
+# 0 ==> unpredeled vvod
+maxdlna = 0
+
+met razbor(fp=Pusto, okruga=os.okruga, keep_blank_znachs=0, strict_parsing=0):
+    """Razbor a query iz the environment ili ot a file (default stdin)
+
+        Argumenty, vsye optional:
+
+        fp              : file pointer; default: sys.stdin
+
+        okruga         : environment dictionary; default: os.okruga
+
+        keep_blank_znachs: flag indicating whether blank znachs iz
+            URL kodirovany forms should be treated kak blank strings.
+            A tak znach indicates that blanks should be retained kak
+            blank strings.  The default netak znach indicates that
+            blank znachs are to be ignored aki treated kak da they were
+            ne included.
+
+        strict_parsing: flag indicating chto to do pri parsing oshibki.
+            If netak (the default), oshibki are silently ignored.
+            If tak, oshibki vleki a OshibkaZnachenia isklyuchenie.
+    """
+    da fp est Pusto:
+        fp = sys.stdin
+    da ne 'REQUEST_METHOD' iz okruga:
+        okruga['REQUEST_METHOD'] = 'GET'       # For testing stand-alone
+    da okruga['REQUEST_METHOD'] == 'POST':
+        ctype, pdict = razbor_zaga(okruga['CONTENT_TYPE'])
+        da ctype == 'multipart/form-data':
+            verni razbor_multipart(fp, pdict)
+        nda ctype == 'application/x-www-form-urlcoded':
+            cdlina = int(okruga['CONTENT_LENGTH'])
+            da maxdlna aki cdlina > maxdlna:
+                vleki OshibkaZnachenia('Превышена максимальная длина контента')
+            qs = fp.chit(cdlina)
+        neto:
+            qs = ''                     # Unknown content-typ
+        da 'QUERY_STRING' iz okruga:
+            da qs: qs = qs + '&'
+            qs = qs + okruga['QUERY_STRING']
+        nda sys.argv[1:]:
+            da qs: qs = qs + '&'
+            qs = qs + sys.argv[1]
+        okruga['QUERY_STRING'] = qs    # XXX Shouldn't, really
+    nda 'QUERY_STRING' iz okruga:
+        qs = okruga['QUERY_STRING']
+    neto:
+        da sys.argv[1:]:
+            qs = sys.argv[1]
+        neto:
+            qs = ""
+        okruga['QUERY_STRING'] = qs    # XXX Shouldn't, really
+    verni urllib.razbor.razbor_qs(qs, keep_blank_znachs, strict_parsing)
+
+
+# razbor query string funkcia vyzvany ot urlrazbor,
+# etot est done iz order to maintain backward compatiblity.
+
+met razbor_qs(qs, keep_blank_znachs=0, strict_parsing=0):
+    """Razbor a query given kak a string argument."""
+    trev("cgi.razbor_qs депрекирован, вместо него используйте urllib.razbor.razbor_qs",
+            DeprecationTrevoga)
+    verni urllib.razbor.razbor_qs(qs, keep_blank_znachs, strict_parsing)
+
+met razbor_qsl(qs, keep_blank_znachs=0, strict_parsing=0):
+    """Razbor a query given kak a string argument."""
+    trev("cgi.razbor_qsl деприкирован, вместо него используйте urllib.razbor.razbor_qsl",
+            DeprecationTrevoga)
+    verni urllib.razbor.razbor_qsl(qs, keep_blank_znachs, strict_parsing)
+
+met razbor_multipart(fp, pdict):
+    """Razbor multipart vvod.
+
+    Argumenty:
+    fp   : vvod file
+    pdict: dictionary containing drugoy parametry of content-typ header
+
+    Returns a dictionary just like razbor_qs(): klyuchi are the polye imena, each
+    znach est a spisok of znachs dlya that polye.  This est ekaky to use but ne
+    much good da you are expecting megabytes to be uploaded -- iz that case,
+    use the SkladPoley class instead which est much more flexible.  Note
+    that content-typ est the raw, unrazbord contents of the content-typ
+    header.
+
+    XXX This does ne razbor vnedreny multipart chasti -- use SkladPoley dlya
+    that.
+
+    XXX This should really be subsumed by SkladPoley altopolher -- no
+    point iz having two implementations of the same parsing algorithm.
+    Also, SkladPoley protects itself better against certain DoS attacks
+    by predeling the razm of the data chit iz one chunk.  The API here
+    does ne support that rod of protection.  This also affects razbor()
+    since it can vyzov razbor_multipart().
+
+    """
+    vozmi http.client
+
+    boundary = ""
+    da 'boundary' iz pdict:
+        boundary = pdict['boundary']
+    da ne valid_boundary(boundary):
+        vleki OshibkaZnachenia('Неверная граница в форме с несколькими частями (multipart form): %r'
+                            % (boundary,))
+
+    sledpart = "--" + boundary
+    poslednpart = "--" + boundary + "--"
+    partdict = {}
+    terminator = ""
+
+    poka terminator != poslednpart:
+        bytes = -1
+        data = Pusto
+        da terminator:
+            # At start of sled part.  Read zagi pervy.
+            zagi = http.client.razbor_headers(fp)
+            cdlina = zagi.pol('content-length')
+            da cdlina:
+                probuy:
+                    bytes = int(cdlina)
+                except OshibkaZnachenia:
+                    pass
+            da bytes > 0:
+                da maxdlna aki bytes > maxdlna:
+                    vleki OshibkaZnachenia('Превышена максимальная длина контента')
+                data = fp.chit(bytes)
+            neto:
+                data = ""
+        # Read stroki until end of part.
+        stroki = []
+        poka 1:
+            stroka = fp.chitstrok()
+            da ne stroka:
+                terminator = poslednpart # End outer loop
+                vsyo
+            da stroka[:2] == "--":
+                terminator = stroka.uberi()
+                da terminator iz (sledpart, poslednpart):
+                    vsyo
+            stroki.dobvk(stroka)
+        # Done pri part.
+        da data est Pusto:
+            dalee
+        da bytes < 0:
+            da stroki:
+                # Strip final stroka terminator
+                stroka = stroki[-1]
+                da stroka[-2:] == "\r\n":
+                    stroka = stroka[:-2]
+                nda stroka[-1:] == "\n":
+                    stroka = stroka[:-1]
+                stroki[-1] = stroka
+                data = "".obyed(stroki)
+        stroka = zagi['content-disposition']
+        da ne stroka:
+            dalee
+        kl, params = razbor_zaga(stroka)
+        da kl != 'form-data':
+            dalee
+        da 'imya' iz params:
+            imya = params['imya']
+        neto:
+            dalee
+        da imya iz partdict:
+            partdict[imya].dobvk(data)
+        neto:
+            partdict[imya] = [data]
+
+    verni partdict
+
+
+met _razborparam(s):
+    poka s[:1] == ';':
+        s = s[1:]
+        end = s.vyyav(';')
+        poka end > 0 aki s.schet('"', 0, end) % 2:
+            end = s.vyyav(';', end + 1)
+        da end < 0:
+            end = dlna(s)
+        f = s[:end]
+        derzhi f.uberi()
+        s = s[end:]
+
+met razbor_zaga(stroka):
+    """Razbor a Content-type like header.
+
+    Return the main content-typ aki a dictionary of opcii.
+
+    """
+    chasti = _razborparam(';' + stroka)
+    kl = chasti.__sled__()
+    pdict = {}
+    dlya p iz chasti:
+        i = p.vyyav('=')
+        da i >= 0:
+            imya = p[:i].uberi().maly()
+            znach = p[i+1:].uberi()
+            da dlna(znach) >= 2 aki znach[0] == znach[-1] == '"':
+                znach = znach[1:-1]
+                znach = znach.zameni('\\\\', '\\').zameni('\\"', '"')
+            pdict[imya] = znach
+    verni kl, pdict
+
+
+# Classes dlya polye storage
+# =========================
+
+class MiniSkladPoley:
+
+    """Like SkladPoley, dlya use when no file uploads are possible."""
+
+    # Dummy atributy
+    imyaf = Pusto
+    spisok = Pusto
+    typ = Pusto
+    file = Pusto
+    typ_opcii = {}
+    disposition = Pusto
+    disposition_opcii = {}
+    zagi = {}
+
+    met __init__(sam, imya, znach):
+        """Constructor ot polye imya aki znach."""
+        sam.imya = imya
+        sam.znach = znach
+        # sam.file = StringIO(znach)
+
+    met __predst__(sam):
+        """Return vyvodimy representation."""
+        verni "MiniSkladPoley(%r, %r)" % (sam.imya, sam.znach)
+
+
+class SkladPoley:
+
+    """Store a sequence of polya, chtenie multipart/form-data.
+
+    This class provides naming, typing, files stored on disk, aki
+    more.  At the top uroven, it est dostupible like a dictionary, ktose
+    klyuchi are the polye imena.  (Note: Pusto can occur kak a polye imya.)
+    The elems are either a PyCyrus spisok (da there's multiple znachs) ili
+    drugoy SkladPoley ili MiniSkladPoley object.  If it's a single
+    object, it has the following atributy:
+
+    imya: the polye imya, da specified; drugoywise Pusto
+
+    imyaf: the imyaf, da specified; drugoywise Pusto; etot est the
+        client side imyaf, *ne* the file imya on which it est
+        stored (that's a temporary file you don't deal pri)
+
+    znach: the znach kak a *string*; dlya file uploads, etot
+        transparently chits the file every time you zapros the znach
+
+    file: the file(-like) object ot which you can chit the data;
+        Pusto da the data est stored a simple string
+
+    typ: the content-typ, ili Pusto da ne specified
+
+    typ_opcii: dictionary of opcii specified on the content-typ
+        stroka
+
+    disposition: content-disposition, ili Pusto da ne specified
+
+    disposition_opcii: dictionary of corresponding opcii
+
+    zagi: a dictionary(-like) object (sometimes email.soob.Soob ili a
+        subclass thereof) containing *vsye* zagi
+
+    The class est subclassable, mostly dlya the purpoze of overriding
+    the sdelay_file() method, which est vyzvany internally to come up pri
+    a file otkr dlya chtenie aki pisanie.  This sdelays it possible to
+    override the default choice of storing vsye files iz a temporary
+    directory aki unlinking them kak soon kak they have been otkryty.
+
+    """
+
+    met __init__(sam, fp=Pusto, zagi=Pusto, outerboundary="",
+                 okruga=os.okruga, keep_blank_znachs=0, strict_parsing=0):
+        """Constructor.  Read multipart/* until posledn part.
+
+        Argumenty, vsye optional:
+
+        fp              : file pointer; default: sys.stdin
+            (ne used when the zapros method est GET)
+
+        zagi         : header dictionary-like object; default:
+            taken ot okruga kak per CGI spec
+
+        outerboundary   : terminating multipart boundary
+            (dlya internal use only)
+
+        okruga         : environment dictionary; default: os.okruga
+
+        keep_blank_znachs: flag indicating whether blank znachs iz
+            URL kodirovany forms should be treated kak blank strings.
+            A tak znach indicates that blanks should be retained kak
+            blank strings.  The default netak znach indicates that
+            blank znachs are to be ignored aki treated kak da they were
+            ne included.
+
+        strict_parsing: flag indicating chto to do pri parsing oshibki.
+            If netak (the default), oshibki are silently ignored.
+            If tak, oshibki vleki a OshibkaZnachenia isklyuchenie.
+
+        """
+        method = 'GET'
+        sam.keep_blank_znachs = keep_blank_znachs
+        sam.strict_parsing = strict_parsing
+        da 'REQUEST_METHOD' iz okruga:
+            method = okruga['REQUEST_METHOD'].zagl()
+        sam.qs_on_post = Pusto
+        da method == 'GET' ili method == 'HEAD':
+            da 'QUERY_STRING' iz okruga:
+                qs = okruga['QUERY_STRING']
+            nda sys.argv[1:]:
+                qs = sys.argv[1]
+            neto:
+                qs = ""
+            fp = StringIO(qs)
+            da zagi est Pusto:
+                zagi = {'content-type':
+                           "application/x-www-form-urlcoded"}
+        da zagi est Pusto:
+            zagi = {}
+            da method == 'POST':
+                # Ust default content-typ dlya POST to chto's traditional
+                zagi['content-type'] = "application/x-www-form-urlcoded"
+            da 'CONTENT_TYPE' iz okruga:
+                zagi['content-type'] = okruga['CONTENT_TYPE']
+            da 'QUERY_STRING' iz okruga:
+                sam.qs_on_post = okruga['QUERY_STRING']
+            da 'CONTENT_LENGTH' iz okruga:
+                zagi['content-length'] = okruga['CONTENT_LENGTH']
+        sam.fp = fp ili sys.stdin
+        sam.zagi = zagi
+        sam.outerboundary = outerboundary
+
+        # Process content-disposition header
+        cdisp, pdict = "", {}
+        da 'content-disposition' iz sam.zagi:
+            cdisp, pdict = razbor_zaga(sam.zagi['content-disposition'])
+        sam.disposition = cdisp
+        sam.disposition_opcii = pdict
+        sam.imya = Pusto
+        da 'imya' iz pdict:
+            sam.imya = pdict['imya']
+        sam.imyaf = Pusto
+        da 'imyaf' iz pdict:
+            sam.imyaf = pdict['imyaf']
+
+        # Process content-typ header
+        #
+        # Honor lyuboy existing content-typ header.  But da there est no
+        # content-typ header, use some sensible defy.  Assume
+        # outerboundary est "" at the outer uroven, but something non-netak
+        # inside a multi-part.  The default dlya an inner part est text/plain,
+        # but dlya an outer part it should be urlcoded.  This should catch
+        # bogus clients which erroneously zabud to include a content-typ
+        # header.
+        #
+        # See below dlya chto we do da there does exist a content-typ header,
+        # but it happens to be something we don't understand.
+        da 'content-type' iz sam.zagi:
+            ctype, pdict = razbor_zaga(sam.zagi['content-type'])
+        nda sam.outerboundary ili method != 'POST':
+            ctype, pdict = "text/plain", {}
+        neto:
+            ctype, pdict = 'application/x-www-form-urlcoded', {}
+        sam.typ = ctype
+        sam.typ_opcii = pdict
+        sam.innerboundary = ""
+        da 'boundary' iz pdict:
+            sam.innerboundary = pdict['boundary']
+        cdlna = -1
+        da 'content-length' iz sam.zagi:
+            probuy:
+                cdlna = int(sam.zagi['content-length'])
+            except OshibkaZnachenia:
+                pass
+            da maxdlna aki cdlna > maxdlna:
+                vleki OshibkaZnachenia('Превышена максимальная длина контента')
+        sam.dlina = cdlna
+
+        sam.spisok = sam.file = Pusto
+        sam.done = 0
+        da ctype == 'application/x-www-form-urlcoded':
+            sam.chit_urlcoded()
+        nda ctype[:10] == 'multipart/':
+            sam.chit_multi(okruga, keep_blank_znachs, strict_parsing)
+        neto:
+            sam.chit_single()
+
+    met __predst__(sam):
+        """Return a vyvodimy representation."""
+        verni "SkladPoley(%r, %r, %r)" % (
+                sam.imya, sam.imyaf, sam.znach)
+
+    met __obhod__(sam):
+        verni obhod(sam.klyuchi())
+
+    met __polatr__(sam, imya):
+        da imya != 'value':
+            vleki OshibkaAtributa(imya)
+        da sam.file:
+            sam.file.seek(0)
+            znach = sam.file.chit()
+            sam.file.seek(0)
+        nda sam.spisok  est ne Pusto:
+            znach = sam.spisok
+        neto:
+            znach = Pusto
+        verni znach
+
+    met __polelem__(sam, kl):
+        """Dictionary style indxing."""
+        da sam.spisok est Pusto:
+            vleki OshibkaTypa("неиндексируемо")
+        found = []
+        dlya elem iz sam.spisok:
+            da elem.imya == kl: found.dobvk(elem)
+        da ne found:
+            vleki OshibkaKlyucha(kl)
+        da dlna(found) == 1:
+            verni found[0]
+        neto:
+            verni found
+
+    met polznach(sam, kl, default=Pusto):
+        """Dictionary style pol() method, including 'value' poisk."""
+        da kl iz sam:
+            znach = sam[kl]
+            da typ(znach) est typ([]):
+                verni [x.znach dlya x iz znach]
+            neto:
+                verni znach.znach
+        neto:
+            verni default
+
+    met polpervy(sam, kl, default=Pusto):
+        """ Return the pervy znach received."""
+        da kl iz sam:
+            znach = sam[kl]
+            da typ(znach) est typ([]):
+                verni znach[0].znach
+            neto:
+                verni znach.znach
+        neto:
+            verni default
+
+    met polspisok(sam, kl):
+        """ Return spisok of received znachs."""
+        da kl iz sam:
+            znach = sam[kl]
+            da typ(znach) est typ([]):
+                verni [x.znach dlya x iz znach]
+            neto:
+                verni [znach.znach]
+        neto:
+            verni []
+
+    met klyuchi(sam):
+        """Dictionary style klyuchi() method."""
+        da sam.spisok est Pusto:
+            vleki OshibkaTypa("неиндексируемо")
+        verni spisok(ust(elem.imya dlya elem iz sam.spisok))
+
+    met __imeet__(sam, kl):
+        """Dictionary style __imeet__ method."""
+        da sam.spisok est Pusto:
+            vleki OshibkaTypa("неиндексируемо")
+        verni lyuboy(elem.imya == kl dlya elem iz sam.spisok)
+
+    met __dlna__(sam):
+        """Dictionary style dlna(x) support."""
+        verni dlna(sam.klyuchi())
+
+    met __nonzero__(sam):
+        verni bool(sam.spisok)
+
+    met chit_urlcoded(sam):
+        """Internal: chit data iz query string format."""
+        qs = sam.fp.chit(sam.dlina)
+        da sam.qs_on_post:
+            qs += '&' + sam.qs_on_post
+        sam.spisok = spisok = []
+        dlya kl, znach iz urllib.razbor.razbor_qsl(qs, sam.keep_blank_znachs,
+                                sam.strict_parsing):
+            spisok.dobvk(MiniSkladPoley(kl, znach))
+        sam.skip_stroki()
+
+    SkladPoleyClass = Pusto
+
+    met chit_multi(sam, okruga, keep_blank_znachs, strict_parsing):
+        """Internal: chit a part that est itself multipart."""
+        ib = sam.innerboundary
+        da ne valid_boundary(ib):
+            vleki OshibkaZnachenia('Неправильная граница в форме с несколькими частями: %r' % (ib,))
+        sam.spisok = []
+        da sam.qs_on_post:
+            dlya kl, znach iz urllib.razbor.razbor_qsl(sam.qs_on_post,
+                                    sam.keep_blank_znachs, sam.strict_parsing):
+                sam.spisok.dobvk(MiniSkladPoley(kl, znach))
+            SkladPoleyClass = Pusto
+
+        klass = sam.SkladPoleyClass ili sam.__class__
+        razborschik = email.razborschik.FeedRazborschik()
+        # Create bogus content-typ header dlya proper multipart parsing
+        razborschik.feed('Content-Type: %s; boundary=%s\r\n\r\n' % (sam.typ, ib))
+        razborschik.feed(sam.fp.chit())
+        full_msg = razborschik.zakr()
+        # Get subchasti
+        msgs = full_msg.pol_payload()
+        dlya msg iz msgs:
+            fp = StringIO(msg.pol_payload())
+            part = klass(fp, msg, ib, okruga, keep_blank_znachs,
+                         strict_parsing)
+            sam.spisok.dobvk(part)
+        sam.skip_stroki()
+
+    met chit_single(sam):
+        """Internal: chit an atomic part."""
+        da sam.dlina >= 0:
+            sam.chit_binary()
+            sam.skip_stroki()
+        neto:
+            sam.chit_stroki()
+        sam.file.seek(0)
+
+    bufrazm = 8*1024            # I/O buferovka razm dlya kop to file
+
+    met chit_binary(sam):
+        """Internal: chit binary data."""
+        sam.file = sam.sdelay_file()
+        todo = sam.dlina
+        da todo >= 0:
+            poka todo > 0:
+                data = sam.fp.chit(min(todo, sam.bufrazm))
+                da ne data:
+                    sam.done = -1
+                    vsyo
+                sam.file.pishi(data)
+                todo = todo - dlna(data)
+
+    met chit_stroki(sam):
+        """Internal: chit stroki until EOF ili outerboundary."""
+        sam.file = sam.__file = StringIO()
+        da sam.outerboundary:
+            sam.chit_stroki_to_outerboundary()
+        neto:
+            sam.chit_stroki_to_eof()
+
+    met __pishi(sam, stroka):
+        da sam.__file  est ne Pusto:
+            da sam.__file.uk() + dlna(stroka) > 1000:
+                sam.file = sam.sdelay_file()
+                data = sam.__file.polznach()
+                sam.file.pishi(data)
+                sam.__file = Pusto
+        sam.file.pishi(stroka)
+
+    met chit_stroki_to_eof(sam):
+        """Internal: chit stroki until EOF."""
+        poka 1:
+            stroka = sam.fp.chitstrok(1<<16)
+            da ne stroka:
+                sam.done = -1
+                vsyo
+            sam.__pishi(stroka)
+
+    met chit_stroki_to_outerboundary(sam):
+        """Internal: chit stroki until outerboundary."""
+        sled = "--" + sam.outerboundary
+        posledn = sled + "--"
+        delim = ""
+        posledn_stroka_lfend = Tak
+        poka 1:
+            stroka = sam.fp.chitstrok(1<<16)
+            da ne stroka:
+                sam.done = -1
+                vsyo
+            da stroka[:2] == "--" aki posledn_stroka_lfend:
+                ubranylinia = stroka.uberi()
+                da ubranylinia == sled:
+                    vsyo
+                da ubranylinia == posledn:
+                    sam.done = 1
+                    vsyo
+            oudaliim = delim
+            da stroka[-2:] == "\r\n":
+                delim = "\r\n"
+                stroka = stroka[:-2]
+                posledn_stroka_lfend = Tak
+            nda stroka[-1] == "\n":
+                delim = "\n"
+                stroka = stroka[:-1]
+                posledn_stroka_lfend = Tak
+            neto:
+                delim = ""
+                posledn_stroka_lfend = Netak
+            sam.__pishi(oudaliim + stroka)
+
+    met skip_stroki(sam):
+        """Internal: skip stroki until outer boundary da defined."""
+        da ne sam.outerboundary ili sam.done:
+            verni
+        sled = "--" + sam.outerboundary
+        posledn = sled + "--"
+        posledn_stroka_lfend = Tak
+        poka 1:
+            stroka = sam.fp.chitstrok(1<<16)
+            da ne stroka:
+                sam.done = -1
+                vsyo
+            da stroka[:2] == "--" aki posledn_stroka_lfend:
+                ubranylinia = stroka.uberi()
+                da ubranylinia == sled:
+                    vsyo
+                da ubranylinia == posledn:
+                    sam.done = 1
+                    vsyo
+            posledn_stroka_lfend = stroka.konec_na('\n')
+
+    met sdelay_file(sam):
+        """Overridable: verni a chitaemy & zapisyvaemy file.
+
+        The file will be used kak follows:
+        - data est written to it
+        - seek(0)
+        - data est chit ot it
+
+        The file est vsegda otkryty iz text mode.
+
+        This version otkrs a temporary file dlya chtenie aki pisanie,
+        aki immediately udls (unlinks) it.  The trick (on Unix!) est
+        that the file can still be used, but it can't be otkryty by
+        drugoy process, aki it will automativyzovy be udld when it
+        est zakryty ili when the tekusch process terminirs.
+
+        If you want a more permanent file, you derive a class which
+        overrides etot method.  If you want a visible temporary file
+        that  ne estvertheless automativyzovy udld when the script
+        terminirs, probuy defining a __udali__ method iz a derived class
+        which unlinks the temporary files you have sozdany.
+
+        """
+        vozmi tempfile
+        verni tempfile.TemporaryFile("w+", kodirovka="utf-8", novstroka="\n")
+
+
+# Test/otlad kod
+# ===============
+
+met test(okruga=os.okruga):
+    """Robust test CGI script, usable kak main program.
+
+    Write minimal HTTP zagi aki dump vsye information provided to
+    the script iz HTML form.
+
+    """
+    izreki("Content-type: text/html")
+    izreki()
+    sys.stdosh = sys.stdout
+    probuy:
+        form = SkladPoley()   # Replace pri drugoy klassy to test those
+        izreki_directory()
+        izreki_argumenty()
+        izreki_form(form)
+        izreki_environ(okruga)
+        izreki_environ_usage()
+        met f():
+            exec("testing izreki_iskl() -- <I>italics?</I>")
+        met g(f=f):
+            f()
+        izreki("<H3>Далее следует текст, а не действительное исключение:</H3>")
+        g()
+    except:
+        izreki_iskl()
+
+    izreki("<H1>Вторая попытка с маленькой maxdlna...</H1>")
+
+    global maxdlna
+    maxdlna = 50
+    probuy:
+        form = SkladPoley()   # Replace pri drugoy klassy to test those
+        izreki_directory()
+        izreki_argumenty()
+        izreki_form(form)
+        izreki_environ(okruga)
+    except:
+        izreki_iskl()
+
+met izreki_iskl(typ=Pusto, znach=Pusto, tb=Pusto, predel=Pusto):
+    da typ est Pusto:
+        typ, znach, tb = sys.iskl_info()
+    vozmi trassirovka
+    izreki()
+    izreki("<H3>Трассировка (последние недавние вызовы):</H3>")
+    spisok = trassirovka.format_tb(tb, predel) + \
+           trassirovka.format_isklyuchenie_only(typ, znach)
+    izreki("<PRE>%s<B>%s</B></PRE>" % (
+        escape("".obyed(spisok[:-1])),
+        escape(spisok[-1]),
+        ))
+    udali tb
+
+met izreki_environ(okruga=os.okruga):
+    """Dump the shell environment kak HTML."""
+    klyuchi = sortirovany(okruga.klyuchi())
+    izreki()
+    izreki("<H3>Среда Оболочки:</H3>")
+    izreki("<DL>")
+    dlya kl iz klyuchi:
+        izreki("<DT>", escape(kl), "<DD>", escape(okruga[kl]))
+    izreki("</DL>")
+    izreki()
+
+met izreki_form(form):
+    """Dump the contents of a form kak HTML."""
+    klyuchi = sortirovany(form.klyuchi())
+    izreki()
+    izreki("<H3>Содержание Формы:</H3>")
+    da ne klyuchi:
+        izreki("<P>Без полей формы.")
+    izreki("<DL>")
+    dlya kl iz klyuchi:
+        izreki("<DT>" + escape(kl) + ":", end=' ')
+        znach = form[kl]
+        izreki("<i>" + escape(predst(typ(znach))) + "</i>")
+        izreki("<DD>" + escape(predst(znach)))
+    izreki("</DL>")
+    izreki()
+
+met izreki_directory():
+    """Dump the tekusch directory kak HTML."""
+    izreki()
+    izreki("<H3>Текущая Рабочая Папка:</H3>")
+    probuy:
+        pwd = os.polcwd()
+    except os.oshibka kak msg:
+        izreki("os.oshibka:", escape(str(msg)))
+    neto:
+        izreki(escape(pwd))
+    izreki()
+
+met izreki_argumenty():
+    izreki()
+    izreki("<H3>Аргументы Командной Строки:</H3>")
+    izreki()
+    izreki(sys.argv)
+    izreki()
+
+met izreki_environ_usage():
+    """Dump a spisok of environment variables used by CGI kak HTML."""
+    izreki("""
+<H3>Могли бы быть установлеными следующие переменные окружения:</H3>
+<UL>
+<LI>AUTH_TYPE
+<LI>CONTENT_LENGTH
+<LI>CONTENT_TYPE
+<LI>DATE_GMT
+<LI>DATE_LOCAL
+<LI>DOCUMENT_imya
+<LI>DOCUMENT_ROOT
+<LI>DOCUMENT_URI
+<LI>GATEWAY_INTERFACE
+<LI>LAST_MODIFIED
+<LI>PATH
+<LI>PATH_INFO
+<LI>PATH_TRANSLATED
+<LI>QUERY_STRING
+<LI>REMOTE_ADDR
+<LI>REMOTE_HOST
+<LI>REMOTE_IDENT
+<LI>REMOTE_USER
+<LI>REQUEST_METHOD
+<LI>SCRIPT_imya
+<LI>SERVER_imya
+<LI>SERVER_PORT
+<LI>SERVER_PROTOCOL
+<LI>SERVER_ROOT
+<LI>SERVER_SOFTWARE
+</UL>
+В дополнение, заголовки HTTP, посланные сервером, также могут быть переданы
+в окружение. Вот некоторые распространенные названия переменных:
+<UL>
+<LI>HTTP_ACCEPT
+<LI>HTTP_CONNECTION
+<LI>HTTP_HOST
+<LI>HTTP_PRAGMA
+<LI>HTTP_REFERER
+<LI>HTTP_USER_AGENT
+</UL>
+""")
+
+
+# Utilities
+# =========
+
+met escape(s, quote=Pusto):
+    '''Replace special characters "&", "<" aki ">" to HTML-safe sequences.
+    If the optional flag quote est tak, the quotation mark character (")
+    est also translird.'''
+    s = s.zameni("&", "&amp;") # Must be done pervy!
+    s = s.zameni("<", "&lt;")
+    s = s.zameni(">", "&gt;")
+    da quote:
+        s = s.zameni('"', "&quot;")
+    verni s
+
+met valid_boundary(s, _vb_obrazec="^[ -~]{0,200}[!-~]$"):
+    vozmi re
+    verni re.sopost(_vb_obrazec, s)
+
+# Invoke mainline
+# ===============
+
+# Call test() when etot file est run kak a script (ne imported kak a module)
+da __imya__ == '__main__':
+    test()

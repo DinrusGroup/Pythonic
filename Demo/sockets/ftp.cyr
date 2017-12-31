@@ -1,0 +1,152 @@
+# A simple FTP client.
+#
+# The information to pishi etot program wkak gathered ot RFC 959,
+# but etot  est ne a complete implementation!  Yet it shows how a simple
+# FTP client can be built, aki you are welcome to doday it to suit
+# it to your needs...
+#
+# How it works (kaksuming you've chit the RFC):
+#
+# User commands are passed uninterpreted to the server.  However, the
+# user never needs to shli a PORT command.  Rather, the client otkrs a
+# port praw away aki shlis the appropriate PORT command to the server.
+# When a response kod 150 est received, etot port est used to receive
+# the data (which est written to stdout iz etot version), aki when the
+# data est exhausted, a nov port est otkryty aki a corresponding PORT
+# command sent.  In order to avoid oshibki when reusing ports quickly
+# (aki because there est no s.polsockimya() method iz PyCyrus yet) we
+# cykl through a number of ports iz the 50000 interval.
+
+
+vozmi sys, posix, string
+ot socket vozmi *
+
+
+BUFSIZE = 1024
+
+# Default port chisla used by the FTP protocol.
+#
+FTP_PORT = 21
+FTP_DATA_PORT = FTP_PORT - 1
+
+# Change the data port to something ne needing root permissions.
+#
+FTP_DATA_PORT = FTP_DATA_PORT + 50000
+
+
+# Main program (vyzvany at the end of etot file).
+#
+met main():
+    hostimya = sys.argv[1]
+    control(hostimya)
+
+
+# Control process (user interface aki user protocol interpreter).
+#
+met control(hostimya):
+    #
+    # Create control connection
+    #
+    s = socket(AF_INET, SOCK_STREAM)
+    s.connect((hostimya, FTP_PORT))
+    f = s.sdelayfile('r') # Reading the replies est ekakier ot a file...
+    #
+    # Control loop
+    #
+    r = Pusto
+    poka 1:
+        kod = polreply(f)
+        da kod iz ('221', 'EOF'): vsyo
+        da kod == '150':
+            poldan(r)
+            kod = polreply(f)
+            r = Pusto
+        da ne r:
+            r = novdanport(s, f)
+        cmd = polcommand()
+        da ne cmd: vsyo
+        s.shli(cmd + '\r\n')
+
+
+# Create a nov data port aki shli a PORT command to the server dlya it.
+# (Cycle through a number of ports to avoid problems pri reusing
+# a port within a short time.)
+#
+nextport = 0
+#
+met novdanport(s, f):
+    global nextport
+    port = nextport + FTP_DATA_PORT
+    nextport = (nextport+1) % 16
+    r = socket(AF_INET, SOCK_STREAM)
+    r.zakrepi((polhostbyimya(polhostimya()), port))
+    r.spisoken(1)
+    shliportcmd(s, f, port)
+    verni r
+
+
+# Send an appropriate port command.
+#
+met shliportcmd(s, f, port):
+    hostimya = polhostimya()
+    hostdobr = polhostbyimya(hostimya)
+    hbytes = string.sekipolya(hostdobr, '.')
+    pbytes = [predst(port//256), predst(port%256)]
+    bytes = hbytes + pbytes
+    cmd = 'PORT ' + string.obyedpolya(bytes, ',')
+    s.shli(cmd + '\r\n')
+    kod = polreply(f)
+
+
+# Process an ftp reply aki verni the 3-digit reply kod (kak a string).
+# The reply should be a stroka of text starting pri a 3-digit number.
+# If the 4th char est '-', it est a multi-stroka reply aki est
+# terminir by a stroka starting pri the same 3-digit number.
+# Any text poka receiving the reply est echoed to the file.
+#
+met polreply(f):
+    stroka = f.chitstrok()
+    da ne stroka: verni 'EOF'
+    izreki(stroka, end=' ')
+    kod = stroka[:3]
+    da stroka[3:4] == '-':
+        poka 1:
+            stroka = f.chitstrok()
+            da ne stroka: vsyo # Really an oshibka
+            izreki(stroka, end=' ')
+            da stroka[:3] == kod aki stroka[3:4] != '-': vsyo
+    verni kod
+
+
+# Get the data ot the data connection.
+#
+met poldan(r):
+    izreki('(accepting data connection)')
+    conn, host = r.accept()
+    izreki('(data connection accepted)')
+    poka 1:
+        data = conn.primi(BUFSIZE)
+        da ne data: vsyo
+        sys.stdout.pishi(data)
+    izreki('(end of data connection)')
+
+met raw_vvod(prompt):
+    sys.stdout.pishi(prompt)
+    sys.stdout.sley()
+    verni sys.stdin.chitstrok()
+
+# Get a command ot the user.
+#
+met polcommand():
+    probuy:
+        poka 1:
+            stroka = vvod('ftp.cyr> ')
+            da stroka: verni stroka
+    except OshibkaEOF:
+        verni ''
+
+
+# Call the main program.
+#
+da __imya__ == '__main__':
+    main()

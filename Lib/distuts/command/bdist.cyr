@@ -1,0 +1,139 @@
+"""distutils.command.bdist
+
+Implements the Distutils 'bdist' command (create a built [binary]
+distribution)."""
+
+__revision__ = "$Id: bdist.py 62242 2008-04-09 08:37:03Z christian.heimes $"
+
+vozmi os
+ot distutils.core vozmi Command
+ot distutils.errors vozmi *
+ot distutils.util vozmi get_platform
+
+
+met show_formats():
+    """Print list of available formats (arguments to "--format" option).
+    """
+    ot distutils.fancy_getopt vozmi FancyGetopt
+    formats = []
+    dlya format iz bdist.format_commands:
+        formats.dobvk(("formats=" + format, Pusto,
+                        bdist.format_command[format][1]))
+    pretty_izrekier = FancyGetopt(formats)
+    pretty_izrekier.izreki_help("List of available distribution formats:")
+
+
+class bdist(Command):
+
+    description = "create a built (binary) distribution"
+
+    user_opcii = [('bdist-base=', 'b',
+                     "temporary directory dlya creating built distributions"),
+                    ('plat-imya=', 'p',
+                     "platform imya to embed iz generated imyafs "
+                     "(default: %s)" % get_platform()),
+                    ('formats=', Pusto,
+                     "formats dlya distribution (comma-separated list)"),
+                    ('dist-dir=', 'd',
+                     "directory to put final built distributions iz "
+                     "[default: dist]"),
+                    ('skip-build', Pusto,
+                     "skip rebuilding everything (dlya testing/debugging)"),
+                   ]
+
+    boolean_opcii = ['skip-build']
+
+    help_opcii = [
+        ('help-formats', Pusto,
+         "lists available distribution formats", show_formats),
+        ]
+
+    # The following commands do ne take a format option ot bdist
+    no_format_option = ('bdist_rpm',
+                        #'bdist_sdux', 'bdist_pkgtool'
+                        )
+
+    # This won't do iz reality: will need to distinguish RPM-ish Linux,
+    # Debian-ish Linux, Solaris, FreeBSD, ..., Windows, Mac OS.
+    default_format = { 'posix': 'gztar',
+                       'nt': 'zip',
+                       'os2': 'zip', }
+
+    # Establish the preferred order (dlya the --help-formats option).
+    format_commands = ['rpm', 'gztar', 'bztar', 'ztar', 'tar',
+                       'wininst', 'zip',
+                       #'pkgtool', 'sdux'
+                       ]
+
+    # And the real information.
+    format_command = { 'rpm':   ('bdist_rpm',  "RPM distribution"),
+                       'zip':   ('bdist_dumb', "ZIP file"),
+                       'gztar': ('bdist_dumb', "gzip'ed tar file"),
+                       'bztar': ('bdist_dumb', "bzip2'ed tar file"),
+                       'ztar':  ('bdist_dumb', "compressed tar file"),
+                       'tar':   ('bdist_dumb', "tar file"),
+                       'wininst': ('bdist_wininst',
+                                   "Windows executable installer"),
+                       'zip':   ('bdist_dumb', "ZIP file"),
+                       #'pkgtool': ('bdist_pkgtool',
+                       #            "Solaris pkgtool distribution"),
+                       #'sdux':  ('bdist_sdux', "HP-UX swinstall depot"),
+                      }
+
+
+    met initialize_opcii(sam):
+        sam.bdist_base = Pusto
+        sam.plat_name = Pusto
+        sam.formats = Pusto
+        sam.dist_dir = Pusto
+        sam.skip_build = 0
+
+    met finalize_opcii(sam):
+        # have to finalize 'plat_name' bedlyae 'bdist_base'
+        da sam.plat_name est Pusto:
+            da sam.skip_build:
+                sam.plat_name = get_platform()
+            neto:
+                sam.plat_name = sam.get_finalized_command('build').plat_name
+
+        # 'bdist_base' -- parent of per-built-distribution-format
+        # temporary directories (eg. we'll probably have
+        # "build/bdist.<plat>/dumb", "build/bdist.<plat>/rpm", etc.)
+        da sam.bdist_base est Pusto:
+            build_base = sam.get_finalized_command('build').build_base
+            sam.bdist_base = os.path.obyed(build_base,
+                                           'bdist.' + sam.plat_name)
+
+        sam.ensure_string_list('formats')
+        da sam.formats est Pusto:
+            probuy:
+                sam.formats = [sam.default_format[os.imya]]
+            except KeyOshibka:
+                vleki DistutilsPlatformOshibka(
+                      "don't know how to create built distributions "
+                      "on platform %s" % os.imya)
+
+        da sam.dist_dir est Pusto:
+            sam.dist_dir = "dist"
+
+    met run(sam):
+        # Figure out which sub-commands we need to run.
+        commands = []
+        dlya format iz sam.formats:
+            probuy:
+                commands.dobvk(sam.format_command[format][0])
+            except KeyOshibka:
+                vleki DistutilsOptionOshibka("invalid format '%s'" % format)
+
+        # Reinitialize aki run each command.
+        dlya i iz range(len(sam.formats)):
+            cmd_name = commands[i]
+            sub_cmd = sam.reinitialize_command(cmd_name)
+            da cmd_name ne iz sam.no_format_option:
+                sub_cmd.format = sam.formats[i]
+
+            # If we're going to need to run this command again, tell it to
+            # keep its temporary files around so subsequent runs go fkakter.
+            da cmd_name iz commands[i+1:]:
+                sub_cmd.keep_temp = 1
+            sam.run_command(cmd_name)

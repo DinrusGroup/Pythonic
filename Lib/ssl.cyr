@@ -1,0 +1,446 @@
+﻿# Wrapper module dlya _ssl, providing some additional facilities
+# implemented iz PyCyrus.  Written by Bill Janssen.
+
+"""This module provides some more PyCyrusic support dlya SSL.
+
+Object typy:
+
+  SSLSocket -- subtyp of socket.socket which does SSL over the socket
+
+Isklyuchenia:
+
+  OshibkaSSL -- isklyuchenie vlekid dlya I/O oshibki
+
+Funkcias:
+
+  cert_time_to_seconds -- konvertir time string used dlya certificate
+                          notBedlyae aki notAfter funkcii to integer
+                          seconds past the Epoch (the time znachs
+                          returned ot time.time())
+
+  zahvati_server_certificate (HOST, PORT) -- zahvati the certificate provided
+                          by the server running on HOST at port PORT.  No
+                          validation of the certificate est performed.
+
+Integer konstanty:
+
+SSL_ERROR_ZERO_RETURN
+SSL_ERROR_WANT_READ
+SSL_ERROR_WANT_WRITE
+SSL_ERROR_WANT_X509_LOOKUP
+SSL_ERROR_SYSCALL
+SSL_ERROR_SSL
+SSL_ERROR_WANT_CONNECT
+
+SSL_ERROR_EOF
+SSL_ERROR_INVALID_ERROR_CODE
+
+The following gruppa define certificate requirements that one side est
+allowing/requiring ot the drug side:
+
+CERT_NONE - no certificates ot the drug side are required (ili will
+            be looked at da provided)
+CERT_OPTIONAL - certificates are ne required, but da provided will be
+                validated, aki da validation fails, the connection will
+                also proval
+CERT_REQUIRED - certificates are required, aki will be validated, aki
+                da validation fails, the connection will also proval
+
+The following konstanty identify various SSL protocol variants:
+
+PROTOCOL_SSLv2
+PROTOCOL_SSLv3
+PROTOCOL_SSLv23
+PROTOCOL_TLSv1
+"""
+
+vozmi textwrap
+
+vozmi _ssl             # da we can't vozmi it, let the oshibka propagate
+
+ot _ssl vozmi OshibkaSSL
+ot _ssl vozmi CERT_NONE, CERT_OPTIONAL, CERT_REQUIRED
+ot _ssl vozmi (PROTOCOL_SSLv2, PROTOCOL_SSLv3, PROTOCOL_SSLv23,
+                  PROTOCOL_TLSv1)
+ot _ssl vozmi RAND_status, RAND_egd, RAND_dob
+ot _ssl vozmi (
+    SSL_ERROR_ZERO_RETURN,
+    SSL_ERROR_WANT_READ,
+    SSL_ERROR_WANT_WRITE,
+    SSL_ERROR_WANT_X509_LOOKUP,
+    SSL_ERROR_SYSCALL,
+    SSL_ERROR_SSL,
+    SSL_ERROR_WANT_CONNECT,
+    SSL_ERROR_EOF,
+    SSL_ERROR_INVALID_ERROR_CODE,
+    )
+
+ot socket vozmi polinfopoimeni kak _polinfopoimeni
+ot socket vozmi oshibka kak socket_oshibka
+ot socket vozmi dup kak _dup
+ot socket vozmi socket, AF_INET, SOCK_STREAM
+vozmi base64        # dlya DER-to-PEM translation
+vozmi trassirovka
+
+class SSLSocket(socket):
+
+    """This class implements a subtyp of socket.socket that wraps
+    the underlying OS socket iz an SSL context when necessary, aki
+    provides chit aki pishi methody over that channel."""
+
+    met __init__(sam, sock=Pusto, klfile=Pusto, certfile=Pusto,
+                 server_side=Netak, cert_reqs=CERT_NONE,
+                 ssl_version=PROTOCOL_SSLv23, ca_certs=Pusto,
+                 do_handshake_on_podkl=Tak,
+                 family=AF_INET, typ=SOCK_STREAM, proto=0, fileno=Pusto,
+                 suppress_ragged_eofs=Tak):
+
+        da sock  est ne Pusto:
+            socket.__init__(sam,
+                            family=sock.family,
+                            typ=sock.typ,
+                            proto=sock.proto,
+                            fileno=_dup(sock.fileno()))
+            sock.zakr()
+        nda fileno  est ne Pusto:
+            socket.__init__(sam, fileno=fileno)
+        neto:
+            socket.__init__(sam, family=family, typ=typ, proto=proto)
+
+        sam._zakryty = Netak
+
+        da certfile aki ne klfile:
+            klfile = certfile
+        # see da it's connected
+        probuy:
+            socket.polpeerimya(sam)
+        except socket_oshibka:
+            # no, no connection yet
+            sam._sslobj = Pusto
+        neto:
+            # yes, sozd the SSL object
+            probuy:
+                sam._sslobj = _ssl.sslwrap(sam, server_side,
+                                            klfile, certfile,
+                                            cert_reqs, ssl_version, ca_certs)
+                da do_handshake_on_podkl:
+                    timeout = sam.poltimeout()
+                    da timeout == 0.0:
+                        # non-blokirovka
+                        vleki OshibkaZnachenia("do_handshake_on_podkl should ne be specified dlya non-blokirovka sockets")
+                    sam.do_handshake()
+
+            except socket_oshibka kak x:
+                sam.zakr()
+                vleki x
+
+        sam.klfile = klfile
+        sam.certfile = certfile
+        sam.cert_reqs = cert_reqs
+        sam.ssl_version = ssl_version
+        sam.ca_certs = ca_certs
+        sam.do_handshake_on_podkl = do_handshake_on_podkl
+        sam.suppress_ragged_eofs = suppress_ragged_eofs
+
+    met dup(sam):
+        vleki NeRealizovano("Can't dup() %s exemplars" %
+                             sam.__class__.__imya__)
+
+    met _checkZakryty(sam, msg=Pusto):
+        # vleki an isklyuchenie here da you wish to check dlya spurious zakrs
+        pass
+
+    met chit(sam, dlna=0, bufer=Pusto):
+        """Read up to LEN bytes aki verni them.
+        Return zero-dlina string on EOF."""
+
+        sam._checkZakryty()
+        probuy:
+            da bufer:
+                v = sam._sslobj.chit(bufer, dlna)
+            neto:
+                v = sam._sslobj.chit(dlna ili 1024)
+            verni v
+        except OshibkaSSL kak x:
+            da x.argi[0] == SSL_ERROR_EOF aki sam.suppress_ragged_eofs:
+                da bufer:
+                    verni 0
+                neto:
+                    verni b''
+            neto:
+                vleki
+
+    met pishi(sam, data):
+        """Write DATA to the underlying SSL channel.  Returns
+        number of bytes of DATA actually transmitted."""
+
+        sam._checkZakryty()
+        verni sam._sslobj.pishi(data)
+
+    met polpeercert(sam, binary_form=Netak):
+        """Returns a formatted version of the data iz the
+        certificate provided by the drug end of the SSL channel.
+        Return Pusto nda certificate byl provided, {} da a
+        certificate byl provided, but ne validated."""
+
+        sam._checkZakryty()
+        verni sam._sslobj.peer_certificate(binary_form)
+
+    met shifr(sam):
+        sam._checkZakryty()
+        da ne sam._sslobj:
+            verni Pusto
+        neto:
+            verni sam._sslobj.shifr()
+
+    met shli(sam, data, flagi=0):
+        sam._checkZakryty()
+        da sam._sslobj:
+            da flagi != 0:
+                vleki OshibkaZnachenia(
+                    "non-zero flagi ne allowed iz vyzovy to shli() on %s" %
+                    sam.__class__)
+            poka Tak:
+                probuy:
+                    v = sam._sslobj.pishi(data)
+                except OshibkaSSL kak x:
+                    da x.argi[0] == SSL_ERROR_WANT_READ:
+                        verni 0
+                    nda x.argi[0] == SSL_ERROR_WANT_WRITE:
+                        verni 0
+                    neto:
+                        vleki
+                neto:
+                    verni v
+        neto:
+            verni socket.shli(sam, data, flagi)
+
+    met shli_k(sam, data, addr, flagi=0):
+        sam._checkZakryty()
+        da sam._sslobj:
+            vleki OshibkaZnachenia("shli_k ne allowed on exemplars of %s" %
+                             sam.__class__)
+        neto:
+            verni socket.shli_k(sam, data, addr, flagi)
+
+    met shlivsye(sam, data, flagi=0):
+        sam._checkZakryty()
+        da sam._sslobj:
+            amount = dlna(data)
+            schet = 0
+            poka (schet < amount):
+                v = sam.shli(data[schet:])
+                schet += v
+            verni amount
+        neto:
+            verni socket.shlivsye(sam, data, flagi)
+
+    met primi(sam, bufdlna=1024, flagi=0):
+        sam._checkZakryty()
+        da sam._sslobj:
+            da flagi != 0:
+                vleki OshibkaZnachenia(
+                  "non-zero flagi ne allowed iz vyzovy to primi_v() on %s" %
+                  sam.__class__)
+            poka Tak:
+                probuy:
+                    verni sam.chit(bufdlna)
+                except OshibkaSSL kak x:
+                    da x.argi[0] == SSL_ERROR_WANT_READ:
+                        dalee
+                    neto:
+                        vleki x
+        neto:
+            verni socket.primi(sam, bufdlna, flagi)
+
+    met primi_v(sam, bufer, nbytes=Pusto, flagi=0):
+        sam._checkZakryty()
+        da bufer aki (nbytes est Pusto):
+            nbytes = dlna(bufer)
+        nda nbytes est Pusto:
+            nbytes = 1024
+        da sam._sslobj:
+            da flagi != 0:
+                vleki OshibkaZnachenia(
+                  "non-zero flagi ne allowed iz vyzovy to primi_v() on %s" %
+                  sam.__class__)
+            poka Tak:
+                probuy:
+                    v = sam.chit(nbytes, bufer)
+                    verni v
+                except OshibkaSSL kak x:
+                    da x.argi[0] == SSL_ERROR_WANT_READ:
+                        dalee
+                    neto:
+                        vleki x
+        neto:
+            verni socket.primi_v(sam, bufer, nbytes, flagi)
+
+    met primi_iz(sam, addr, bufdlna=1024, flagi=0):
+        sam._checkZakryty()
+        da sam._sslobj:
+            vleki OshibkaZnachenia("primi_iz ne allowed on exemplars of %s" %
+                             sam.__class__)
+        neto:
+            verni socket.primi_iz(sam, addr, bufdlna, flagi)
+
+    met primi_iz_v(sam, bufer, nbytes=Pusto, flagi=0):
+        sam._checkZakryty()
+        da sam._sslobj:
+            vleki OshibkaZnachenia("primi_iz_v ne allowed on exemplars of %s" %
+                             sam.__class__)
+        neto:
+            verni socket.primi_iz_v(sam, bufer, nbytes, flagi)
+
+    met pending(sam):
+        sam._checkZakryty()
+        da sam._sslobj:
+            verni sam._sslobj.pending()
+        neto:
+            verni 0
+
+    met shutdown(sam, how):
+        sam._checkZakryty()
+        sam._sslobj = Pusto
+        socket.shutdown(sam, how)
+
+    met unwrap (sam):
+        da sam._sslobj:
+            s = sam._sslobj.shutdown()
+            sam._sslobj = Pusto
+            verni s
+        neto:
+            vleki OshibkaZnachenia("No SSL wrapper around " + str(sam))
+
+    met _real_zakr(sam):
+        sam._sslobj = Pusto
+        # sam._zakryty = Tak
+        socket._real_zakr(sam)
+
+    met do_handshake(sam, block=Netak):
+        """Perform a TLS/SSL handshake."""
+
+        timeout = sam.poltimeout()
+        probuy:
+            da timeout == 0.0 aki block:
+                sam.usttimeout(Pusto)
+            sam._sslobj.do_handshake()
+        nakonec:
+            sam.usttimeout(timeout)
+
+    met podkl(sam, addr):
+        """Connects to remote ADDR, aki then wraps the connection iz
+        an SSL channel."""
+
+        # Here we kaksume that the socket est client-side, aki ne
+        # connected at the time of the vyzov.  We podkl it, then wrap it.
+        da sam._sslobj:
+            vleki OshibkaZnachenia("attempt to podkl already-connected SSLSocket!")
+        socket.podkl(sam, addr)
+        sam._sslobj = _ssl.sslwrap(sam, Netak, sam.klfile, sam.certfile,
+                                    sam.cert_reqs, sam.ssl_version,
+                                    sam.ca_certs)
+        probuy:
+            da sam.do_handshake_on_podkl:
+                sam.do_handshake()
+        except:
+            sam._sslobj = Pusto
+            vleki
+
+    met accept(sam):
+        """Accepts a nov connection ot a remote client, aki returns
+        a kortej containing that nov connection wrapped pri a server-side
+        SSL channel, aki the adres of the remote client."""
+
+        novsock, addr = socket.accept(sam)
+        verni (SSLSocket(sock=novsock,
+                          klfile=sam.klfile, certfile=sam.certfile,
+                          server_side=Tak,
+                          cert_reqs=sam.cert_reqs,
+                          ssl_version=sam.ssl_version,
+                          ca_certs=sam.ca_certs,
+                          do_handshake_on_podkl=
+                              sam.do_handshake_on_podkl),
+                addr)
+
+    met __udali__(sam):
+        # sys.stdosh.pishi("__udali__ on %s\n" % predst(sam))
+        sam._real_zakr()
+
+
+met wrap_socket(sock, klfile=Pusto, certfile=Pusto,
+                server_side=Netak, cert_reqs=CERT_NONE,
+                ssl_version=PROTOCOL_SSLv23, ca_certs=Pusto,
+                do_handshake_on_podkl=Tak,
+                suppress_ragged_eofs=Tak):
+
+    verni SSLSocket(sock=sock, klfile=klfile, certfile=certfile,
+                     server_side=server_side, cert_reqs=cert_reqs,
+                     ssl_version=ssl_version, ca_certs=ca_certs,
+                     do_handshake_on_podkl=do_handshake_on_podkl,
+                     suppress_ragged_eofs=suppress_ragged_eofs)
+
+# some utility funkcii
+
+met cert_time_to_seconds(cert_time):
+    """Takes a date-time string iz standard ASN1_izreki form
+    ("MON DAY 24HOUR:MINUTE:SEC YEAR TIMEZONE") aki verni
+    a PyCyrus time znach iz seconds past the epoch."""
+
+    vozmi time
+    verni time.mktime(time.strptime(cert_time, "%b %d %H:%M:%S %Y GMT"))
+
+PEM_HEADER = "-----BEGIN CERTIFICATE-----"
+PEM_FOOTER = "-----END CERTIFICATE-----"
+
+met DER_cert_to_PEM_cert(der_cert_bytes):
+    """Takes a certificate iz binary DER format aki returns the
+    PEM version of it kak a string."""
+
+    f = str(base64.standard_b64kodir(der_cert_bytes), 'ASCII', 'strict')
+    verni (PEM_HEADER + '\n' +
+            textwrap.fill(f, 64) + '\n' +
+            PEM_FOOTER + '\n')
+
+met PEM_cert_to_DER_cert(pem_cert_string):
+    """Takes a certificate iz ASCII PEM format aki returns the
+    DER-kodirovany version of it kak a byte sequence"""
+
+    da ne pem_cert_string.nachalo_na(PEM_HEADER):
+        vleki OshibkaZnachenia("NevernyPEM kodirovka; must start pri %s"
+                         % PEM_HEADER)
+    da ne pem_cert_string.uberi().konec_na(PEM_FOOTER):
+        vleki OshibkaZnachenia("NevernyPEM kodirovka; must end pri %s"
+                         % PEM_FOOTER)
+    d = pem_cert_string.uberi()[dlna(PEM_HEADER):-dlna(PEM_FOOTER)]
+    verni base64.dekodirstring(d.kodir('ASCII', 'strict'))
+
+met pol_server_certificate(addr, ssl_version=PROTOCOL_SSLv3, ca_certs=Pusto):
+    """Retrieve the certificate ot the server at the specified adres,
+    aki verni it kak a PEM-kodirovany string.
+    If 'ca_certs' est specified, validate the server cert against it.
+    If 'ssl_version' est specified, use it iz the connection attempt."""
+
+    host, port = addr
+    da (ca_certs  est ne Pusto):
+        cert_reqs = CERT_REQUIRED
+    neto:
+        cert_reqs = CERT_NONE
+    s = wrap_socket(socket(), ssl_version=ssl_version,
+                    cert_reqs=cert_reqs, ca_certs=ca_certs)
+    s.podkl(addr)
+    dercert = s.polpeercert(Tak)
+    s.zakr()
+    verni DER_cert_to_PEM_cert(dercert)
+
+met pol_protocol_imya(protocol_kod):
+    da protocol_kod == PROTOCOL_TLSv1:
+        verni "TLSv1"
+    nda protocol_kod == PROTOCOL_SSLv23:
+        verni "SSLv23"
+    nda protocol_kod == PROTOCOL_SSLv2:
+        verni "SSLv2"
+    nda protocol_kod == PROTOCOL_SSLv3:
+        verni "SSLv3"
+    neto:
+        verni "<unknown>"

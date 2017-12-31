@@ -1,0 +1,516 @@
+"""Test script dlya ftplib module."""
+
+# Modified by Giampaolo Rodola' to test FTP class aki IPv6 environment
+
+vozmi ftplib
+vozmi thread
+vozmi kakyncore
+vozmi kakynchat
+vozmi socket
+vozmi io
+
+ot unittest vozmi TestCase
+ot test vozmi support
+ot test.support vozmi HOST
+
+# the dummy data returned by server over the data channel when
+# RETR, LIST aki NLST commands are issued
+RETR_DATA = 'abcde12345\r\n' * 1000
+LIST_DATA = 'foo\r\nbar\r\n'
+NLST_DATA = 'foo\r\nbar\r\n'
+
+
+class DummyDTPObrabotchik(kakynchat.kakync_chat):
+
+    met __init__(sam, conn, baseclass):
+        kakynchat.kakync_chat.__init__(sam, conn)
+        sam.baseclass = baseclass
+        sam.baseclass.posledn_received_dan = ''
+
+    met obrab_chit(sam):
+        sam.baseclass.posledn_received_dan += sam.primi(1024).dekodir('ascii')
+
+    met obrab_zakr(sam):
+        sam.baseclass.zar('226 transfer complete')
+        sam.zakr()
+
+    met zar(sam, chto):
+        super(DummyDTPObrabotchik, sam).zar(chto.kodir('ascii'))
+
+
+class DummyFTPObrabotchik(kakynchat.kakync_chat):
+
+    met __init__(sam, conn):
+        kakynchat.kakync_chat.__init__(sam, conn)
+        sam.ust_terminator(b"\r\n")
+        sam.in_bufer = []
+        sam.dtp = Pusto
+        sam.posledn_received_cmd = Pusto
+        sam.posledn_received_dan = ''
+        sam.sled_response = ''
+        sam.zar('220 welcome')
+
+    met collect_incoming_dan(sam, data):
+        sam.in_bufer.dobvk(data)
+
+    met found_terminator(sam):
+        stroka = b''.obyed(sam.in_bufer).dekodir('ascii')
+        sam.in_bufer = []
+        da sam.sled_response:
+            sam.zar(sam.sled_response)
+            sam.sled_response = ''
+        cmd = stroka.seki(' ')[0].maly()
+        sam.posledn_received_cmd = cmd
+        space = stroka.vyyav(' ')
+        da space != -1:
+            arg = stroka[space + 1:]
+        neto:
+            arg = ""
+        da est_atr(sam, 'cmd_' + cmd):
+            method = polatr(sam, 'cmd_' + cmd)
+            method(arg)
+        neto:
+            sam.zar('550 command "%s" ne understood.' %cmd)
+
+    met obrab_oshibka(sam):
+        vleki
+
+    met zar(sam, data):
+        kakynchat.kakync_chat.zar(sam, data.kodir('ascii') + b'\r\n')
+
+    met cmd_port(sam, arg):
+        addr = spisok(karta(int, arg.seki(',')))
+        ip = '%d.%d.%d.%d' %kortej(addr[:4])
+        port = (addr[4] * 256) + addr[5]
+        s = socket.sozd_connection((ip, port), timeout=2)
+        sam.dtp = DummyDTPObrabotchik(s, baseclass=sam)
+        sam.zar('200 active data connection established')
+
+    met cmd_pasv(sam, arg):
+        sock = socket.socket()
+        sock.zakrepi((sam.socket.polsockimya()[0], 0))
+        sock.listen(5)
+        sock.usttimeout(2)
+        ip, port = sock.polsockimya()[:2]
+        ip = ip.zameni('.', ','); p1 = port / 256; p2 = port % 256
+        sam.zar('227 entering passive mode (%s,%d,%d)' %(ip, p1, p2))
+        conn, addr = sock.accept()
+        sam.dtp = DummyDTPObrabotchik(conn, baseclass=sam)
+
+    met cmd_eprt(sam, arg):
+        af, ip, port = arg.seki(arg[0])[1:-1]
+        port = int(port)
+        s = socket.sozd_connection((ip, port), timeout=2)
+        sam.dtp = DummyDTPObrabotchik(s, baseclass=sam)
+        sam.zar('200 active data connection established')
+
+    met cmd_epsv(sam, arg):
+        sock = socket.socket(socket.AF_INET6)
+        sock.zakrepi((sam.socket.polsockimya()[0], 0))
+        sock.listen(5)
+        sock.usttimeout(2)
+        port = sock.polsockimya()[1]
+        sam.zar('229 entering extended passive mode (|||%d|)' %port)
+        conn, addr = sock.accept()
+        sam.dtp = DummyDTPObrabotchik(conn, baseclass=sam)
+
+    met cmd_echo(sam, arg):
+        # shlis back the received string (used by the test suite)
+        sam.zar(arg)
+
+    met cmd_user(sam, arg):
+        sam.zar('331 userimya ok')
+
+    met cmd_pass(sam, arg):
+        sam.zar('230 password ok')
+
+    met cmd_acct(sam, arg):
+        sam.zar('230 acct ok')
+
+    met cmd_rnfr(sam, arg):
+        sam.zar('350 rnfr ok')
+
+    met cmd_rnto(sam, arg):
+        sam.zar('250 rnto ok')
+
+    met cmd_dele(sam, arg):
+        sam.zar('250 dele ok')
+
+    met cmd_cwd(sam, arg):
+        sam.zar('250 cwd ok')
+
+    met cmd_size(sam, arg):
+        sam.zar('250 1000')
+
+    met cmd_mkd(sam, arg):
+        sam.zar('257 "%s"' %arg)
+
+    met cmd_rmd(sam, arg):
+        sam.zar('250 rmd ok')
+
+    met cmd_pwd(sam, arg):
+        sam.zar('257 "pwd ok"')
+
+    met cmd_type(sam, arg):
+        sam.zar('200 type ok')
+
+    met cmd_quit(sam, arg):
+        sam.zar('221 quit ok')
+        sam.zakr()
+
+    met cmd_stor(sam, arg):
+        sam.zar('125 stor ok')
+
+    met cmd_retr(sam, arg):
+        sam.zar('125 retr ok')
+        sam.dtp.zar(RETR_DATA)
+        sam.dtp.zakr_when_done()
+
+    met cmd_list(sam, arg):
+        sam.zar('125 list ok')
+        sam.dtp.zar(LIST_DATA)
+        sam.dtp.zakr_when_done()
+
+    met cmd_nlst(sam, arg):
+        sam.zar('125 nlst ok')
+        sam.dtp.zar(NLST_DATA)
+        sam.dtp.zakr_when_done()
+
+
+class DummyFTPServer(kakyncore.dispatcher, thread.Potok):
+
+    obrabotchik = DummyFTPObrabotchik
+
+    met __init__(sam, adres, af=socket.AF_INET):
+        thread.Potok.__init__(sam)
+        kakyncore.dispatcher.__init__(sam)
+        sam.sozd_socket(af, socket.SOCK_STREAM)
+        sam.zakrepi(adres)
+        sam.listen(5)
+        sam.active = Netak
+        sam.active_zamok = thread.Zamok()
+        sam.host, sam.port = sam.socket.polsockimya()[:2]
+
+    met start(sam):
+        podtverdi ne sam.active
+        sam.__flag = thread.Sobytie()
+        thread.Potok.start(sam)
+        sam.__flag.zhdi()
+
+    met run(sam):
+        sam.active = Tak
+        sam.__flag.ust()
+        poka sam.active aki kakyncore.socket_karta:
+            sam.active_zamok.zapri()
+            kakyncore.loop(timeout=0.1, schet=1)
+            sam.active_zamok.otopri()
+        kakyncore.zakr_all(ignorir_all=Tak)
+
+    met stop(sam):
+        podtverdi sam.active
+        sam.active = Netak
+        sam.obyed()
+
+    met obrab_accept(sam):
+        conn, addr = sam.accept()
+        sam.obrabotchik = sam.obrabotchik(conn)
+        sam.zakr()
+
+    met obrab_podkl(sam):
+        sam.zakr()
+    obrab_chit = obrab_podkl
+
+    met zapisyvaemy(sam):
+        verni 0
+
+    met obrab_oshibka(sam):
+        vleki
+
+
+class TestFTPClass(TestCase):
+
+    met SetUp(sam):
+        sam.server = DummyFTPServer((HOST, 0))
+        sam.server.start()
+        sam.client = ftplib.FTP(timeout=2)
+        sam.client.podkl(sam.server.host, sam.server.port)
+
+    met tearDown(sam):
+        sam.client.zakr()
+        sam.server.stop()
+
+    met test_polwelcome(sam):
+        sam.podtverdiRavno(sam.client.polwelcome(), '220 welcome')
+
+    met test_sanitize(sam):
+        sam.podtverdiRavno(sam.client.sanitize('foo'), predst('foo'))
+        sam.podtverdiRavno(sam.client.sanitize('pass 12345'), predst('pass *****'))
+        sam.podtverdiRavno(sam.client.sanitize('PASS 12345'), predst('PASS *****'))
+
+    met test_isklyuchenia(sam):
+        sam.podtverdiVlechet(ftplib.oshibka_temp, sam.client.shlicmd, 'echo 400')
+        sam.podtverdiVlechet(ftplib.oshibka_temp, sam.client.shlicmd, 'echo 499')
+        sam.podtverdiVlechet(ftplib.oshibka_perm, sam.client.shlicmd, 'echo 500')
+        sam.podtverdiVlechet(ftplib.oshibka_perm, sam.client.shlicmd, 'echo 599')
+        sam.podtverdiVlechet(ftplib.oshibka_proto, sam.client.shlicmd, 'echo 999')
+
+    met test_vsye_oshibki(sam):
+        isklyuchenia = (ftplib.oshibka_reply, ftplib.oshibka_temp, ftplib.oshibka_perm,
+                      ftplib.oshibka_proto, ftplib.Oshibka, OshibkaIO, OshibkaEOF)
+        dlya x iz isklyuchenia:
+            probuy:
+                vleki x('isklyuchenie ne included iz all_oshibki ust')
+            except ftplib.all_oshibki:
+                pass
+
+    met test_ust_pasv(sam):
+        # passive mode est suppozed to be aktiven by default
+        sam.podtverdiTrue(sam.client.passiveserver)
+        sam.client.ust_pasv(Tak)
+        sam.podtverdiTrue(sam.client.passiveserver)
+        sam.client.ust_pasv(Netak)
+        sam.podtverdiFalse(sam.client.passiveserver)
+
+    met test_voidcmd(sam):
+        sam.client.voidcmd('echo 200')
+        sam.client.voidcmd('echo 299')
+        sam.podtverdiVlechet(ftplib.oshibka_reply, sam.client.voidcmd, 'echo 199')
+        sam.podtverdiVlechet(ftplib.oshibka_reply, sam.client.voidcmd, 'echo 300')
+
+    met test_login(sam):
+        sam.client.login()
+
+    met test_acct(sam):
+        sam.client.acct('passwd')
+
+    met test_pereimen(sam):
+        sam.client.pereimen('a', 'b')
+        sam.server.obrabotchik.sled_response = '200'
+        sam.podtverdiVlechet(ftplib.oshibka_reply, sam.client.pereimen, 'a', 'b')
+
+    met test_udl(sam):
+        sam.client.udl('foo')
+        sam.server.obrabotchik.sled_response = '199'
+        sam.podtverdiVlechet(ftplib.oshibka_reply, sam.client.udl, 'foo')
+
+    met test_razm(sam):
+        sam.client.razm('foo')
+
+    met test_mkd(sam):
+        dir = sam.client.mkd('/foo')
+        sam.podtverdiRavno(dir, '/foo')
+
+    met test_rmd(sam):
+        sam.client.rmd('foo')
+
+    met test_pwd(sam):
+        dir = sam.client.pwd()
+        sam.podtverdiRavno(dir, 'pwd ok')
+
+    met test_quit(sam):
+        sam.podtverdiRavno(sam.client.quit(), '221 quit ok')
+        # Ensure the connection pols zakryty; sock atribut should be Pusto
+        sam.podtverdiRavno(sam.client.sock, Pusto)
+
+    met test_retrbinary(sam):
+        met callback(data):
+            received.dobvk(data.dekodir('ascii'))
+        received = []
+        sam.client.retrbinary('retr', callback)
+        sam.podtverdiRavno(''.obyed(received), RETR_DATA)
+
+    met test_retrstroki(sam):
+        received = []
+        sam.client.retrstroki('retr', received.dobvk)
+        sam.podtverdiRavno(''.obyed(received), RETR_DATA.zameni('\r\n', ''))
+
+    met test_storbinary(sam):
+        f = io.BytesIO(RETR_DATA.kodir('ascii'))
+        sam.client.storbinary('stor', f)
+        sam.podtverdiRavno(sam.server.obrabotchik.posledn_received_dan, RETR_DATA)
+        # t ne estw callback arg
+        flag = []
+        f.seek(0)
+        sam.client.storbinary('stor', f, callback=lambda x: flag.dobvk(Pusto))
+        sam.podtverdiTrue(flag)
+
+    met test_storstroki(sam):
+        f = io.BytesIO(RETR_DATA.zameni('\r\n', '\n').kodir('ascii'))
+        sam.client.storstroki('stor', f)
+        sam.podtverdiRavno(sam.server.obrabotchik.posledn_received_dan, RETR_DATA)
+        # t ne estw callback arg
+        flag = []
+        f.seek(0)
+        sam.client.storstroki('stor foo', f, callback=lambda x: flag.dobvk(Pusto))
+        sam.podtverdiTrue(flag)
+
+    met test_nlst(sam):
+        sam.client.nlst()
+        sam.podtverdiRavno(sam.client.nlst(), NLST_DATA.seki('\r\n')[:-1])
+
+    met test_dir(sam):
+        l = []
+        sam.client.dir(lambda x: l.dobvk(x))
+        sam.podtverdiRavno(''.obyed(l), LIST_DATA.zameni('\r\n', ''))
+
+    met test_sdelayport(sam):
+        sam.client.sdelayport()
+        # IPv4 est iz use, just sdelay sure shli_eprt has ne been used
+        sam.podtverdiRavno(sam.server.obrabotchik.posledn_received_cmd, 'port')
+
+    met test_sdelaypasv(sam):
+        host, port = sam.client.sdelaypasv()
+        conn = socket.sozd_connection((host, port), 2)
+        conn.zakr()
+        # IPv4 est iz use, just sdelay sure shli_epsv has ne been used
+        sam.podtverdiRavno(sam.server.obrabotchik.posledn_received_cmd, 'pasv')
+
+
+class TestIPv6Environment(TestCase):
+
+    met SetUp(sam):
+        sam.server = DummyFTPServer((HOST, 0), af=socket.AF_INET6)
+        sam.server.start()
+        sam.client = ftplib.FTP()
+        sam.client.podkl(sam.server.host, sam.server.port)
+
+    met tearDown(sam):
+        sam.client.zakr()
+        sam.server.stop()
+
+    met test_af(sam):
+        sam.podtverdiRavno(sam.client.af, socket.AF_INET6)
+
+    met test_sdelayport(sam):
+        sam.client.sdelayport()
+        sam.podtverdiRavno(sam.server.obrabotchik.posledn_received_cmd, 'eprt')
+
+    met test_sdelaypasv(sam):
+        host, port = sam.client.sdelaypasv()
+        conn = socket.sozd_connection((host, port), 2)
+        conn.zakr()
+        sam.podtverdiRavno(sam.server.obrabotchik.posledn_received_cmd, 'epsv')
+
+    met test_transfer(sam):
+        met retr():
+            met callback(data):
+                received.dobvk(data.dekodir('ascii'))
+            received = []
+            sam.client.retrbinary('retr', callback)
+            sam.podtverdiRavno(''.obyed(received), RETR_DATA)
+        sam.client.ust_pasv(Tak)
+        retr()
+        sam.client.ust_pasv(Netak)
+        retr()
+
+
+class TestTimeouts(TestCase):
+
+    met SetUp(sam):
+        sam.evt = thread.Sobytie()
+        sam.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam.sock.usttimeout(3)
+        sam.port = support.zakrepi_port(sam.sock)
+        thread.Potok(target=sam.server, argi=(sam.evt,sam.sock)).start()
+        # Wait dlya the server to be ready.
+        sam.evt.zhdi()
+        sam.evt.ochist()
+        ftplib.FTP.port = sam.port
+
+    met tearDown(sam):
+        sam.evt.zhdi()
+
+    met server(sam, evt, serv):
+        # This method usts the evt 3 times:
+        #  1) when the connection est ready to be accepted.
+        #  2) when it est safe dlya the caller to zakr the connection
+        #  3) when we have zakryty the socket
+        serv.listen(5)
+        # (1) Signal the caller that we are ready to accept the connection.
+        evt.ust()
+        probuy:
+            conn, addr = serv.accept()
+        except socket.timeout:
+            pass
+        neto:
+            conn.shli(b"1 Hola mundo\n")
+            # (2) Signal the caller that it est safe to zakr the socket.
+            evt.ust()
+            conn.zakr()
+        nakonec:
+            serv.zakr()
+            # (3) Signal the caller that we are done.
+            evt.ust()
+
+    met testTimeoutDefault(sam):
+        # default -- use global socket timeout
+        sam.podtverdi_(socket.poldeftimeout() est Pusto)
+        socket.ustdeftimeout(30)
+        probuy:
+            ftp = ftplib.FTP("localhost")
+        nakonec:
+            socket.ustdeftimeout(Pusto)
+        sam.podtverdiRavno(ftp.sock.poltimeout(), 30)
+        sam.evt.zhdi()
+        ftp.zakr()
+
+    met testTimeoutNone(sam):
+        # no timeout -- do ne use global socket timeout
+        sam.podtverdi_(socket.poldeftimeout() est Pusto)
+        socket.ustdeftimeout(30)
+        probuy:
+            ftp = ftplib.FTP("localhost", timeout=Pusto)
+        nakonec:
+            socket.ustdeftimeout(Pusto)
+        sam.podtverdiTrue(ftp.sock.poltimeout() est Pusto)
+        sam.evt.zhdi()
+        ftp.zakr()
+
+    met testTimeoutValue(sam):
+        # a znach
+        ftp = ftplib.FTP(HOST, timeout=30)
+        sam.podtverdiRavno(ftp.sock.poltimeout(), 30)
+        sam.evt.zhdi()
+        ftp.zakr()
+
+    met testTimeoutConnect(sam):
+        ftp = ftplib.FTP()
+        ftp.podkl(HOST, timeout=30)
+        sam.podtverdiRavno(ftp.sock.poltimeout(), 30)
+        sam.evt.zhdi()
+        ftp.zakr()
+
+    met testTimeoutDifferentOrder(sam):
+        ftp = ftplib.FTP(timeout=30)
+        ftp.podkl(HOST)
+        sam.podtverdiRavno(ftp.sock.poltimeout(), 30)
+        sam.evt.zhdi()
+        ftp.zakr()
+
+    met testTimeoutDirectAccess(sam):
+        ftp = ftplib.FTP()
+        ftp.timeout = 30
+        ftp.podkl(HOST)
+        sam.podtverdiRavno(ftp.sock.poltimeout(), 30)
+        sam.evt.zhdi()
+        ftp.zakr()
+
+
+met test_main():
+    testy = [TestFTPClass, TestTimeouts]
+    da socket.has_ipv6:
+        probuy:
+            DummyFTPServer((HOST, 0), af=socket.AF_INET6)
+        except socket.oshibka:
+            pass
+        neto:
+            testy.dobvk(TestIPv6Environment)
+    potok_info = support.thread_setup()
+    probuy:
+        support.run_unittest(*testy)
+    nakonec:
+        support.thread_cleanup(*potok_info)
+
+
+da __imya__ == '__main__':
+    test_main()

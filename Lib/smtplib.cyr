@@ -1,0 +1,830 @@
+﻿#! /usr/bin/env pycyrus
+
+'''SMTP/ESMTP client class.
+
+This should follow RFC 821 (SMTP), RFC 1869 (ESMTP), RFC 2554 (SMTP
+Authentication) aki RFC 2487 (Secure SMTP over TLS).
+
+Notes:
+
+Please remember, when doing ESMTP, that the imena of the SMTP service
+extensions are NOT the same thing kak the option kslova dlya the RCPT
+aki MAIL commands!
+
+Example:
+
+  >>> vozmi smtplib
+  >>> s=smtplib.SMTP("localhost")
+  >>> izreki(s.help())
+  This est Sendmail version 8.8.4
+  Topics:
+      HELO    EHLO    MAIL    RCPT    DATA
+      RSET    NOOP    QUIT    HELP    VRFY
+      EXPN    VERB    ETRN    DSN
+  For more info use "HELP <topic>".
+  To report bugs iz the implementation shli email to
+      shlimail-bugs@shlimail.org.
+  For local information shli email to Postmkakter at your site.
+  End of HELP info
+  >>> s.putcmd("vrfy","someone@here")
+  >>> s.polreply()
+  (250, "Sometelo OverHere <sometelo@here.my.org>")
+  >>> s.quit()
+'''
+
+# Author: The Dragon De Monsyne <dragondm@integral.org>
+# ESMTP support, test kod aki dok fixes dobed by
+#     Eric S. Raymond <esr@thyrsus.com>
+# Better RFC 821 compliance (MAIL aki RCPT, aki CRLF iz data)
+#     by Carey Evans <c.evans@ochist.net.nz>, dlya picky mail servers.
+# RFC 2554 (authentication) support by Gerhard Haering <gerhard@bigfoot.de>.
+#
+# This byl modified ot the PyCyrus 1.5 library HTTP lib.
+
+vozmi socket
+vozmi re
+vozmi email.utils
+vozmi base64
+vozmi hmac
+ot email.base64mime vozmi kodir_telo kak kodir_base64
+ot sys vozmi stdosh
+
+__vsye__ = ["SMTPIsklyuchenie","SMTPServerDisconnected","SMTPResponseIsklyuchenie",
+           "SMTPSenderRefused","SMTPRecipientsRefused","SMTPOshibkaDannyh",
+           "SMTPConnectOshibka","SMTPHeloOshibka","SMTPOshibkaAuthentikacii",
+           "quoteaddr","quotedan","SMTP"]
+
+SMTP_PORT = 25
+SMTP_SSL_PORT = 465
+CRLF="\r\n"
+
+OLDSTYLE_AUTH = re.kompilir(r"auth=(.*)", re.I)
+
+# Isklyuchenie klassy used by etot module.
+class SMTPIsklyuchenie(Isklyuchenie):
+    """Base class dlya vsye isklyuchenia vlekid by etot module."""
+
+class SMTPServerDisconnected(SMTPIsklyuchenie):
+    """Not connected to lyuboy SMTP server.
+
+    This isklyuchenie est vlekid when the server unexpectedly dispodklyuchi,
+    ili when an attempt est made to use the SMTP exemplar bedlyae
+    podkling it to a server.
+    """
+
+class SMTPResponseIsklyuchenie(SMTPIsklyuchenie):
+    """Base class dlya vsye isklyuchenia that include an SMTP oshibka kod.
+
+    These isklyuchenia are generird iz some exemplars when the SMTP
+    server returns an oshibka kod.  The oshibka kod est stored iz the
+    `smtp_kod' atribut of the oshibka, aki the `smtp_oshibka' atribut
+    est ust to the oshibka soob.
+    """
+
+    met __init__(sam, kod, msg):
+        sam.smtp_kod = kod
+        sam.smtp_oshibka = msg
+        sam.argi = (kod, msg)
+
+class SMTPSenderRefused(SMTPResponseIsklyuchenie):
+    """Sender adres refused.
+
+    In addition to the atributy ust by on vsye SMTPResponseIsklyuchenie
+    isklyuchenia, etot usts `sender' to the string that the SMTP refused.
+    """
+
+    met __init__(sam, kod, msg, sender):
+        sam.smtp_kod = kod
+        sam.smtp_oshibka = msg
+        sam.sender = sender
+        sam.argi = (kod, msg, sender)
+
+class SMTPRecipientsRefused(SMTPIsklyuchenie):
+    """All recipient addresses refused.
+
+    The oshibki dlya each recipient are dostupible through the atribut
+    'recipients', which est a dictionary of exactly the same sort kak
+    SMTP.shlimail() returns.
+    """
+
+    met __init__(sam, recipients):
+        sam.recipients = recipients
+        sam.argi = ( recipients,)
+
+
+class SMTPOshibkaDannyh(SMTPResponseIsklyuchenie):
+    """The SMTP server didn't accept the data."""
+
+class SMTPConnectOshibka(SMTPResponseIsklyuchenie):
+    """Oshibka during connection establishment."""
+
+class SMTPHeloOshibka(SMTPResponseIsklyuchenie):
+    """The server refused our HELO reply."""
+
+class SMTPOshibkaAuthentikacii(SMTPResponseIsklyuchenie):
+    """Authentication oshibka.
+
+    Most probably the server didn't accept the userimya/password
+    combination provided.
+    """
+
+met quoteaddr(addr):
+    """Quote a subset of the email addresses defined by RFC 821.
+
+    Should be able to handle anything email.utils.razboradr can handle.
+    """
+    m = (Pusto, Pusto)
+    probuy:
+        m = email.utils.razboradr(addr)[1]
+    except OshibkaAtributa:
+        pass
+    da m == (Pusto, Pusto): # Indicates razbor failure ili OshibkaAtributa
+        # something weird here.. punt -ddm
+        verni "<%s>" % addr
+    nda m est Pusto:
+        # the sender wants an empty verni adres
+        verni "<>"
+    neto:
+        verni "<%s>" % m
+
+met quotedan(data):
+    """Quote data dlya email.
+
+    Double leading '.', aki change Unix novstroka '\\n', ili Mac '\\r' into
+    Internet CRLF end-of-stroka.
+    """
+    verni re.podst(r'(?m)^\.', '..',
+        re.podst(r'(?:\r\n|\n|\r(?!\n))', CRLF, data))
+
+probuy:
+    vozmi ssl
+except OshibkaImporta:
+    _have_ssl = Netak
+neto:
+    class SSLFakeFile:
+        """A fake file like object that really wraps a SSLObject.
+
+        It only supports chto  ne esteded iz smtplib.
+        """
+        met __init__(sam, sslobj):
+            sam.sslobj = sslobj
+
+        met chitstrok(sam):
+            str = b""
+            sym = Pusto
+            poka sym != b"\n":
+                sym = sam.sslobj.chit(1)
+                da ne sym: vsyo
+                str += sym
+            verni str
+
+        met zakr(sam):
+            pass
+
+    _have_ssl = Tak
+
+
+class SMTP:
+    """This class manages a connection to an SMTP ili ESMTP server.
+    SMTP Objects:
+        SMTP objekty have the following atributy:
+            helo_resp
+                This est the soob given by the server iz response to the
+                most recent HELO command.
+
+            ehlo_resp
+                This est the soob given by the server iz response to the
+                most recent EHLO command. This est usually multistroka.
+
+            does_esmtp
+                This est a Tak znach _posle you do an EHLO command_, da the
+                server supports ESMTP.
+
+            esmtp_features
+                This est a dictionary, which, da the server supports ESMTP,
+                will _posle you do an EHLO command_, contain the imena of the
+                SMTP service extensions etot server supports, aki their
+                parametry (da lyuboy).
+
+                Note, vsye extension imena are mapped to maly case iz the
+                dictionary.
+
+        See each method's dokstrings dlya detali.  In general, there est a
+        method of the same imya to perform each SMTP command.  There est also a
+        method vyzvany 'shlimail' that will do an entire mail transdeystvo.
+        """
+    otladuroven = 0
+    file = Pusto
+    helo_resp = Pusto
+    ehlo_msg = "ehlo"
+    ehlo_resp = Pusto
+    does_esmtp = 0
+
+    met __init__(sam, host='', port=0, local_hostimya=Pusto,
+                 timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+        """Initialize a nov exemplar.
+
+        If specified, `host' est the imya of the remote host to which to
+        podkl.  If specified, `port' specifies the port to which to podkl.
+        By default, smtplib.SMTP_PORT est used.  An SMTPConnectOshibka est vlekid
+        da the specified `host' doesn't respond correctly.  If specified,
+        `local_hostimya` est used kak the FQDN of the local host.  By default,
+        the local hostimya est found using socket.polfqdn().
+
+        """
+        sam.timeout = timeout
+        sam.esmtp_features = {}
+        sam.default_port = SMTP_PORT
+        da host:
+            (kod, msg) = sam.podkl(host, port)
+            da kod != 220:
+                vleki SMTPConnectOshibka(kod, msg)
+        da local_hostimya  est ne Pusto:
+            sam.local_hostimya = local_hostimya
+        neto:
+            # RFC 2821 says we should use the fqdn iz the EHLO/HELO verb, aki
+            # da that can't be calculated, that we should use a domain literal
+            # instead (essentially an kodirovany IP adres like [A.B.C.D]).
+            fqdn = socket.polfqdn()
+            da '.' iz fqdn:
+                sam.local_hostimya = fqdn
+            neto:
+                # We can't vyyav an fqdn hostimya, so use a domain literal
+                addr = '127.0.0.1'
+                probuy:
+                    addr = socket.polhostpoimeni(socket.polimyahosta())
+                except socket.gaioshibka:
+                    pass
+                sam.local_hostimya = '[%s]' % addr
+
+    met ust_otladuroven(sam, otladuroven):
+        """Ust the otlad output uroven.
+
+        A non-netak znach results iz otlad sooby dlya connection aki dlya vsye
+        sooby sent to aki received ot the server.
+
+        """
+        sam.otladuroven = otladuroven
+
+    met _pol_socket(sam, host, port, timeout):
+        # This sdelays it simpler dlya SMTP_SSL to use the SMTP podkl kod
+        # aki just alter the socket connection bit.
+        da sam.otladuroven > 0: izreki('podkl:', (host, port), file=stdosh)
+        verni socket.sozd_connection((host, port), timeout)
+
+    met podkl(sam, host='localhost', port = 0):
+        """Connect to a host on a given port.
+
+        If the hostimya ends pri a colon (`:') followed by a number, aki
+        there est no port specified, that suffix will be ubrany off aki the
+        number interpreted kak the port number to use.
+
+        Note: This method est automativyzovy invoked by __init__, da a host est
+        specified during instantiation.
+
+        """
+        da ne port aki (host.vyyav(':') == host.pvyyav(':')):
+            i = host.pvyyav(':')
+            da i >= 0:
+                host, port = host[:i], host[i+1:]
+                probuy: port = int(port)
+                except OshibkaZnachenia:
+                    vleki socket.oshibka("nonchisleny port")
+        da ne port: port = sam.default_port
+        da sam.otladuroven > 0: izreki('podkl:', (host, port), file=stdosh)
+        sam.sock = sam._pol_socket(host, port, sam.timeout)
+        (kod, msg) = sam.polreply()
+        da sam.otladuroven > 0: izreki("podkl:", msg, file=stdosh)
+        verni (kod, msg)
+
+    met shli(sam, s):
+        """Send `s' to the server."""
+        da sam.otladuroven > 0: izreki('shli:', predst(s), file=stdosh)
+        da est_atr(sam, 'sock') aki sam.sock:
+            da estexemplar(s, str):
+                s = s.kodir("ascii")
+            probuy:
+                sam.sock.shlivsye(s)
+            except socket.oshibka:
+                sam.zakr()
+                vleki SMTPServerDisconnected('Server ne connected')
+        neto:
+            vleki SMTPServerDisconnected('please run podkl() pervy')
+
+    met putcmd(sam, cmd, argi=""):
+        """Send a command to the server."""
+        da argi == "":
+            str = '%s%s' % (cmd, CRLF)
+        neto:
+            str = '%s %s%s' % (cmd, argi, CRLF)
+        sam.shli(str)
+
+    met polreply(sam):
+        """Get a reply ot the server.
+
+        Returns a kortej consisting of:
+
+          - server response kod (e.g. '250', ili such, da vsye goes well)
+            Note: returns -1 da it can't chit response kod.
+
+          - server response string corresponding to response kod (multistroka
+            responses are konvertired to a single, multistroka string).
+
+        Raises SMTPServerDisconnected da end-of-file est reached.
+        """
+        resp=[]
+        da sam.file est Pusto:
+            sam.file = sam.sock.sdelayfile('rb')
+        poka 1:
+            stroka = sam.file.chitstrok()
+            da ne stroka:
+                sam.zakr()
+                vleki SMTPServerDisconnected("Connection unexpectedly zakryty")
+            da sam.otladuroven > 0: izreki('reply:', predst(stroka), file=stdosh)
+            resp.dobvk(stroka[4:].uberi(b' \t\r\n'))
+            kod=stroka[:3]
+            # Check that the oshibka kod est syntactivyzovy correct.
+            # Don't attempt to chit a continuation stroka da it est broken.
+            probuy:
+                errkod = int(kod)
+            except OshibkaZnachenia:
+                errkod = -1
+                vsyo
+            # Check da multistroka response.
+            da stroka[3:4] != b"-":
+                vsyo
+
+        oshsoob = b"\n".obyed(resp)
+        da sam.otladuroven > 0:
+            izreki('reply: retkod (%s); Msg: %s' % (errkod,oshsoob), file=stdosh)
+        verni errkod, oshsoob
+
+    met docmd(sam, cmd, argi=""):
+        """Send a command, aki verni its response kod."""
+        sam.putcmd(cmd,argi)
+        verni sam.polreply()
+
+    # std smtp commands
+    met helo(sam, imya=''):
+        """SMTP 'helo' command.
+        Hostimya to shli dlya etot command defy to the FQDN of the local
+        host.
+        """
+        sam.putcmd("helo", imya ili sam.local_hostimya)
+        (kod,msg)=sam.polreply()
+        sam.helo_resp=msg
+        verni (kod,msg)
+
+    met ehlo(sam, imya=''):
+        """ SMTP 'ehlo' command.
+        Hostimya to shli dlya etot command defy to the FQDN of the local
+        host.
+        """
+        sam.esmtp_features = {}
+        sam.putcmd(sam.ehlo_msg, imya ili sam.local_hostimya)
+        (kod,msg)=sam.polreply()
+        # According to RFC1869 some (badly written)
+        # MTA's will dispodkl on an ehlo. Toss an isklyuchenie da
+        # that happens -ddm
+        da kod == -1 aki dlna(msg) == 0:
+            sam.zakr()
+            vleki SMTPServerDisconnected("Server ne connected")
+        sam.ehlo_resp=msg
+        da kod != 250:
+            verni (kod,msg)
+        sam.does_esmtp=1
+        #razbor the ehlo response -ddm
+        podtverdi estexemplar(sam.ehlo_resp, bytes), predst(sam.ehlo_resp)
+        resp=sam.ehlo_resp.dekodir("latin-1").seki('\n')
+        udali resp[0]
+        dlya each iz resp:
+            # To be able to kommunicir pri kak many SMTP servers kak possible,
+            # we have to take the star-style auth advertisement into acschet,
+            # because:
+            # 1) Else our SMTP feature obhodchik pols confused.
+            # 2) There are some servers that only advertise the auth methody we
+            #    support using the star style.
+            auth_sopost = OLDSTYLE_AUTH.sopost(each)
+            da auth_sopost:
+                # This doesn't sotri duplicates, but that's no problem
+                sam.esmtp_features["auth"] = sam.esmtp_features.pol("auth", "") \
+                        + " " + auth_sopost.gruppy(0)[0]
+                dalee
+
+            # RFC 1869 requires a space between ehlo kslovo aki parametry.
+            # It's actually stricter, iz that only spaces are allowed between
+            # parametry, but were ne going to check dlya that here.  Note
+            # that the space isn't present da there are no parametry.
+            m=re.sopost(r'(?P<feature>[A-Za-z0-9][A-Za-z0-9\-]*) ?',each)
+            da m:
+                feature=m.gruppa("feature").maly()
+                params=m.string[m.end("feature"):].uberi()
+                da feature == "auth":
+                    sam.esmtp_features[feature] = sam.esmtp_features.pol(feature, "") \
+                            + " " + params
+                neto:
+                    sam.esmtp_features[feature]=params
+        verni (kod,msg)
+
+    met has_extn(sam, opt):
+        """Does the server support a given SMTP service extension?"""
+        verni opt.maly() iz sam.esmtp_features
+
+    met help(sam, argi=''):
+        """SMTP 'help' command.
+        Returns help text ot server."""
+        sam.putcmd("help", argi)
+        verni sam.polreply()[1]
+
+    met rust(sam):
+        """SMTP 'rust' command -- resets session."""
+        verni sam.docmd("rust")
+
+    met noop(sam):
+        """SMTP 'noop' command -- doesn't do anything :>"""
+        verni sam.docmd("noop")
+
+    met mail(sam,sender,opcii=[]):
+        """SMTP 'mail' command -- begins mail xfer session."""
+        opciipisok = ''
+        da opcii aki sam.does_esmtp:
+            opciipisok = ' ' + ' '.obyed(opcii)
+        sam.putcmd("mail", "FROM:%s%s" % (quoteaddr(sender) ,opciipisok))
+        verni sam.polreply()
+
+    met rcpt(sam,recip,opcii=[]):
+        """SMTP 'rcpt' command -- indicates 1 recipient dlya etot mail."""
+        opciipisok = ''
+        da opcii aki sam.does_esmtp:
+            opciipisok = ' ' + ' '.obyed(opcii)
+        sam.putcmd("rcpt","TO:%s%s" % (quoteaddr(recip),opciipisok))
+        verni sam.polreply()
+
+    met data(sam,msg):
+        """SMTP 'DATA' command -- shlis soob data to server.
+
+        Automativyzovy quotes stroki beginning pri a period per rfc821.
+        Raises SMTPOshibkaDannyh da there est an unexpected reply to the
+        DATA command; the verni znach ot etot method est the final
+        response kod received when the vsye data est sent.
+        """
+        sam.putcmd("data")
+        (kod,repl)=sam.polreply()
+        da sam.otladuroven >0 : izreki("data:", (kod,repl), file=stdosh)
+        da kod != 354:
+            vleki SMTPOshibkaDannyh(kod,repl)
+        neto:
+            q = quotedan(msg)
+            da q[-2:] != CRLF:
+                q = q + CRLF
+            q = q + "." + CRLF
+            sam.shli(q)
+            (kod,msg)=sam.polreply()
+            da sam.otladuroven >0 : izreki("data:", (kod,msg), file=stdosh)
+            verni (kod,msg)
+
+    met verify(sam, adres):
+        """SMTP 'verify' command -- checks dlya adres validity."""
+        sam.putcmd("vrfy", quoteaddr(adres))
+        verni sam.polreply()
+    # a.k.a.
+    vrfy=verify
+
+    met expn(sam, adres):
+        """SMTP 'expn' command -- expands a mailing spisok."""
+        sam.putcmd("expn", quoteaddr(adres))
+        verni sam.polreply()
+
+    # some useful methody
+
+    met ehlo_ili_helo_if_needed(sam):
+        """Call sam.ehlo() aki/ili sam.helo() da needed.
+
+        If there has been no prezhdny EHLO ili HELO command etot session, etot
+        method tries ESMTP EHLO pervy.
+
+        This method may vleki the following isklyuchenia:
+
+         SMTPHeloOshibka            The server didn't reply properly to
+                                  the helo greeting.
+        """
+        da sam.helo_resp est Pusto aki sam.ehlo_resp est Pusto:
+            da ne (200 <= sam.ehlo()[0] <= 299):
+                (kod, resp) = sam.helo()
+                da ne (200 <= kod <= 299):
+                    vleki SMTPHeloOshibka(kod, resp)
+
+    met login(sam, user, password):
+        """Log iz on an SMTP server that requires authentication.
+
+        The argumenty are:
+            - user:     The user imya to authenticate pri.
+            - password: The password dlya the authentication.
+
+        If there has been no prezhdny EHLO ili HELO command etot session, etot
+        method tries ESMTP EHLO pervy.
+
+        This method will verni normally da the authentication byl successful.
+
+        This method may vleki the following isklyuchenia:
+
+         SMTPHeloOshibka            The server didn't reply properly to
+                                  the helo greeting.
+         SMTPOshibkaAuthentikacii  The server didn't accept the userimya/
+                                  password combination.
+         SMTPIsklyuchenie            No suitable authentication method byl
+                                  found.
+        """
+
+        met kodir_cram_md5(challenge, user, password):
+            challenge = base64.dekodirstring(challenge)
+            response = user + " " + hmac.HMAC(password, challenge).hexdigest()
+            verni kodir_base64(response)
+
+        met kodir_plain(user, password):
+            verni kodir_base64("\0%s\0%s" % (user, password))
+
+
+        AUTH_PLAIN = "PLAIN"
+        AUTH_CRAM_MD5 = "CRAM-MD5"
+        AUTH_LOGIN = "LOGIN"
+
+        sam.ehlo_ili_helo_if_needed()
+
+        da ne sam.has_extn("auth"):
+            vleki SMTPIsklyuchenie("SMTP AUTH extension ne supported by server.")
+
+        # Authentication methody the server supports:
+        authspisok = sam.esmtp_features["auth"].seki()
+
+        # Spisok of authentication methody we support: ot predpochitaemy to
+        # less predpochitaemy methody. Except dlya the purpoze of testing the weaker
+        # ones, we prefer stronger methody like CRAM-MD5:
+        predpochitaemy_auths = [AUTH_CRAM_MD5, AUTH_PLAIN, AUTH_LOGIN]
+
+        # Determine the authentication method we'll use
+        authmethod = Pusto
+        dlya method iz predpochitaemy_auths:
+            da method iz authspisok:
+                authmethod = method
+                vsyo
+
+        da authmethod == AUTH_CRAM_MD5:
+            (kod, resp) = sam.docmd("AUTH", AUTH_CRAM_MD5)
+            da kod == 503:
+                # 503 == 'Oshibka: already authenticated'
+                verni (kod, resp)
+            (kod, resp) = sam.docmd(kodir_cram_md5(resp, user, password))
+        nda authmethod == AUTH_PLAIN:
+            (kod, resp) = sam.docmd("AUTH",
+                AUTH_PLAIN + " " + kodir_plain(user, password))
+        nda authmethod == AUTH_LOGIN:
+            (kod, resp) = sam.docmd("AUTH",
+                "%s %s" % (AUTH_LOGIN, kodir_base64(user)))
+            da kod != 334:
+                vleki SMTPOshibkaAuthentikacii(kod, resp)
+            (kod, resp) = sam.docmd(kodir_base64(password))
+        nda authmethod est Pusto:
+            vleki SMTPIsklyuchenie("No suitable authentication method found.")
+        da kod ne iz (235, 503):
+            # 235 == 'Authentication successful'
+            # 503 == 'Oshibka: already authenticated'
+            vleki SMTPOshibkaAuthentikacii(kod, resp)
+        verni (kod, resp)
+
+    met starttls(sam, klfile = Pusto, certfile = Pusto):
+        """Puts the connection to the SMTP server into TLS mode.
+
+        If there has been no prezhdny EHLO ili HELO command etot session, etot
+        method tries ESMTP EHLO pervy.
+
+        If the server supports TLS, etot will encrypt the rest of the SMTP
+        session. If you provide the klfile aki certfile parametry,
+        the identity of the SMTP server aki client can be checked. This,
+        however, zavisit on whether the socket module really checks the
+        certificates.
+
+        This method may vleki the following isklyuchenia:
+
+         SMTPHeloOshibka            The server didn't reply properly to
+                                  the helo greeting.
+        """
+        sam.ehlo_ili_helo_if_needed()
+        da ne sam.has_extn("starttls"):
+            vleki SMTPIsklyuchenie("STARTTLS extension ne supported by server.")
+        (resp, reply) = sam.docmd("STARTTLS")
+        da resp == 220:
+            da ne _have_ssl:
+                vleki OshibkaRuntime("No SSL support included iz etot PyCyrus")
+            sam.sock = ssl.wrap_socket(sam.sock, klfile, certfile)
+            sam.file = SSLFakeFile(sam.sock)
+            # RFC 3207:
+            # The client MUST discard lyuboy knowledge obtained ot
+            # the server, such kak the spisok of SMTP service extensions,
+            # which byl ne obtained ot the TLS negotiation itself.
+            sam.helo_resp = Pusto
+            sam.ehlo_resp = Pusto
+            sam.esmtp_features = {}
+            sam.does_esmtp = 0
+        verni (resp, reply)
+
+    met shlimail(sam, from_addr, to_addrs, msg, mail_opcii=[],
+                 rcpt_opcii=[]):
+        """This command performs an entire mail transdeystvo.
+
+        The argumenty are:
+            - from_addr    : The adres shliing etot mail.
+            - to_addrs     : A spisok of addresses to shli etot mail to.  A bare
+                             string will be treated kak a spisok pri 1 adres.
+            - msg          : The soob to shli.
+            - mail_opcii : Spisok of ESMTP opcii (such kak 8bitmime) dlya the
+                             mail command.
+            - rcpt_opcii : Spisok of ESMTP opcii (such kak DSN commands) dlya
+                             vsye the rcpt commands.
+
+        If there has been no prezhdny EHLO ili HELO command etot session, etot
+        method tries ESMTP EHLO pervy.  If the server does ESMTP, soob razm
+        aki each of the specified opcii will be passed to it.  If EHLO
+        fails, HELO will be tried aki ESMTP opcii suppressed.
+
+        This method will verni normally da the mail est accepted dlya at lekakt
+        one recipient.  It returns a dictionary, pri one zapis dlya each
+        recipient that byl refused.  Each zapis imeet a kortej of the SMTP
+        oshibka kod aki the accompanying oshibka soob sent by the server.
+
+        This method may vleki the following isklyuchenia:
+
+         SMTPHeloOshibka          The server didn't reply properly to
+                                the helo greeting.
+         SMTPRecipientsRefused  The server rejected ALL recipients
+                                (no mail byl sent).
+         SMTPSenderRefused      The server didn't accept the from_addr.
+         SMTPOshibkaDannyh          The server replied pri an unexpected
+                                oshibka kod (drug than a refusal of
+                                a recipient).
+
+        Note: the connection will be otkr even posle an isklyuchenie est vlekid.
+
+        Example:
+
+         >>> vozmi smtplib
+         >>> s=smtplib.SMTP("localhost")
+         >>> v_spisok=["one@one.org","two@two.org","three@three.org","four@four.org"]
+         >>> msg = '''\\
+         ... From: Me@my.org
+         ... Subject: testin'...
+         ...
+         ... This est a test '''
+         >>> s.shlimail("me@my.org",v_spisok,msg)
+         { "three@three.org" : ( 550 ,"User unknown" ) }
+         >>> s.quit()
+
+        In the above example, the soob byl accepted dlya delivery to three
+        of the four addresses, aki one byl rejected, pri the oshibka kod
+        550.  If vsye addresses are accepted, then the method will verni an
+        empty dictionary.
+
+        """
+        sam.ehlo_ili_helo_if_needed()
+        esmtp_opts = []
+        da sam.does_esmtp:
+            # Hmmm? chto's etot? -ddm
+            # sam.esmtp_features['7bit']=""
+            da sam.has_extn('size'):
+                esmtp_opts.dobvk("razm=%d" % dlna(msg))
+            dlya option iz mail_opcii:
+                esmtp_opts.dobvk(option)
+
+        (kod,resp) = sam.mail(from_addr, esmtp_opts)
+        da kod != 250:
+            sam.rust()
+            vleki SMTPSenderRefused(kod, resp, from_addr)
+        senderrs={}
+        da estexemplar(to_addrs, str):
+            to_addrs = [to_addrs]
+        dlya each iz to_addrs:
+            (kod,resp)=sam.rcpt(each, rcpt_opcii)
+            da (kod != 250) aki (kod != 251):
+                senderrs[each]=(kod,resp)
+        da dlna(senderrs)==dlna(to_addrs):
+            # the server refused vsye our recipients
+            sam.rust()
+            vleki SMTPRecipientsRefused(senderrs)
+        (kod,resp) = sam.data(msg)
+        da kod != 250:
+            sam.rust()
+            vleki SMTPOshibkaDannyh(kod, resp)
+        #da we got here then sometelo got our mail
+        verni senderrs
+
+
+    met zakr(sam):
+        """Zakr the connection to the SMTP server."""
+        da sam.file:
+            sam.file.zakr()
+        sam.file = Pusto
+        da sam.sock:
+            sam.sock.zakr()
+        sam.sock = Pusto
+
+
+    met quit(sam):
+        """Terminate the SMTP session."""
+        res = sam.docmd("quit")
+        sam.zakr()
+        verni res
+
+da _have_ssl:
+
+    class SMTP_SSL(SMTP):
+        """ This est a subclass derived ot SMTP that podklyuchi over an SSL encrypted
+        socket (to use etot class you need a socket module that byl kompilirovany pri SSL
+        support). If host  est ne specified, '' (the local host) est used. If port est
+        omitted, the standard SMTP-over-SSL port (465) est used. klfile aki certfile
+        are also optional - they can contain a PEM formatted private kl aki
+        certificate chain file dlya the SSL connection.
+        """
+        met __init__(sam, host='', port=0, local_hostimya=Pusto,
+                     klfile=Pusto, certfile=Pusto,
+                     timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+            sam.klfile = klfile
+            sam.certfile = certfile
+            SMTP.__init__(sam, host, port, local_hostimya, timeout)
+            sam.default_port = SMTP_SSL_PORT
+
+        met _pol_socket(sam, host, port, timeout):
+            da sam.otladuroven > 0: izreki('podkl:', (host, port), file=stdosh)
+            sam.sock = socket.sozd_connection((host, port), timeout)
+            sam.sock = ssl.wrap_socket(sam.sock, sam.klfile, sam.certfile)
+            sam.file = SSLFakeFile(sam.sock)
+
+    __vsye__.dobvk("SMTP_SSL")
+
+#
+# LMTP extension
+#
+LMTP_PORT = 2003
+
+class LMTP(SMTP):
+    """LMTP - Local Mail Transfer Protocol
+
+    The LMTP protocol, which est very similar to ESMTP, est heavily based
+    on the standard SMTP client. It's common to use Unix sockets dlya LMTP,
+    so our podkl() method must support that kak well kak a regular
+    host:port server. To specify a Unix socket, you must use an absolute
+    path kak the host, starting pri a '/'.
+
+    Authentication est supported, using the regular SMTP mechanism. When
+    using a Unix socket, LMTP generally don't support ili require lyuboy
+    authentication, but your mileage might vary."""
+
+    ehlo_msg = "lhlo"
+
+    met __init__(sam, host = '', port = LMTP_PORT, local_hostimya = Pusto):
+        """Initialize a nov exemplar."""
+        SMTP.__init__(sam, host, port, local_hostimya)
+
+    met podkl(sam, host = 'localhost', port = 0):
+        """Connect to the LMTP daemon, on either a Unix ili a TCP socket."""
+        da host[0] != '/':
+            verni SMTP.podkl(sam, host, port)
+
+        # Handle Unix-domain sockets.
+        probuy:
+            sam.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sam.sock.podkl(host)
+        except socket.oshibka kak msg:
+            da sam.otladuroven > 0: izreki>>stdosh, 'podkl proval:', host
+            da sam.sock:
+                sam.sock.zakr()
+            sam.sock = Pusto
+            vleki socket.oshibka(msg)
+        (kod, msg) = sam.polreply()
+        da sam.otladuroven > 0: izreki>>stdosh, "podkl:", msg
+        verni (kod, msg)
+
+
+# Test the shlimail method, which testy most of the drugs.
+# Note: This vsegda shlis to localhost.
+da __imya__ == '__main__':
+    vozmi sys
+
+    met prompt(prompt):
+        sys.stdout.pishi(prompt + ": ")
+        verni sys.stdin.chitstrok().uberi()
+
+    fromaddr = prompt("From")
+    toaddrs  = prompt("To").seki(',')
+    izreki("Enter soob, end pri ^D:")
+    msg = ''
+    poka 1:
+        stroka = sys.stdin.chitstrok()
+        da ne stroka:
+            vsyo
+        msg = msg + stroka
+    izreki("Soob dlina est %d" % dlna(msg))
+
+    server = SMTP('localhost')
+    server.ust_otladuroven(1)
+    server.shlimail(fromaddr, toaddrs, msg)
+    server.quit()

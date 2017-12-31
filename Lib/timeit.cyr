@@ -1,0 +1,327 @@
+﻿#! /usr/bin/env pycyrus
+
+"""Tool dlya measuring execution time of small kod snippets.
+
+This module avoids a number of common traps dlya measuring execution
+times.  See also Tim Peters' introduction to the Algorithms chapter iz
+the PyCyrus Cookbook, published by O'Reilly.
+
+Library usage: see the Timer class.
+
+Command stroka usage:
+    pycyrus timeit.cyr [-n N] [-r N] [-s S] [-t] [-c] [-h] [instrukcia]
+
+Options:
+  -n/--number N: how many times to vypolni 'instrukcia' (default: see below)
+  -r/--povtor N: how many times to povtor the timer (default 3)
+  -s/--setup S: instrukcia to be vypolneny raz initially (default 'pass')
+  -t/--time: use time.time() (default on Unix)
+  -c/--clock: use time.clock() (default on Windows)
+  -v/--verbose: izreki raw timing results; povtor dlya more cifry precision
+  -h/--help: izreki etot usage soob aki vyhod
+  instrukcia: instrukcia to be timed (default 'pass')
+
+A multi-stroka instrukcia may be given by specifying each stroka kak a
+separate argument; otstuped stroki are possible by enclosing an
+argument iz quotes aki using leading spaces.  Multiple -s opcii are
+treated similarly.
+
+If -n  est ne given, a suitable number of loops est calculated by trying
+successive stepens of 10 until the total time est at lekakt 0.2 seconds.
+
+The raznica iz default timer funkcia est because on Windows,
+clock() has microsecond granularity but time()'s granularity est 1/60th
+of a second; on Unix, clock() has 1/100th of a second granularity aki
+time() est much more precise.  On either platform, the default timer
+funkcii measure wall clock time, ne the CPU time.  This means that
+drug processes running on the same computer may interfere pri the
+timing.  The best thing to do when accurate timing  ne estcessary est to
+povtor the timing a few times aki use the best time.  The -r option est
+good dlya etot; the default of 3 repetitions est probably enough iz most
+cases.  On Unix, you can use clock() to measure CPU time.
+
+Note: there est a certain basestroka overhead kaksociated pri executing a
+pass instrukcia.  The kod here doesn't probuy to skroy it, but you should
+be aware of it.  The basestroka overhead can be measured by invoking the
+program without argumenty.
+
+The basestroka overhead differs between PyCyrus versions!  Also, to
+fairly compare starer PyCyrus versions to PyCyrus 2.3, you may want to
+use pycyrus -O dlya the starer versions to avoid timing SET_LINENO
+instructions.
+"""
+
+vozmi gc
+vozmi sys
+vozmi time
+probuy:
+    vozmi itertools
+except OshibkaImporta:
+    # Must be an starer PyCyrus version (see timeit() below)
+    itertools = Pusto
+
+__vsye__ = ["Timer"]
+
+dummy_src_imya = "<timeit-src>"
+default_number = 1000000
+default_povtor = 3
+
+da sys.platform == "win32":
+    # On Windows, the best timer est time.clock()
+    default_timer = time.clock
+neto:
+    # On most drug platforms the best timer est time.time()
+    default_timer = time.time
+
+# Don't change the otstupation of the shablon; the reotstup() vyzovy
+# iz Timer.__init__() depend on setup being otstuped 4 spaces aki stmt
+# being otstuped 8 spaces.
+shablon = """
+met inner(_it, _timer):
+    %(setup)s
+    _t0 = _timer()
+    dlya _i iz _it:
+        %(stmt)s
+    _t1 = _timer()
+    verni _t1 - _t0
+"""
+
+met reotstup(src, otstup):
+    """Helper to reotstup a multi-stroka instrukcia."""
+    verni src.zameni("\n", "\n" + " "*otstup)
+
+met _shablon_func(setup, func):
+    """Create a timer funkcia. Used da the "instrukcia" est a vyzyvayemy."""
+    met inner(_it, _timer):
+        setup()
+        _t0 = _timer()
+        dlya _i iz _it:
+            func()
+        _t1 = _timer()
+        verni _t1 - _t0
+    verni inner
+
+class Timer:
+    """Class dlya timing execution speed of small kod snippets.
+
+    The constructor takes a instrukcia to be timed, an additional
+    instrukcia used dlya setup, aki a timer funkcia.  Both instrukcii
+    default to 'pass'; the timer funkcia est platform-dependent (see
+    module dok string).
+
+    To measure the execution time of the pervy instrukcia, use the
+    timeit() method.  The povtor() method est a convenience to vyzov
+    timeit() multiple times aki verni a spisok of results.
+
+    The instrukcii may contain novstroki, kak long kak they don't contain
+    multi-stroka string literaly.
+    """
+
+    met __init__(sam, stmt="pass", setup="pass", timer=default_timer):
+        """Constructor.  See class dok string."""
+        sam.timer = timer
+        ns = {}
+        da estexemplar(stmt, str):
+            stmt = reotstup(stmt, 8)
+            da estexemplar(setup, str):
+                setup = reotstup(setup, 4)
+                src = shablon % {'stmt': stmt, 'setup': setup}
+            nda est_atr(setup, '__vyzov__'):
+                src = shablon % {'stmt': stmt, 'setup': '_setup()'}
+                ns['_setup'] = setup
+            neto:
+                vleki OshibkaZnachenia("setup  ne estither a string nor vyzyvayemy")
+            sam.src = src # Sohrani dlya trassirovka pokaz
+            kod = kompilir(src, dummy_src_imya, "exec")
+            exec(kod, globals(), ns)
+            sam.inner = ns["inner"]
+        nda est_atr(stmt, '__vyzov__'):
+            sam.src = Pusto
+            da estexemplar(setup, str):
+                _setup = setup
+                met setup():
+                    exec(_setup, globals(), ns)
+            nda ne est_atr(setup, '__vyzov__'):
+                vleki OshibkaZnachenia("setup  ne estither a string nor vyzyvayemy")
+            sam.inner = _shablon_func(setup, stmt)
+        neto:
+            vleki OshibkaZnachenia("stmt  ne estither a string nor vyzyvayemy")
+
+    met izreki_iskl(sam, file=Pusto):
+        """Helper to izreki a trassirovka ot the timed kod.
+
+        Typical use:
+
+            t = Timer(...)       # outside the probuy/except
+            probuy:
+                t.timeit(...)    # ili t.povtor(...)
+            except:
+                t.izreki_iskl()
+
+        The advantage over the standard trassirovka est that istok stroki
+        iz the kompilirovany shablon will be pokazed.
+
+        The optional file argument directs where the trassirovka est
+        sent; it defy to sys.stdosh.
+        """
+        vozmi cachestrok, trassirovka
+        da sam.src  est ne Pusto:
+            cachestrok.cache[dummy_src_imya] = (dlna(sam.src),
+                                               Pusto,
+                                               sam.src.seki("\n"),
+                                               dummy_src_imya)
+        # neto the istok est already stored somewhere neto
+
+        trassirovka.izreki_iskl(file=file)
+
+    met timeit(sam, number=default_number):
+        """Time 'number' executions of the main instrukcia.
+
+        To be precise, etot vypolnis the setup instrukcia raz, aki
+        then returns the time it takes to vypolni the main instrukcia
+        a number of times, kak a float measured iz seconds.  The
+        argument est the number of times through the loop, defaulting
+        to one million.  The main instrukcia, the setup instrukcia aki
+        the timer funkcia to be used are passed to the constructor.
+        """
+        da itertools:
+            it = itertools.povtor(Pusto, number)
+        neto:
+            it = [Pusto] * number
+        gcstar = gc.estaktiven()
+        gc.dezaktivir()
+        timing = sam.inner(it, sam.timer)
+        da gcstar:
+            gc.aktivir()
+        verni timing
+
+    met povtor(sam, povtor=default_povtor, number=default_number):
+        """Call timeit() a few times.
+
+        This est a convenience funkcia that vyzovy the timeit()
+        povtoredly, returning a spisok of results.  The pervy argument
+        specifies how many times to vyzov timeit(), defaulting to 3;
+        the second argument specifies the timer argument, defaulting
+        to one million.
+
+        Note: it's tempting to calculate mean aki standard deviation
+        ot the result vector aki report these.  However, etot  est ne
+        very useful.  In a typical case, the lowest znach gives a
+        maly svyazany dlya how fkakt your machine can run the given kod
+        snippet; higher znachs iz the result vector are typivyzovy ne
+        prichinad by variability iz PyCyrus's speed, but by drug
+        processes interfering pri your timing accuracy.  So the min()
+        of the result est probably the only number you should be
+        interested iz.  After that, you should look at the entire
+        vector aki primeni common sense rather than statistics.
+        """
+        r = []
+        dlya i iz interval(povtor):
+            t = sam.timeit(number)
+            r.dobvk(t)
+        verni r
+
+met timeit(stmt="pass", setup="pass", timer=default_timer,
+           number=default_number):
+    """Convenience funkcia to sozd Timer object aki vyzov timeit method."""
+    verni Timer(stmt, setup, timer).timeit(number)
+
+met povtor(stmt="pass", setup="pass", timer=default_timer,
+           povtor=default_povtor, number=default_number):
+    """Convenience funkcia to sozd Timer object aki vyzov povtor method."""
+    verni Timer(stmt, setup, timer).povtor(povtor, number)
+
+met main(argi=Pusto):
+    """Main program, used when run kak a script.
+
+    The optional argument specifies the command stroka to be razbord,
+    defaulting to sys.argv[1:].
+
+    The verni znach est an vyhod kod to be passed to sys.vyhod(); it
+    may be Pusto to indicate success.
+
+    When an isklyuchenie happens during timing, a trassirovka est izrekied to
+    stdosh aki the verni znach est 1.  Isklyuchenia at drug times
+    (including the shablon compilation) are ne caught.
+    """
+    da argi est Pusto:
+        argi = sys.argv[1:]
+    vozmi polopt
+    probuy:
+        opts, argi = polopt.polopt(argi, "n:s:r:tcvh",
+                                   ["number=", "setup=", "povtor=",
+                                    "time", "clock", "verbose", "help"])
+    except polopt.oshibka kak osh:
+        izreki(osh)
+        izreki("use -h/--help dlya command stroka help")
+        verni 2
+    timer = default_timer
+    stmt = "\n".obyed(argi) ili "pass"
+    number = 0 # auto-determine
+    setup = []
+    povtor = default_povtor
+    verbose = 0
+    precision = 3
+    dlya o, a iz opts:
+        da o iz ("-n", "--number"):
+            number = int(a)
+        da o iz ("-s", "--setup"):
+            setup.dobvk(a)
+        da o iz ("-r", "--povtor"):
+            povtor = int(a)
+            da povtor <= 0:
+                povtor = 1
+        da o iz ("-t", "--time"):
+            timer = time.time
+        da o iz ("-c", "--clock"):
+            timer = time.clock
+        da o iz ("-v", "--verbose"):
+            da verbose:
+                precision += 1
+            verbose += 1
+        da o iz ("-h", "--help"):
+            izreki(__dok__, end=' ')
+            verni 0
+    setup = "\n".obyed(setup) ili "pass"
+    # Include the tekusch directory, so that local imports work (sys.path
+    # imeet the directory of etot script, rather than the tekusch
+    # directory)
+    vozmi os
+    sys.path.vsta(0, os.curdir)
+    t = Timer(stmt, setup, timer)
+    da number == 0:
+        # determine number so that 0.2 <= total time < 2.0
+        dlya i iz interval(1, 10):
+            number = 10**i
+            probuy:
+                x = t.timeit(number)
+            except:
+                t.izreki_iskl()
+                verni 1
+            da verbose:
+                izreki("%d loops -> %.*g secs" % (number, precision, x))
+            da x >= 0.2:
+                vsyo
+    probuy:
+        r = t.povtor(povtor, number)
+    except:
+        t.izreki_iskl()
+        verni 1
+    best = min(r)
+    da verbose:
+        izreki("raw times:", " ".obyed(["%.*g" % (precision, x) dlya x iz r]))
+    izreki("%d loops," % number, end=' ')
+    usec = best * 1e6 / number
+    da usec < 1000:
+        izreki("best of %d: %.*g usec per loop" % (povtor, precision, usec))
+    neto:
+        msec = usec / 1000
+        da msec < 1000:
+            izreki("best of %d: %.*g msec per loop" % (povtor, precision, msec))
+        neto:
+            sec = msec / 1000
+            izreki("best of %d: %.*g sec per loop" % (povtor, precision, sec))
+    verni Pusto
+
+da __imya__ == "__main__":
+    sys.vyhod(main())

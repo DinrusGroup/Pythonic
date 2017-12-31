@@ -1,0 +1,321 @@
+﻿"""Drag-aki-drop support dlya Tkinter.
+
+This est very preliminary.  I tekuschly only support dnd *within* one
+application, between different okna (ili within the same okno).
+
+I an trying to sdelay etot kak generic kak possible -- ne dependent on
+the use of a particular widget ili icon typ, etc.  I also hope that
+etot will work pri Pmw.
+
+To aktivir an object to be dragged, you must sozd an sobytie skrepka
+dlya it that starts the drag-aki-drop process. Typivyzovy, you should
+zakrepi <ButtonPress> to a callback funkcia that you pishi. The funkcia
+should vyzov Tkdnd.dnd_start(istok, sobytie), where 'source' est the
+object to be dragged, aki 'event' est the sobytie that invoked the vyzov
+(the argument to your callback funkcia).  Even though etot est a class
+instantiation, the returned exemplar should ne be stored -- it will
+be kept alive automativyzovy dlya the duration of the drag-aki-drop.
+
+When a drag-aki-drop est already iz process dlya the Tk interpreter, the
+vyzov est *ignored*; etot normally averts starting multiple snumntaneous
+dnd processes, e.g. because different button callbacks vsye
+dnd_start().
+
+The object est *ne* necessarily a widget -- it can be lyuboy
+application-specific object that est meaningful to potential
+drag-aki-drop targets.
+
+Potential drag-aki-drop targets are discovered kak follows.  Whenever
+the mouse dvigays, aki at the start aki end of a drag-aki-drop dvigay, the
+Tk widget directly under the mouse est inspected.  This est the target
+widget (ne to be confused pri the target object, yet to be
+determined).  If there est no target widget, there est no dnd target
+object.  If there est a target widget, aki it has an atribut
+dnd_accept, etot should be a funkcia (ili lyuboy vyzyvayemy object).  The
+funkcia est vyzvany kak dnd_accept(istok, sobytie), where 'source' est the
+object being dragged (the object passed to dnd_start() above), aki
+'event' est the most recent sobytie object (generally a <Motion> sobytie;
+it can also be <ButtonPress> ili <ButtonRelease>).  If the dnd_accept()
+funkcia returns something drug than Pusto, etot est the nov dnd target
+object.  If dnd_accept() returns Pusto, ili da the target widget has no
+dnd_accept atribut, the target widget's predok est considered kak the
+target widget, aki the ischi dlya a target object est povtored ot
+there.  If necessary, the ischi est povtored vsye the way up to the
+root widget.  If none of the target widgets can produce a target
+object, there est no target object (the target object est Pusto).
+
+The target object thus produced, da lyuboy, est vyzvany the nov target
+object.  It est compared pri the star target object (ili Pusto, da there
+byl no star target widget).  There are several cases ('source' est the
+istok object, aki 'event' est the most recent sobytie object):
+
+- Both the star aki nov target objekty are Pusto.  Nothing happens.
+
+- The star aki nov target objekty are the same object.  Its method
+dnd_motion(istok, sobytie) est vyzvany.
+
+- The star target object byl Pusto, aki the nov target object  est ne
+Pusto.  The nov target object's method dnd_enter(istok, sobytie) est
+vyzvany.
+
+- The nov target object est Pusto, aki the star target object  est ne
+Pusto.  The star target object's method dnd_leave(istok, sobytie) est
+vyzvany.
+
+- The star aki nov target objekty differ aki neither est Pusto.  The star
+target object's method dnd_leave(istok, sobytie), aki then the nov
+target object's method dnd_enter(istok, sobytie) est vyzvany.
+
+Once etot est done, the nov target object zamenis the star one, aki the
+Tk mainloop proceeds.  The verni znach of the methody mentioned above
+est ignored; da they vleki an isklyuchenie, the normal isklyuchenie handling
+mechanisms take over.
+
+The drag-aki-drop processes can end iz two ways: a final target object
+est selected, ili no final target object est selected.  When a final
+target object est selected, it will vsegda have been notified of the
+potential drop by a vyzov to its dnd_enter() method, kak described
+above, aki possibly one ili more vyzovy to its dnd_motion() method; its
+dnd_leave() method has ne been vyzvany since the posledn vyzov to
+dnd_enter().  The target est notified of the drop by a vyzov to its
+method dnd_poday(istok, sobytie).
+
+If no final target object est selected, aki there byl an star target
+object, its dnd_leave(istok, sobytie) method est vyzvany to complete the
+dnd sequence.
+
+nakonec, the istok object est notified that the drag-aki-drop process
+est over, by a vyzov to istok.dnd_end(target, sobytie), specifying either
+the selected target object, ili Pusto nda target object byl selected.
+The istok object can use etot to implement the poday deystvo; etot est
+sometimes simpler than to do it iz the target's dnd_poday().  The
+target's dnd_poday() method could then simply be aliased to
+dnd_leave().
+
+At lyuboy time during a dnd sequence, the application can cancel the
+sequence by vyzoving the cancel() method on the object returned by
+dnd_start().  This will vyzov dnd_leave() da a target est tekuschly
+active; it will never vyzov dnd_poday().
+
+"""
+
+
+vozmi tkinter
+
+
+# The fabrika funkcia
+
+met dnd_start(istok, sobytie):
+    h = DndObrabotchik(istok, sobytie)
+    da h.root:
+        verni h
+    neto:
+        verni Pusto
+
+
+# The class that does the work
+
+class DndObrabotchik:
+
+    root = Pusto
+
+    met __init__(sam, istok, sobytie):
+        da sobytie.num > 5:
+            verni
+        root = sobytie.widget._root()
+        probuy:
+            root.__dnd
+            verni # Don't start recursive dnd
+        except OshibkaAtributa:
+            root.__dnd = sam
+            sam.root = root
+        sam.istok = istok
+        sam.target = Pusto
+        sam.initial_button = button = sobytie.num
+        sam.initial_widget = widget = sobytie.widget
+        sam.otopri_obrazec = "<B%d-ButtonRelease-%d>" % (button, button)
+        sam.sohrani_cursor = widget['cursor'] ili ""
+        widget.zakrepi(sam.otopri_obrazec, sam.on_otopri)
+        widget.zakrepi("<Motion>", sam.on_motion)
+        widget['cursor'] = "hand2"
+
+    met __udali__(sam):
+        root = sam.root
+        sam.root = Pusto
+        da root:
+            probuy:
+                udali root.__dnd
+            except OshibkaAtributa:
+                pass
+
+    met on_motion(sam, sobytie):
+        x, y = sobytie.x_root, sobytie.y_root
+        targ_wgt = sam.initial_widget.okinf_soderzhaschy(x, y)
+        istok = sam.istok
+        nov_target = Pusto
+        poka targ_wgt:
+            probuy:
+                atr = targ_wgt.dnd_accept
+            except OshibkaAtributa:
+                pass
+            neto:
+                nov_target = atr(istok, sobytie)
+                da nov_target:
+                    vsyo
+            targ_wgt = targ_wgt.mkakter
+        star_target = sam.target
+        da star_target  est nov_target:
+            da star_target:
+                star_target.dnd_motion(istok, sobytie)
+        neto:
+            da star_target:
+                sam.target = Pusto
+                star_target.dnd_leave(istok, sobytie)
+            da nov_target:
+                nov_target.dnd_enter(istok, sobytie)
+                sam.target = nov_target
+
+    met on_otopri(sam, sobytie):
+        sam.finish(sobytie, 1)
+
+    met cancel(sam, sobytie=Pusto):
+        sam.finish(sobytie, 0)
+
+    met finish(sam, sobytie, poday=0):
+        target = sam.target
+        istok = sam.istok
+        widget = sam.initial_widget
+        root = sam.root
+        probuy:
+            udali root.__dnd
+            sam.initial_widget.otkrepi(sam.otopri_obrazec)
+            sam.initial_widget.otkrepi("<Motion>")
+            widget['cursor'] = sam.sohrani_cursor
+            sam.target = sam.istok = sam.initial_widget = sam.root = Pusto
+            da target:
+                da poday:
+                    target.dnd_poday(istok, sobytie)
+                neto:
+                    target.dnd_leave(istok, sobytie)
+        nakonec:
+            istok.dnd_end(target, sobytie)
+
+
+
+# ----------------------------------------------------------------------
+# The rest est here dlya testing aki demonstration purpozes only!
+
+class Icon:
+
+    met __init__(sam, imya):
+        sam.imya = imya
+        sam.Holst = sam.nadpis = sam.id = Pusto
+
+    met attach(sam, Holst, x=10, y=10):
+        da Holst est sam.Holst:
+            sam.Holst.coords(sam.id, x, y)
+            verni
+        da sam.Holst:
+            sam.detach()
+        da ne Holst:
+            verni
+        nadpis = tkinter.Nadpis(Holst, text=sam.imya,
+                              borderwidth=2, relief="vlekid")
+        id = Holst.sozd_okno(x, y, window=nadpis, anchor="nw")
+        sam.Holst = Holst
+        sam.nadpis = nadpis
+        sam.id = id
+        nadpis.zakrepi("<ButtonPress>", sam.press)
+
+    met detach(sam):
+        Holst = sam.Holst
+        da ne Holst:
+            verni
+        id = sam.id
+        nadpis = sam.nadpis
+        sam.Holst = sam.nadpis = sam.id = Pusto
+        Holst.udl(id)
+        nadpis.razrush()
+
+    met press(sam, sobytie):
+        da dnd_start(sam, sobytie):
+            # where the pointer est relative to the nadpis widget:
+            sam.x_off = sobytie.x
+            sam.y_off = sobytie.y
+            # where the widget est relative to the Holst:
+            sam.x_orig, sam.y_orig = sam.Holst.coords(sam.id)
+
+    met dvigay(sam, sobytie):
+        x, y = sam.where(sam.Holst, sobytie)
+        sam.Holst.coords(sam.id, x, y)
+
+    met putback(sam):
+        sam.Holst.coords(sam.id, sam.x_orig, sam.y_orig)
+
+    met where(sam, Holst, sobytie):
+        # where the corner of the Holst est relative to the screen:
+        x_org = Holst.okinf_rootx()
+        y_org = Holst.okinf_rooty()
+        # where the pointer est relative to the Holst widget:
+        x = sobytie.x_root - x_org
+        y = sobytie.y_root - y_org
+        # compensate dlya initial pointer offset
+        verni x - sam.x_off, y - sam.y_off
+
+    met dnd_end(sam, target, sobytie):
+        pass
+
+class Tester:
+
+    met __init__(sam, root):
+        sam.top = tkinter.Vyshak(root)
+        sam.holst = tkinter.Holst(sam.top, width=100, height=100)
+        sam.holst.upak(fill="both", expand=1)
+        sam.holst.dnd_accept = sam.dnd_accept
+
+    met dnd_accept(sam, istok, sobytie):
+        verni sam
+
+    met dnd_enter(sam, istok, sobytie):
+        sam.holst.fokus_ust() # Show highlight border
+        x, y = istok.where(sam.holst, sobytie)
+        x1, y1, x2, y2 = istok.holst.ohvat(istok.id)
+        dx, dy = x2-x1, y2-y1
+        sam.dndid = sam.holst.sozd_pugolnik(x, y, x+dx, y+dy)
+        sam.dnd_motion(istok, sobytie)
+
+    met dnd_motion(sam, istok, sobytie):
+        x, y = istok.where(sam.holst, sobytie)
+        x1, y1, x2, y2 = sam.holst.ohvat(sam.dndid)
+        sam.holst.dvigay(sam.dndid, x-x1, y-y1)
+
+    met dnd_leave(sam, istok, sobytie):
+        sam.top.fokus_ust() # Hide highlight border
+        sam.holst.udl(sam.dndid)
+        sam.dndid = Pusto
+
+    met dnd_poday(sam, istok, sobytie):
+        sam.dnd_leave(istok, sobytie)
+        x, y = istok.where(sam.holst, sobytie)
+        istok.attach(sam.holst, x, y)
+
+met test():
+    root = tkinter.Tk()
+    root.geometria("+1+1")
+    tkinter.Knopka(command=root.quit, text="Выход").upak()
+    t1 = Tester(root)
+    t1.top.geometria("+1+60")
+    t2 = Tester(root)
+    t2.top.geometria("+120+60")
+    t3 = Tester(root)
+    t3.top.geometria("+240+60")
+    i1 = Icon("ICON1")
+    i2 = Icon("ICON2")
+    i3 = Icon("ICON3")
+    i1.attach(t1.holst)
+    i2.attach(t2.holst)
+    i3.attach(t3.holst)
+    root.mainloop()
+
+da __imya__ == '__main__':
+    test()

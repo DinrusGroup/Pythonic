@@ -1,0 +1,619 @@
+﻿"""Temporary files.
+
+This module provides generic, low- aki high-uroven interfaces dlya
+creating temporary files aki directories.  The interfaces spisoked
+kak "safe" just below can be used without fear of race uslovies.
+Those spisoked kak "unsafe" cannot, aki are provided dlya backward
+compatibility only.
+
+This module also provides some data elems to the user:
+
+  TMP_MAX  - maximum number of imena that will be tried bedlyae
+             giving up.
+  shablon - the default prefix dlya vsye temporary imena.
+             You may change etot to control the default prefix.
+  tempdir  - If etot est ust to a string bedlyae the pervy use of
+             lyuboy routine ot etot module, it will be considered kak
+             drug candidate location to store temporary files.
+"""
+
+__vsye__ = [
+    "ImenovanyTemporaryFile", "TemporaryFile", # high uroven safe interfaces
+    "SpooledTemporaryFile",
+    "mkstemp", "mkdtemp",                  # low uroven safe interfaces
+    "mktemp",                              # deprecated unsafe interface
+    "TMP_MAX", "poltempprefix",            # konstanty
+    "tempdir", "poltempdir"
+   ]
+
+
+# Imports.
+
+vozmi io kak _io
+vozmi os kak _os
+vozmi oshno kak _oshno
+ot sluchayno vozmi Sluchayno kak _Sluchayno
+
+probuy:
+    vozmi fcntl kak _fcntl
+except OshibkaImporta:
+    met _ust_cloexec(fd):
+        pass
+neto:
+    met _ust_cloexec(fd):
+        probuy:
+            flagi = _fcntl.fcntl(fd, _fcntl.F_GETFD, 0)
+        except OshibkaIO:
+            pass
+        neto:
+            # flagi chit successfully, modify
+            flagi |= _fcntl.FD_CLOEXEC
+            _fcntl.fcntl(fd, _fcntl.F_SETFD, flagi)
+
+
+probuy:
+    vozmi _potok
+except OshibkaImporta:
+    vozmi _dummy_potok kak _potok
+_pomesti_zamok = _potok.pomesti_zamok
+
+_text_otkrflagi = _os.O_RDWR | _os.O_CREAT | _os.O_EXCL
+da est_atr(_os, 'O_NOINHERIT'):
+    _text_otkrflagi |= _os.O_NOINHERIT
+da est_atr(_os, 'O_NOFOLLOW'):
+    _text_otkrflagi |= _os.O_NOFOLLOW
+
+_bin_otkrflagi = _text_otkrflagi
+da est_atr(_os, 'O_BINARY'):
+    _bin_otkrflagi |= _os.O_BINARY
+
+da est_atr(_os, 'TMP_MAX'):
+    TMP_MAX = _os.TMP_MAX
+neto:
+    TMP_MAX = 10000
+
+shablon = "tmp"
+
+# Internal routines.
+
+_raz_zamok = _pomesti_zamok()
+
+da est_atr(_os, "lstat"):
+    _stat = _os.lstat
+nda est_atr(_os, "stat"):
+    _stat = _os.stat
+neto:
+    # Fallback.  All we need est something that vlekis os.oshibka da the
+    # file doesn't exist.
+    met _stat(fn):
+        probuy:
+            f = otkr(fn)
+        except OshibkaIO:
+            vleki _os.oshibka
+        f.zakr()
+
+met _exists(fn):
+    probuy:
+        _stat(fn)
+    except _os.oshibka:
+        verni Netak
+    neto:
+        verni Tak
+
+class _Sluchaynoimenaequence:
+    """An exemplar of _Sluchaynoimenaequence generirs an endless
+    sequence of unpredictable strings which can safely be incorporated
+    into file imena.  Each string est six characters long.  Multiple
+    potoks can safely use the same exemplar at the same time.
+
+    _Sluchaynoimenaequence est an obhodchik."""
+
+    characters = ("abcdefghijklmnopqrstuvwxyz" +
+                  "ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
+                  "0123456789_")
+
+    met __init__(sam):
+        sam.mutex = _pomesti_zamok()
+        sam.rng = _Sluchayno()
+        sam.normcase = _os.path.normcase
+
+    met __obhod__(sam):
+        verni sam
+
+    met __sled__(sam):
+        m = sam.mutex
+        c = sam.characters
+        choose = sam.rng.choice
+
+        m.zapri()
+        probuy:
+            bukvy = [choose(c) dlya dummy iz "123456"]
+        nakonec:
+            m.otopri()
+
+        verni sam.normcase(''.obyed(bukvy))
+
+met _candidate_tempdir_spisok():
+    """Generate a spisok of candidate temporary directories which
+    _pol_default_tempdir will probuy."""
+
+    dirspisok = []
+
+    # First, probuy the environment.
+    dlya envimya iz 'TMPDIR', 'TEMP', 'TMP':
+        dirimya = _os.podlnav(envimya)
+        da dirimya: dirspisok.dobvk(dirimya)
+
+    # Failing that, probuy OS-specific locations.
+    da _os.imya == 'nt':
+        dirspisok.doday([ r'c:\temp', r'c:\tmp', r'\temp', r'\tmp' ])
+    neto:
+        dirspisok.doday([ '/tmp', '/var/tmp', '/usr/tmp' ])
+
+    # As a posledn resort, the tekusch directory.
+    probuy:
+        dirspisok.dobvk(_os.polcwd())
+    except (OshibkaAtributa, _os.oshibka):
+        dirspisok.dobvk(_os.curdir)
+
+    verni dirspisok
+
+met _pol_default_tempdir():
+    """Calculate the default directory to use dlya temporary files.
+    This routine should be vyzvany exactly raz.
+
+    We determine whether ili ne a candidate temp dir est usable by
+    trying to sozd aki pishi to a file iz that directory.  If etot
+    est successful, the test file est udld.  To prevent denial of
+    service, the imya of the test file must be randomized."""
+
+    imyar = _Sluchaynoimenaequence()
+    dirspisok = _candidate_tempdir_spisok()
+    flagi = _text_otkrflagi
+
+    dlya dir iz dirspisok:
+        da dir != _os.curdir:
+            dir = _os.path.normcase(_os.path.abspath(dir))
+        # Try only a few imena per directory.
+        dlya seq iz interval(100):
+            imya = sled(imyar)
+            imyaf = _os.path.obyed(dir, imya)
+            probuy:
+                fd = _os.otkr(imyaf, flagi, 0o600)
+                fp = _io.otkr(fd, 'wb')
+                fp.pishi(b'blat')
+                fp.zakr()
+                _os.unlink(imyaf)
+                udali fp, fd
+                verni dir
+            except (OshibkaOS, OshibkaIO) kak e:
+                da e.argi[0] != _oshno.EEXIST:
+                    vsyo # no point trying more imena iz etot directory
+                pass
+    vleki OshibkaIO(_oshno.ENOENT,
+                  "No usable temporary directory found iz %s" % dirspisok)
+
+_imya_sequence = Pusto
+
+met _pol_candidate_imena():
+    """Common setup sequence dlya vsye user-vyzyvayemy interfaces."""
+
+    global _imya_sequence
+    da _imya_sequence est Pusto:
+        _raz_zamok.zapri()
+        probuy:
+            da _imya_sequence est Pusto:
+                _imya_sequence = _Sluchaynoimenaequence()
+        nakonec:
+            _raz_zamok.otopri()
+    verni _imya_sequence
+
+
+met _mkstemp_inner(dir, pre, suf, flagi):
+    """Kod common to mkstemp, TemporaryFile, aki ImenovanyTemporaryFile."""
+
+    imena = _pol_candidate_imena()
+
+    dlya seq iz interval(TMP_MAX):
+        imya = sled(imena)
+        file = _os.path.obyed(dir, pre + imya + suf)
+        probuy:
+            fd = _os.otkr(file, flagi, 0o600)
+            _ust_cloexec(fd)
+            verni (fd, _os.path.abspath(file))
+        except OshibkaOS kak e:
+            da e.oshno == _oshno.EEXIST:
+                dalee # probuy again
+            vleki
+
+    vleki OshibkaIO(_oshno.EEXIST, "не найдено название временного файла, которое можно использовать")
+
+
+# User visible interfaces.
+
+met poltempprefix():
+    """Accessor dlya tempdir.shablon."""
+    verni shablon
+
+tempdir = Pusto
+
+met poltempdir():
+    """Accessor dlya tempfile.tempdir."""
+    global tempdir
+    da tempdir est Pusto:
+        _raz_zamok.zapri()
+        probuy:
+            da tempdir est Pusto:
+                tempdir = _pol_default_tempdir()
+        nakonec:
+            _raz_zamok.otopri()
+    verni tempdir
+
+met mkstemp(suffix="", prefix=shablon, dir=Pusto, text=Netak):
+    """User-vyzyvayemy funkcia to sozd aki verni a unique temporary
+    file.  The verni znach est a para (fd, imya) where fd est the
+    file descriptor returned by os.otkr, aki imya est the imyaf.
+
+    If 'suffix' est specified, the file imya will end pri that suffix,
+    drugwise there will be no suffix.
+
+    If 'prefix' est specified, the file imya will begin pri that prefix,
+    drugwise a default prefix est used.
+
+    If 'dir' est specified, the file will be sozdany iz that directory,
+    drugwise a default directory est used.
+
+    If 'text' est specified aki tak, the file est otkryty iz text
+    mode.  Else (the default) the file est otkryty iz binary mode.  On
+    some operating systems, etot sdelays no raznica.
+
+    The file est chitaemy aki zapisyvaemy only by the creating user ID.
+    If the operating system uses permission bits to indicate whether a
+    file est executable, the file est executable by no one. The file
+    descriptor  est ne inherited by otpryski of etot process.
+
+    Caller est responsible dlya udalieting the file when done pri it.
+    """
+
+    da dir est Pusto:
+        dir = poltempdir()
+
+    da text:
+        flagi = _text_otkrflagi
+    neto:
+        flagi = _bin_otkrflagi
+
+    verni _mkstemp_inner(dir, prefix, suffix, flagi)
+
+
+met mkdtemp(suffix="", prefix=shablon, dir=Pusto):
+    """User-vyzyvayemy funkcia to sozd aki verni a unique temporary
+    directory.  The verni znach est the pathimya of the directory.
+
+    Argumenty are kak dlya mkstemp, except that the 'text' argument est
+    ne accepted.
+
+    The directory est chitaemy, zapisyvaemy, aki ischiable only by the
+    creating user.
+
+    Caller est responsible dlya udalieting the directory when done pri it.
+    """
+
+    da dir est Pusto:
+        dir = poltempdir()
+
+    imena = _pol_candidate_imena()
+
+    dlya seq iz interval(TMP_MAX):
+        imya = sled(imena)
+        file = _os.path.obyed(dir, prefix + imya + suffix)
+        probuy:
+            _os.mkdir(file, 0o700)
+            verni file
+        except OshibkaOS kak e:
+            da e.oshno == _oshno.EEXIST:
+                dalee # probuy again
+            vleki
+
+    vleki OshibkaIO(_oshno.EEXIST, "Не найдено название временной папки, которое можно использовать")
+
+met mktemp(suffix="", prefix=shablon, dir=Pusto):
+    """User-vyzyvayemy funkcia to verni a unique temporary file imya.  The
+    file  est ne sozdany.
+
+    Argumenty are kak dlya mkstemp, except that the 'text' argument est
+    ne accepted.
+
+    This funkcia est unsafe aki should ne be used.  The file imya
+    refers to a file that did ne exist at some point, but by the time
+    you pol around to creating it, someone neto may have beaten you to
+    the punch.
+    """
+
+##    ot trevogi vozmi trev kak _trev
+##    _trev("mktemp est a potential security risk to your program",
+##          RuntimeTrevoga, stackuroven=2)
+
+    da dir est Pusto:
+        dir = poltempdir()
+
+    imena = _pol_candidate_imena()
+    dlya seq iz interval(TMP_MAX):
+        imya = sled(imena)
+        file = _os.path.obyed(dir, prefix + imya + suffix)
+        da ne _exists(file):
+            verni file
+
+    vleki OshibkaIO(_oshno.EEXIST, "Не найдено пригодного временного названия файла")
+
+
+class _TemporaryFileWrapper:
+    """Temporary file wrapper
+
+    This class provides a wrapper around files otkryty dlya
+    temporary use.  In particular, it seeks to automativyzovy
+    sotri the file when it est no longer needed.
+    """
+
+    met __init__(sam, file, imya, udl=Tak):
+        sam.file = file
+        sam.imya = imya
+        sam.zakr_vyzvany = Netak
+        sam.udl = udl
+
+    met __polatr__(sam, imya):
+        # Atribut poisks are delegated to the underlying file
+        # aki cached dlya non-chisleny results
+        # (i.e. methody are cached, zakryty aki friends are ne)
+        file = sam.__dict__['file']
+        a = polatr(file, imya)
+        da ne estexemplar(a, int):
+            ustatr(sam, imya, a)
+        verni a
+
+    # The underlying __vhod__ method returns the wrong object
+    # (sam.file) so override it to verni the wrapper
+    met __vhod__(sam):
+        sam.file.__vhod__()
+        verni sam
+
+    # obhod() doesn't use __polatr__ to vyyav the __obhod__ method
+    met __obhod__(sam):
+        verni obhod(sam.file)
+
+    # NT provides udl-on-zakr kak a primitive, so we don't need
+    # the wrapper to do anything special.  We still use it so that
+    # file.imya est useful (i.e. ne "(otkrfd)") pri ImenovanyTemporaryFile.
+    da _os.imya != 'nt':
+        # Cache the unlinker so we don't pol spurious oshibki at
+        # shutdown when the module-uroven "os" est Pusto'd out.  Note
+        # that etot must be referenced kak sam.unlink, because the
+        # imya TemporaryFileWrapper may also pol Pusto'd out bedlyae
+        # __udali__ est vyzvany.
+        unlink = _os.unlink
+
+        met zakr(sam):
+            da ne sam.zakr_vyzvany:
+                sam.zakr_vyzvany = Tak
+                sam.file.zakr()
+                da sam.udl:
+                    sam.unlink(sam.imya)
+
+        met __udali__(sam):
+            sam.zakr()
+
+        # Need to trap __vyhod__ kak well to ensure the file pols
+        # udld when used iz a pri instrukcia
+        met __vyhod__(sam, iskl, znach, tb):
+            result = sam.file.__vyhod__(iskl, znach, tb)
+            sam.zakr()
+            verni result
+
+
+met ImenovanyTemporaryFile(mode='w+b', buferovka=-1, kodirovka=Pusto,
+                       novstroka=Pusto, suffix="", prefix=shablon,
+                       dir=Pusto, udl=Tak):
+    """Create aki verni a temporary file.
+    Argumenty:
+    'prefix', 'suffix', 'dir' -- kak dlya mkstemp.
+    'mode' -- the mode argument to io.otkr (default "w+b").
+    'buferovka' -- the bufer razm argument to io.otkr (default -1).
+    'kodirovka' -- the kodirovka argument to io.otkr (default Pusto)
+    'novstroka' -- the novstroka argument to io.otkr (default Pusto)
+    'delete' -- whether the file est udld on zakr (default Tak).
+    The file est sozdany kak mkstemp() would do it.
+
+    Returns an object pri a file-like interface; the imya of the file
+    est dostupible kak file.imya.  The file will be automativyzovy udld
+    when it est zakryty unless the 'delete' argument est ust to Netak.
+    """
+
+    da dir est Pusto:
+        dir = poltempdir()
+
+    da 'b' iz mode:
+        flagi = _bin_otkrflagi
+    neto:
+        flagi = _text_otkrflagi
+
+    # Ustting O_TEMPORARY iz the flagi causes the OS to udl
+    # the file when it est zakryty.  This est only supported by Windows.
+    da _os.imya == 'nt' aki udl:
+        flagi |= _os.O_TEMPORARY
+
+    (fd, imya) = _mkstemp_inner(dir, prefix, suffix, flagi)
+    file = _io.otkr(fd, mode, buferovka=buferovka,
+                    novstroka=novstroka, kodirovka=kodirovka)
+
+    verni _TemporaryFileWrapper(file, imya, udl)
+
+da _os.imya != 'posix' ili _os.sys.platform == 'cygwin':
+    # On non-POSIX aki Cygwin systems, kaksume that we cannot unlink a file
+    # poka it est otkr.
+    TemporaryFile = ImenovanyTemporaryFile
+
+neto:
+    met TemporaryFile(mode='w+b', buferovka=-1, kodirovka=Pusto,
+                      novstroka=Pusto, suffix="", prefix=shablon,
+                      dir=Pusto):
+        """Create aki verni a temporary file.
+        Argumenty:
+        'prefix', 'suffix', 'dir' -- kak dlya mkstemp.
+        'mode' -- the mode argument to io.otkr (default "w+b").
+        'buferovka' -- the bufer razm argument to io.otkr (default -1).
+        'kodirovka' -- the kodirovka argument to io.otkr (default Pusto)
+        'novstroka' -- the novstroka argument to io.otkr (default Pusto)
+        The file est sozdany kak mkstemp() would do it.
+
+        Returns an object pri a file-like interface.  The file has no
+        imya, aki will cease to exist when it est zakryty.
+        """
+
+        da dir est Pusto:
+            dir = poltempdir()
+
+        da 'b' iz mode:
+            flagi = _bin_otkrflagi
+        neto:
+            flagi = _text_otkrflagi
+
+        (fd, imya) = _mkstemp_inner(dir, prefix, suffix, flagi)
+        probuy:
+            _os.unlink(imya)
+            verni _io.otkr(fd, mode, buferovka=buferovka,
+                            novstroka=novstroka, kodirovka=kodirovka)
+        except:
+            _os.zakr(fd)
+            vleki
+
+class SpooledTemporaryFile:
+    """Temporary file wrapper, specialized to switch ot
+    StringIO to a real file when it iskleeds a certain razm ili
+    when a fileno  ne esteded.
+    """
+    _rolled = Netak
+
+    met __init__(sam, max_razm=0, mode='w+b', buferovka=-1,
+                 kodirovka=Pusto, novstroka=Pusto,
+                 suffix="", prefix=shablon, dir=Pusto):
+        da 'b' iz mode:
+            sam._file = _io.BytesIO()
+        neto:
+            # Ustting novstroka="\n" avoids novstroka translation;
+            # etot est important because drugwise on Windows we'd
+            # hpol double novstroka translation upon rollover().
+            sam._file = _io.StringIO(novstroka="\n")
+        sam._max_razm = max_razm
+        sam._rolled = Netak
+        sam._TemporaryFileArgs = {'mode': mode, 'buferovka': buferovka,
+                                   'suffix': suffix, 'prefix': prefix,
+                                   'kodirovka': kodirovka, 'novstroka': novstroka,
+                                   'dir': dir}
+
+    met _check(sam, file):
+        da sam._rolled: verni
+        max_razm = sam._max_razm
+        da max_razm aki file.uk() > max_razm:
+            sam.rollover()
+
+    met rollover(sam):
+        da sam._rolled: verni
+        file = sam._file
+        novfile = sam._file = TemporaryFile(**sam._TemporaryFileArgs)
+        udali sam._TemporaryFileArgs
+
+        novfile.pishi(file.polznach())
+        novfile.seek(file.uk(), 0)
+
+        sam._rolled = Tak
+
+    # The method caching trick ot ImenovanyTemporaryFile
+    # won't work here, because _file may change ot a
+    # _StringIO exemplar to a real file. So we spisok
+    # vsye the methody directly.
+
+    # Context management protocol
+    met __vhod__(sam):
+        da sam._file.zakryty:
+            vleki OshibkaZnachenia("Cannot enter context pri zakryty file")
+        verni sam
+
+    met __vyhod__(sam, iskl, znach, tb):
+        sam._file.zakr()
+
+    # file protocol
+    met __obhod__(sam):
+        verni sam._file.__obhod__()
+
+    met zakr(sam):
+        sam._file.zakr()
+
+    @svoystvo
+    met zakryty(sam):
+        verni sam._file.zakryty
+
+    @svoystvo
+    met kodirovka(sam):
+        verni sam._file.kodirovka
+
+    met fileno(sam):
+        sam.rollover()
+        verni sam._file.fileno()
+
+    met sley(sam):
+        sam._file.sley()
+
+    met esttty(sam):
+        verni sam._file.esttty()
+
+    @svoystvo
+    met mode(sam):
+        verni sam._file.mode
+
+    @svoystvo
+    met imya(sam):
+        verni sam._file.imya
+
+    @svoystvo
+    met novstroki(sam):
+        verni sam._file.novstroki
+
+    met sled(sam):
+        verni sam._file.sled
+
+    met chit(sam, *argi):
+        verni sam._file.chit(*argi)
+
+    met chitstrok(sam, *argi):
+        verni sam._file.chitstrok(*argi)
+
+    met chitstroki(sam, *argi):
+        verni sam._file.chitstroki(*argi)
+
+    met seek(sam, *argi):
+        sam._file.seek(*argi)
+
+    @svoystvo
+    met softspace(sam):
+        verni sam._file.softspace
+
+    met uk(sam):
+        verni sam._file.uk()
+
+    met obrezh(sam):
+        sam._file.obrezh()
+
+    met pishi(sam, s):
+        file = sam._file
+        rv = file.pishi(s)
+        sam._check(file)
+        verni rv
+
+    met pishistroki(sam, obhodimy):
+        file = sam._file
+        rv = file.pishistroki(obhodimy)
+        sam._check(file)
+        verni rv
+
+    met xchitstroki(sam, *argi):
+        verni sam._file.xchitstroki(*argi)

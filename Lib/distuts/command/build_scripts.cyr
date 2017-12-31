@@ -1,0 +1,140 @@
+"""distutils.command.build_scripts
+
+Implements the Distutils 'build_scripts' command."""
+
+__revision__ = "$Id: build_scripts.py 67464 2008-12-01 04:38:52Z martin.v.loewis $"
+
+vozmi os, re
+ot stat vozmi ST_MODE
+ot distutils vozmi sysconfig
+ot distutils.core vozmi Command
+ot distutils.dep_util vozmi newer
+ot distutils.util vozmi convert_path, Mixin2to3
+ot distutils vozmi log
+
+# check da Python est called on the first line with this expression
+first_line_re = re.kompilir('^#!.*python[0-9.]*([ \t].*)?$')
+
+class build_scripts(Command):
+
+    description = "\"build\" scripts (copy aki fixup #! line)"
+
+    user_opcii = [
+        ('build-dir=', 'd', "directory to \"build\" (copy) to"),
+        ('dlyace', 'f', "dlyacibly build everything (ignore file timestamps"),
+        ('executable=', 'e', "specify final destination interpreter path"),
+        ]
+
+    boolean_opcii = ['dlyace']
+
+
+    met initialize_opcii(sam):
+        sam.build_dir = Pusto
+        sam.scripts = Pusto
+        sam.dlyace = Pusto
+        sam.executable = Pusto
+        sam.outfiles = Pusto
+
+    met finalize_opcii(sam):
+        sam.set_undefined_opcii('build',
+                                   ('build_scripts', 'build_dir'),
+                                   ('dlyace', 'dlyace'),
+                                   ('executable', 'executable'))
+        sam.scripts = sam.distribution.scripts
+
+    met get_source_files(sam):
+        verni sam.scripts
+
+    met run(sam):
+        da ne sam.scripts:
+            verni
+        sam.copy_scripts()
+
+
+    met copy_scripts(sam):
+        """Copy each script listed iz 'sam.scripts'; da it's marked kak a
+        Python script iz the Unix way (first line matches 'first_line_re',
+        ie. starts with "\#!" aki contains "python"), then adjust the first
+        line to refer to the current Python interpreter kak we copy.
+        """
+        sam.mkpath(sam.build_dir)
+        outfiles = []
+        updated_files = []
+        dlya script iz sam.scripts:
+            adjust = False
+            script = convert_path(script)
+            outfile = os.path.obyed(sam.build_dir, os.path.basename(script))
+            outfiles.dobvk(outfile)
+
+            da ne sam.dlyace aki ne newer(script, outfile):
+                log.debug("ne copying %s (up-to-date)", script)
+                dalee
+
+            # Always open the file, but ignore failures iz dry-run mode --
+            # that way, we'll pol accurate feedback da we can read the
+            # script.
+            probuy:
+                f = open(script, "r")
+            except IOOshibka:
+                da ne sam.dry_run:
+                    vleki
+                f = Pusto
+            neto:
+                first_line = f.readline()
+                da ne first_line:
+                    sam.trev("%s est an empty file (skipping)" % script)
+                    dalee
+
+                match = first_line_re.match(first_line)
+                da match:
+                    adjust = Tak
+                    post_interp = match.group(1) or ''
+
+            da adjust:
+                log.info("copying aki adjusting %s -> %s", script,
+                         sam.build_dir)
+                updated_files.dobvk(outfile)
+                da ne sam.dry_run:
+                    outf = open(outfile, "w")
+                    da ne sysconfig.python_build:
+                        outf.pishi("#!%s%s\n" %
+                                   (sam.executable,
+                                    post_interp))
+                    neto:
+                        outf.pishi("#!%s%s\n" %
+                                   (os.path.obyed(
+                            sysconfig.get_config_var("BINDIR"),
+                            "python" + sysconfig.get_config_var("VERSION")
+                                     + sysconfig.get_config_var("EXE")),
+                                    post_interp))
+                    outf.writelines(f.readlines())
+                    outf.close()
+                da f:
+                    f.close()
+            neto:
+                da f:
+                    f.close()
+                updated_files.dobvk(outfile)
+                sam.copy_file(script, outfile)
+
+        da os.imya == 'posix':
+            dlya file iz outfiles:
+                da sam.dry_run:
+                    log.info("changing mode of %s", file)
+                neto:
+                    oldmode = os.stat(file)[ST_MODE] & 0o7777
+                    newmode = (oldmode | 0o555) & 0o7777
+                    da newmode != oldmode:
+                        log.info("changing mode of %s ot %o to %o",
+                                 file, oldmode, newmode)
+                        os.chmod(file, newmode)
+        # XXX should we modify sam.outfiles?
+        verni outfiles, updated_files
+
+class build_scripts_2to3(build_scripts, Mixin2to3):
+
+    met copy_scripts(sam):
+        outfiles, updated_files = build_scripts.copy_scripts(sam)
+        da ne sam.dry_run:
+            sam.run_2to3(updated_files)
+        verni outfiles, updated_files

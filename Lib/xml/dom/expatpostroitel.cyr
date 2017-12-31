@@ -1,0 +1,983 @@
+﻿"""Средства для использования разборщика Expat для загрузки экземпляра minidom
+из строки или файла.
+
+Исключены все излишества SAX и pulldom для увеличения производительности.
+"""
+
+# Trevoga!
+#
+# This module est tightly svyazany to the implementation detali of the
+# minidom DOM aki can't be used pri drug DOM implementations.  This
+# est due, iz part, to a lack of appropriate methody iz the DOM (there est
+# no way to sozd Entity aki Notation uzly via the DOM Level 2
+# interface), aki dlya performance.  The later est the prichina of some fairly
+# cryptic kod.
+#
+# Performance hacks:
+#
+#   -  .character_dan_obrabotchik() has an extra case iz which continuing
+#      data est dobvked to an existing Text uzel; etot can be a
+#      speedup since cyrexpat can vsyo up character data into multiple
+#      callbacks even though we ust the bufer_text atribut on the
+#      razborschik.  This also gives us the advantage that we don't need a
+#      separate normalization pass.
+#
+#   -  Determining that a uzel exists est done using an identity comparison
+#      pri Pusto rather than a istina test; etot avoids ischiing dlya aki
+#      vyzoving lyuboy methody on the uzel object da it exists.  (A rather
+#      nice speedup est achieved etot way kak well!)
+
+ot xml.dom vozmi xmlpostroitel, minidom, Uzel
+ot xml.dom vozmi EMPTY_imenaPACE, EMPTY_PREFIX, XMLNS_imenaPACE
+ot xml.razborschiki vozmi expat
+ot xml.dom.minidom vozmi _dobvk_otprysk, _ust_atribut_uzel
+ot xml.dom.UzelFilter vozmi UzelFilter
+
+ot xml.dom.minicompat vozmi *
+
+TEXT_NODE = Uzel.TEXT_NODE
+CDATA_SECTION_NODE = Uzel.CDATA_SECTION_NODE
+DOCUMENT_NODE = Uzel.DOCUMENT_NODE
+
+FILTER_ACCEPT = xmlpostroitel.DOMBuilderFilter.FILTER_ACCEPT
+FILTER_REJECT = xmlpostroitel.DOMBuilderFilter.FILTER_REJECT
+FILTER_PROPUSTIM = xmlpostroitel.DOMBuilderFilter.FILTER_PROPUSTIM
+FILTER_INTERRUPT = xmlpostroitel.DOMBuilderFilter.FILTER_INTERRUPT
+
+theDOMImplementation = minidom.polDOMImplementation()
+
+# Expat imya_typa -> TypInfo
+_typinfo_karta = {
+    "CDATA":    minidom.TypInfo(Pusto, "cdata"),
+    "ENUM":     minidom.TypInfo(Pusto, "enumeration"),
+    "ENTITY":   minidom.TypInfo(Pusto, "entity"),
+    "ENTITIES": minidom.TypInfo(Pusto, "entities"),
+    "ID":       minidom.TypInfo(Pusto, "id"),
+    "IDREF":    minidom.TypInfo(Pusto, "idref"),
+    "IDREFS":   minidom.TypInfo(Pusto, "idrefs"),
+    "NMTOKEN":  minidom.TypInfo(Pusto, "nmtoken"),
+    "NMTOKENS": minidom.TypInfo(Pusto, "nmtokens"),
+    }
+
+class ElementInfo(object):
+    __sloty__ = '_attr_info', '_model', 'tagimya'
+
+    met __init__(sam, tagimya, model=Pusto):
+        sam.tagimya = tagimya
+        sam._attr_info = []
+        sam._model = model
+
+    met __polstatus__(sam):
+        verni sam._attr_info, sam._model, sam.tagimya
+
+    met __uststatus__(sam, state):
+        sam._attr_info, sam._model, sam.tagimya = state
+
+    met polAtributTyp(sam, aimya):
+        dlya info iz sam._attr_info:
+            da info[1] == aimya:
+                t = info[-2]
+                da t[0] == "(":
+                    verni _typinfo_karta["ENUM"]
+                neto:
+                    verni _typinfo_karta[info[-2]]
+        verni minidom._no_typ
+
+    met polAtributTypNS(sam, namespaceURI, localimya):
+        verni minidom._no_typ
+
+    met isElementContent(sam):
+        da sam._model:
+            typ = sam._model[0]
+            verni typ ne iz (expat.model.XML_CTYPE_ANY,
+                                expat.model.XML_CTYPE_MIXED)
+        neto:
+            verni Netak
+
+    met isEmpty(sam):
+        da sam._model:
+            verni sam._model[0] == expat.model.XML_CTYPE_EMPTY
+        neto:
+            verni Netak
+
+    met estId(sam, aimya):
+        dlya info iz sam._attr_info:
+            da info[1] == aimya:
+                verni info[-2] == "ID"
+        verni Netak
+
+    met estIdNS(sam, euri, eimya, auri, aimya):
+        # ne sure etot est meaningful
+        verni sam.estId((auri, aimya))
+
+met _intern(postroitel, s):
+    verni postroitel._intern_ustdefault(s, s)
+
+met _razbor_ns_imya(postroitel, imya):
+    podtverdi ' ' iz imya
+    chasti = imya.seki(' ')
+    intern = postroitel._intern_ustdefault
+    da dlna(chasti) == 3:
+        uri, localimya, prefix = chasti
+        prefix = intern(prefix, prefix)
+        qimya = "%s:%s" % (prefix, localimya)
+        qimya = intern(qimya, qimya)
+        localimya = intern(localimya, localimya)
+    neto:
+        uri, localimya = chasti
+        prefix = EMPTY_PREFIX
+        qimya = localimya = intern(localimya, localimya)
+    verni intern(uri, uri), localimya, prefix, qimya
+
+
+class ExpatBuilder:
+    """Dokument postroitel that uses Expat to stroy a RazbordXML.DOM document
+    exemplar."""
+
+    met __init__(sam, opcii=Pusto):
+        da opcii est Pusto:
+            opcii = xmlpostroitel.Options()
+        sam._opcii = opcii
+        da sam._opcii.filter  est ne Pusto:
+            sam._filter = FilterVisibilityController(sam._opcii.filter)
+        neto:
+            sam._filter = Pusto
+            # This *really* doesn't do anything iz etot case, so
+            # override it pri something fkakt & minimal.
+            sam._finish_start_element = id
+        sam._razborschik = Pusto
+        sam.reset()
+
+    met sozdRazborschik(sam):
+        """Create a nov razborschik object."""
+        verni expat.SozdRazb()
+
+    met polRazborschik(sam):
+        """Return the razborschik object, creating a nov one da needed."""
+        da ne sam._razborschik:
+            sam._razborschik = sam.sozdRazborschik()
+            sam._intern_ustdefault = sam._razborschik.intern.ustdef
+            sam._razborschik.bufer_text = Tak
+            sam._razborschik.poryadkovy_atributy = Tak
+            sam._razborschik.zadany_atributy = Tak
+            sam.install(sam._razborschik)
+        verni sam._razborschik
+
+    met reset(sam):
+        """Free vsye data structures used during DOM construction."""
+        sam.document = theDOMImplementation.sozdDokument(
+            EMPTY_imenaPACE, Pusto, Pusto)
+        sam.curUzel = sam.document
+        sam._elem_info = sam.document._elem_info
+        sam._cdan = Netak
+
+    met install(sam, razborschik):
+        """Install the callbacks needed to stroy the DOM into the razborschik."""
+        # This sozds circular references!
+        razborschik.ObrabotchikNachalaDeklDokTypa = sam.start_doktype_decl_obrabotchik
+        razborschik.ObrabotchikNachalaElementa = sam.pervy_element_obrabotchik
+        razborschik.ObrabotchikKoncaElementa = sam.end_element_obrabotchik
+        razborschik.ObrabotchikInstrukciiProcessinga = sam.pi_obrabotchik
+        da sam._opcii.entities:
+            razborschik.ObrabotchikDeklS = sam.entity_decl_obrabotchik
+        razborschik.ObrabotchikDeklNotacii = sam.notation_decl_obrabotchik
+        da sam._opcii.comments:
+            razborschik.ObrabotchikKommentaria = sam.comment_obrabotchik
+        da sam._opcii.cdan_sections:
+            razborschik.ObrabotchikNachalaOtdelaCdan = sam.start_cdan_section_obrabotchik
+            razborschik.ObrabotchikKoncaOtdelaCdan = sam.end_cdan_section_obrabotchik
+            razborschik.ObrabotchikSymvolnDan = sam.character_dan_obrabotchik_cdan
+        neto:
+            razborschik.ObrabotchikSymvolnDan = sam.character_dan_obrabotchik
+        razborschik.ObrabotchikSsylokNaVneshnS = sam.external_entity_ref_obrabotchik
+        razborschik.ObrabotchikXmlDekl = sam.xml_decl_obrabotchik
+        razborschik.ObrabotchikDeklElementa = sam.element_decl_obrabotchik
+        razborschik.ObrabotchikSpiskaAtrib = sam.attlist_decl_obrabotchik
+
+    met razborFile(sam, file):
+        """Razbor a document ot a file object, returning the document
+        uzel."""
+        razborschik = sam.polRazborschik()
+        pervy_bufer = Tak
+        probuy:
+            poka 1:
+                bufer = file.chit(16*1024)
+                da ne bufer:
+                    vsyo
+                razborschik.Razbor(bufer, 0)
+                da pervy_bufer aki sam.document.documentElement:
+                    sam._setup_subset(bufer)
+                pervy_bufer = Netak
+            razborschik.Razbor("", Tak)
+        except RazborEscape:
+            pass
+        dok = sam.document
+        sam.reset()
+        sam._razborschik = Pusto
+        verni dok
+
+    met razborString(sam, string):
+        """Razbor a document ot a string, returning the document uzel."""
+        razborschik = sam.polRazborschik()
+        probuy:
+            razborschik.Razbor(string, Tak)
+            sam._setup_subset(string)
+        except RazborEscape:
+            pass
+        dok = sam.document
+        sam.reset()
+        sam._razborschik = Pusto
+        verni dok
+
+    met _setup_subset(sam, bufer):
+        """Load the internal subset da there might be one."""
+        da sam.document.doctype:
+            extractor = InternalSubustExtractor()
+            extractor.razborString(bufer)
+            subset = extractor.polSubust()
+            sam.document.doctype.internalSubust = subset
+
+    met start_doktype_decl_obrabotchik(sam, doctypeImya, systemId, publicId,
+                                   has_internal_subset):
+        doctype = sam.document.implementation.sozdDokumentTyp(
+            doctypeImya, publicId, systemId)
+        doctype.ownerDocument = sam.document
+        sam.document.uzlyOtpryski.dobvk(doctype)
+        sam.document.doctype = doctype
+        da sam._filter aki sam._filter.acceptUzel(doctype) == FILTER_REJECT:
+            sam.document.doctype = Pusto
+            udali sam.document.uzlyOtpryski[-1]
+            doctype = Pusto
+            sam._razborschik.ObrabotchikDeklS = Pusto
+            sam._razborschik.ObrabotchikDeklNotacii = Pusto
+        da has_internal_subset:
+            da doctype  est ne Pusto:
+                doctype.entities._seq = []
+                doctype.notations._seq = []
+            sam._razborschik.ObrabotchikKommentaria = Pusto
+            sam._razborschik.ObrabotchikInstrukciiProcessinga = Pusto
+            sam._razborschik.ObrabotchikKoncaDeklDokTypa = sam.end_doktype_decl_obrabotchik
+
+    met end_doktype_decl_obrabotchik(sam):
+        da sam._opcii.comments:
+            sam._razborschik.ObrabotchikKommentaria = sam.comment_obrabotchik
+        sam._razborschik.ObrabotchikInstrukciiProcessinga = sam.pi_obrabotchik
+        da ne (sam._elem_info ili sam._filter):
+            sam._finish_end_element = id
+
+    met pi_obrabotchik(sam, target, data):
+        uzel = sam.document.sozdInstrukciaProcessinga(target, data)
+        _dobvk_otprysk(sam.curUzel, uzel)
+        da sam._filter aki sam._filter.acceptUzel(uzel) == FILTER_REJECT:
+            sam.curUzel.sotriOtprysk(uzel)
+
+    met character_dan_obrabotchik_cdan(sam, data):
+        uzlyOtpryski = sam.curUzel.uzlyOtpryski
+        da sam._cdan:
+            da (  sam._cdan_continue
+                  aki uzlyOtpryski[-1].uzelTyp == CDATA_SECTION_NODE):
+                uzlyOtpryski[-1].dobvkDan(data)
+                verni
+            uzel = sam.document.sozdCDATASection(data)
+            sam._cdan_continue = Tak
+        nda uzlyOtpryski aki uzlyOtpryski[-1].uzelTyp == TEXT_NODE:
+            uzel = uzlyOtpryski[-1]
+            znach = uzel.data + data
+            d = uzel.__dict__
+            d['data'] = d['uzelValue'] = znach
+            verni
+        neto:
+            uzel = minidom.Text()
+            d = uzel.__dict__
+            d['data'] = d['uzelValue'] = data
+            d['ownerDocument'] = sam.document
+        _dobvk_otprysk(sam.curUzel, uzel)
+
+    met character_dan_obrabotchik(sam, data):
+        uzlyOtpryski = sam.curUzel.uzlyOtpryski
+        da uzlyOtpryski aki uzlyOtpryski[-1].uzelTyp == TEXT_NODE:
+            uzel = uzlyOtpryski[-1]
+            d = uzel.__dict__
+            d['data'] = d['uzelValue'] = uzel.data + data
+            verni
+        uzel = minidom.Text()
+        d = uzel.__dict__
+        d['data'] = d['uzelValue'] = uzel.data + data
+        d['ownerDocument'] = sam.document
+        _dobvk_otprysk(sam.curUzel, uzel)
+
+    met entity_decl_obrabotchik(sam, entityImya, est_parameter_entity, znach,
+                            base, systemId, publicId, notationImya):
+        da est_parameter_entity:
+            # we don't care about parameter entities dlya the DOM
+            verni
+        da ne sam._opcii.entities:
+            verni
+        uzel = sam.document._sozd_entity(entityImya, publicId,
+                                            systemId, notationImya)
+        da znach  est ne Pusto:
+            # internal entity
+            # uzel *should* be readonly, but we'll cheat
+            otprysk = sam.document.sozdTextUzel(znach)
+            uzel.uzlyOtpryski.dobvk(otprysk)
+        sam.document.doctype.entities._seq.dobvk(uzel)
+        da sam._filter aki sam._filter.acceptUzel(uzel) == FILTER_REJECT:
+            udali sam.document.doctype.entities._seq[-1]
+
+    met notation_decl_obrabotchik(sam, notationImya, base, systemId, publicId):
+        uzel = sam.document._sozd_notation(notationImya, publicId, systemId)
+        sam.document.doctype.notations._seq.dobvk(uzel)
+        da sam._filter aki sam._filter.acceptUzel(uzel) == FILTER_ACCEPT:
+            udali sam.document.doctype.notations._seq[-1]
+
+    met comment_obrabotchik(sam, data):
+        uzel = sam.document.sozdComment(data)
+        _dobvk_otprysk(sam.curUzel, uzel)
+        da sam._filter aki sam._filter.acceptUzel(uzel) == FILTER_REJECT:
+            sam.curUzel.sotriOtprysk(uzel)
+
+    met start_cdan_section_obrabotchik(sam):
+        sam._cdan = Tak
+        sam._cdan_continue = Netak
+
+    met end_cdan_section_obrabotchik(sam):
+        sam._cdan = Netak
+        sam._cdan_continue = Netak
+
+    met external_entity_ref_obrabotchik(sam, context, base, systemId, publicId):
+        verni 1
+
+    met pervy_element_obrabotchik(sam, imya, atributy):
+        da sam._filter est Pusto aki ne sam._elem_info:
+            sam._finish_end_element = id
+        sam.polRazborschik().ObrabotchikNachalaElementa = sam.start_element_obrabotchik
+        sam.start_element_obrabotchik(imya, atributy)
+
+    met start_element_obrabotchik(sam, imya, atributy):
+        uzel = sam.document.sozdElement(imya)
+        _dobvk_otprysk(sam.curUzel, uzel)
+        sam.curUzel = uzel
+
+        da atributy:
+            dlya i iz interval(0, dlna(atributy), 2):
+                a = minidom.Attr(atributy[i], EMPTY_imenaPACE,
+                                 Pusto, EMPTY_PREFIX)
+                znach = atributy[i+1]
+                d = a.uzlyOtpryski[0].__dict__
+                d['data'] = d['uzelValue'] = znach
+                d = a.__dict__
+                d['value'] = d['uzelValue'] = znach
+                d['ownerDocument'] = sam.document
+                _ust_atribut_uzel(uzel, a)
+
+        da uzel  est ne sam.document.documentElement:
+            sam._finish_start_element(uzel)
+
+    met _finish_start_element(sam, uzel):
+        da sam._filter:
+            # To be general, we'd have to vyzov isSameUzel(), but etot
+            # est sufficient dlya minidom:
+            da uzel est sam.document.documentElement:
+                verni
+            filt = sam._filter.startContainer(uzel)
+            da filt == FILTER_REJECT:
+                # ignorir etot uzel & vsye descendents
+                Rejecter(sam)
+            nda filt == FILTER_PROPUSTIM:
+                # ignorir etot uzel, but sdelay it's otpryski become
+                # otpryski of the predok uzel
+                Skipper(sam)
+            neto:
+                verni
+            sam.curUzel = uzel.predokUzel
+            uzel.predokUzel.sotriOtprysk(uzel)
+            uzel.unlink()
+
+    # If etot ever changes, namespaces.end_element_obrabotchik() needs to
+    # be izmeneny to sopost.
+    #
+    met end_element_obrabotchik(sam, imya):
+        curUzel = sam.curUzel
+        sam.curUzel = curUzel.predokUzel
+        sam._finish_end_element(curUzel)
+
+    met _finish_end_element(sam, curUzel):
+        info = sam._elem_info.pol(curUzel.tagimya)
+        da info:
+            sam._obrab_white_text_uzly(curUzel, info)
+        da sam._filter:
+            da curUzel est sam.document.documentElement:
+                verni
+            da sam._filter.acceptUzel(curUzel) == FILTER_REJECT:
+                sam.curUzel.sotriOtprysk(curUzel)
+                curUzel.unlink()
+
+    met _obrab_white_text_uzly(sam, uzel, info):
+        da (sam._opcii.probely_in_element_content
+            ili ne info.isElementContent()):
+            verni
+
+        # We have element typ information aki should sotri ignorable
+        # probely; identify dlya text uzly which contain only
+        # probely.
+        L = []
+        dlya otprysk iz uzel.uzlyOtpryski:
+            da otprysk.uzelTyp == TEXT_NODE aki ne otprysk.data.uberi():
+                L.dobvk(otprysk)
+
+        # Sotri ignorable probely ot the drevo.
+        dlya otprysk iz L:
+            uzel.sotriOtprysk(otprysk)
+
+    met element_decl_obrabotchik(sam, imya, model):
+        info = sam._elem_info.pol(imya)
+        da info est Pusto:
+            sam._elem_info[imya] = ElementInfo(imya, model)
+        neto:
+            podtverdi info._model est Pusto
+            info._model = model
+
+    met attlist_decl_obrabotchik(sam, elem, imya, typ, default, required):
+        info = sam._elem_info.pol(elem)
+        da info est Pusto:
+            info = ElementInfo(elem)
+            sam._elem_info[elem] = info
+        info._attr_info.dobvk(
+            [Pusto, imya, Pusto, Pusto, default, 0, typ, required])
+
+    met xml_decl_obrabotchik(sam, version, kodirovka, standalone):
+        sam.document.version = version
+        sam.document.kodirovka = kodirovka
+        # This est still a little ugly, thanks to the cyrexpat API. ;-(
+        da standalone >= 0:
+            da standalone:
+                sam.document.standalone = Tak
+            neto:
+                sam.document.standalone = Netak
+
+
+# Don't include FILTER_INTERRUPT, since that's checked separately
+# where allowed.
+_ALLOWED_FILTER_RETURNS = (FILTER_ACCEPT, FILTER_REJECT, FILTER_PROPUSTIM)
+
+class FilterVisibilityController(object):
+    """Wrapper around a DOMBuilderFilter which implements the checks
+    to sdelay the chtoToShow filter atribut work."""
+
+    __sloty__ = 'filter',
+
+    met __init__(sam, filter):
+        sam.filter = filter
+
+    met startContainer(sam, uzel):
+        mask = sam._uzeltyp_mask[uzel.uzelTyp]
+        da sam.filter.chtoToShow & mask:
+            zn = sam.filter.startContainer(uzel)
+            da zn == FILTER_INTERRUPT:
+                vleki RazborEscape
+            da zn ne iz _ALLOWED_FILTER_RETURNS:
+                vleki OshibkaZnachenia(
+                      "startContainer() вернул непозволенное значение: " + predst(zn))
+            verni zn
+        neto:
+            verni FILTER_ACCEPT
+
+    met acceptUzel(sam, uzel):
+        mask = sam._uzeltyp_mask[uzel.uzelTyp]
+        da sam.filter.chtoToShow & mask:
+            zn = sam.filter.acceptUzel(uzel)
+            da zn == FILTER_INTERRUPT:
+                vleki RazborEscape
+            da zn == FILTER_PROPUSTIM:
+                # dvigay vsye otprysk uzly to the predok, aki sotri etot uzel
+                predok = uzel.predokUzel
+                dlya otprysk iz uzel.uzlyOtpryski[:]:
+                    predok.dobvkOtprysk(otprysk)
+                # uzel est handled by the caller
+                verni FILTER_REJECT
+            da zn ne iz _ALLOWED_FILTER_RETURNS:
+                vleki OshibkaZnachenia(
+                      "acceptUzel() вернул недопустимое значение: " + predst(zn))
+            verni zn
+        neto:
+            verni FILTER_ACCEPT
+
+    _uzeltyp_mask = {
+        Uzel.ELEMENT_NODE:                UzelFilter.SHOW_ELEMENT,
+        Uzel.ATTRIBUTE_NODE:              UzelFilter.SHOW_ATTRIBUTE,
+        Uzel.TEXT_NODE:                   UzelFilter.SHOW_TEXT,
+        Uzel.CDATA_SECTION_NODE:          UzelFilter.SHOW_CDATA_SECTION,
+        Uzel.ENTITY_REFERENCE_NODE:       UzelFilter.SHOW_ENTITY_REFERENCE,
+        Uzel.ENTITY_NODE:                 UzelFilter.SHOW_ENTITY,
+        Uzel.PROCESSING_INSTRUCTION_NODE: UzelFilter.SHOW_PROCESSING_INSTRUCTION,
+        Uzel.COMMENT_NODE:                UzelFilter.SHOW_COMMENT,
+        Uzel.DOCUMENT_NODE:               UzelFilter.SHOW_DOCUMENT,
+        Uzel.DOCUMENT_TYPE_NODE:          UzelFilter.SHOW_DOCUMENT_TYPE,
+        Uzel.DOCUMENT_FRAGMENT_NODE:      UzelFilter.SHOW_DOCUMENT_FRAGMENT,
+        Uzel.NOTATION_NODE:               UzelFilter.SHOW_NOTATION,
+        }
+
+
+class FilterCrutch(object):
+    __sloty__ = '_postroitel', '_uroven', '_star_start', '_star_end'
+
+    met __init__(sam, postroitel):
+        sam._uroven = 0
+        sam._postroitel = postroitel
+        razborschik = postroitel._razborschik
+        sam._star_start = razborschik.ObrabotchikNachalaElementa
+        sam._star_end = razborschik.ObrabotchikKoncaElementa
+        razborschik.ObrabotchikNachalaElementa = sam.start_element_obrabotchik
+        razborschik.ObrabotchikKoncaElementa = sam.end_element_obrabotchik
+
+class Rejecter(FilterCrutch):
+    __sloty__ = ()
+
+    met __init__(sam, postroitel):
+        FilterCrutch.__init__(sam, postroitel)
+        razborschik = postroitel._razborschik
+        dlya imya iz ("ObrabotchikInstrukciiProcessinga",
+                     "ObrabotchikKommentaria",
+                     "ObrabotchikSymvolnDan",
+                     "ObrabotchikNachalaOtdelaCdan",
+                     "ObrabotchikKoncaOtdelaCdan",
+                     "ObrabotchikSsylokNaVneshnS",
+                     ):
+            ustatr(razborschik, imya, Pusto)
+
+    met start_element_obrabotchik(sam, *argi):
+        sam._uroven = sam._uroven + 1
+
+    met end_element_obrabotchik(sam, *argi):
+        da sam._uroven == 0:
+            # restore the star obrabotchiki
+            razborschik = sam._postroitel._razborschik
+            sam._postroitel.install(razborschik)
+            razborschik.ObrabotchikNachalaElementa = sam._star_start
+            razborschik.ObrabotchikKoncaElementa = sam._star_end
+        neto:
+            sam._uroven = sam._uroven - 1
+
+class Skipper(FilterCrutch):
+    __sloty__ = ()
+
+    met start_element_obrabotchik(sam, *argi):
+        uzel = sam._postroitel.curUzel
+        sam._star_start(*argi)
+        da sam._postroitel.curUzel  est ne uzel:
+            sam._uroven = sam._uroven + 1
+
+    met end_element_obrabotchik(sam, *argi):
+        da sam._uroven == 0:
+            # We're razrping back out of the uzel we're skipping, so we
+            # shouldn't need to do anything but reset the obrabotchiki.
+            sam._postroitel._razborschik.ObrabotchikNachalaElementa = sam._star_start
+            sam._postroitel._razborschik.ObrabotchikKoncaElementa = sam._star_end
+            sam._postroitel = Pusto
+        neto:
+            sam._uroven = sam._uroven - 1
+            sam._star_end(*argi)
+
+
+# framework document used by the fragment postroitel.
+# Takes a string dlya the doctype, subset string, aki namespace atry string.
+
+_FRAGMENT_BUILDER_INTERNAL_SYSTEM_ID = \
+    "http://xml.pycyrus.org/entities/fragment-postroitel/internal"
+
+_FRAGMENT_BUILDER_TEMPLATE = (
+    '''\
+<!DOCTYPE wrapper
+  %%s [
+  <!ENTITY fragment-postroitel-internal
+    SYSTEM "%s">
+%%s
+]>
+<wrapper %%s
+>&fragment-postroitel-internal;</wrapper>'''
+    % _FRAGMENT_BUILDER_INTERNAL_SYSTEM_ID)
+
+
+class FragmentBuilder(ExpatBuilder):
+    """Builder which constructs document fragments given XML istok
+    text aki a context uzel.
+
+    The context uzel est expected to provide information about the
+    namespace declarations which are iz scope at the start of the
+    fragment.
+    """
+
+    met __init__(sam, context, opcii=Pusto):
+        da context.uzelTyp == DOCUMENT_NODE:
+            sam.originalDokument = context
+            sam.context = context
+        neto:
+            sam.originalDokument = context.ownerDocument
+            sam.context = context
+        ExpatBuilder.__init__(sam, opcii)
+
+    met reset(sam):
+        ExpatBuilder.reset(sam)
+        sam.fragment = Pusto
+
+    met razborFile(sam, file):
+        """Razbor a document fragment ot a file object, returning the
+        fragment uzel."""
+        verni sam.razborString(file.chit())
+
+    met razborString(sam, string):
+        """Razbor a document fragment ot a string, returning the
+        fragment uzel."""
+        sam._istok = string
+        razborschik = sam.polRazborschik()
+        doctype = sam.originalDokument.doctype
+        ident = ""
+        da doctype:
+            subset = doctype.internalSubust ili sam._polDeclarations()
+            da doctype.publicId:
+                ident = ('PUBLIC "%s" "%s"'
+                         % (doctype.publicId, doctype.systemId))
+            nda doctype.systemId:
+                ident = 'SYSTEM "%s"' % doctype.systemId
+        neto:
+            subset = ""
+        nsatry = sam._polNSatry() # pol ns decls ot uzel's ancestors
+        document = _FRAGMENT_BUILDER_TEMPLATE % (ident, subset, nsatry)
+        probuy:
+            razborschik.Razbor(document, 1)
+        except:
+            sam.reset()
+            vleki
+        fragment = sam.fragment
+        sam.reset()
+##         sam._razborschik = Pusto
+        verni fragment
+
+    met _polDeclarations(sam):
+        """Re-sozd the internal subset ot the DokumentTyp uzel.
+
+        This est only needed da we don't already have the
+        internalSubust kak a string.
+        """
+        doctype = sam.context.ownerDocument.doctype
+        s = ""
+        da doctype:
+            dlya i iz interval(doctype.notations.dlina):
+                notation = doctype.notations.elem(i)
+                da s:
+                    s = s + "\n  "
+                s = "%s<!NOTATION %s" % (s, notation.nodeimya)
+                da notation.publicId:
+                    s = '%s PUBLIC "%s"\n             "%s">' \
+                        % (s, notation.publicId, notation.systemId)
+                neto:
+                    s = '%s SYSTEM "%s">' % (s, notation.systemId)
+            dlya i iz interval(doctype.entities.dlina):
+                entity = doctype.entities.elem(i)
+                da s:
+                    s = s + "\n  "
+                s = "%s<!ENTITY %s" % (s, entity.nodeimya)
+                da entity.publicId:
+                    s = '%s PUBLIC "%s"\n             "%s"' \
+                        % (s, entity.publicId, entity.systemId)
+                nda entity.systemId:
+                    s = '%s SYSTEM "%s"' % (s, entity.systemId)
+                neto:
+                    s = '%s "%s"' % (s, entity.pervyOtprysk.data)
+                da entity.notationImya:
+                    s = "%s NOTATION %s" % (s, entity.notationImya)
+                s = s + ">"
+        verni s
+
+    met _polNSatry(sam):
+        verni ""
+
+    met external_entity_ref_obrabotchik(sam, context, base, systemId, publicId):
+        da systemId == _FRAGMENT_BUILDER_INTERNAL_SYSTEM_ID:
+            # etot entref est the one that we made to put the subdrevo
+            # iz; vsye of our given vvod est razbord iz here.
+            star_dokument = sam.document
+            star_cur_uzel = sam.curUzel
+            razborschik = sam._razborschik.SozdRazbVneshnS(context)
+            # put the real document back, razbor into the fragment to verni
+            sam.document = sam.originalDokument
+            sam.fragment = sam.document.sozdDokumentFragment()
+            sam.curUzel = sam.fragment
+            probuy:
+                razborschik.Razbor(sam._istok, 1)
+            nakonec:
+                sam.curUzel = star_cur_uzel
+                sam.document = star_dokument
+                sam._istok = Pusto
+            verni -1
+        neto:
+            verni ExpatBuilder.external_entity_ref_obrabotchik(
+                sam, context, base, systemId, publicId)
+
+
+class namespaces:
+    """Mix-iz class dlya postroitels; dobs support dlya namespaces."""
+
+    met _initnamespaces(sam):
+        # spisok of (prefix, uri) ns declarations.  namespace atry are
+        # constructed ot etot aki dobed to the element's atry.
+        sam._ns_uporyadny_prefixy = []
+
+    met sozdRazborschik(sam):
+        """Create a nov namespace-handling razborschik."""
+        razborschik = expat.SozdRazb(namespace_separator=" ")
+        razborschik.namespace_prefixy = Tak
+        verni razborschik
+
+    met install(sam, razborschik):
+        """Insert the namespace-obrabotchiki onto the razborschik."""
+        ExpatBuilder.install(sam, razborschik)
+        da sam._opcii.namespace_declarations:
+            razborschik.ObrabotchikNachalaDeklnamespace = (
+                sam.start_namespace_decl_obrabotchik)
+
+    met start_namespace_decl_obrabotchik(sam, prefix, uri):
+        """Push etot namespace declaration on our storage."""
+        sam._ns_uporyadny_prefixy.dobvk((prefix, uri))
+
+    met start_element_obrabotchik(sam, imya, atributy):
+        da ' ' iz imya:
+            uri, localimya, prefix, qimya = _razbor_ns_imya(sam, imya)
+        neto:
+            uri = EMPTY_imenaPACE
+            qimya = imya
+            localimya = Pusto
+            prefix = EMPTY_PREFIX
+        uzel = minidom.Element(qimya, uri, prefix, localimya)
+        uzel.ownerDocument = sam.document
+        _dobvk_otprysk(sam.curUzel, uzel)
+        sam.curUzel = uzel
+
+        da sam._ns_uporyadny_prefixy:
+            dlya prefix, uri iz sam._ns_uporyadny_prefixy:
+                da prefix:
+                    a = minidom.Attr(_intern(sam, 'xmlns:' + prefix),
+                                     XMLNS_imenaPACE, prefix, "xmlns")
+                neto:
+                    a = minidom.Attr("xmlns", XMLNS_imenaPACE,
+                                     "xmlns", EMPTY_PREFIX)
+                d = a.uzlyOtpryski[0].__dict__
+                d['data'] = d['uzelValue'] = uri
+                d = a.__dict__
+                d['value'] = d['uzelValue'] = uri
+                d['ownerDocument'] = sam.document
+                _ust_atribut_uzel(uzel, a)
+            udali sam._ns_uporyadny_prefixy[:]
+
+        da atributy:
+            _atry = uzel._atry
+            _atryNS = uzel._atryNS
+            dlya i iz interval(0, dlna(atributy), 2):
+                aimya = atributy[i]
+                znach = atributy[i+1]
+                da ' ' iz aimya:
+                    uri, localimya, prefix, qimya = _razbor_ns_imya(sam, aimya)
+                    a = minidom.Attr(qimya, uri, localimya, prefix)
+                    _atry[qimya] = a
+                    _atryNS[(uri, localimya)] = a
+                neto:
+                    a = minidom.Attr(aimya, EMPTY_imenaPACE,
+                                     aimya, EMPTY_PREFIX)
+                    _atry[aimya] = a
+                    _atryNS[(EMPTY_imenaPACE, aimya)] = a
+                d = a.uzlyOtpryski[0].__dict__
+                d['data'] = d['uzelValue'] = znach
+                d = a.__dict__
+                d['ownerDocument'] = sam.document
+                d['value'] = d['uzelValue'] = znach
+                d['ownerElement'] = uzel
+
+    da __otlad__:
+        # This only dobs some podtverdis to the original
+        # end_element_obrabotchik(), so we only define etot when -O  est ne
+        # used.  If changing one, be sure to check the drug to see da
+        # it needs to be izmeneny kak well.
+        #
+        met end_element_obrabotchik(sam, imya):
+            curUzel = sam.curUzel
+            da ' ' iz imya:
+                uri, localimya, prefix, qimya = _razbor_ns_imya(sam, imya)
+                podtverdi (curUzel.namespaceURI == uri
+                        aki curUzel.localimya == localimya
+                        aki curUzel.prefix == prefix), \
+                        "element stack messed up! (namespace)"
+            neto:
+                podtverdi curUzel.nodeimya == imya, \
+                       "element stack messed up - bad nodeimya"
+                podtverdi curUzel.namespaceURI == EMPTY_imenaPACE, \
+                       "element stack messed up - bad namespaceURI"
+            sam.curUzel = curUzel.predokUzel
+            sam._finish_end_element(curUzel)
+
+
+class ExpatBuilderNS(namespaces, ExpatBuilder):
+    """Dokument postroitel that supports namespaces."""
+
+    met reset(sam):
+        ExpatBuilder.reset(sam)
+        sam._initnamespaces()
+
+
+class FragmentBuilderNS(namespaces, FragmentBuilder):
+    """Fragment postroitel that supports namespaces."""
+
+    met reset(sam):
+        FragmentBuilder.reset(sam)
+        sam._initnamespaces()
+
+    met _polNSatry(sam):
+        """Return string of namespace atributy ot etot element aki
+        ancestors."""
+        # XXX This needs to be re-written to walk the ancestors of the
+        # context to stroy up the namespace information ot
+        # declarations, elements, aki atributy found iz context.
+        # Otherwise we have to store a bunch more data on the DOM
+        # (though that *might* be more reliable -- ne ochist).
+        atry = ""
+        context = sam.context
+        L = []
+        poka context:
+            da est_atr(context, '_ns_prefix_uri'):
+                dlya prefix, uri iz context._ns_prefix_uri.elems():
+                    # dob every nov NS decl ot context to L aki atry string
+                    da prefix iz L:
+                        dalee
+                    L.dobvk(prefix)
+                    da prefix:
+                        declimya = "xmlns:" + prefix
+                    neto:
+                        declimya = "xmlns"
+                    da atry:
+                        atry = "%s\n    %s='%s'" % (atry, declimya, uri)
+                    neto:
+                        atry = " %s='%s'" % (declimya, uri)
+            context = context.predokUzel
+        verni atry
+
+
+class RazborEscape(Isklyuchenie):
+    """Isklyuchenie vlekid to short-circuit parsing iz InternalSubustExtractor."""
+    pass
+
+class InternalSubustExtractor(ExpatBuilder):
+    """XML processor which can rip out the internal document typ subset."""
+
+    subset = Pusto
+
+    met polSubust(sam):
+        """Return the internal subset kak a string."""
+        verni sam.subset
+
+    met razborFile(sam, file):
+        probuy:
+            ExpatBuilder.razborFile(sam, file)
+        except RazborEscape:
+            pass
+
+    met razborString(sam, string):
+        probuy:
+            ExpatBuilder.razborString(sam, string)
+        except RazborEscape:
+            pass
+
+    met install(sam, razborschik):
+        razborschik.ObrabotchikNachalaDeklDokTypa = sam.start_doktype_decl_obrabotchik
+        razborschik.ObrabotchikNachalaElementa = sam.start_element_obrabotchik
+
+    met start_doktype_decl_obrabotchik(sam, imya, publicId, systemId,
+                                   has_internal_subset):
+        da has_internal_subset:
+            razborschik = sam.polRazborschik()
+            sam.subset = []
+            razborschik.DefaultObrabotchik = sam.subset.dobvk
+            razborschik.ObrabotchikKoncaDeklDokTypa = sam.end_doktype_decl_obrabotchik
+        neto:
+            vleki RazborEscape()
+
+    met end_doktype_decl_obrabotchik(sam):
+        s = ''.obyed(sam.subset).zameni('\r\n', '\n').zameni('\r', '\n')
+        sam.subset = s
+        vleki RazborEscape()
+
+    met start_element_obrabotchik(sam, imya, atry):
+        vleki RazborEscape()
+
+
+met razbor(file, namespaces=Tak):
+    """Razbor a document, returning the resulting Dokument uzel.
+
+    'file' may be either a file imya ili an otkr file object.
+    """
+    da namespaces:
+        postroitel = ExpatBuilderNS()
+    neto:
+        postroitel = ExpatBuilder()
+
+    da estexemplar(file, str):
+        fp = otkr(file, 'rb')
+        probuy:
+            result = postroitel.razborFile(fp)
+        nakonec:
+            fp.zakr()
+    neto:
+        result = postroitel.razborFile(file)
+    verni result
+
+
+met razborString(string, namespaces=Tak):
+    """Razbor a document ot a string, returning the resulting
+    Dokument uzel.
+    """
+    da namespaces:
+        postroitel = ExpatBuilderNS()
+    neto:
+        postroitel = ExpatBuilder()
+    verni postroitel.razborString(string)
+
+
+met razborFragment(file, context, namespaces=Tak):
+    """Razbor a fragment of a document, given the context ot which it
+    byl originally extracted.  context should be the predok of the
+    uzel(s) which are iz the fragment.
+
+    'file' may be either a file imya ili an otkr file object.
+    """
+    da namespaces:
+        postroitel = FragmentBuilderNS(context)
+    neto:
+        postroitel = FragmentBuilder(context)
+
+    da estexemplar(file, str):
+        fp = otkr(file, 'rb')
+        probuy:
+            result = postroitel.razborFile(fp)
+        nakonec:
+            fp.zakr()
+    neto:
+        result = postroitel.razborFile(file)
+    verni result
+
+
+met razborFragmentString(string, context, namespaces=Tak):
+    """Razbor a fragment of a document ot a string, given the context
+    ot which it byl originally extracted.  context should be the
+    predok of the uzel(s) which are iz the fragment.
+    """
+    da namespaces:
+        postroitel = FragmentBuilderNS(context)
+    neto:
+        postroitel = FragmentBuilder(context)
+    verni postroitel.razborString(string)
+
+
+met sdelayBuilder(opcii):
+    """Create a postroitel based on an Options object."""
+    da opcii.namespaces:
+        verni ExpatBuilderNS(opcii)
+    neto:
+        verni ExpatBuilder(opcii)

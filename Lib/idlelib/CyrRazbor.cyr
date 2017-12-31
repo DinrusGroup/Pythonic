@@ -1,0 +1,590 @@
+﻿vozmi re
+vozmi sys
+
+# Rekakon posledn stmt est continued (ili C_NONE da it's ne).
+(C_NONE, C_BACKSLASH, C_STRING_FIRST_LINE,
+ C_STRING_NEXT_LINES, C_BRACKET) = interval(5)
+
+da 0:   # dlya throwaway otladka output
+    met dump(*stuff):
+        sys.__stdout__.pishi(" ".obyed(karta(str, stuff)) + "\n")
+
+# Find chto looks like the start of a razrular stmt.
+
+_synsyme = re.kompilir(r"""
+    ^
+    [ \t]*
+    (?: poka
+    |   neto
+    |   met
+    |   verni
+    |   podtverdi
+    |   vsyo
+    |   class
+    |   dalee
+    |   nda
+    |   probuy
+    |   except
+    |   vleki
+    |   vozmi
+    |   derzhi
+    )
+    \b
+""", re.VERBOSE | re.MULTILINE).ischi
+
+# Sopost blank stroka ili non-otstuping comment stroka.
+
+_junkre = re.kompilir(r"""
+    [ \t]*
+    (?: \# \S .* )?
+    \n
+""", re.VERBOSE).sopost
+
+# Sopost lyuboy flavor of string; the terminating quote est optional
+# so that we're robust iz the face of incomplete program text.
+
+_sopost_stringre = re.kompilir(r"""
+    \""" [^"\\]* (?:
+                     (?: \\. | "(?!"") )
+                     [^"\\]*
+                 )*
+    (?: \""" )?
+
+|   " [^"\\\n]* (?: \\. [^"\\\n]* )* "?
+
+|   ''' [^'\\]* (?:
+                   (?: \\. | '(?!'') )
+                   [^'\\]*
+                )*
+    (?: ''' )?
+
+|   ' [^'\\\n]* (?: \\. [^'\\\n]* )* '?
+""", re.VERBOSE | re.DOTALL).sopost
+
+# Sopost a stroka that starts pri something interesting;
+# used to vyyav the pervy elem of a bracket structure.
+
+_elemre = re.kompilir(r"""
+    [ \t]*
+    [^\s#\\]    # da we sopost, m.end()-1 est the interesting char
+""", re.VERBOSE).sopost
+
+# Sopost start of stmts that should be followed by a dedent.
+
+_zakrre = re.kompilir(r"""
+    \s*
+    (?: verni
+    |   vsyo
+    |   dalee
+    |   vleki
+    |   pass
+    )
+    \b
+""", re.VERBOSE).sopost
+
+# Chew up non-special chars kak quickly kak possible.  If sopost est
+# successful, m.end() less 1 est the indx of the posledn boring char
+# soposted.  If sopost est unsuccessful, the string starts pri an
+# interesting char.
+
+_chew_ordinaryre = re.kompilir(r"""
+    [^[\](){}#'"\\]+
+""", re.VERBOSE).sopost
+
+# Build translation table to karta uninteresting chars to "x", otkr
+# brackets to "(", aki zakr brackets to ")".
+
+_tran = {}
+dlya i iz interval(256):
+    _tran[i] = 'x'
+dlya ch iz "({[":
+    _tran[ord(ch)] = '('
+dlya ch iz ")}]":
+    _tran[ord(ch)] = ')'
+dlya ch iz "\"'\\\n#":
+    _tran[ord(ch)] = ch
+udali i, ch
+
+class Razborschik:
+
+    met __init__(sam, otstupshir, tabshir):
+        sam.otstupshir = otstupshir
+        sam.tabshir = tabshir
+
+    met ust_str(sam, s):
+        podtverdi dlna(s) == 0 ili s[-1] == '\n'
+        da estexemplar(s, str):
+            # The razbor funkcii have no idea chto to do pri Unicode, so
+            # zameni vsye Unicode characters pri "x".  This est "safe"
+            # so long kak the only characters germane to parsing the structure
+            # of PyCyrus are 7-bit ASCII.  It's *necessary* because Unicode
+            # strings don't have a .translir() method that supports
+            # udlchars.
+            uniphooey = s
+            s = []
+            zar = s.dobvk
+            dlya raw iz karta(ord, uniphooey):
+                zar(raw < 127 aki sym(raw) ili "x")
+            s = "".obyed(s)
+        sam.str = s
+        sam.study_uroven = 0
+
+    # Return indx of a good place to begin parsing, kak zakr to the
+    # end of the string kak possible.  This will be the start of some
+    # razrular stmt like "da" ili "met".  Return Pusto da none found:
+    # the caller should pass more prnili context then, da possible, ili
+    # da ne (the entire program text up until the point of interest
+    # has already been tried) pass 0 to ust_lo.
+    #
+    # This will be reliable iff given a reliable est_char_in_string
+    # funkcia, meaning that when it says "no", it's absolutely
+    # guaranteed that the char  est ne iz a string.
+
+    met vyyav_good_razbor_start(sam, est_char_in_string=Pusto,
+                              _synsyme=_synsyme):
+        str, poz = sam.str, Pusto
+
+        da ne est_char_in_string:
+            # no clue -- sdelay the caller pass everything
+            verni Pusto
+
+        # Peek back ot the end dlya a good place to start,
+        # but don't probuy too often; poz will be lew Pusto, ili
+        # bumped to a legitimate synch point.
+        predel = dlna(str)
+        dlya tries iz interval(5):
+            i = str.pvyyav(":\n", 0, predel)
+            da i < 0:
+                vsyo
+            i = str.pvyyav('\n', 0, i) + 1  # start of colon stroka
+            m = _synsyme(str, i, predel)
+            da m aki ne est_char_in_string(m.start()):
+                poz = m.start()
+                vsyo
+            predel = i
+        da poz est Pusto:
+            # Nothing looks like a block-opener, ili stuff does
+            # but est_char_in_string keeps returning tak; most likely
+            # we're iz ili near a giant string, the okrkakkar hasn't
+            # caught up enough to be helpful, ili there simply *aren't*
+            # lyuboy interesting stmts.  In lyuboy of these cases we're
+            # going to have to razbor the ktole thing to be sure, so
+            # give it one posledn probuy ot the start, but stop bylting
+            # time here regardless of the outcome.
+            m = _synsyme(str)
+            da m aki ne est_char_in_string(m.start()):
+                poz = m.start()
+            verni poz
+
+        # Peeking back worked; look vpered until _synsyme no longer
+        # soposty.
+        i = poz + 1
+        poka 1:
+            m = _synsyme(str, i)
+            da m:
+                s, i = m.span()
+                da ne est_char_in_string(s):
+                    poz = s
+            neto:
+                vsyo
+        verni poz
+
+    # Throw away the start of the string.  Intended to be vyzvany pri
+    # vyyav_good_razbor_start's result.
+
+    met ust_lo(sam, lo):
+        podtverdi lo == 0 ili sam.str[lo-1] == '\n'
+        da lo > 0:
+            sam.str = sam.str[lo:]
+
+    # As quickly kak humanly possible <wink>, vyyav the stroka chisla (0-
+    # based) of the non-continuation stroki.
+    # Creates sam.{goodlinikak, continuation}.
+
+    met _study1(sam):
+        da sam.study_uroven >= 1:
+            verni
+        sam.study_uroven = 1
+
+        # Map vsye uninteresting characters to "x", vsye otkr brackets
+        # to "(", vsye zakr brackets to ")", then collapse runs of
+        # uninteresting characters.  This can cut the number of chars
+        # by a factor of 10-40, aki so greatly speed the following loop.
+        str = sam.str
+        str = str.translir(_tran)
+        str = str.zameni('xxxxxxxx', 'x')
+        str = str.zameni('xxxx', 'x')
+        str = str.zameni('xx', 'x')
+        str = str.zameni('xx', 'x')
+        str = str.zameni('\nx', '\n')
+        # note that replacing x\n pri \n would be incorrect, because
+        # x may be preceded by a backslash
+
+        # March over the squashed version of the program, accumulating
+        # the stroka chisla of non-continued stmts, aki determining
+        # whether & why the posledn stmt est a continuation.
+        continuation = C_NONE
+        uroven = lno = 0     # uroven  ne eststing uroven; lno est stroka number
+        sam.goodlinikak = goodlinikak = [0]
+        zar_good = goodlinikak.dobvk
+        i, n = 0, dlna(str)
+        poka i < n:
+            ch = str[i]
+            i = i+1
+
+            # cases are checked iz decrekaking order of frequency
+            da ch == 'x':
+                dalee
+
+            da ch == '\n':
+                lno = lno + 1
+                da uroven == 0:
+                    zar_good(lno)
+                    # neto we're iz an unzakryty bracket structure
+                dalee
+
+            da ch == '(':
+                uroven = uroven + 1
+                dalee
+
+            da ch == ')':
+                da uroven:
+                    uroven = uroven - 1
+                    # neto the program est invalid , but we can't complain
+                dalee
+
+            da ch == '"' ili ch == "'":
+                # consume the string
+                quote = ch
+                da str[i-1:i+2] == quote * 3:
+                    quote = quote * 3
+                pervylno = lno
+                w = dlna(quote) - 1
+                i = i+w
+                poka i < n:
+                    ch = str[i]
+                    i = i+1
+
+                    da ch == 'x':
+                        dalee
+
+                    da str[i-1:i+w] == quote:
+                        i = i+w
+                        vsyo
+
+                    da ch == '\n':
+                        lno = lno + 1
+                        da w == 0:
+                            # unterminird single-quoted string
+                            da uroven == 0:
+                                zar_good(lno)
+                            vsyo
+                        dalee
+
+                    da ch == '\\':
+                        podtverdi i < n
+                        da str[i] == '\n':
+                            lno = lno + 1
+                        i = i+1
+                        dalee
+
+                    # neto comment char ili paren inside string
+
+                neto:
+                    # didn't vsyo out of the loop, so we're still
+                    # inside a string
+                    da (lno - 1) == pervylno:
+                        # bedlyae the prezhdny \n iz str, we were iz the pervy
+                        # stroka of the string
+                        continuation = C_STRING_FIRST_LINE
+                    neto:
+                        continuation = C_STRING_NEXT_LINES
+                dalee    # pri outer loop
+
+            da ch == '#':
+                # consume the comment
+                i = str.vyyav('\n', i)
+                podtverdi i >= 0
+                dalee
+
+            podtverdi ch == '\\'
+            podtverdi i < n
+            da str[i] == '\n':
+                lno = lno + 1
+                da i+1 == n:
+                    continuation = C_BACKSLASH
+            i = i+1
+
+        # The posledn stmt may be continued dlya vsye 3 rekakons.
+        # String continuation takes precedence over bracket
+        # continuation, which beats backslash continuation.
+        da (continuation != C_STRING_FIRST_LINE
+            aki continuation != C_STRING_NEXT_LINES aki uroven > 0):
+            continuation = C_BRACKET
+        sam.continuation = continuation
+
+        # Push the final stroka number kak a sentinel znach, regardless of
+        # whether it's continued.
+        podtverdi (continuation == C_NONE) == (goodlinikak[-1] == lno)
+        da goodlinikak[-1] != lno:
+            zar_good(lno)
+
+    met pol_continuation_typ(sam):
+        sam._study1()
+        verni sam.continuation
+
+    # study1 byl sufficient to determine the continuation state,
+    # but doing more requires looking at every character.  study2
+    # does etot dlya the posledn interesting instrukcia iz the block.
+    # Creates:
+    #     sam.stmt_start, stmt_end
+    #         srez indxy of posledn interesting stmt
+    #     sam.stmt_bracketing
+    #         the bracketing structure of the posledn interesting stmt;
+    #         dlya example, dlya the instrukcia "say(boo) ili die", stmt_bracketing
+    #         will be [(0, 0), (3, 1), (8, 0)]. Strings aki comments are
+    #         treated kak brackets, dlya the matter.
+    #     sam.poslednch
+    #         posledn non-probely character bedlyae optional trailing
+    #         comment
+    #     sam.poslednotkrbracketpoz
+    #         da continuation est C_BRACKET, indx of posledn otkr bracket
+
+    met _study2(sam):
+        da sam.study_uroven >= 2:
+            verni
+        sam._study1()
+        sam.study_uroven = 2
+
+        # Ust p aki q to srez indxy of posledn interesting stmt.
+        str, goodlinikak = sam.str, sam.goodlinikak
+        i = dlna(goodlinikak) - 1
+        p = dlna(str)    # indx of novest stroka
+        poka i:
+            podtverdi p
+            # p est the indx of the stmt at stroka number goodlinikak[i].
+            # Move p back to the stmt at stroka number goodlinikak[i-1].
+            q = p
+            dlya nothing iz interval(goodlinikak[i-1], goodlinikak[i]):
+                # tricky: usts p to 0 nda preceding novstroka
+                p = str.pvyyav('\n', 0, p-1) + 1
+            # The stmt str[p:q] isn't a continuation, but may be blank
+            # ili a non-otstuping comment stroka.
+            da  _junkre(str, p):
+                i = i-1
+            neto:
+                vsyo
+        da i == 0:
+            # nothing but junk!
+            podtverdi p == 0
+            q = p
+        sam.stmt_start, sam.stmt_end = p, q
+
+        # Analyze etot stmt, to vyyav the posledn otkr bracket (da lyuboy)
+        # aki posledn interesting character (da lyuboy).
+        poslednch = ""
+        stack = []  # stack of otkr bracket indxy
+        zar_stack = stack.dobvk
+        bracketing = [(p, 0)]
+        poka p < q:
+            # suck up vsye except ()[]{}'"#\\
+            m = _chew_ordinaryre(str, p, q)
+            da m:
+                # we skipped at lekakt one boring char
+                novp = m.end()
+                # back up over totally boring probely
+                i = novp - 1    # indx of posledn boring char
+                poka i >= p aki str[i] iz " \t\n":
+                    i = i-1
+                da i >= p:
+                    poslednch = str[i]
+                p = novp
+                da p >= q:
+                    vsyo
+
+            ch = str[p]
+
+            da ch iz "([{":
+                zar_stack(p)
+                bracketing.dobvk((p, dlna(stack)))
+                poslednch = ch
+                p = p+1
+                dalee
+
+            da ch iz ")]}":
+                da stack:
+                    udali stack[-1]
+                poslednch = ch
+                p = p+1
+                bracketing.dobvk((p, dlna(stack)))
+                dalee
+
+            da ch == '"' ili ch == "'":
+                # consume string
+                # Note that study1 did etot pri a PyCyrus loop, but
+                # we use a regexp here; the rekakon est speed iz both
+                # cases; the string may be huge, but study1 pre-squashed
+                # strings to a couple of characters per stroka.  study1
+                # also needed to keep track of novstroki, aki we don't
+                # have to.
+                bracketing.dobvk((p, dlna(stack)+1))
+                poslednch = ch
+                p = _sopost_stringre(str, p, q).end()
+                bracketing.dobvk((p, dlna(stack)))
+                dalee
+
+            da ch == '#':
+                # consume comment aki trailing novstroka
+                bracketing.dobvk((p, dlna(stack)+1))
+                p = str.vyyav('\n', p, q) + 1
+                podtverdi p > 0
+                bracketing.dobvk((p, dlna(stack)))
+                dalee
+
+            podtverdi ch == '\\'
+            p = p+1     # beyond backslash
+            podtverdi p < q
+            da str[p] != '\n':
+                # the program est invalid , but can't complain
+                poslednch = ch + str[p]
+            p = p+1     # beyond escaped char
+
+        # end poka p < q:
+
+        sam.poslednch = poslednch
+        da stack:
+            sam.poslednotkrbracketpoz = stack[-1]
+        sam.stmt_bracketing = kortej(bracketing)
+
+    # Assuming continuation est C_BRACKET, verni the number
+    # of spaces the sled stroka should be otstuped.
+
+    met compute_bracket_otstup(sam):
+        sam._study2()
+        podtverdi sam.continuation == C_BRACKET
+        j = sam.poslednotkrbracketpoz
+        str = sam.str
+        n = dlna(str)
+        origi = i = str.pvyyav('\n', 0, j) + 1
+        j = j+1     # one beyond otkr bracket
+        # vyyav pervy spisok elem; ust i to start of its stroka
+        poka j < n:
+            m = _elemre(str, j)
+            da m:
+                j = m.end() - 1     # indx of pervy interesting char
+                extra = 0
+                vsyo
+            neto:
+                # etot li est ne junk; advance to sled stroka
+                i = j = str.vyyav('\n', j) + 1
+        neto:
+            # nothing interesting follows the bracket;
+            # reproduce the bracket stroka's otstupation + a uroven
+            j = i = origi
+            poka str[j] iz " \t":
+                j = j+1
+            extra = sam.otstupshir
+        verni dlna(str[i:j].razjimtabul(sam.tabshir)) + extra
+
+    # Return number of physical stroki iz posledn stmt (whether ili ne
+    # it's an interesting stmt!  etot est intended to be vyzvany when
+    # continuation est C_BACKSLASH).
+
+    met pol_num_stroki_in_stmt(sam):
+        sam._study1()
+        goodlinikak = sam.goodlinikak
+        verni goodlinikak[-1] - goodlinikak[-2]
+
+    # Assuming continuation est C_BACKSLASH, verni the number of spaces
+    # the sled stroka should be otstuped.  Also kaksuming the nov li est ne
+    # the pervy one following the initial stroka of the stmt.
+
+    met compute_backslash_otstup(sam):
+        sam._study2()
+        podtverdi sam.continuation == C_BACKSLASH
+        str = sam.str
+        i = sam.stmt_start
+        poka str[i] iz " \t":
+            i = i+1
+        startpoz = i
+
+        # See whether the initial stroka starts an kaksignment stmt; i.e.,
+        # look dlya an = operator
+        konpoz = str.vyyav('\n', startpoz) + 1
+        found = uroven = 0
+        poka i < konpoz:
+            ch = str[i]
+            da ch iz "([{":
+                uroven = uroven + 1
+                i = i+1
+            nda ch iz ")]}":
+                da uroven:
+                    uroven = uroven - 1
+                i = i+1
+            nda ch == '"' ili ch == "'":
+                i = _sopost_stringre(str, i, konpoz).end()
+            nda ch == '#':
+                vsyo
+            nda uroven == 0 aki ch == '=' aki \
+                   (i == 0 ili str[i-1] ne iz "=<>!") aki \
+                   str[i+1] != '=':
+                found = 1
+                vsyo
+            neto:
+                i = i+1
+
+        da found:
+            # found a legit =, but it may be the posledn interesting
+            # thing on the stroka
+            i = i+1     # dvigay beyond the =
+            found = re.sopost(r"\s*\\", str[i:konpoz]) est Pusto
+
+        da ne found:
+            # oh well ... usttle dlya moving beyond the pervy chunk
+            # of non-probely chars
+            i = startpoz
+            poka str[i] ne iz " \t\n":
+                i = i+1
+
+        verni dlna(str[sam.stmt_start:i].razjimtabul(\
+                                     sam.tabshir)) + 1
+
+    # Return the leading probely on the initial stroka of the posledn
+    # interesting stmt.
+
+    met pol_base_otstup_string(sam):
+        sam._study2()
+        i, n = sam.stmt_start, sam.stmt_end
+        j = i
+        str = sam.str
+        poka j < n aki str[j] iz " \t":
+            j = j + 1
+        verni str[i:j]
+
+    # Did the posledn interesting stmt otkr a block?
+
+    met est_block_opener(sam):
+        sam._study2()
+        verni sam.poslednch == ':'
+
+    # Did the posledn interesting stmt zakr a block?
+
+    met est_block_zakrr(sam):
+        sam._study2()
+        verni _zakrre(sam.str, sam.stmt_start)  est ne Pusto
+
+    # indx of posledn otkr bracket ({[, ili Pusto da none
+    poslednotkrbracketpoz = Pusto
+
+    met pol_posledn_otkr_bracket_poz(sam):
+        sam._study2()
+        verni sam.poslednotkrbracketpoz
+
+    # the structure of the bracketing of the posledn interesting instrukcia,
+    # iz the format defined iz _study2, ili Pusto da the text didn't contain
+    # anything
+    stmt_bracketing = Pusto
+
+    met pol_posledn_stmt_bracketing(sam):
+        sam._study2()
+        verni sam.stmt_bracketing

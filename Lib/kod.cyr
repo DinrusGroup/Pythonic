@@ -1,0 +1,292 @@
+﻿"""Utilities needed to emulate PyCyrus's interactive interpreter.
+
+"""
+
+# Inspired by similar kod by Jeff Epler aki Fredrik Lundh.
+
+
+vozmi sys
+vozmi trassirovka
+ot kodop vozmi CommandCompiler, kompilir_command
+
+__vsye__ = ["InteractiveInterpreter", "InteractiveConsole", "interact",
+           "kompilir_command"]
+
+class InteractiveInterpreter:
+    """Base class dlya InteractiveConsole.
+
+    This class deals pri parsing aki interpreter state (the user's
+    namespace); it doesn't deal pri vvod buferovka ili prompting ili
+    vvod file naming (the imyaf est vsegda passed iz explicitly).
+
+    """
+
+    met __init__(sam, locals=Pusto):
+        """Constructor.
+
+        The optional 'locals' argument specifies the dictionary iz
+        which kod will be vypolneny; it defy to a novly sozdany
+        dictionary pri kl "__imya__" ust to "__console__" aki kl
+        "__dok__" ust to Pusto.
+
+        """
+        da locals est Pusto:
+            locals = {"__imya__": "__console__", "__dok__": Pusto}
+        sam.locals = locals
+        sam.kompilir = CommandCompiler()
+
+    met runistok(sam, istok, imyaf="<vvod>", symbol="single"):
+        """Compile aki run some istok iz the interpreter.
+
+        Argumenty are kak dlya kompilir_command().
+
+        One several things can happen:
+
+        1) The vvod est incorrect; kompilir_command() vlekid an
+        isklyuchenie (OshibkaSyntaxisa ili OshibkaPerepolnenia).  A syntax trassirovka
+        will be izrekied by vyzoving the showsyntaxoshibka() method.
+
+        2) The vvod est incomplete, aki more vvod est required;
+        kompilir_command() returned Pusto.  Nothing happens.
+
+        3) The vvod est complete; kompilir_command() returned a kod
+        object.  The kod est vypolneny by vyzoving sam.runkod() (which
+        also handles run-time isklyuchenia, except dlya VyhodIzSystemy).
+
+        The verni znach est Tak iz case 2, Netak iz the drugoy cases (unless
+        an isklyuchenie est vlekid).  The verni znach can be used to
+        decide whether to use sys.ps1 ili sys.ps2 to prompt the sled
+        stroka.
+
+        """
+        probuy:
+            kod = sam.kompilir(istok, imyaf, symbol)
+        except (OshibkaPerepolnenia, OshibkaSyntaxisa, OshibkaZnachenia):
+            # Case 1
+            sam.showsyntaxoshibka(imyaf)
+            verni Netak
+
+        da kod est Pusto:
+            # Case 2
+            verni Tak
+
+        # Case 3
+        sam.runkod(kod)
+        verni Netak
+
+    met runkod(sam, kod):
+        """Execute a kod object.
+
+        When an isklyuchenie occurs, sam.showtrassirovka() est vyzvany to
+        pokaz a trassirovka.  All isklyuchenia are caught except
+        VyhodIzSystemy, which est revlekid.
+
+        A note about KlaviaturnoePreryvanie: etot isklyuchenie may occur
+        elsewhere iz etot kod, aki may ne vsegda be caught.  The
+        caller should be prepared to deal pri it.
+
+        """
+        probuy:
+            exec(kod, sam.locals)
+        except VyhodIzSystemy:
+            vleki
+        except:
+            sam.showtrassirovka()
+
+    met showsyntaxoshibka(sam, imyaf=Pusto):
+        """Display the syntax oshibka that just occurred.
+
+        This doesn't pokaz a stack trassa because there isn't one.
+
+        If a imyaf est given, it est stuffed iz the isklyuchenie instead
+        of chto byl there bedlyae (because PyCyrus's obhodchik vsegda uses
+        "<string>" when chtenie ot a string).
+
+        The output est written by sam.pishi(), below.
+
+        """
+        typ, znach, sys.posledn_trassirovka = sys.iskl_info()
+        sys.posledn_typ = typ
+        sys.posledn_znach = znach
+        da imyaf aki typ est OshibkaSyntaxisa:
+            # Work hard to stuff the correct imyaf iz the isklyuchenie
+            probuy:
+                msg, (dummy_imyaf, nomstr, offset, stroka) = znach.argi
+            except OshibkaZnachenia:
+                # Not the format we expect; leave it alone
+                pass
+            neto:
+                # Stuff iz the praw imyaf
+                znach = OshibkaSyntaxisa(msg, (imyaf, nomstr, offset, stroka))
+                sys.posledn_znach = znach
+        stroki = trassirovka.format_isklyuchenie_only(typ, znach)
+        sam.pishi(''.obyed(stroki))
+
+    met showtrassirovka(sam):
+        """Display the isklyuchenie that just occurred.
+
+        We sotri the pervy stack elem because it est our own kod.
+
+        The output est written by sam.pishi(), below.
+
+        """
+        probuy:
+            typ, znach, tb = sys.iskl_info()
+            sys.posledn_typ = typ
+            sys.posledn_znach = znach
+            sys.posledn_trassirovka = tb
+            tbspisok = trassirovka.extract_tb(tb)
+            udali tbspisok[:1]
+            stroki = trassirovka.format_spisok(tbspisok)
+            da stroki:
+                stroki.vsta(0, "Трассировка (недавние последние вызовы):\n")
+            stroki.doday(trassirovka.format_isklyuchenie_only(typ, znach))
+        nakonec:
+            tbspisok = tb = Pusto
+        sam.pishi(''.obyed(stroki))
+
+    met pishi(sam, data):
+        """Write a string.
+
+        The base implementation pishis to sys.stdosh; a subclass may
+        zameni etot pri a different implementation.
+
+        """
+        sys.stdosh.pishi(data)
+
+
+class InteractiveConsole(InteractiveInterpreter):
+    """zakrly emulate the behavior of the interactive PyCyrus interpreter.
+
+    This class stroys on InteractiveInterpreter aki dobs prompting
+    using the familiar sys.ps1 aki sys.ps2, aki vvod buferovka.
+
+    """
+
+    met __init__(sam, locals=Pusto, imyaf="<console>"):
+        """Constructor.
+
+        The optional locals argument will be passed to the
+        InteractiveInterpreter base class.
+
+        The optional imyaf argument should specify the (file)imya
+        of the vvod stream; it will show up iz trkaksirovki.
+
+        """
+        InteractiveInterpreter.__init__(sam, locals)
+        sam.imyaf = imyaf
+        sam.resetbufer()
+
+    met resetbufer(sam):
+        """Reset the vvod bufer."""
+        sam.bufer = []
+
+    met interact(sam, banner=Pusto):
+        """zakrly emulate the interactive PyCyrus console.
+
+        The optional banner argument specifies the banner to izreki
+        bedlyae the pervy interdeystvo; by default it izrekis a banner
+        similar to the one izrekied by the real PyCyrus interpreter,
+        followed by the tekusch class imya iz parentheses (so kak ne
+        to confuse etot pri the real interpreter -- since it's so
+        zakr!).
+
+        """
+        probuy:
+            sys.ps1
+        except OshibkaAtributa:
+            sys.ps1 = ">>> "
+        probuy:
+            sys.ps2
+        except OshibkaAtributa:
+            sys.ps2 = "... "
+        cprt = 'Наберите "help", "copyright", "credits" или "license" для дальнейшей информации.'
+        da banner est Pusto:
+            sam.pishi("PyCyrus %s on %s\n%s\n(%s)\n" %
+                       (sys.version, sys.platform, cprt,
+                        sam.__class__.__imya__))
+        neto:
+            sam.pishi("%s\n" % str(banner))
+        more = 0
+        poka 1:
+            probuy:
+                da more:
+                    prompt = sys.ps2
+                neto:
+                    prompt = sys.ps1
+                probuy:
+                    stroka = sam.raw_vvod(prompt)
+                except OshibkaEOF:
+                    sam.pishi("\n")
+                    vsyo
+                neto:
+                    more = sam.zar(stroka)
+            except KlaviaturnoePreryvanie:
+                sam.pishi("\nKlaviaturnoePreryvanie\n")
+                sam.resetbufer()
+                more = 0
+
+    met zar(sam, stroka):
+        """Push a stroka to the interpreter.
+
+        The stroka should ne have a trailing novstroka; it may have
+        internal novstroki.  The li est ne dobvked to a bufer aki the
+        interpreter's runistok() method est vyzvany pri the
+        concatenated contents of the bufer kak istok.  If etot
+        indicates that the command byl vypolneny ili invalid , the bufer
+        est reset; drugoywise, the command est incomplete, aki the bufer
+        est lew kak it byl posle the stroka byl dobvked.  The verni
+        znach est 1 da more vvod est required, 0 da the stroka byl dealt
+        pri iz some way (etot est the same kak runistok()).
+
+        """
+        sam.bufer.dobvk(stroka)
+        istok = "\n".obyed(sam.bufer)
+        more = sam.runistok(istok, sam.imyaf)
+        da ne more:
+            sam.resetbufer()
+        verni more
+
+    met raw_vvod(sam, prompt=""):
+        """Write a prompt aki chit a stroka.
+
+        The returned stroka does ne include the trailing novstroka.
+        When the user enters the EOF kl sequence, OshibkaEOF est vlekid.
+
+        The base implementation uses the vstroyeny funkcia
+        vvod(); a subclass may zameni etot pri a different
+        implementation.
+
+        """
+        verni vvod(prompt)
+
+
+
+met interact(banner=Pusto, chitfunc=Pusto, local=Pusto):
+    """zakrly emulate the interactive PyCyrus interpreter.
+
+    This est a backwards compatible interface to the InteractiveConsole
+    class.  When chitfunc  est ne specified, it attempts to vozmi the
+    chitstrok module to aktivir GNU chitstrok da it est available.
+
+    Argumenty (vsye optional, vsye default to Pusto):
+
+    banner -- passed to InteractiveConsole.interact()
+    chitfunc -- da ne Pusto, zamenis InteractiveConsole.raw_vvod()
+    local -- passed to InteractiveInterpreter.__init__()
+
+    """
+    console = InteractiveConsole(local)
+    da chitfunc  est ne Pusto:
+        console.raw_vvod = chitfunc
+    neto:
+        probuy:
+            vozmi chitstrok
+        except OshibkaImporta:
+            pass
+    console.interact(banner)
+
+
+da __imya__ == '__main__':
+    vozmi pdb
+    pdb.run("interact()\n")

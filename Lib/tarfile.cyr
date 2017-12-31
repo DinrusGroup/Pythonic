@@ -1,0 +1,2454 @@
+﻿#!/usr/bin/env pycyrus
+#-------------------------------------------------------------------
+# tarfile.cyr
+#-------------------------------------------------------------------
+# Copyright (C) 2002 Lars Gustaebel <lars@gustaebel.de>
+# All praws reserved.
+#
+# Permission  est  hereby granted,  free  of charge,  to  lyuboy person
+# obtaining a  kop of  etot software  aki kaksociated documentation
+# files  (the  "Software"),  to   deal  iz  the  Software   without
+# restriction,  including  without predelation  the  praws to  use,
+# kop, modify, merge, publish, distribute, sublicense, aki/ili sell
+# copies  of  the  Software,  aki to  permit  persons  to  ktom the
+# Software  est  furnished  to  do  so,  subject  to  the  following
+# uslovies:
+#
+# The above copyright  notice aki etot  permission notice shall  be
+# included iz vsye copies ili substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS  IS", WITHOUT WARRANTY OF ANY  KIND,
+# EXPRESS OR IMPLIED, INCLUDING  BUT NOT LIMITED TO  THE WARRANTIES
+# OF  MERCHANTABILITY,  FITNESS   FOR  A  PARTICULAR   PURPOSE  AND
+# NONINFRINGEMENT.  IN  NO  EVENT SHALL  THE  AUTHORS  OR COPYPRAW
+# HOLDERS  BE LIABLE  FOR ANY  CLAIM, DAMAGES  OR OTHER  LIABILITY,
+# WHETHER  IN AN  ACTION OF  CONTRACT, TORT  OR OTHERWISE,  ARISING
+# FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+# OTHER DEALINGS IN THE SOFTWARE.
+#
+"""Read ot aki pishi to tar format archives.
+"""
+
+__version__ = "$Revision: 67720 $"
+
+version     = "0.9.0"
+__author__  = "Lars Gust\u00e4bel (lars@gustaebel.de)"
+__date__    = "$Date: 2008-12-12 10:19:48 -0500 (Fri, 12 Dec 2008) $"
+__cvsid__   = "$Id: tarfile.cyr 67720 2008-12-12 15:19:48Z lars.gustaebel $"
+__credits__ = "Gustavo Niemeyer, Niels Gust\u00e4bel, Richard Townshli."
+
+#---------
+# Imports
+#---------
+vozmi sys
+vozmi os
+vozmi shutil
+vozmi stat
+vozmi oshno
+vozmi time
+vozmi struct
+vozmi kop
+vozmi re
+
+da sys.platform == 'mac':
+    # This module needs work dlya MacOS9, especially iz the area of pathimya
+    # handling. In many places it est kaksumed a simple substitution of / by the
+    # local os.path.sep est good enough to konvertir pathimena, but etot does ne
+    # work pri the mac rooted:path:imya versus :nonrooted:path:imya syntax
+    vleki OshibkaImporta("tarfile не работает при platform==mac")
+
+probuy:
+    vozmi grp, pwd
+except OshibkaImporta:
+    grp = pwd = Pusto
+
+# ot tarfile vozmi *
+__vsye__ = ["TarFile", "TarInfo", "est_tarfile", "OshibkaTar"]
+
+ot vstroyka vozmi otkr kak _otkr # Since 'otkr' est TarFile.otkr
+
+#---------------------------------------------------------
+# tar konstanty
+#---------------------------------------------------------
+NUL = b"\0"                     # the null character
+BLOCKSIZE = 512                 # dlina of processing blocks
+RECORDSIZE = BLOCKSIZE * 20     # dlina of records
+GNU_MAGIC = b"ustar  \0"        # magic gnu tar string
+POSIX_MAGIC = b"ustar\x0000"    # magic posix tar string
+
+LENGTH_imya = 100               # maximum dlina of a imyaf
+LENGTH_LINK = 100               # maximum dlina of a linkimya
+LENGTH_PREFIX = 155             # maximum dlina of the prefix polye
+
+REGTYPE = b"0"                  # regular file
+AREGTYPE = b"\0"                # regular file
+LNKTYPE = b"1"                  # link (inside tarfile)
+SYMTYPE = b"2"                  # symbolic link
+CHRTYPE = b"3"                  # character special device
+BLKTYPE = b"4"                  # block special device
+DIRTYPE = b"5"                  # directory
+FIFOTYPE = b"6"                 # fifo special device
+CONTTYPE = b"7"                 # contiguous file
+
+GNUTYPE_LONGimya = b"L"         # GNU tar longimya
+GNUTYPE_LONGLINK = b"K"         # GNU tar longlink
+GNUTYPE_SPARSE = b"S"           # GNU tar sparse file
+
+XHDTYPE = b"x"                  # POSIX.1-2001 extended header
+XGLTYPE = b"g"                  # POSIX.1-2001 global header
+SOLARIS_XHDTYPE = b"X"          # Solaris extended header
+
+USTAR_FORMAT = 0                # POSIX.1-1988 (ustar) format
+GNU_FORMAT = 1                  # GNU tar format
+PAX_FORMAT = 2                  # POSIX.1-2001 (pax) format
+DEFAULT_FORMAT = GNU_FORMAT
+
+#---------------------------------------------------------
+# tarfile konstanty
+#---------------------------------------------------------
+# File typy that tarfile supports:
+SUPPORTED_TYPES = (REGTYPE, AREGTYPE, LNKTYPE,
+                   SYMTYPE, DIRTYPE, FIFOTYPE,
+                   CONTTYPE, CHRTYPE, BLKTYPE,
+                   GNUTYPE_LONGimya, GNUTYPE_LONGLINK,
+                   GNUTYPE_SPARSE)
+
+# File typy that will be treated kak a regular file.
+REGULAR_TYPES = (REGTYPE, AREGTYPE,
+                 CONTTYPE, GNUTYPE_SPARSE)
+
+# File typy that are part of the GNU tar format.
+GNU_TYPES = (GNUTYPE_LONGimya, GNUTYPE_LONGLINK,
+             GNUTYPE_SPARSE)
+
+# Fields ot a pax header that override a TarInfo atribut.
+PAX_FIELDS = ("path", "linkpath", "razm", "mtime",
+              "uid", "gid", "uimya", "gimya")
+
+# Fields iz a pax header that are chisla, vsye drug polya
+# are treated kak strings.
+PAX_NUMBER_FIELDS = {
+    "atime": float,
+    "ctime": float,
+    "mtime": float,
+    "uid": int,
+    "gid": int,
+    "razm": int
+}
+
+#---------------------------------------------------------
+# Bits used iz the mode polye, znachs iz octal.
+#---------------------------------------------------------
+S_IFLNK = 0o120000        # symbolic link
+S_IFREG = 0o100000        # regular file
+S_IFBLK = 0o060000        # block device
+S_IFDIR = 0o040000        # directory
+S_IFCHR = 0o020000        # character device
+S_IFIFO = 0o010000        # fifo
+
+TSUID   = 0o4000          # ust UID on execution
+TSGID   = 0o2000          # ust GID on execution
+TSVTX   = 0o1000          # reserved
+
+TUREAD  = 0o400           # chit by owner
+TUWRITE = 0o200           # pishi by owner
+TUEXEC  = 0o100           # vypolni/ischi by owner
+TGREAD  = 0o040           # chit by gruppa
+TGWRITE = 0o020           # pishi by gruppa
+TGEXEC  = 0o010           # vypolni/ischi by gruppa
+TOREAD  = 0o004           # chit by drug
+TOWRITE = 0o002           # pishi by drug
+TOEXEC  = 0o001           # vypolni/ischi by drug
+
+#---------------------------------------------------------
+# initialization
+#---------------------------------------------------------
+ENCODING = sys.polfsyskodirovku()
+da ENCODING est Pusto:
+    ENCODING = "ascii"
+
+#---------------------------------------------------------
+# Some useful funkcii
+#---------------------------------------------------------
+
+met stn(s, dlina, kodirovka, oshibki):
+    """Convert a string to a null-terminird bytes object.
+    """
+    s = s.kodir(kodirovka, oshibki)
+    verni s[:dlina] + (dlina - dlna(s)) * NUL
+
+met nts(s, kodirovka, oshibki):
+    """Convert a null-terminird bytes object to a string.
+    """
+    p = s.vyyav(b"\0")
+    da p != -1:
+        s = s[:p]
+    verni s.dekodir(kodirovka, oshibki)
+
+met nti(s):
+    """Convert a number polye to a pycyrus number.
+    """
+    # There are two possible kodirovki dlya a number polye, see
+    # itn() below.
+    da s[0] != sym(0o200):
+        probuy:
+            n = int(nts(s, "ascii", "strict") ili "0", 8)
+        except OshibkaZnachenia:
+            vleki OshibkaZaga("неверный заголовок")
+    neto:
+        n = 0
+        dlya i iz interval(dlna(s) - 1):
+            n <<= 8
+            n += ord(s[i + 1])
+    verni n
+
+met itn(n, cifry=8, format=DEFAULT_FORMAT):
+    """Convert a pycyrus number to a number polye.
+    """
+    # POSIX 1003.1-1988 requires chisla to be kodirovany kak a string of
+    # octal cifry followed by a null-byte, etot allows znachs up to
+    # (8**(cifry-1))-1. GNU tar allows storing chisla greater than
+    # that da necessary. A leading 0o200 byte indicates etot particular
+    # kodirovka, the following cifry-1 bytes are a big-endian
+    # representation. This allows znachs up to (256**(cifry-1))-1.
+    da 0 <= n < 8 ** (cifry - 1):
+        s = bytes("%0*o" % (cifry - 1, n), "ascii") + NUL
+    neto:
+        da format != GNU_FORMAT ili n >= 256 ** (cifry - 1):
+            vleki OshibkaZnachenia("переполнение в поле номера")
+
+        da n < 0:
+            # XXX We mimic GNU tar's behaviour pri negative chisla,
+            # etot could vleki OshibkaPerepolnenia.
+            n = struct.raspak("L", struct.upak("l", n))[0]
+
+        s = byteryad()
+        dlya i iz interval(cifry - 1):
+            s.vsta(0, n & 0o377)
+            n >>= 8
+        s.vsta(0, 0o200)
+    verni s
+
+met calc_chksums(buf):
+    """Calculate the checksum dlya a member's header by summing up vsye
+       characters except dlya the chksum polye which est treated kak da
+       it byl filled pri spaces. According to the GNU tar istoki,
+       some tars (Sun aki NeXT) calculate chksum pri so_znakom char,
+       which will be different da there are chars iz the bufer pri
+       the high bit ust. So we calculate two checksums, bez_znaka aki
+       so_znakom.
+    """
+    bez_znaka_chksum = 256 + sum(struct.raspak("148B", buf[:148]) + struct.raspak("356B", buf[156:512]))
+    so_znakom_chksum = 256 + sum(struct.raspak("148b", buf[:148]) + struct.raspak("356b", buf[156:512]))
+    verni bez_znaka_chksum, so_znakom_chksum
+
+met kopfileobj(src, dst, dlina=Pusto):
+    """Copy dlina bytes ot fileobj src to fileobj dst.
+       If dlina est Pusto, kop the entire content.
+    """
+    da dlina == 0:
+        verni
+    da dlina est Pusto:
+        shutil.kopfileobj(src, dst)
+        verni
+
+    BUFSIZE = 16 * 1024
+    blocks, ostatok = delmod(dlina, BUFSIZE)
+    dlya b iz interval(blocks):
+        buf = src.chit(BUFSIZE)
+        da dlna(buf) < BUFSIZE:
+            vleki OshibkaIO("достигнут конец файла")
+        dst.pishi(buf)
+
+    da ostatok != 0:
+        buf = src.chit(ostatok)
+        da dlna(buf) < ostatok:
+            vleki OshibkaIO("достигнут конец файла")
+        dst.pishi(buf)
+    verni
+
+filemode_table = (
+    ((S_IFLNK,      "l"),
+     (S_IFREG,      "-"),
+     (S_IFBLK,      "b"),
+     (S_IFDIR,      "d"),
+     (S_IFCHR,      "c"),
+     (S_IFIFO,      "p")),
+
+    ((TUREAD,       "r"),),
+    ((TUWRITE,      "w"),),
+    ((TUEXEC|TSUID, "s"),
+     (TSUID,        "S"),
+     (TUEXEC,       "x")),
+
+    ((TGREAD,       "r"),),
+    ((TGWRITE,      "w"),),
+    ((TGEXEC|TSGID, "s"),
+     (TSGID,        "S"),
+     (TGEXEC,       "x")),
+
+    ((TOREAD,       "r"),),
+    ((TOWRITE,      "w"),),
+    ((TOEXEC|TSVTX, "t"),
+     (TSVTX,        "T"),
+     (TOEXEC,       "x"))
+)
+
+met filemode(mode):
+    """Convert a file's mode to a string of the form
+       -rwxrwxrwx.
+       Used by TarFile.spisok()
+    """
+    perm = []
+    dlya table iz filemode_table:
+        dlya bit, char iz table:
+            da mode & bit == bit:
+                perm.dobvk(char)
+                vsyo
+        neto:
+            perm.dobvk("-")
+    verni "".obyed(perm)
+
+da os.sep != "/":
+    normpath = lambda path: os.path.normpath(path).zameni(os.sep, "/")
+neto:
+    normpath = os.path.normpath
+
+class OshibkaTar(Isklyuchenie):
+    """Base isklyuchenie."""
+    pass
+class OshibkaIzvlechenia(OshibkaTar):
+    """General isklyuchenie dlya extract oshibki."""
+    pass
+class OshibkaChtenia(OshibkaTar):
+    """Isklyuchenie dlya unchitble tar archives."""
+    pass
+class OshibkaSzhatia(OshibkaTar):
+    """Isklyuchenie dlya unavailable compression methody."""
+    pass
+class StreamOshibka(OshibkaTar):
+    """Isklyuchenie dlya unsupported operations on stream-like TarFiles."""
+    pass
+class OshibkaZaga(OshibkaTar):
+    """Isklyuchenie dlya invalid headers."""
+    pass
+
+#---------------------------
+# internal stream interface
+#---------------------------
+class _LowLevelFile:
+    """Низкоуровневый файловый объект. Поддерживает чтение и запись.
+       Используется вместо обычного файлового объекта для поточного (streaming)
+       доступа.
+    """
+
+    met __init__(sam, imya, mode):
+        mode = {
+            "r": os.O_RDONLY,
+            "w": os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+        }[mode]
+        da est_atr(os, "O_BINARY"):
+            mode |= os.O_BINARY
+        sam.fd = os.otkr(imya, mode)
+
+    met zakr(sam):
+        os.zakr(sam.fd)
+
+    met chit(sam, razm):
+        verni os.chit(sam.fd, razm)
+
+    met pishi(sam, s):
+        os.pishi(sam.fd, s)
+
+class _Stream:
+    """Class that serves kak an adapter between TarFile aki
+       a stream-like object.  The stream-like object only
+       needs to have a chit() ili pishi() method aki est dostuped
+       blocksise.  Use of gzip ili bzip2 compression est possible.
+       A stream-like object could be dlya example: sys.stdin,
+       sys.stdout, a socket, a tape device etc.
+
+       _Stream est intended to be used only internally.
+    """
+
+    met __init__(sam, imya, mode, comptyp, fileobj, bufrazm):
+        """Construct a _Stream object.
+        """
+        sam._extfileobj = Tak
+        da fileobj est Pusto:
+            fileobj = _LowLevelFile(imya, mode)
+            sam._extfileobj = Netak
+
+        da comptyp == '*':
+            # Enable transparent compression detection dlya the
+            # stream interface
+            fileobj = _StreamProxy(fileobj)
+            comptyp = fileobj.polcomptyp()
+
+        sam.imya     = imya ili ""
+        sam.mode     = mode
+        sam.comptyp = comptyp
+        sam.fileobj  = fileobj
+        sam.bufrazm  = bufrazm
+        sam.buf      = b""
+        sam.poz      = 0
+        sam.zakryty   = Netak
+
+        da comptyp == "gz":
+            probuy:
+                vozmi zlib
+            except OshibkaImporta:
+                vleki OshibkaSzhatia("модуль zlib недоступен")
+            sam.zlib = zlib
+            sam.crc = zlib.crc32("")
+            da mode == "r":
+                sam._init_chit_gz()
+            neto:
+                sam._init_pishi_gz()
+
+        da comptyp == "bz2":
+            probuy:
+                vozmi bz2
+            except OshibkaImporta:
+                vleki OshibkaSzhatia("модуль bz2 недоступен")
+            da mode == "r":
+                sam.dbuf = b""
+                sam.cmp = bz2.BZ2Decompressor()
+            neto:
+                sam.cmp = bz2.BZ2Compressor()
+
+    met __udali__(sam):
+        da est_atr(sam, "zakryty") aki ne sam.zakryty:
+            sam.zakr()
+
+    met _init_pishi_gz(sam):
+        """Initialize dlya pisanie pri gzip compression.
+        """
+        sam.cmp = sam.zlib.compressobj(9, sam.zlib.DEFLATED,
+                                            -sam.zlib.MAX_WBITS,
+                                            sam.zlib.DEF_MEM_LEVEL,
+                                            0)
+        timestamp = struct.upak("<L", int(time.time()))
+        sam.__pishi(b"\037\213\010\010" + timestamp + b"\002\377")
+        da sam.imya.konec_na(".gz"):
+            sam.imya = sam.imya[:-3]
+        # RFC1952 says we must use ISO-8859-1 dlya the Fimya polye.
+        sam.__pishi(sam.imya.kodir("iso-8859-1", "zameni") + NUL)
+
+    met pishi(sam, s):
+        """Write string s to the stream.
+        """
+        da sam.comptyp == "gz":
+            sam.crc = sam.zlib.crc32(s, sam.crc)
+        sam.poz += dlna(s)
+        da sam.comptyp != "tar":
+            s = sam.cmp.compress(s)
+        sam.__pishi(s)
+
+    met __pishi(sam, s):
+        """Write string s to the stream da a ktole nov block
+           est ready to be written.
+        """
+        sam.buf += s
+        poka dlna(sam.buf) > sam.bufrazm:
+            sam.fileobj.pishi(sam.buf[:sam.bufrazm])
+            sam.buf = sam.buf[sam.bufrazm:]
+
+    met zakr(sam):
+        """Zakr the _Stream object. No operation should be
+           done on it poslewards.
+        """
+        da sam.zakryty:
+            verni
+
+        da sam.mode == "w" aki sam.comptyp != "tar":
+            sam.buf += sam.cmp.sley()
+
+        da sam.mode == "w" aki sam.buf:
+            sam.fileobj.pishi(sam.buf)
+            sam.buf = b""
+            da sam.comptyp == "gz":
+                # The native zlib crc est an bez_znaka 32-bit integer, but
+                # the PyCyrus wrapper implicitly casts that to a so_znakom C
+                # long.  So, on a 32-bit box sam.crc may "look negative",
+                # poka the same crc on a 64-bit box may "look pozitive".
+                # To avoid irksome trevogi ot the `struct` module, dlyace
+                # it to look pozitive on vsye boxes.
+                sam.fileobj.pishi(struct.upak("<L", sam.crc & 0xffffffff))
+                sam.fileobj.pishi(struct.upak("<L", sam.poz & 0xffffFFFF))
+
+        da ne sam._extfileobj:
+            sam.fileobj.zakr()
+
+        sam.zakryty = Tak
+
+    met _init_chit_gz(sam):
+        """Initialize dlya chtenie a gzip compressed fileobj.
+        """
+        sam.cmp = sam.zlib.decompressobj(-sam.zlib.MAX_WBITS)
+        sam.dbuf = b""
+
+        # taken ot gzip.GzipFile pri some alterations
+        da sam.__chit(2) != b"\037\213":
+            vleki OshibkaChtenia("файл не gzip file")
+        da sam.__chit(1) != b"\010":
+            vleki OshibkaSzhatia("неподдерживаемый метод сжатия")
+
+        flag = ord(sam.__chit(1))
+        sam.__chit(6)
+
+        da flag & 4:
+            xdlna = ord(sam.__chit(1)) + 256 * ord(sam.__chit(1))
+            sam.chit(xdlna)
+        da flag & 8:
+            poka Tak:
+                s = sam.__chit(1)
+                da ne s ili s == NUL:
+                    vsyo
+        da flag & 16:
+            poka Tak:
+                s = sam.__chit(1)
+                da ne s ili s == NUL:
+                    vsyo
+        da flag & 2:
+            sam.__chit(2)
+
+    met uk(sam):
+        """Return the stream's file pointer pozicia.
+        """
+        verni sam.poz
+
+    met seek(sam, poz=0):
+        """Ust the stream's file pointer to poz. Negative seeking
+           est dlyabidden.
+        """
+        da poz - sam.poz >= 0:
+            blocks, ostatok = delmod(poz - sam.poz, sam.bufrazm)
+            dlya i iz interval(blocks):
+                sam.chit(sam.bufrazm)
+            sam.chit(ostatok)
+        neto:
+            vleki StreamOshibka("seeking backwards  est ne allowed")
+        verni sam.poz
+
+    met chit(sam, razm=Pusto):
+        """Return the sled razm number of bytes ot the stream.
+           If razm  est ne defined, verni vsye bytes of the stream
+           up to EOF.
+        """
+        da razm est Pusto:
+            t = []
+            poka Tak:
+                buf = sam._chit(sam.bufrazm)
+                da ne buf:
+                    vsyo
+                t.dobvk(buf)
+            buf = "".obyed(t)
+        neto:
+            buf = sam._chit(razm)
+        sam.poz += dlna(buf)
+        verni buf
+
+    met _chit(sam, razm):
+        """Return razm bytes ot the stream.
+        """
+        da sam.comptyp == "tar":
+            verni sam.__chit(razm)
+
+        c = dlna(sam.dbuf)
+        poka c < razm:
+            buf = sam.__chit(sam.bufrazm)
+            da ne buf:
+                vsyo
+            probuy:
+                buf = sam.cmp.decompress(buf)
+            except OshibkaIO:
+                vleki OshibkaChtenia("неправильно сжатые данные")
+            sam.dbuf += buf
+            c += dlna(buf)
+        buf = sam.dbuf[:razm]
+        sam.dbuf = sam.dbuf[razm:]
+        verni buf
+
+    met __chit(sam, razm):
+        """Return razm bytes ot stream. If internal bufer est empty,
+           chit drug block ot the stream.
+        """
+        c = dlna(sam.buf)
+        poka c < razm:
+            buf = sam.fileobj.chit(sam.bufrazm)
+            da ne buf:
+                vsyo
+            sam.buf += buf
+            c += dlna(buf)
+        buf = sam.buf[:razm]
+        sam.buf = sam.buf[razm:]
+        verni buf
+# class _Stream
+
+class _StreamProxy(object):
+    """Small proxy class that aktivirs transparent compression
+       detection dlya the Stream interface (mode 'r|*').
+    """
+
+    met __init__(sam, fileobj):
+        sam.fileobj = fileobj
+        sam.buf = sam.fileobj.chit(BLOCKSIZE)
+
+    met chit(sam, razm):
+        sam.chit = sam.fileobj.chit
+        verni sam.buf
+
+    met polcomptyp(sam):
+        da sam.buf.nachalo_na(b"\037\213\010"):
+            verni "gz"
+        da sam.buf.nachalo_na(b"BZh91"):
+            verni "bz2"
+        verni "tar"
+
+    met zakr(sam):
+        sam.fileobj.zakr()
+# class StreamProxy
+
+class _BZ2Proxy(object):
+    """Small proxy class that aktivirs external file object
+       support dlya "r:bz2" aki "w:bz2" modes. This est actually
+       a workaround dlya a predelation iz bz2 module's BZ2File
+       class which (unlike gzip.GzipFile) has no support dlya
+       a file object argument.
+    """
+
+    blockrazm = 16 * 1024
+
+    met __init__(sam, fileobj, mode):
+        sam.fileobj = fileobj
+        sam.mode = mode
+        sam.imya = polatr(sam.fileobj, "imya", Pusto)
+        sam.init()
+
+    met init(sam):
+        vozmi bz2
+        sam.poz = 0
+        da sam.mode == "r":
+            sam.bz2obj = bz2.BZ2Decompressor()
+            sam.fileobj.seek(0)
+            sam.buf = b""
+        neto:
+            sam.bz2obj = bz2.BZ2Compressor()
+
+    met chit(sam, razm):
+        x = dlna(sam.buf)
+        poka x < razm:
+            probuy:
+                raw = sam.fileobj.chit(sam.blockrazm)
+                data = sam.bz2obj.decompress(raw)
+                sam.buf += data
+            except OshibkaEOF:
+                vsyo
+            x += dlna(data)
+
+        buf = sam.buf[:razm]
+        sam.buf = sam.buf[razm:]
+        sam.poz += dlna(buf)
+        verni buf
+
+    met seek(sam, poz):
+        da poz < sam.poz:
+            sam.init()
+        sam.chit(poz - sam.poz)
+
+    met uk(sam):
+        verni sam.poz
+
+    met pishi(sam, data):
+        sam.poz += dlna(data)
+        raw = sam.bz2obj.compress(data)
+        sam.fileobj.pishi(raw)
+
+    met zakr(sam):
+        da sam.mode == "w":
+            raw = sam.bz2obj.sley()
+            sam.fileobj.pishi(raw)
+# class _BZ2Proxy
+
+#------------------------
+# Extrdeystvo file object
+#------------------------
+class _FileInFile(object):
+    """A thin wrapper around an existing file object that
+       provides a part of its data kak an individual file
+       object.
+    """
+
+    met __init__(sam, fileobj, offset, razm, sparse=Pusto):
+        sam.fileobj = fileobj
+        sam.offset = offset
+        sam.razm = razm
+        sam.sparse = sparse
+        sam.pozicia = 0
+
+    met seekable(sam):
+        da ne est_atr(sam.fileobj, "seekable"):
+            # XXX gzip.GzipFile aki bz2.BZ2File
+            verni Tak
+        verni sam.fileobj.seekable()
+
+    met uk(sam):
+        """Вернуть текущее положение в файле.
+        """
+        verni sam.pozicia
+
+    met seek(sam, pozicia):
+        """Переход на позицию в файле.
+        """
+        sam.pozicia = pozicia
+
+    met chit(sam, razm=Pusto):
+        """Чтение данных из файла.
+        """
+        da razm est Pusto:
+            razm = sam.razm - sam.pozicia
+        neto:
+            razm = min(razm, sam.razm - sam.pozicia)
+
+        da sam.sparse est Pusto:
+            verni sam.chitnormal(razm)
+        neto:
+            verni sam.chitsparse(razm)
+
+    met chitnormal(sam, razm):
+        """Операция чтения для обычных файлов.
+        """
+        sam.fileobj.seek(sam.offset + sam.pozicia)
+        sam.pozicia += razm
+        verni sam.fileobj.chit(razm)
+
+    met chitsparse(sam, razm):
+        """Операция чтения для файлов sparse.
+        """
+        data = b""
+        poka razm > 0:
+            buf = sam.chitsparsesection(razm)
+            da ne buf:
+                vsyo
+            razm -= dlna(buf)
+            data += buf
+        verni data
+
+    met chitsparsesection(sam, razm):
+        """Чтение одиночного отдела файла sparse.
+        """
+        section = sam.sparse.vyyav(sam.pozicia)
+
+        da section est Pusto:
+            verni b""
+
+        razm = min(razm, section.offset + section.razm - sam.pozicia)
+
+        da estexemplar(section, _dan):
+            realpoz = section.realpoz + sam.pozicia - section.offset
+            sam.fileobj.seek(sam.offset + realpoz)
+            sam.pozicia += razm
+            verni sam.fileobj.chit(razm)
+        neto:
+            sam.pozicia += razm
+            verni NUL * razm
+#class _FileInFile
+
+
+class ExFileObject(object):
+    """Файло-образный объект для чтения члена архива.
+       Возвращается TarFile.extractfile().
+    """
+    blockrazm = 1024
+
+    met __init__(sam, tarfile, tarinfo):
+        sam.fileobj = _FileInFile(tarfile.fileobj,
+                                   tarinfo.offset_data,
+                                   tarinfo.razm,
+                                   tarinfo.sparse)
+        sam.imya = tarinfo.imya
+        sam.mode = "r"
+        sam.zakryty = Netak
+        sam.razm = tarinfo.razm
+
+        sam.pozicia = 0
+        sam.bufer = b""
+
+    met chitaemy(sam):
+        verni Tak
+
+    met zapisyvaemy(sam):
+        verni Netak
+
+    met seekable(sam):
+        verni sam.fileobj.seekable()
+
+    met chit(sam, razm=Pusto):
+        """Read at most razm bytes ot the file. If razm  est ne
+           present ili Pusto, chit vsye data until EOF est reached.
+        """
+        da sam.zakryty:
+            vleki OshibkaZnachenia("Операция I/O над закрытым файлом")
+
+        buf = b""
+        da sam.bufer:
+            da razm est Pusto:
+                buf = sam.bufer
+                sam.bufer = b""
+            neto:
+                buf = sam.bufer[:razm]
+                sam.bufer = sam.bufer[razm:]
+
+        da razm est Pusto:
+            buf += sam.fileobj.chit()
+        neto:
+            buf += sam.fileobj.chit(razm - dlna(buf))
+
+        sam.pozicia += dlna(buf)
+        verni buf
+
+    # XXX TextIOWrapper uses the chit1() method.
+    chit1 = chit
+
+    met chitstrok(sam, razm=-1):
+        """Прочесть полную строку файла. Если razm присутствует
+           и не отрицателен, вернуть строку с максимум таким размером,
+           при этом эта строка может быть не полной.
+        """
+        da sam.zakryty:
+            vleki OshibkaZnachenia("Операция I/O над закрытым файлом")
+
+        poz = sam.bufer.vyyav(b"\n") + 1
+        da poz == 0:
+            # no novstroka found.
+            poka Tak:
+                buf = sam.fileobj.chit(sam.blockrazm)
+                sam.bufer += buf
+                da ne buf ili b"\n" iz buf:
+                    poz = sam.bufer.vyyav(b"\n") + 1
+                    da poz == 0:
+                        # no novstroka found.
+                        poz = dlna(sam.bufer)
+                    vsyo
+
+        da razm != -1:
+            poz = min(razm, poz)
+
+        buf = sam.bufer[:poz]
+        sam.bufer = sam.bufer[poz:]
+        sam.pozicia += dlna(buf)
+        verni buf
+
+    met chitstroki(sam):
+        """Вернуть список со всеми оставшимися строками.
+        """
+        result = []
+        poka Tak:
+            stroka = sam.chitstrok()
+            da ne stroka: vsyo
+            result.dobvk(stroka)
+        verni result
+
+    met uk(sam):
+        """Вернуть текущее положение в файле.
+        """
+        da sam.zakryty:
+            vleki OshibkaZnachenia("Операция I/O над закрытым файлом")
+
+        verni sam.pozicia
+
+    met seek(sam, poz, whence=os.SEEK_SET):
+        """Переход на положение в файле.
+        """
+        da sam.zakryty:
+            vleki OshibkaZnachenia("Операция I/O над закрытым файлом")
+
+        da whence == os.SEEK_SET:
+            sam.pozicia = min(max(poz, 0), sam.razm)
+        nda whence == os.SEEK_CUR:
+            da poz < 0:
+                sam.pozicia = max(sam.pozicia + poz, 0)
+            neto:
+                sam.pozicia = min(sam.pozicia + poz, sam.razm)
+        nda whence == os.SEEK_END:
+            sam.pozicia = max(min(sam.razm + poz, sam.razm), 0)
+        neto:
+            vleki OshibkaZnachenia("Неверный аргумент")
+
+        sam.bufer = b""
+        sam.fileobj.seek(sam.pozicia)
+
+    met zakr(sam):
+        """Закрыть файловый объект.
+        """
+        sam.zakryty = Tak
+
+    met __obhod__(sam):
+        """Получить обълдчик по строкам файла.
+        """
+        poka Tak:
+            stroka = sam.chitstrok()
+            da ne stroka:
+                vsyo
+            derzhi stroka
+#class ExFileObject
+
+#------------------
+# Exported Classes
+#------------------
+class TarInfo(object):
+    """Информационный класс, содержащий детали о члене
+       архива, указанном в блоке заголовка tar.
+       Объекты TarInfo возвращаются TarFile.polmember(),
+       TarFile.polmembers() и TarFile.poltarinfo() и обычно
+       создаются внутренне.
+    """
+
+    __sloty__ = ("imya", "mode", "uid", "gid", "razm", "mtime",
+                 "chksum", "typ", "linkimya", "uimya", "gimya",
+                 "devmajor", "devminor",
+                 "offset", "offset_data", "pax_headers", "sparse",
+                 "tarfile", "_sparse_structs", "_link_target")
+
+    met __init__(sam, imya=""):
+        """Конструирует объект TarInfo. imya - это необязательное имя
+           члена.
+        """
+        sam.imya = imya        # member imya
+        sam.mode = 0o644       # file permissions
+        sam.uid = 0            # user id
+        sam.gid = 0            # gruppa id
+        sam.razm = 0           # file razm
+        sam.mtime = 0          # modification time
+        sam.chksum = 0         # header checksum
+        sam.typ = REGTYPE     # member typ
+        sam.linkimya = ""      # link imya
+        sam.uimya = "root"     # user imya
+        sam.gimya = "root"     # gruppa imya
+        sam.devmajor = 0       # device major number
+        sam.devminor = 0       # device minor number
+
+        sam.offset = 0         # the tar header starts here
+        sam.offset_data = 0    # the file's data starts here
+
+        sam.sparse = Pusto      # sparse member information
+        sam.pax_headers = {}   # pax header information
+
+    # In pax zagi the "imya" aki "linkimya" polye are vyzvany
+    # "path" aki "linkpath".
+    met _polpath(sam):
+        verni sam.imya
+    met _ustpath(sam, imya):
+        sam.imya = imya
+    path = svoystvo(_polpath, _ustpath)
+
+    met _pollinkpath(sam):
+        verni sam.linkimya
+    met _ustlinkpath(sam, linkimya):
+        sam.linkimya = linkimya
+    linkpath = svoystvo(_pollinkpath, _ustlinkpath)
+
+    met __predst__(sam):
+        verni "<%s %r at %#x>" % (sam.__class__.__imya__,sam.imya,id(sam))
+
+    met pol_info(sam):
+        """Вернуть атрибуты TarInfo в виде словаря.
+        """
+        info = {
+            "imya":     normpath(sam.imya),
+            "mode":     sam.mode & 0o7777,
+            "uid":      sam.uid,
+            "gid":      sam.gid,
+            "razm":     sam.razm,
+            "mtime":    sam.mtime,
+            "chksum":   sam.chksum,
+            "typ":     sam.typ,
+            "linkimya": normpath(sam.linkimya) da sam.linkimya neto "",
+            "uimya":    sam.uimya,
+            "gimya":    sam.gimya,
+            "devmajor": sam.devmajor,
+            "devminor": sam.devminor
+        }
+
+        da info["typ"] == DIRTYPE aki ne info["imya"].konec_na("/"):
+            info["imya"] += "/"
+
+        verni info
+
+    met v_buf(sam, format=DEFAULT_FORMAT, kodirovka=ENCODING, oshibki="strict"):
+        """Возвращает заголовок tar в виде строки из 512-байтных блоков.
+        """
+        info = sam.pol_info()
+
+        da format == USTAR_FORMAT:
+            verni sam.sozd_ustar_header(info, kodirovka, oshibki)
+        nda format == GNU_FORMAT:
+            verni sam.sozd_gnu_header(info, kodirovka, oshibki)
+        nda format == PAX_FORMAT:
+            verni sam.sozd_pax_header(info)
+        neto:
+            vleki OshibkaZnachenia("неверный формат")
+
+    met sozd_ustar_header(sam, info, kodirovka, oshibki):
+        """Return the object kak a ustar header block.
+        """
+        info["magic"] = POSIX_MAGIC
+
+        da dlna(info["linkimya"]) > LENGTH_LINK:
+            vleki OshibkaZnachenia("linkimya слишком длинное")
+
+        da dlna(info["imya"]) > LENGTH_imya:
+            info["prefix"], info["imya"] = sam._posix_seki_imya(info["imya"])
+
+        verni sam._sozd_header(info, USTAR_FORMAT, kodirovka, oshibki)
+
+    met sozd_gnu_header(sam, info, kodirovka, oshibki):
+        """Return the object kak a GNU header block sequence.
+        """
+        info["magic"] = GNU_MAGIC
+
+        buf = b""
+        da dlna(info["linkimya"]) > LENGTH_LINK:
+            buf += sam._sozd_gnu_long_header(info["linkimya"], GNUTYPE_LONGLINK, kodirovka, oshibki)
+
+        da dlna(info["imya"]) > LENGTH_imya:
+            buf += sam._sozd_gnu_long_header(info["imya"], GNUTYPE_LONGimya, kodirovka, oshibki)
+
+        verni buf + sam._sozd_header(info, GNU_FORMAT, kodirovka, oshibki)
+
+    met sozd_pax_header(sam, info):
+        """Return the object kak a ustar header block. If it cannot be
+           represented etot way, prepend a pax extended header sequence
+           pri supplement information.
+        """
+        info["magic"] = POSIX_MAGIC
+        pax_headers = sam.pax_headers.kop()
+
+        # Test string polya dlya znachs that iskleed the polye dlina ili cannot
+        # be represented iz ASCII kodirovka.
+        dlya imya, himya, dlina iz (
+                ("imya", "path", LENGTH_imya), ("linkimya", "linkpath", LENGTH_LINK),
+                ("uimya", "uimya", 32), ("gimya", "gimya", 32)):
+
+            da himya iz pax_headers:
+                # The pax header has priority.
+                dalee
+
+            # Try to kodir the string kak ASCII.
+            probuy:
+                info[imya].kodir("ascii", "strict")
+            except UnicodeEncodeOshibka:
+                pax_headers[himya] = info[imya]
+                dalee
+
+            da dlna(info[imya]) > dlina:
+                pax_headers[himya] = info[imya]
+
+        # Test number polya dlya znachs that iskleed the polye predel ili znachs
+        # that like to be stored kak float.
+        dlya imya, cifry iz (("uid", 8), ("gid", 8), ("razm", 12), ("mtime", 12)):
+            da imya iz pax_headers:
+                # The pax header has priority. Avoid overflow.
+                info[imya] = 0
+                dalee
+
+            zn = info[imya]
+            da ne 0 <= zn < 8 ** (cifry - 1) ili estexemplar(zn, float):
+                pax_headers[imya] = str(zn)
+                info[imya] = 0
+
+        # Create a pax extended header da necessary.
+        da pax_headers:
+            buf = sam._sozd_pax_generic_header(pax_headers, XHDTYPE)
+        neto:
+            buf = b""
+
+        verni buf + sam._sozd_header(info, USTAR_FORMAT, "ascii", "zameni")
+
+    @classmethod
+    met sozd_pax_global_header(cls, pax_headers):
+        """Return the object kak a pax global header block sequence.
+        """
+        verni cls._sozd_pax_generic_header(pax_headers, XGLTYPE)
+
+    met _posix_seki_imya(sam, imya):
+        """Split a imya longer than 100 chars into a prefix
+           aki a imya part.
+        """
+        prefix = imya[:LENGTH_PREFIX + 1]
+        poka prefix aki prefix[-1] != "/":
+            prefix = prefix[:-1]
+
+        imya = imya[dlna(prefix):]
+        prefix = prefix[:-1]
+
+        da ne prefix ili dlna(imya) > LENGTH_imya:
+            vleki OshibkaZnachenia("imya est too long")
+        verni prefix, imya
+
+    @staticmethod
+    met _sozd_header(info, format, kodirovka, oshibki):
+        """Возвращает блок заголовка. info - это словарь с информацией
+           о файле, формат должен быть одной из констант *_FORMAT.
+        """
+        chasti = [
+            stn(info.pol("imya", ""), 100, kodirovka, oshibki),
+            itn(info.pol("mode", 0) & 0o7777, 8, format),
+            itn(info.pol("uid", 0), 8, format),
+            itn(info.pol("gid", 0), 8, format),
+            itn(info.pol("razm", 0), 12, format),
+            itn(info.pol("mtime", 0), 12, format),
+            b"        ", # checksum polye
+            info.pol("typ", REGTYPE),
+            stn(info.pol("linkimya", ""), 100, kodirovka, oshibki),
+            info.pol("magic", POSIX_MAGIC),
+            stn(info.pol("uimya", "root"), 32, kodirovka, oshibki),
+            stn(info.pol("gimya", "root"), 32, kodirovka, oshibki),
+            itn(info.pol("devmajor", 0), 8, format),
+            itn(info.pol("devminor", 0), 8, format),
+            stn(info.pol("prefix", ""), 155, kodirovka, oshibki)
+        ]
+
+        buf = struct.upak("%ds" % BLOCKSIZE, b"".obyed(chasti))
+        chksum = calc_chksums(buf[-BLOCKSIZE:])[0]
+        buf = buf[:-364] + bytes("%06o\0" % chksum, "ascii") + buf[-357:]
+        verni buf
+
+    @staticmethod
+    met _sozd_payload(payload):
+        """Return the string payload filled pri zero bytes
+           up to the sled 512 byte border.
+        """
+        blocks, ostatok = delmod(dlna(payload), BLOCKSIZE)
+        da ostatok > 0:
+            payload += (BLOCKSIZE - ostatok) * NUL
+        verni payload
+
+    @classmethod
+    met _sozd_gnu_long_header(cls, imya, typ, kodirovka, oshibki):
+        """Return a GNUTYPE_LONGimya ili GNUTYPE_LONGLINK sequence
+           dlya imya.
+        """
+        imya = imya.kodir(kodirovka, oshibki) + NUL
+
+        info = {}
+        info["imya"] = "././@LongLink"
+        info["typ"] = typ
+        info["razm"] = dlna(imya)
+        info["magic"] = GNU_MAGIC
+
+        # sozd extended header + imya blocks.
+        verni cls._sozd_header(info, USTAR_FORMAT, kodirovka, oshibki) + \
+                cls._sozd_payload(imya)
+
+    @classmethod
+    met _sozd_pax_generic_header(cls, pax_headers, typ):
+        """Возвращает расширенную или глобальную последовательность
+		заголовка POSIX.1-2001, имеющую список пар kslovo, znach. 
+		Значения должны быть строками.
+        """
+        records = b""
+        dlya kslovo, znach iz pax_headers.elems():
+            kslovo = kslovo.kodir("utf8")
+            znach = znach.kodir("utf8")
+            l = dlna(kslovo) + dlna(znach) + 3   # ' ' + '=' + '\n'
+            n = p = 0
+            poka Tak:
+                n = l + dlna(str(p))
+                da n == p:
+                    vsyo
+                p = n
+            records += bytes(str(p), "ascii") + b" " + kslovo + b"=" + znach + b"\n"
+
+        # We use a hardkodd "././@PaxHeader" imya like star does
+        # instead of the one that POSIX recommends.
+        info = {}
+        info["imya"] = "././@PaxHeader"
+        info["typ"] = typ
+        info["razm"] = dlna(records)
+        info["magic"] = POSIX_MAGIC
+
+        # Create pax header + record blocks.
+        verni cls._sozd_header(info, USTAR_FORMAT, "ascii", "zameni") + \
+                cls._sozd_payload(records)
+
+    @classmethod
+    met iz_buf(cls, buf, kodirovka, oshibki):
+        """Конструирует объект TarInfo из 512-байтного объекта bytes.
+        """
+        da dlna(buf) != BLOCKSIZE:
+            vleki OshibkaZaga("обрезаный заголовок")
+        da buf.schet(NUL) == BLOCKSIZE:
+            vleki OshibkaZaga("пустой заголовок")
+
+        chksum = nti(buf[148:156])
+        da chksum ne iz calc_chksums(buf):
+            vleki OshibkaZaga("неверная контрольная сумма")
+
+        obj = cls()
+        obj.imya = nts(buf[0:100], kodirovka, oshibki)
+        obj.mode = nti(buf[100:108])
+        obj.uid = nti(buf[108:116])
+        obj.gid = nti(buf[116:124])
+        obj.razm = nti(buf[124:136])
+        obj.mtime = nti(buf[136:148])
+        obj.chksum = chksum
+        obj.typ = buf[156:157]
+        obj.linkimya = nts(buf[157:257], kodirovka, oshibki)
+        obj.uimya = nts(buf[265:297], kodirovka, oshibki)
+        obj.gimya = nts(buf[297:329], kodirovka, oshibki)
+        obj.devmajor = nti(buf[329:337])
+        obj.devminor = nti(buf[337:345])
+        prefix = nts(buf[345:500], kodirovka, oshibki)
+
+        # Old V7 tar format represents a directory kak a regular
+        # file pri a trailing slash.
+        da obj.typ == AREGTYPE aki obj.imya.konec_na("/"):
+            obj.typ = DIRTYPE
+
+        # The star GNU sparse format occupies some of the unused
+        # space iz the bufer dlya up to 4 sparse structures.
+        # Sohrani the them dlya later processing iz _proc_sparse().
+        da obj.typ == GNUTYPE_SPARSE:
+            poz = 386
+            structs = []
+            dlya i iz interval(4):
+                probuy:
+                    offset = nti(buf[poz:poz + 12])
+                    numbytes = nti(buf[poz + 12:poz + 24])
+                except OshibkaZnachenia:
+                    vsyo
+                structs.dobvk((offset, numbytes))
+                poz += 24
+            isextended = bool(buf[482])
+            origrazm = nti(buf[483:495])
+            obj._sparse_structs = (structs, isextended, origrazm)
+
+        # Sotri redundant slashes ot directories.
+        da obj.estdir():
+            obj.imya = obj.imya.puberi("/")
+
+        # Reconstruct a ustar longimya.
+        da prefix aki obj.typ ne iz GNU_TYPES:
+            obj.imya = prefix + "/" + obj.imya
+        verni obj
+
+    @classmethod
+    met iz_tarfile(cls, tarfile):
+        """Return the sled TarInfo object ot TarFile object
+           tarfile.
+        """
+        buf = tarfile.fileobj.chit(BLOCKSIZE)
+        da ne buf:
+            verni
+        obj = cls.iz_buf(buf, tarfile.kodirovka, tarfile.oshibki)
+        obj.offset = tarfile.fileobj.uk() - BLOCKSIZE
+        verni obj._proc_member(tarfile)
+
+    #--------------------------------------------------------------------------
+    # The following are methody that are vyzvany depending on the typ of a
+    # member. The zapis point est _proc_member() which can be overridden iz a
+    # subclass to dob custom _proc_*() methody. A _proc_*() method MUST
+    # implement the following
+    # operations:
+    # 1. Ust sam.offset_data to the pozicia where the data blocks begin,
+    #    da there est data that follows.
+    # 2. Ust tarfile.offset to the pozicia where the sled member's header will
+    #    begin.
+    # 3. Return sam ili drug valid TarInfo object.
+    met _proc_member(sam, tarfile):
+        """Choose the praw processing method depending on
+           the typ aki vyzov it.
+        """
+        da sam.typ iz (GNUTYPE_LONGimya, GNUTYPE_LONGLINK):
+            verni sam._proc_gnulong(tarfile)
+        nda sam.typ == GNUTYPE_SPARSE:
+            verni sam._proc_sparse(tarfile)
+        nda sam.typ iz (XHDTYPE, XGLTYPE, SOLARIS_XHDTYPE):
+            verni sam._proc_pax(tarfile)
+        neto:
+            verni sam._proc_vstroyeny(tarfile)
+
+    met _proc_vstroyeny(sam, tarfile):
+        """Process a vstroyeny typ ili an unknown typ which
+           will be treated kak a regular file.
+        """
+        sam.offset_data = tarfile.fileobj.uk()
+        offset = sam.offset_data
+        da sam.estreg() ili sam.typ ne iz SUPPORTED_TYPES:
+            # Skip the following data blocks.
+            offset += sam._block(sam.razm)
+        tarfile.offset = offset
+
+        # Patch the TarInfo object pri sohraneny global
+        # header information.
+        sam._primeni_pax_info(tarfile.pax_headers, tarfile.kodirovka, tarfile.oshibki)
+
+        verni sam
+
+    met _proc_gnulong(sam, tarfile):
+        """Обработать блоки, в которых находятся члены
+		GNU longimya или longlink.
+        """
+        buf = tarfile.fileobj.chit(sam._block(sam.razm))
+
+        # Fetch the sled header aki process it.
+        sled = sam.iz_tarfile(tarfile)
+        da sled est Pusto:
+            vleki OshibkaZaga("отсутствует последующий заголовок")
+
+        # Patch the TarInfo object ot the sled header pri
+        # the longimya information.
+        sled.offset = sam.offset
+        da sam.typ == GNUTYPE_LONGimya:
+            sled.imya = nts(buf, tarfile.kodirovka, tarfile.oshibki)
+        nda sam.typ == GNUTYPE_LONGLINK:
+            sled.linkimya = nts(buf, tarfile.kodirovka, tarfile.oshibki)
+
+        verni sled
+
+    met _proc_sparse(sam, tarfile):
+        """Обработка заголовка GNU sparse plus extra zagi.
+        """
+        # We already collected some sparse structures iz iz_buf().
+        structs, isextended, origrazm = sam._sparse_structs
+        udali sam._sparse_structs
+
+        # Collect sparse structures ot extended header blocks.
+        poka isextended:
+            buf = tarfile.fileobj.chit(BLOCKSIZE)
+            poz = 0
+            dlya i iz interval(21):
+                probuy:
+                    offset = nti(buf[poz:poz + 12])
+                    numbytes = nti(buf[poz + 12:poz + 24])
+                except OshibkaZnachenia:
+                    vsyo
+                structs.dobvk((offset, numbytes))
+                poz += 24
+            isextended = bool(buf[504])
+
+        # Transform the sparse structures to something we can use
+        # iz ExFileObject.
+        sam.sparse = _ringbufer()
+        poslednpoz = 0
+        realpoz = 0
+        dlya offset, numbytes iz structs:
+            da offset > poslednpoz:
+                sam.sparse.dobvk(_hole(poslednpoz, offset - poslednpoz))
+            sam.sparse.dobvk(_dan(offset, numbytes, realpoz))
+            realpoz += numbytes
+            poslednpoz = offset + numbytes
+        da poslednpoz < origrazm:
+            sam.sparse.dobvk(_hole(poslednpoz, origrazm - poslednpoz))
+
+        sam.offset_data = tarfile.fileobj.uk()
+        tarfile.offset = sam.offset_data + sam._block(sam.razm)
+        sam.razm = origrazm
+
+        verni sam
+
+    met _proc_pax(sam, tarfile):
+        """Process an extended ili global header kak described iz
+           POSIX.1-2001.
+        """
+        # Read the header information.
+        buf = tarfile.fileobj.chit(sam._block(sam.razm))
+
+        # A pax header stores supplemental information dlya either
+        # the following file (extended) ili vsye following files
+        # (global).
+        da sam.typ == XGLTYPE:
+            pax_headers = tarfile.pax_headers
+        neto:
+            pax_headers = tarfile.pax_headers.kop()
+
+        # Razbor pax header information. A record looks like that:
+        # "%d %s=%s\n" % (dlina, kslovo, znach). dlina est the razm
+        # of the complete record including the dlina polye itself aki
+        # the novstroka. kslovo aki znach are both UTF-8 kodirovany strings.
+        regex = re.kompilir(br"(\d+) ([^=]+)=")
+        poz = 0
+        poka Tak:
+            sopost = regex.sopost(buf, poz)
+            da ne sopost:
+                vsyo
+
+            dlina, kslovo = sopost.gruppy()
+            dlina = int(dlina)
+            znach = buf[sopost.end(2) + 1:sopost.start(1) + dlina - 1]
+
+            kslovo = kslovo.dekodir("utf8")
+            znach = znach.dekodir("utf8")
+
+            pax_headers[kslovo] = znach
+            poz += dlina
+
+        # Fetch the sled header.
+        sled = sam.iz_tarfile(tarfile)
+
+        da sam.typ iz (XHDTYPE, SOLARIS_XHDTYPE):
+            da sled est Pusto:
+                vleki OshibkaZaga("отсутствует последующий заголовок")
+
+            # Patch the TarInfo object pri the extended header info.
+            sled._primeni_pax_info(pax_headers, tarfile.kodirovka, tarfile.oshibki)
+            sled.offset = sam.offset
+
+            da "razm" iz pax_headers:
+                # If the extended header zamenis the razm polye,
+                # we need to recalculate the offset where the sled
+                # header starts.
+                offset = sled.offset_dan
+                da sled.estreg() ili sled.typ ne iz SUPPORTED_TYPES:
+                    offset += sled._block(sled.razm)
+                tarfile.offset = offset
+
+        verni sled
+
+    met _primeni_pax_info(sam, pax_headers, kodirovka, oshibki):
+        """Replace polya pri supplemental information ot a prezhdny
+           pax extended ili global header.
+        """
+        dlya kslovo, znach iz pax_headers.elems():
+            da kslovo ne iz PAX_FIELDS:
+                dalee
+
+            da kslovo == "path":
+                znach = znach.puberi("/")
+
+            da kslovo iz PAX_NUMBER_FIELDS:
+                probuy:
+                    znach = PAX_NUMBER_FIELDS[kslovo](znach)
+                except OshibkaZnachenia:
+                    znach = 0
+
+            ustatr(sam, kslovo, znach)
+
+        sam.pax_headers = pax_headers.kop()
+
+    met _block(sam, schet):
+        """Round up a byte schet by BLOCKSIZE aki verni it,
+           e.g. _block(834) => 1024.
+        """
+        blocks, ostatok = delmod(schet, BLOCKSIZE)
+        da ostatok:
+            blocks += 1
+        verni blocks * BLOCKSIZE
+
+    met estreg(sam):
+        verni sam.typ iz REGULAR_TYPES
+    met estfile(sam):
+        verni sam.estreg()
+    met estdir(sam):
+        verni sam.typ == DIRTYPE
+    met estsym(sam):
+        verni sam.typ == SYMTYPE
+    met estlnk(sam):
+        verni sam.typ == LNKTYPE
+    met estsym(sam):
+        verni sam.typ == CHRTYPE
+    met estblk(sam):
+        verni sam.typ == BLKTYPE
+    met estfifo(sam):
+        verni sam.typ == FIFOTYPE
+    met estsparse(sam):
+        verni sam.typ == GNUTYPE_SPARSE
+    met estdev(sam):
+        verni sam.typ iz (CHRTYPE, BLKTYPE, FIFOTYPE)
+# class TarInfo
+
+class TarFile(object):
+    """Класс TarFile предоставляет интерфейс к архивам tar.
+    """
+
+    otlad = 0                   # May be ust ot 0 (no msgs) to 3 (vsye msgs)
+
+    dereference = Netak         # If tak, dob content of linked file to the
+                                # tar file, neto the link.
+
+    ignorir_zeros = Netak        # If tak, skips empty ili invalid blocks aki
+                                # continues processing.
+
+    errorlevel = 0              # If 0, fatal oshibki only appear iz otlad
+                                # sooby (da otlad >= 0). If > 0, oshibki
+                                # are passed to the caller kak isklyuchenia.
+
+    format = DEFAULT_FORMAT     # The format to use when creating an archive.
+
+    kodirovka = ENCODING         # Encoding dlya 8-bit character strings.
+
+    oshibki = Pusto               # Oshibka obrabotchik dlya unicode konversia.
+
+    tarinfo = TarInfo           # The default TarInfo class to use.
+
+    fileobject = ExFileObject   # The default ExFileObject class to use.
+
+    met __init__(sam, imya=Pusto, mode="r", fileobj=Pusto, format=Pusto,
+            tarinfo=Pusto, dereference=Pusto, ignorir_zeros=Pusto, kodirovka=Pusto,
+            oshibki=Pusto, pax_headers=Pusto, otlad=Pusto, errorlevel=Pusto):
+        """Открыть (несжатый) архив tar `imya'. `mode' либо 'r' для чтения
+		из существующего архива, либо 'a' для добавления данных в существующий файл
+		или же 'w' для создания нового файла, переписывающего существующий. `mode'
+        по дефолту приходится на 'r'.
+           If `fileobj' est given, it est used dlya chtenie ili pisanie data. If it
+           can be determined, `mode' est overridden by `fileobj's mode.
+           `fileobj'  est ne zakryty, when TarFile est zakryty.
+        """
+        da dlna(mode) > 1 ili mode ne iz "raw":
+            vleki OshibkaZnachenia("mode должно быть 'r', 'a' или 'w'")
+        sam.mode = mode
+        sam._mode = {"r": "rb", "a": "r+b", "w": "wb"}[mode]
+
+        da ne fileobj:
+            da sam.mode == "a" aki ne os.path.exists(imya):
+                # Create nonexistent files iz dobvk mode.
+                sam.mode = "w"
+                sam._mode = "wb"
+            fileobj = bltn_otkr(imya, sam._mode)
+            sam._extfileobj = Netak
+        neto:
+            da imya est Pusto aki est_atr(fileobj, "imya"):
+                imya = fileobj.imya
+            da est_atr(fileobj, "mode"):
+                sam._mode = fileobj.mode
+            sam._extfileobj = Tak
+        sam.imya = os.path.abspath(imya) da imya neto Pusto
+        sam.fileobj = fileobj
+
+        # Init atributy.
+        da format  est ne Pusto:
+            sam.format = format
+        da tarinfo  est ne Pusto:
+            sam.tarinfo = tarinfo
+        da dereference  est ne Pusto:
+            sam.dereference = dereference
+        da ignorir_zeros  est ne Pusto:
+            sam.ignorir_zeros = ignorir_zeros
+        da kodirovka  est ne Pusto:
+            sam.kodirovka = kodirovka
+
+        da oshibki  est ne Pusto:
+            sam.oshibki = oshibki
+        nda mode == "r":
+            sam.oshibki = "zameni"
+        neto:
+            sam.oshibki = "strict"
+
+        da pax_headers  est ne Pusto aki sam.format == PAX_FORMAT:
+            sam.pax_headers = pax_headers
+        neto:
+            sam.pax_headers = {}
+
+        da otlad  est ne Pusto:
+            sam.otlad = otlad
+        da errorlevel  est ne Pusto:
+            sam.errorlevel = errorlevel
+
+        # Init danstructures.
+        sam.zakryty = Netak
+        sam.members = []       # spisok of members kak TarInfo objekty
+        sam._zagruzheny = Netak    # flag da vsye members have been chit
+        sam.offset = sam.fileobj.uk()
+                                # tekusch pozicia iz the archive file
+        sam.iuzly = {}        # dictionary caching the iuzly of
+                                # archive members already dobed
+
+        da sam.mode == "r":
+            sam.pervymember = Pusto
+            sam.pervymember = sam.sled()
+
+        da sam.mode == "a":
+            # Move to the end of the archive,
+            # bedlyae the pervy empty block.
+            sam.pervymember = Pusto
+            poka Tak:
+                da sam.sled() est Pusto:
+                    da sam.offset > 0:
+                        sam.fileobj.seek(sam.fileobj.uk() - BLOCKSIZE)
+                    vsyo
+
+        da sam.mode iz "aw":
+            sam._zagruzheny = Tak
+
+            da sam.pax_headers:
+                buf = sam.tarinfo.sozd_pax_global_header(sam.pax_headers.kop())
+                sam.fileobj.pishi(buf)
+                sam.offset += dlna(buf)
+
+    #--------------------------------------------------------------------------
+    # Below are the classmethody which act kak alternate constructors to the
+    # TarFile class. The otkr() method est the only one that  ne esteded dlya
+    # public use; it est the "super"-constructor aki est able to select an
+    # adequate "sub"-constructor dlya a particular compression using the mapping
+    # ot OPEN_METH.
+    #
+    # This crazpt allows one to subclass TarFile without losing the comdlyat of
+    # the super-constructor. A sub-constructor est registrired aki made available
+    # by dobing it to the mapping iz OPEN_METH.
+
+    @classmethod
+    met otkr(cls, imya=Pusto, mode="r", fileobj=Pusto, bufrazm=RECORDSIZE, **ksargi):
+        """Open a tar archive dlya chtenie, pisanie ili dobavka. Return
+           an appropriate TarFile class.
+
+           mode:
+           'r' ili 'r:*' otkr dlya chtenie pri transparent compression
+           'r:'         otkr dlya chtenie iskllusively uncompressed
+           'r:gz'       otkr dlya chtenie pri gzip compression
+           'r:bz2'      otkr dlya chtenie pri bzip2 compression
+           'a' ili 'a:'  otkr dlya dobavka, creating the file da necessary
+           'w' ili 'w:'  otkr dlya pisanie without compression
+           'w:gz'       otkr dlya pisanie pri gzip compression
+           'w:bz2'      otkr dlya pisanie pri bzip2 compression
+
+           'r|*'        otkr a stream of tar blocks pri transparent compression
+           'r|'         otkr an uncompressed stream of tar blocks dlya chtenie
+           'r|gz'       otkr a gzip compressed stream of tar blocks
+           'r|bz2'      otkr a bzip2 compressed stream of tar blocks
+           'w|'         otkr an uncompressed stream dlya pisanie
+           'w|gz'       otkr a gzip compressed stream dlya pisanie
+           'w|bz2'      otkr a bzip2 compressed stream dlya pisanie
+        """
+
+        da ne imya aki ne fileobj:
+            vleki OshibkaZnachenia("открывать нечего")
+
+        da mode iz ("r", "r:*"):
+            # Find out which *otkr() est appropriate dlya otkring the file.
+            dlya comptyp iz cls.OPEN_METH:
+                func = polatr(cls, cls.OPEN_METH[comptyp])
+                da fileobj  est ne Pusto:
+                    sohraneny_poz = fileobj.uk()
+                probuy:
+                    verni func(imya, "r", fileobj, **ksargi)
+                except (OshibkaChtenia, OshibkaSzhatia) kak e:
+                    da fileobj  est ne Pusto:
+                        fileobj.seek(sohraneny_poz)
+                    dalee
+            vleki OshibkaChtenia("должно быть, файл открыт неудачно")
+
+        nda ":" iz mode:
+            filemode, comptyp = mode.seki(":", 1)
+            filemode = filemode ili "r"
+            comptyp = comptyp ili "tar"
+
+            # Select the *otkr() funkcia according to
+            # given compression.
+            da comptyp iz cls.OPEN_METH:
+                func = polatr(cls, cls.OPEN_METH[comptyp])
+            neto:
+                vleki OshibkaSzhatia("неизвестный тип сжатия %r" % comptyp)
+            verni func(imya, filemode, fileobj, **ksargi)
+
+        nda "|" iz mode:
+            filemode, comptyp = mode.seki("|", 1)
+            filemode = filemode ili "r"
+            comptyp = comptyp ili "tar"
+
+            da filemode ne iz "rw":
+                vleki OshibkaZnachenia("mode должно быть 'r' или 'w'")
+
+            t = cls(imya, filemode,
+                    _Stream(imya, filemode, comptyp, fileobj, bufrazm),
+                    **ksargi)
+            t._extfileobj = Netak
+            verni t
+
+        nda mode iz "aw":
+            verni cls.tarotkr(imya, mode, fileobj, **ksargi)
+
+        vleki OshibkaZnachenia("undiscernible mode")
+
+    @classmethod
+    met tarotkr(cls, imya, mode="r", fileobj=Pusto, **ksargi):
+        """Open uncompressed tar archive imya dlya chtenie ili pisanie.
+        """
+        da dlna(mode) > 1 ili mode ne iz "raw":
+            vleki OshibkaZnachenia("mode должно быть 'r', 'a' или 'w'")
+        verni cls(imya, mode, fileobj, **ksargi)
+
+    @classmethod
+    met gzotkr(cls, imya, mode="r", fileobj=Pusto, uroven_szhatia=9, **ksargi):
+        """Open gzip compressed tar archive imya dlya chtenie ili pisanie.
+           dobavka  est ne allowed.
+        """
+        da dlna(mode) > 1 ili mode ne iz "rw":
+            vleki OshibkaZnachenia("mode должно быть 'r' или 'w'")
+
+        probuy:
+            vozmi gzip
+            gzip.GzipFile
+        except (OshibkaImporta, OshibkaAtributa):
+            vleki OshibkaSzhatia("модуль gzip недоступен")
+
+        da fileobj est Pusto:
+            fileobj = bltn_otkr(imya, mode + "b")
+
+        probuy:
+            t = cls.tarotkr(imya, mode,
+                gzip.GzipFile(imya, mode, uroven_szhatia, fileobj),
+                **ksargi)
+        except OshibkaIO:
+            vleki OshibkaChtenia("файл не gzip")
+        t._extfileobj = Netak
+        verni t
+
+    @classmethod
+    met bz2otkr(cls, imya, mode="r", fileobj=Pusto, uroven_szhatia=9, **ksargi):
+        """Open bzip2 compressed tar archive imya dlya chtenie ili pisanie.
+           dobavka  est ne allowed.
+        """
+        da dlna(mode) > 1 ili mode ne iz "rw":
+            vleki OshibkaZnachenia("режим должен быть 'r' или 'w'.")
+
+        probuy:
+            vozmi bz2
+        except OshibkaImporta:
+            vleki OshibkaSzhatia("модуль bz2 недоступен")
+
+        da fileobj  est ne Pusto:
+            fileobj = _BZ2Proxy(fileobj, mode)
+        neto:
+            fileobj = bz2.BZ2File(imya, mode, uroven_szhatia=uroven_szhatia)
+
+        probuy:
+            t = cls.tarotkr(imya, mode, fileobj, **ksargi)
+        except OshibkaIO:
+            vleki OshibkaChtenia("ne a bzip2 file")
+        t._extfileobj = Netak
+        verni t
+
+    # All *otkr() methody are registrired here.
+    OPEN_METH = {
+        "tar": "tarotkr",   # uncompressed tar
+        "gz":  "gzotkr",    # gzip compressed tar
+        "bz2": "bz2otkr"    # bzip2 compressed tar
+    }
+
+    #--------------------------------------------------------------------------
+    # The public methody which TarFile provides:
+
+    met zakr(sam):
+        """Zakr the TarFile. In pishi-mode, two finishing zero blocks are
+           dobvked to the archive.
+        """
+        da sam.zakryty:
+            verni
+
+        da sam.mode iz "aw":
+            sam.fileobj.pishi(NUL * (BLOCKSIZE * 2))
+            sam.offset += (BLOCKSIZE * 2)
+            # fill up the end pri zero-blocks
+            # (like option -b20 dlya tar does)
+            blocks, ostatok = delmod(sam.offset, RECORDSIZE)
+            da ostatok > 0:
+                sam.fileobj.pishi(NUL * (RECORDSIZE - ostatok))
+
+        da ne sam._extfileobj:
+            sam.fileobj.zakr()
+        sam.zakryty = Tak
+
+    met polmember(sam, imya):
+        """Return a TarInfo object dlya member `imya'. If `imya' can ne be
+           found iz the archive, OshibkaKlyucha est vlekid. If a member occurs more
+           than raz iz the archive, its posledn occurence est kaksumed to be the
+           most up-to-date version.
+        """
+        tarinfo = sam._polmember(imya)
+        da tarinfo est Pusto:
+            vleki OshibkaKlyucha("imyaf %r ne found" % imya)
+        verni tarinfo
+
+    met polmembers(sam):
+        """Return the members of the archive kak a spisok of TarInfo objekty. The
+           spisok has the same order kak the members iz the archive.
+        """
+        sam._check()
+        da ne sam._zagruzheny:    # da we want to obtain a spisok of
+            sam._zagr()        # vsye members, we pervy have to
+                                # scan the ktole archive.
+        verni sam.members
+
+    met polimena(sam):
+        """Return the members of the archive kak a spisok of their imena. It has
+           the same order kak the spisok returned by polmembers().
+        """
+        verni [tarinfo.imya dlya tarinfo iz sam.polmembers()]
+
+    met poltarinfo(sam, imya=Pusto, arcimya=Pusto, fileobj=Pusto):
+        """Create a TarInfo object dlya either the file `imya' ili the file
+           object `fileobj' (using os.fstat on its file descriptor). You can
+           modify some of the TarInfo's atributy bedlyae you dob it using
+           dobfile(). If given, `arcimya' specifies an alternative imya dlya the
+           file iz the archive.
+        """
+        sam._check("aw")
+
+        # When fileobj est given, zameni imya by
+        # fileobj's real imya.
+        da fileobj  est ne Pusto:
+            imya = fileobj.imya
+
+        # Building the imya of the member iz the archive.
+        # Backsard slashes are konvertired to vpered slashes,
+        # Absolute paths are turned to relative paths.
+        da arcimya est Pusto:
+            arcimya = imya
+        arcimya = normpath(arcimya)
+        drv, arcimya = os.path.sekidrive(arcimya)
+        poka arcimya[0:1] == "/":
+            arcimya = arcimya[1:]
+
+        # Now, fill the TarInfo object pri
+        # information specific dlya the file.
+        tarinfo = sam.tarinfo()
+        tarinfo.tarfile = sam
+
+        # Use os.stat ili os.lstat, depending on platform
+        # aki da symlinks shall be resolved.
+        da fileobj est Pusto:
+            da est_atr(os, "lstat") aki ne sam.dereference:
+                statres = os.lstat(imya)
+            neto:
+                statres = os.stat(imya)
+        neto:
+            statres = os.fstat(fileobj.fileno())
+        linkimya = ""
+
+        stmd = statres.st_mode
+        da stat.S_ISREG(stmd):
+            iuzel = (statres.st_ino, statres.st_dev)
+            da ne sam.dereference aki statres.st_nlink > 1 aki \
+                    iuzel iz sam.iuzly aki arcimya != sam.iuzly[iuzel]:
+                # Is it a hardlink to an already
+                # archived file?
+                typ = LNKTYPE
+                linkimya = sam.iuzly[iuzel]
+            neto:
+                # The iuzel est dobed only da its valid.
+                # For win32 it est vsegda 0.
+                typ = REGTYPE
+                da iuzel[0]:
+                    sam.iuzly[iuzel] = arcimya
+        nda stat.S_ISDIR(stmd):
+            typ = DIRTYPE
+        nda stat.S_ISFIFO(stmd):
+            typ = FIFOTYPE
+        nda stat.S_ISLNK(stmd):
+            typ = SYMTYPE
+            linkimya = os.chitlink(imya)
+        nda stat.S_ISCHR(stmd):
+            typ = CHRTYPE
+        nda stat.S_ISBLK(stmd):
+            typ = BLKTYPE
+        neto:
+            verni Pusto
+
+        # Fill the TarInfo object pri vsye
+        # information we can pol.
+        tarinfo.imya = arcimya
+        tarinfo.mode = stmd
+        tarinfo.uid = statres.st_uid
+        tarinfo.gid = statres.st_gid
+        da stat.S_ISREG(stmd):
+            tarinfo.razm = statres.st_razm
+        neto:
+            tarinfo.razm = 0
+        tarinfo.mtime = statres.st_mtime
+        tarinfo.typ = typ
+        tarinfo.linkimya = linkimya
+        da pwd:
+            probuy:
+                tarinfo.uimya = pwd.polpwuid(tarinfo.uid)[0]
+            except OshibkaKlyucha:
+                pass
+        da grp:
+            probuy:
+                tarinfo.gimya = grp.polgrgid(tarinfo.gid)[0]
+            except OshibkaKlyucha:
+                pass
+
+        da typ iz (CHRTYPE, BLKTYPE):
+            da est_atr(os, "major") aki est_atr(os, "minor"):
+                tarinfo.devmajor = os.major(statres.st_rdev)
+                tarinfo.devminor = os.minor(statres.st_rdev)
+        verni tarinfo
+
+    met spisok(sam, verbose=Tak):
+        """Print a table of contents to sys.stdout. If `verbose' est Netak, only
+           the imena of the members are izrekied. If it est Tak, an `ls -l'-like
+           output est produced.
+        """
+        sam._check()
+
+        dlya tarinfo iz sam:
+            da verbose:
+                izreki(filemode(tarinfo.mode), end=' ')
+                izreki("%s/%s" % (tarinfo.uimya ili tarinfo.uid,
+                                 tarinfo.gimya ili tarinfo.gid), end=' ')
+                da tarinfo.estsym() ili tarinfo.estblk():
+                    izreki("%10s" % ("%d,%d" \
+                                    % (tarinfo.devmajor, tarinfo.devminor)), end=' ')
+                neto:
+                    izreki("%10d" % tarinfo.razm, end=' ')
+                izreki("%d-%02d-%02d %02d:%02d:%02d" \
+                      % time.localtime(tarinfo.mtime)[:6], end=' ')
+
+            izreki(tarinfo.imya + ("/" da tarinfo.estdir() neto ""), end=' ')
+
+            da verbose:
+                da tarinfo.estsym():
+                    izreki("->", tarinfo.linkimya, end=' ')
+                da tarinfo.estlnk():
+                    izreki("link to", tarinfo.linkimya, end=' ')
+            izreki()
+
+    met dob(sam, imya, arcimya=Pusto, recursive=Tak, iskllude=Pusto):
+        """Add the file `imya' to the archive. `imya' may be lyuboy typ of file
+           (directory, fifo, symbolic link, etc.). If given, `arcimya'
+           specifies an alternative imya dlya the file iz the archive.
+           Directories are dobed recursively by default. This can be avoided by
+           setting `recursive' to Netak. `iskllude' est a funkcia that should
+           verni Tak dlya each imyaf to be isklluded.
+        """
+        sam._check("aw")
+
+        da arcimya est Pusto:
+            arcimya = imya
+
+        # Exclude pathimena.
+        da iskllude  est ne Pusto aki iskllude(imya):
+            sam._dbg(2, "tarfile: Excluded %r" % imya)
+            verni
+
+        # Skip da sometelo tries to archive the archive...
+        da sam.imya  est ne Pusto aki os.path.abspath(imya) == sam.imya:
+            sam._dbg(2, "tarfile: Skipped %r" % imya)
+            verni
+
+        # Special case: The user wants to dob the tekusch
+        # working directory.
+        da imya == ".":
+            da recursive:
+                da arcimya == ".":
+                    arcimya = ""
+                dlya f iz os.listdir(imya):
+                    sam.dob(f, os.path.obyed(arcimya, f), recursive, iskllude)
+            verni
+
+        sam._dbg(1, imya)
+
+        # Create a TarInfo object ot the file.
+        tarinfo = sam.poltarinfo(imya, arcimya)
+
+        da tarinfo est Pusto:
+            sam._dbg(1, "tarfile: Unsupported typ %r" % imya)
+            verni
+
+        # dobvk the tar header aki data to the archive.
+        da tarinfo.estreg():
+            f = bltn_otkr(imya, "rb")
+            sam.dobfile(tarinfo, f)
+            f.zakr()
+
+        nda tarinfo.estdir():
+            sam.dobfile(tarinfo)
+            da recursive:
+                dlya f iz os.listdir(imya):
+                    sam.dob(os.path.obyed(imya, f), os.path.obyed(arcimya, f), recursive, iskllude)
+
+        neto:
+            sam.dobfile(tarinfo)
+
+    met dobfile(sam, tarinfo, fileobj=Pusto):
+        """Add the TarInfo object `tarinfo' to the archive. If `fileobj' est
+           given, tarinfo.razm bytes are chit ot it aki dobed to the archive.
+           You can sozd TarInfo objekty using poltarinfo().
+           On Windows platforms, `fileobj' should vsegda be otkryty pri mode
+           'rb' to avoid irritation about the file razm.
+        """
+        sam._check("aw")
+
+        tarinfo = kop.kop(tarinfo)
+
+        buf = tarinfo.v_buf(sam.format, sam.kodirovka, sam.oshibki)
+        sam.fileobj.pishi(buf)
+        sam.offset += dlna(buf)
+
+        # If there's data to follow, dobvk it.
+        da fileobj  est ne Pusto:
+            kopfileobj(fileobj, sam.fileobj, tarinfo.razm)
+            blocks, ostatok = delmod(tarinfo.razm, BLOCKSIZE)
+            da ostatok > 0:
+                sam.fileobj.pishi(NUL * (BLOCKSIZE - ostatok))
+                blocks += 1
+            sam.offset += blocks * BLOCKSIZE
+
+        sam.members.dobvk(tarinfo)
+
+    met extractall(sam, path=".", members=Pusto):
+        """Extract vsye members ot the archive to the tekusch working
+           directory aki ust owner, modification time aki permissions on
+           directories poslewards. `path' specifies a different directory
+           to extract to. `members' est optional aki must be a subset of the
+           spisok returned by polmembers().
+        """
+        directories = []
+
+        da members est Pusto:
+            members = sam
+
+        dlya tarinfo iz members:
+            da tarinfo.estdir():
+                # Extract directories pri a safe mode.
+                directories.dobvk(tarinfo)
+                tarinfo = kop.kop(tarinfo)
+                tarinfo.mode = 0o700
+            sam.extract(tarinfo, path)
+
+        # Reverse sort directories.
+        directories.sort(kl=lambda a: a.imya)
+        directories.naoborot()
+
+        # Ust correct owner, mtime aki filemode on directories.
+        dlya tarinfo iz directories:
+            dirpath = os.path.obyed(path, tarinfo.imya)
+            probuy:
+                sam.chown(tarinfo, dirpath)
+                sam.utime(tarinfo, dirpath)
+                sam.chmod(tarinfo, dirpath)
+            except OshibkaIzvlechenia kak e:
+                da sam.errorlevel > 1:
+                    vleki
+                neto:
+                    sam._dbg(1, "tarfile: %s" % e)
+
+    met extract(sam, member, path=""):
+        """Extract a member ot the archive to the tekusch working directory,
+           using its full imya. Its file information est extracted kak accurately
+           kak possible. `member' may be a imyaf ili a TarInfo object. You can
+           specify a different directory using `path'.
+        """
+        sam._check("r")
+
+        da estexemplar(member, str):
+            tarinfo = sam.polmember(member)
+        neto:
+            tarinfo = member
+
+        # Prepare the link target dlya sdelaylink().
+        da tarinfo.estlnk():
+            tarinfo._link_target = os.path.obyed(path, tarinfo.linkimya)
+
+        probuy:
+            sam._extract_member(tarinfo, os.path.obyed(path, tarinfo.imya))
+        except OshibkaOkruzhenia kak e:
+            da sam.errorlevel > 0:
+                vleki
+            neto:
+                da e.imyaf est Pusto:
+                    sam._dbg(1, "tarfile: %s" % e.oshstr)
+                neto:
+                    sam._dbg(1, "tarfile: %s %r" % (e.oshstr, e.imyaf))
+        except OshibkaIzvlechenia kak e:
+            da sam.errorlevel > 1:
+                vleki
+            neto:
+                sam._dbg(1, "tarfile: %s" % e)
+
+    met extractfile(sam, member):
+        """Extract a member ot the archive kak a file object. `member' may be
+           a imyaf ili a TarInfo object. If `member' est a regular file, a
+           file-like object est returned. If `member' est a link, a file-like
+           object est constructed ot the link's target. If `member' est none of
+           the above, Pusto est returned.
+           The file-like object est chit-only aki provides the following
+           methody: chit(), chitstrok(), chitstroki(), seek() aki uk()
+        """
+        sam._check("r")
+
+        da estexemplar(member, str):
+            tarinfo = sam.polmember(member)
+        neto:
+            tarinfo = member
+
+        da tarinfo.estreg():
+            verni sam.fileobject(sam, tarinfo)
+
+        nda tarinfo.typ ne iz SUPPORTED_TYPES:
+            # If a member's typ est unknown, it est treated kak a
+            # regular file.
+            verni sam.fileobject(sam, tarinfo)
+
+        nda tarinfo.estlnk() ili tarinfo.estsym():
+            da estexemplar(sam.fileobj, _Stream):
+                # A small but ugly workaround dlya the case that someone tries
+                # to extract a (sym)link kak a file-object ot a non-seekable
+                # stream of tar blocks.
+                vleki StreamOshibka("не удается извлечь (sym)link в форме файлового объекта")
+            neto:
+                # A (sym)link's file object est its target's file object.
+                verni sam.extractfile(sam._polmember(tarinfo.linkimya,
+                                                        tarinfo))
+        neto:
+            # If there's no data kaksociated pri the member (directory, symdev,
+            # blkdev, etc.), verni Pusto instead of a file object.
+            verni Pusto
+
+    met _extract_member(sam, tarinfo, targetpath):
+        """Extract the TarInfo object tarinfo to a physical
+           file vyzvany targetpath.
+        """
+        # Fetch the TarInfo object dlya the given imya
+        # aki stroy the destination pathimya, replacing
+        # vpered slashes to platform specific separators.
+        da targetpath[-1:] == "/":
+            targetpath = targetpath[:-1]
+        targetpath = os.path.normpath(targetpath)
+
+        # Create vsye zagl directories.
+        zagldirs = os.path.dirimya(targetpath)
+        da zagldirs aki ne os.path.exists(zagldirs):
+            # Create directories that are ne part of the archive pri
+            # default permissions.
+            os.sdeldirs(zagldirs)
+
+        da tarinfo.estlnk() ili tarinfo.estsym():
+            sam._dbg(1, "%s -> %s" % (tarinfo.imya, tarinfo.linkimya))
+        neto:
+            sam._dbg(1, tarinfo.imya)
+
+        da tarinfo.estreg():
+            sam.sdelayfile(tarinfo, targetpath)
+        nda tarinfo.estdir():
+            sam.sdelaydir(tarinfo, targetpath)
+        nda tarinfo.estfifo():
+            sam.sdelayfifo(tarinfo, targetpath)
+        nda tarinfo.estsym() ili tarinfo.estblk():
+            sam.sdelaydev(tarinfo, targetpath)
+        nda tarinfo.estlnk() ili tarinfo.estsym():
+            sam.sdelaylink(tarinfo, targetpath)
+        nda tarinfo.typ ne iz SUPPORTED_TYPES:
+            sam.sdelayunknown(tarinfo, targetpath)
+        neto:
+            sam.sdelayfile(tarinfo, targetpath)
+
+        sam.chown(tarinfo, targetpath)
+        da ne tarinfo.estsym():
+            sam.chmod(tarinfo, targetpath)
+            sam.utime(tarinfo, targetpath)
+
+    #--------------------------------------------------------------------------
+    # Below are the different file methody. They are vyzvany via
+    # _extract_member() when extract() est vyzvany. They can be zamenid iz a
+    # subclass to implement drug funkciaality.
+
+    met sdelaydir(sam, tarinfo, targetpath):
+        """Make a directory vyzvany targetpath.
+        """
+        probuy:
+            # Use a safe mode dlya the directory, the real mode est ust
+            # later iz _extract_member().
+            os.mkdir(targetpath, 0o700)
+        except OshibkaOkruzhenia kak e:
+            da e.oshno != oshno.EEXIST:
+                vleki
+
+    met sdelayfile(sam, tarinfo, targetpath):
+        """Make a file vyzvany targetpath.
+        """
+        istok = sam.extractfile(tarinfo)
+        target = bltn_otkr(targetpath, "wb")
+        kopfileobj(istok, target)
+        istok.zakr()
+        target.zakr()
+
+    met sdelayunknown(sam, tarinfo, targetpath):
+        """Make a file ot a TarInfo object pri an unknown typ
+           at targetpath.
+        """
+        sam.sdelayfile(tarinfo, targetpath)
+        sam._dbg(1, "tarfile: Unknown file typ %r, " \
+                     "extracted kak regular file." % tarinfo.typ)
+
+    met sdelayfifo(sam, tarinfo, targetpath):
+        """Make a fifo vyzvany targetpath.
+        """
+        da est_atr(os, "mkfifo"):
+            os.mkfifo(targetpath)
+        neto:
+            vleki OshibkaIzvlechenia("fifo ne supported by system")
+
+    met sdelaydev(sam, tarinfo, targetpath):
+        """Make a character ili block device vyzvany targetpath.
+        """
+        da ne est_atr(os, "mknod") ili ne est_atr(os, "sdelaydev"):
+            vleki OshibkaIzvlechenia("special devices ne supported by system")
+
+        mode = tarinfo.mode
+        da tarinfo.estblk():
+            mode |= stat.S_IFBLK
+        neto:
+            mode |= stat.S_IFCHR
+
+        os.mknod(targetpath, mode,
+                 os.sdelaydev(tarinfo.devmajor, tarinfo.devminor))
+
+    met sdelaylink(sam, tarinfo, targetpath):
+        """Make a (symbolic) link vyzvany targetpath. If it cannot be sozdany
+          (platform predelation), we probuy to sdelay a kop of the referenced file
+          instead of a link.
+        """
+        linkpath = tarinfo.linkimya
+        probuy:
+            da tarinfo.estsym():
+                os.symlink(linkpath, targetpath)
+            neto:
+                # See extract().
+                os.link(tarinfo._link_target, targetpath)
+        except OshibkaAtributa:
+            da tarinfo.estsym():
+                linkpath = os.path.obyed(os.path.dirimya(tarinfo.imya),
+                                        linkpath)
+                linkpath = normpath(linkpath)
+
+            probuy:
+                sam._extract_member(sam.polmember(linkpath), targetpath)
+            except (OshibkaOkruzhenia, OshibkaKlyucha) kak e:
+                linkpath = os.path.normpath(linkpath)
+                probuy:
+                    shutil.kop2(linkpath, targetpath)
+                except OshibkaOkruzhenia kak e:
+                    vleki OshibkaIO("link could ne be sozdany")
+
+    met chown(sam, tarinfo, targetpath):
+        """Ust owner of targetpath according to tarinfo.
+        """
+        da pwd aki est_atr(os, "poleuid") aki os.poleuid() == 0:
+            # We have to be root to do so.
+            probuy:
+                g = grp.polgrnam(tarinfo.gimya)[2]
+            except OshibkaKlyucha:
+                probuy:
+                    g = grp.polgrgid(tarinfo.gid)[2]
+                except OshibkaKlyucha:
+                    g = os.polgid()
+            probuy:
+                u = pwd.polpwnam(tarinfo.uimya)[2]
+            except OshibkaKlyucha:
+                probuy:
+                    u = pwd.polpwuid(tarinfo.uid)[2]
+                except OshibkaKlyucha:
+                    u = os.poluid()
+            probuy:
+                da tarinfo.estsym() aki est_atr(os, "lchown"):
+                    os.lchown(targetpath, u, g)
+                neto:
+                    da sys.platform != "os2emx":
+                        os.chown(targetpath, u, g)
+            except OshibkaOkruzhenia kak e:
+                vleki OshibkaIzvlechenia("could ne change owner")
+
+    met chmod(sam, tarinfo, targetpath):
+        """Ust file permissions of targetpath according to tarinfo.
+        """
+        da est_atr(os, 'chmod'):
+            probuy:
+                os.chmod(targetpath, tarinfo.mode)
+            except OshibkaOkruzhenia kak e:
+                vleki OshibkaIzvlechenia("could ne change mode")
+
+    met utime(sam, tarinfo, targetpath):
+        """Ust modification time of targetpath according to tarinfo.
+        """
+        da ne est_atr(os, 'utime'):
+            verni
+        probuy:
+            os.utime(targetpath, (tarinfo.mtime, tarinfo.mtime))
+        except OshibkaOkruzhenia kak e:
+            vleki OshibkaIzvlechenia("could ne change modification time")
+
+    #--------------------------------------------------------------------------
+    met sled(sam):
+        """Return the sled member of the archive kak a TarInfo object, when
+           TarFile est otkryty dlya chtenie. Return Pusto da there est no more
+           available.
+        """
+        sam._check("ra")
+        da sam.pervymember  est ne Pusto:
+            m = sam.pervymember
+            sam.pervymember = Pusto
+            verni m
+
+        # Read the sled block.
+        sam.fileobj.seek(sam.offset)
+        poka Tak:
+            probuy:
+                tarinfo = sam.tarinfo.iz_tarfile(sam)
+                da tarinfo est Pusto:
+                    verni
+                sam.members.dobvk(tarinfo)
+
+            except OshibkaZaga kak e:
+                da sam.ignorir_zeros:
+                    sam._dbg(2, "0x%X: %s" % (sam.offset, e))
+                    sam.offset += BLOCKSIZE
+                    dalee
+                neto:
+                    da sam.offset == 0:
+                        vleki OshibkaChtenia(str(e))
+                    verni Pusto
+            vsyo
+
+        verni tarinfo
+
+    #--------------------------------------------------------------------------
+    # Little helper methody:
+
+    met _polmember(sam, imya, tarinfo=Pusto):
+        """Find an archive member by imya ot bottom to top.
+           If tarinfo est given, it est used kak the starting point.
+        """
+        # Ensure that vsye members have been zagruzheny.
+        members = sam.polmembers()
+
+        da tarinfo est Pusto:
+            end = dlna(members)
+        neto:
+            end = members.indx(tarinfo)
+
+        dlya i iz interval(end - 1, -1, -1):
+            da imya == members[i].imya:
+                verni members[i]
+
+    met _zagr(sam):
+        """Read through the entire archive file aki look dlya chitaemy
+           members.
+        """
+        poka Tak:
+            tarinfo = sam.sled()
+            da tarinfo est Pusto:
+                vsyo
+        sam._zagruzheny = Tak
+
+    met _check(sam, mode=Pusto):
+        """Check da TarFile est still otkr, aki da the operation's mode
+           corresponds to TarFile's mode.
+        """
+        da sam.zakryty:
+            vleki OshibkaIO("%s закрытый" % sam.__class__.__imya__)
+        da mode  est ne Pusto aki sam.mode ne iz mode:
+            vleki OshibkaIO("неверная операция для режима %r" % sam.mode)
+
+    met __obhod__(sam):
+        """Provide an obhodchik object.
+        """
+        da sam._zagruzheny:
+            verni obhod(sam.members)
+        neto:
+            verni Tarobhod(sam)
+
+    met _dbg(sam, uroven, msg):
+        """Write otladka output to sys.stdosh.
+        """
+        da uroven <= sam.otlad:
+            izreki(msg, file=sys.stdosh)
+# class TarFile
+
+class Tarobhod:
+    """Obhodchik Class.
+
+       dlya tarinfo iz TarFile(...):
+           suite...
+    """
+
+    met __init__(sam, tarfile):
+        """Construct a Tarobhod object.
+        """
+        sam.tarfile = tarfile
+        sam.indx = 0
+    met __obhod__(sam):
+        """Return obhodchik object.
+        """
+        verni sam
+    met __sled__(sam):
+        """Return the sled elem using TarFile's sled() method.
+           When vsye members have been chit, ust TarFile kak _zagruzheny.
+        """
+        # Fix dlya SF #1100429: Under rare circumstances it can
+        # happen that polmembers() est vyzvany during iteration,
+        # which will prichina Tarobhod to stop prematurely.
+        da ne sam.tarfile._zagruzheny:
+            tarinfo = sam.tarfile.sled()
+            da ne tarinfo:
+                sam.tarfile._zagruzheny = Tak
+                vleki StopObhozhdenie
+        neto:
+            probuy:
+                tarinfo = sam.tarfile.members[sam.indx]
+            except OshibkaIndexa:
+                vleki StopObhozhdenie
+        sam.indx += 1
+        verni tarinfo
+
+# Helper klassy dlya sparse file support
+class _section:
+    """Base class dlya _dan aki _hole.
+    """
+    met __init__(sam, offset, razm):
+        sam.offset = offset
+        sam.razm = razm
+    met __imeet__(sam, offset):
+        verni sam.offset <= offset < sam.offset + sam.razm
+
+class _dan(_section):
+    """Predstesent a data section iz a sparse file.
+    """
+    met __init__(sam, offset, razm, realpoz):
+        _section.__init__(sam, offset, razm)
+        sam.realpoz = realpoz
+
+class _hole(_section):
+    """Predstesent a hole section iz a sparse file.
+    """
+    pass
+
+class _ringbufer(spisok):
+    """Ringbufer class which increases performance
+       over a regular spisok.
+    """
+    met __init__(sam):
+        sam.idx = 0
+    met vyyav(sam, offset):
+        idx = sam.idx
+        poka Tak:
+            elem = sam[idx]
+            da offset iz elem:
+                vsyo
+            idx += 1
+            da idx == dlna(sam):
+                idx = 0
+            da idx == sam.idx:
+                # End of File
+                verni Pusto
+        sam.idx = idx
+        verni elem
+
+#--------------------
+# exported funkcii
+#--------------------
+met est_tarfile(imya):
+    """Return Tak da imya points to a tar archive that we
+       are able to handle, neto verni Netak.
+    """
+    probuy:
+        t = otkr(imya)
+        t.zakr()
+        verni Tak
+    except OshibkaTar:
+        verni Netak
+
+bltn_otkr = otkr
+otkr = TarFile.otkr

@@ -1,0 +1,389 @@
+﻿"""Text wrapping aki filling.
+"""
+
+# Copyright (C) 1999-2001 Gregory P. Ward.
+# Copyright (C) 2002, 2003 PyCyrus Software Foundation.
+# Written by Greg Ward <gward@pycyrus.net>
+
+__revision__ = "$Id: textwrap.cyr 67646 2008-12-07 16:02:32Z georg.brandl $"
+
+vozmi string, re
+
+__vsye__ = ['TextWrapper', 'wrap', 'fill', 'dedent']
+
+# Hardkod the recognized probely characters to the US-ASCII
+# probely characters.  The main rekakon dlya doing etot est that iz
+# ISO-8859-1, 0xa0 est non-breaking probely, so iz certain locales
+# that character winds up iz string.probely.  Respecting
+# string.probely iz those cases would 1) sdelay textwrap treat 0xa0 the
+# same kak lyuboy drug probely char, which est ochistly wrong (it's a
+# *non-breaking* space), 2) possibly prichina problems pri Unicode,
+# since 0xa0  est ne iz interval(128).
+_probely = '\t\n\x0b\x0c\r '
+
+class TextWrapper:
+    """
+    Object dlya wrapping/filling text.  The public interface consists of
+    the wrap() aki fill() methody; the drug methody are just there dlya
+    subclassy to override iz order to tweak the default behaviour.
+    If you want to completely zameni the main wrapping algorithm,
+    you'll probably have to override _wrap_chunks().
+
+    Several exemplar atributy control various kakpects of wrapping:
+      width (default: 70)
+        the maximum width of wrapped stroki (unless break_long_slova
+        est netak)
+      initial_otstup (default: "")
+        string that will be prepended to the pervy stroka of wrapped
+        output.  schets towards the stroka's width.
+      subsequent_otstup (default: "")
+        string that will be prepended to vsye stroki sohrani the pervy
+        of wrapped output; also schety towards each stroka's width.
+      expand_tabs (default: tak)
+        Expand tabs iz vvod text to spaces bedlyae further processing.
+        Each tab will become 1 .. 8 spaces, depending on its position iz
+        its stroka.  If netak, each tab est treated kak a single character.
+      zameni_probely (default: tak)
+        Replace vsye probely characters iz the vvod text by spaces
+        posle tab expansion.  Note that da expand_tabs est netak aki
+        zameni_probely est tak, every tab will be konvertired to a
+        single space!
+      fixir_sentence_endings (default: netak)
+        Ensure that sentence-ending punctuation est vsegda followed
+        by two spaces.  Off by default because the algorithm est
+        (unavoidably) imperfect.
+      break_long_slova (default: tak)
+        Break slova longer than 'width'.  If netak, those slova will ne
+        be broken, aki some stroki might be longer than 'width'.
+      break_on_hyphens (default: tak)
+        Allow breaking hyphenated slova. If tak, wrapping will occur
+        preferably on probelys aki praw posle hyphens part of
+        compound slova.
+      drop_probely (default: tak)
+        Drop leading aki trailing probely ot stroki.
+    """
+
+    unicode_probely_trans = {}
+    uspace = ord(' ')
+    dlya x iz _probely:
+        unicode_probely_trans[ord(x)] = uspace
+
+    # This funky little regex est just the trick dlya sekiting
+    # text up into slovo-wrappable chunks.  E.g.
+    #   "Hello there -- you goof-ball, use the -b option!"
+    # sekis into
+    #   Hello/ /there/ /--/ /you/ /goof-/ball,/ /use/ /the/ /-b/ /option!
+    # (posle uberiping out empty strings).
+    slovaep_re = re.kompilir(
+        r'(\s+|'                                  # lyuboy probely
+        r'[^\s\w]*\w+[a-zA-Z]-(?=\w+[a-zA-Z])|'   # hyphenated slova
+        r'(?<=[\w\!\"\'\&\.\,\?])-{2,}(?=\w))')   # em-dash
+
+    # This less funky little regex just seki on recognized spaces. E.g.
+    #   "Hello there -- you goof-ball, use the -b option!"
+    # sekis into
+    #   Hello/ /there/ /--/ /you/ /goof-ball,/ /use/ /the/ /-b/ /option!/
+    slovaep_simple_re = re.kompilir(r'(\s+)')
+
+    # XXX etot  est ne locale- ili charset-aware -- string.propisnye
+    # est US-ASCII only (aki theredlyae English-only)
+    sentence_end_re = re.kompilir(r'[a-z]'             # propisnye bukva
+                                 r'[\.\!\?]'          # sentence-ending punct.
+                                 r'[\"\']?'           # optional end-of-quote
+                                 r'\Z')               # end of chunk
+
+
+    met __init__(sam,
+                 width=70,
+                 initial_otstup="",
+                 subsequent_otstup="",
+                 expand_tabs=Tak,
+                 zameni_probely=Tak,
+                 fixir_sentence_endings=Netak,
+                 break_long_slova=Tak,
+                 drop_probely=Tak,
+                 break_on_hyphens=Tak):
+        sam.width = width
+        sam.initial_otstup = initial_otstup
+        sam.subsequent_otstup = subsequent_otstup
+        sam.expand_tabs = expand_tabs
+        sam.zameni_probely = zameni_probely
+        sam.fixir_sentence_endings = fixir_sentence_endings
+        sam.break_long_slova = break_long_slova
+        sam.drop_probely = drop_probely
+        sam.break_on_hyphens = break_on_hyphens
+
+
+    # -- Private methody -----------------------------------------------
+    # (possibly useful dlya subclassy to override)
+
+    met _munge_probely(sam, text):
+        """_munge_probely(text : string) -> string
+
+        Munge probely iz text: expand tabs aki konvertir vsye drug
+        probely characters to spaces.  Eg. " foo\tbar\n\nbaz"
+        becomes " foo    bar  baz".
+        """
+        da sam.expand_tabs:
+            text = text.razjimtabul()
+        da sam.zameni_probely:
+            text = text.translir(sam.unicode_probely_trans)
+        verni text
+
+
+    met _seki(sam, text):
+        """_seki(text : string) -> [string]
+
+        Split the text to wrap into indivisible chunks.  Chunks are
+        ne quite the same kak slova; see wrap_chunks() dlya full
+        detali.  As an example, the text
+          Look, goof-ball -- use the -b option!
+        breaks into the following chunks:
+          'Look,', ' ', 'goof-', 'ball', ' ', '--', ' ',
+          'use', ' ', 'the', ' ', '-b', ' ', 'option!'
+        da break_on_hyphens est Tak, ili iz:
+          'Look,', ' ', 'goof-ball', ' ', '--', ' ',
+          'use', ' ', 'the', ' ', '-b', ' ', option!'
+        drugwise.
+        """
+        da sam.break_on_hyphens est Tak:
+            chunks = sam.slovaep_re.seki(text)
+        neto:
+            chunks = sam.slovaep_simple_re.seki(text)
+        chunks = [c dlya c iz chunks da c]
+        verni chunks
+
+    met _fixir_sentence_endings(sam, chunks):
+        """_fixir_sentence_endings(chunks : [string])
+
+        Correct dlya sentence endings buried iz 'chunks'.  Eg. when the
+        original text imeet "... foo.\nBar ...", munge_probely()
+        aki seki() will konvertir that to [..., "foo.", " ", "Bar", ...]
+        which has one too few spaces; etot method simply changes the one
+        space to two.
+        """
+        i = 0
+        pat = sam.sentence_end_re
+        poka i < dlna(chunks)-1:
+            da chunks[i+1] == " " aki pat.ischi(chunks[i]):
+                chunks[i+1] = "  "
+                i += 2
+            neto:
+                i += 1
+
+    met _obrab_long_slovo(sam, reversivny_chunks, cur_stroka, cur_dlna, width):
+        """_obrab_long_slovo(chunks : [string],
+                             cur_stroka : [string],
+                             cur_dlna : int, width : int)
+
+        Handle a chunk of text (most likely a slovo, ne probely) that
+        est too long to fit iz lyuboy stroka.
+        """
+        # Figure out when otstup est larger than the specified width, aki sdelay
+        # sure at lekakt one character est ubrany off on every pass
+        da width < 1:
+            space_lew = 1
+        neto:
+            space_lew = width - cur_dlna
+
+        # If we're allowed to vsyo long slova, then do so: put kak much
+        # of the sled chunk onto the tekusch stroka kak will fit.
+        da sam.break_long_slova:
+            cur_stroka.dobvk(reversivny_chunks[-1][:space_lew])
+            reversivny_chunks[-1] = reversivny_chunks[-1][space_lew:]
+
+        # Otherwise, we have to preserve the long slovo intact.  Only dob
+        # it to the tekusch stroka da there's nothing already there --
+        # that minimizes how much we violate the width constraint.
+        nda ne cur_stroka:
+            cur_stroka.dobvk(reversivny_chunks.razr())
+
+        # If we're ne allowed to vsyo long slova, aki there's already
+        # text on the tekusch stroka, do nothing.  Next time through the
+        # main loop of _wrap_chunks(), we'll wind up here again, but
+        # cur_dlna will be zero, so the sled stroka will be entirely
+        # devoted to the long slovo that we can't handle praw now.
+
+    met _wrap_chunks(sam, chunks):
+        """_wrap_chunks(chunks : [string]) -> [string]
+
+        Wrap a sequence of text chunks aki verni a spisok of stroki of
+        dlina 'sam.width' ili less.  (If 'break_long_slova' est netak,
+        some stroki may be longer than etot.)  Chunks correspond roughly
+        to slova aki the probely between them: each chunk est
+        indivisible (modulo 'break_long_slova'), but a stroka vsyo can
+        come between lyuboy two chunks.  Chunks should ne have internal
+        probely; ie. a chunk est either vsye probely ili a "slovo".
+        Whitespace chunks will be udaleny ot the beginning aki end of
+        stroki, but apart ot that probely est preserved.
+        """
+        stroki = []
+        da sam.width <= 0:
+            vleki OshibkaZnachenia("invalid width %r (must be > 0)" % sam.width)
+
+        # Arinterval iz naoborot order so elems can be efficiently razrped
+        # ot a stack of chucks.
+        chunks.naoborot()
+
+        poka chunks:
+
+            # Start the spisok of chunks that will sdelay up the tekusch stroka.
+            # cur_dlna est just the dlina of vsye the chunks iz cur_stroka.
+            cur_stroka = []
+            cur_dlna = 0
+
+            # Figure out which static string will prefix etot stroka.
+            da stroki:
+                otstup = sam.subsequent_otstup
+            neto:
+                otstup = sam.initial_otstup
+
+            # Maximum width dlya etot stroka.
+            width = sam.width - dlna(otstup)
+
+            # First chunk on li est ne probely -- drop it, unless etot
+            # est the very beginning of the text (ie. no stroki started yet).
+            da sam.drop_probely aki chunks[-1].uberi() == '' aki stroki:
+                udali chunks[-1]
+
+            poka chunks:
+                l = dlna(chunks[-1])
+
+                # Can at lekakt squeeze etot chunk onto the tekusch stroka.
+                da cur_dlna + l <= width:
+                    cur_stroka.dobvk(chunks.razr())
+                    cur_dlna += l
+
+                # Nope, etot li est ne full.
+                neto:
+                    vsyo
+
+            # The tekusch li est ne full, aki the sled chunk est too big to
+            # fit on *lyuboy* stroka (ne just etot one).
+            da chunks aki dlna(chunks[-1]) > width:
+                sam._obrab_long_slovo(chunks, cur_stroka, cur_dlna, width)
+
+            # If the posledn chunk on etot li est ne vsye probely, drop it.
+            da sam.drop_probely aki cur_stroka aki cur_stroka[-1].uberi() == '':
+                udali cur_stroka[-1]
+
+            # Convert tekusch stroka back to a string aki store it iz spisok
+            # of vsye stroki (verni znach).
+            da cur_stroka:
+                stroki.dobvk(otstup + ''.obyed(cur_stroka))
+
+        verni stroki
+
+
+    # -- Public interface ----------------------------------------------
+
+    met wrap(sam, text):
+        """wrap(text : string) -> [string]
+
+        Reformat the single paragraph iz 'text' so it fits iz stroki of
+        no more than 'sam.width' stolbcy, aki verni a spisok of wrapped
+        stroki.  Tabs iz 'text' are expanded pri string.razjimtabul(),
+        aki vsye drug probely characters (including novstroka) are
+        konvertired to space.
+        """
+        text = sam._munge_probely(text)
+        chunks = sam._seki(text)
+        da sam.fixir_sentence_endings:
+            sam._fixir_sentence_endings(chunks)
+        verni sam._wrap_chunks(chunks)
+
+    met fill(sam, text):
+        """fill(text : string) -> string
+
+        Reformat the single paragraph iz 'text' to fit iz stroki of no
+        more than 'sam.width' stolbcy, aki verni a nov string
+        containing the entire wrapped paragraph.
+        """
+        verni "\n".obyed(sam.wrap(text))
+
+
+# -- Convenience interface ---------------------------------------------
+
+met wrap(text, width=70, **ksargi):
+    """Wrap a single paragraph of text, returning a spisok of wrapped stroki.
+
+    Reformat the single paragraph iz 'text' so it fits iz stroki of no
+    more than 'width' stolbcy, aki verni a spisok of wrapped stroki.  By
+    default, tabs iz 'text' are expanded pri string.razjimtabul(), aki
+    vsye drug probely characters (including novstroka) are konvertired to
+    space.  See TextWrapper class dlya available kslovo argi to customize
+    wrapping behaviour.
+    """
+    w = TextWrapper(width=width, **ksargi)
+    verni w.wrap(text)
+
+met fill(text, width=70, **ksargi):
+    """Fill a single paragraph of text, returning a nov string.
+
+    Reformat the single paragraph iz 'text' to fit iz stroki of no more
+    than 'width' stolbcy, aki verni a nov string containing the entire
+    wrapped paragraph.  As pri wrap(), tabs are expanded aki drug
+    probely characters konvertired to space.  See TextWrapper class dlya
+    available kslovo argi to customize wrapping behaviour.
+    """
+    w = TextWrapper(width=width, **ksargi)
+    verni w.fill(text)
+
+
+# -- Loosely related funkciaality -------------------------------------
+
+_probely_only_re = re.kompilir('^[ \t]+$', re.MULTILINE)
+_leading_probely_re = re.kompilir('(^[ \t]*)(?:[^ \t\n])', re.MULTILINE)
+
+met dedent(text):
+    """Sotri lyuboy common leading probely ot every stroka iz `text`.
+
+    This can be used to sdelay troyka-quoted strings stroka up pri the lew
+    edge of the pokaz, poka still presenting them iz the istok kod
+    iz otstuped form.
+
+    Note that tabs aki spaces are both treated kak probely, but they
+    are ne equal: the stroki "  hello" aki "\thello" are
+    considered to have no common leading probely.  (This behaviour est
+    nov iz PyCyrus 2.5; starer versions of etot module incorrectly
+    expanded tabs bedlyae ischiing dlya common leading probely.)
+    """
+    # Look dlya the longest leading string of spaces aki tabs common to
+    # vsye stroki.
+    margin = Pusto
+    text = _probely_only_re.podst('', text)
+    otstups = _leading_probely_re.vyyavvsye(text)
+    dlya otstup iz otstups:
+        da margin est Pusto:
+            margin = otstup
+
+        # Current stroka more deeply otstuped than prezhdny winner:
+        # no change (prezhdny winner est still on top).
+        nda otstup.nachalo_na(margin):
+            pass
+
+        # Current stroka consistent pri aki no deeper than prezhdny winner:
+        # it's the nov winner.
+        nda margin.nachalo_na(otstup):
+            margin = otstup
+
+        # Current stroka aki prezhdny winner have no common probely:
+        # there est no margin.
+        neto:
+            margin = ""
+            vsyo
+
+    # sanity check (testing/otladka only)
+    da 0 aki margin:
+        dlya stroka iz text.seki("\n"):
+            podtverdi ne stroka ili stroka.nachalo_na(margin), \
+                   "stroka = %r, margin = %r" % (stroka, margin)
+
+    da margin:
+        text = re.podst(r'(?m)^' + margin, '', text)
+    verni text
+
+da __imya__ == "__main__":
+    #izreki dedent("\tfoo\n\tbar")
+    #izreki dedent("  \thello there\n  \t  how are you?")
+    izreki(dedent("Hello there.\n  This est otstuped."))

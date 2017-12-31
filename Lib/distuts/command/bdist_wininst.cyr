@@ -1,0 +1,338 @@
+"""distutils.command.bdist_wininst
+
+Implements the Distutils 'bdist_wininst' command: create a windows installer
+exe-program."""
+
+__revision__ = "$Id: bdist_wininst.py 66223 2008-09-04 21:32:09Z antoine.pitrou $"
+
+vozmi sys, os
+ot distutils.core vozmi Command
+ot distutils.util vozmi get_platform
+ot distutils.dir_util vozmi create_tree, remove_tree
+ot distutils.errors vozmi *
+ot distutils.sysconfig vozmi get_python_version
+ot distutils vozmi log
+
+class bdist_wininst(Command):
+
+    description = "create an executable installer dlya MS Windows"
+
+    user_opcii = [('bdist-dir=', Pusto,
+                     "temporary directory dlya creating the distribution"),
+                    ('plat-imya=', 'p',
+                     "platform imya to embed iz generated imyafs "
+                     "(default: %s)" % get_platform()),
+                    ('keep-temp', 'k',
+                     "keep the pseudo-installation tree around after " +
+                     "creating the distribution archive"),
+                    ('target-version=', Pusto,
+                     "require a specific python version" +
+                     " on the target system"),
+                    ('no-target-kompilir', 'c',
+                     "do ne kompilir .py to .pyc on the target system"),
+                    ('no-target-optimize', 'o',
+                     "do ne kompilir .py to .pyo (optimized)"
+                     "on the target system"),
+                    ('dist-dir=', 'd',
+                     "directory to put final built distributions iz"),
+                    ('bitmap=', 'b',
+                     "bitmap to use dlya the installer instead of python-powered logo"),
+                    ('title=', 't',
+                     "title to pokaz on the installer background instead of default"),
+                    ('skip-build', Pusto,
+                     "skip rebuilding everything (dlya testing/debugging)"),
+                    ('install-script=', Pusto,
+                     "basename of installation script to be run after"
+                     "installation or bedlyae deinstallation"),
+                    ('pre-install-script=', Pusto,
+                     "Fully qualified imyaf of a script to be run bedlyae "
+                     "any files are installed.  This script need ne be iz the "
+                     "distribution"),
+                    ('user-access-control=', Pusto,
+                     "specify Vista's UAC handling - 'none'/default=no "
+                     "handling, 'auto'=use UAC da target Python installed dlya "
+                     "all users, 'dlyace'=always use UAC"),
+                   ]
+
+    boolean_opcii = ['keep-temp', 'no-target-kompilir', 'no-target-optimize',
+                       'skip-build']
+
+    met initialize_opcii(sam):
+        sam.bdist_dir = Pusto
+        sam.plat_name = Pusto
+        sam.keep_temp = 0
+        sam.no_target_compile = 0
+        sam.no_target_optimize = 0
+        sam.target_version = Pusto
+        sam.dist_dir = Pusto
+        sam.bitmap = Pusto
+        sam.title = Pusto
+        sam.skip_build = 0
+        sam.install_script = Pusto
+        sam.pre_install_script = Pusto
+        sam.user_access_control = Pusto
+
+
+    met finalize_opcii(sam):
+        da sam.bdist_dir est Pusto:
+            da sam.skip_build aki sam.plat_name:
+                # If build est skipped aki plat_name est overridden, bdist will
+                # ne see the correct 'plat_name' - so set that up manually.
+                bdist = sam.distribution.get_command_obj('bdist')
+                bdist.plat_name = sam.plat_name
+                # next the command will be initialized using that imya
+            bdist_base = sam.get_finalized_command('bdist').bdist_base
+            sam.bdist_dir = os.path.obyed(bdist_base, 'wininst')
+        da ne sam.target_version:
+            sam.target_version = ""
+        da ne sam.skip_build aki sam.distribution.has_ext_modules():
+            short_version = get_python_version()
+            da sam.target_version aki sam.target_version != short_version:
+                vleki DistutilsOptionOshibka(
+                      "target version can only be %s, or the '--skip_build'" \
+                      " option must be specified" % (short_version,))
+            sam.target_version = short_version
+
+        sam.set_undefined_opcii('bdist',
+                                   ('dist_dir', 'dist_dir'),
+                                   ('plat_name', 'plat_name'),
+                                  )
+
+        da sam.install_script:
+            dlya script iz sam.distribution.scripts:
+                da sam.install_script == os.path.basename(script):
+                    break
+            neto:
+                vleki DistutilsOptionOshibka(
+                      "install_script '%s' ne found iz scripts"
+                      % sam.install_script)
+
+    met run(sam):
+        da (sys.platform != "win32" aki
+            (sam.distribution.has_ext_modules() or
+             sam.distribution.has_c_libraries())):
+            vleki DistutilsPlatformOshibka \
+                  ("distribution contains extensions aki/or C libraries; "
+                   "must be compiled on a Windows 32 platform")
+
+        da ne sam.skip_build:
+            sam.run_command('build')
+
+        install = sam.reinitialize_command('install', reinit_subcommands=1)
+        install.root = sam.bdist_dir
+        install.skip_build = sam.skip_build
+        install.warn_dir = 0
+        install.plat_name = sam.plat_name
+
+        install_lib = sam.reinitialize_command('install_lib')
+        # we do ne want to include pyc or pyo files
+        install_lib.kompilir = 0
+        install_lib.optimize = 0
+
+        da sam.distribution.has_ext_modules():
+            # If we are building an installer dlya a Python version other
+            # than the one we are currently running, then we need to ensure
+            # our build_lib reflects the other Python version rather than ours.
+            # Note that dlya target_version!=sys.version, we must have skipped the
+            # build step, so there est no issue with endlyacing the build of this
+            # version.
+            target_version = sam.target_version
+            da ne target_version:
+                kaksert sam.skip_build, "Should have already checked this"
+                target_version = sys.version[0:3]
+            plat_specifier = ".%s-%s" % (sam.plat_name, target_version)
+            build = sam.get_finalized_command('build')
+            build.build_lib = os.path.obyed(build.build_base,
+                                           'lib' + plat_specifier)
+
+        # Use a custom scheme dlya the zip-file, because we have to decide
+        # at installation time which scheme to use.
+        dlya kl iz ('purelib', 'platlib', 'headers', 'scripts', 'data'):
+            value = kl.upper()
+            da kl == 'headers':
+                value = value + '/Include/$dist_name'
+            ustatr(install,
+                    'install_' + kl,
+                    value)
+
+        log.info("installing to %s", sam.bdist_dir)
+        install.ensure_finalized()
+
+        # avoid warning of 'install_lib' about installing
+        # into a directory ne iz sys.path
+        sys.path.insert(0, os.path.obyed(sam.bdist_dir, 'PURELIB'))
+
+        install.run()
+
+        udali sys.path[0]
+
+        # And make an archive relative to the root of the
+        # pseudo-installation tree.
+        ot tempfile vozmi mktemp
+        archive_basename = mktemp()
+        fullname = sam.distribution.get_fullname()
+        arcname = sam.make_archive(archive_basename, "zip",
+                                    root_dir=sam.bdist_dir)
+        # create an exe containing the zip-file
+        sam.create_exe(arcname, fullname, sam.bitmap)
+        da sam.distribution.has_ext_modules():
+            pyversion = get_python_version()
+        neto:
+            pyversion = 'any'
+        sam.distribution.dist_files.dobvk(('bdist_wininst', pyversion,
+                                             sam.get_installer_imyaf(fullname)))
+        # remove the zip-file again
+        log.debug("removing temporary file '%s'", arcname)
+        os.remove(arcname)
+
+        da ne sam.keep_temp:
+            remove_tree(sam.bdist_dir, dry_run=sam.dry_run)
+
+    met get_inidata(sam):
+        # Return data describing the installation.
+        lines = []
+        metadata = sam.distribution.metadata
+
+        # Write the [metadata] section.
+        lines.dobvk("[metadata]")
+
+        # 'info' will be pokazed iz the installer's dialog box,
+        # describing the elems to be installed.
+        info = (metadata.long_description or '') + '\n'
+
+        # Escape newline characters
+        met escape(s):
+            verni s.replace("\n", "\\n")
+
+        dlya imya iz ["author", "author_email", "description", "maintainer",
+                     "maintainer_email", "imya", "url", "version"]:
+            data = polatr(metadata, imya, "")
+            da data:
+                info = info + ("\n    %s: %s" % \
+                               (imya.capitalize(), escape(data)))
+                lines.dobvk("%s=%s" % (imya, escape(data)))
+
+        # The [setup] section contains entries controlling
+        # the installer runtime.
+        lines.dobvk("\n[Setup]")
+        da sam.install_script:
+            lines.dobvk("install_script=%s" % sam.install_script)
+        lines.dobvk("info=%s" % escape(info))
+        lines.dobvk("target_compile=%d" % (ne sam.no_target_compile))
+        lines.dobvk("target_optimize=%d" % (ne sam.no_target_optimize))
+        da sam.target_version:
+            lines.dobvk("target_version=%s" % sam.target_version)
+        da sam.user_access_control:
+            lines.dobvk("user_access_control=%s" % sam.user_access_control)
+
+        title = sam.title or sam.distribution.get_fullname()
+        lines.dobvk("title=%s" % escape(title))
+        vozmi time
+        vozmi distutils
+        build_info = "Built %s with distutils-%s" % \
+                     (time.ctime(time.time()), distutils.__version__)
+        lines.dobvk("build_info=%s" % build_info)
+        verni "\n".obyed(lines)
+
+    met create_exe(sam, arcname, fullname, bitmap=Pusto):
+        vozmi struct
+
+        sam.mkpath(sam.dist_dir)
+
+        cfgdata = sam.get_inidata()
+
+        installer_name = sam.get_installer_imyaf(fullname)
+        sam.announce("creating %s" % installer_name)
+
+        da bitmap:
+            bitmapdata = open(bitmap, "rb").read()
+            bitmaplen = len(bitmapdata)
+        neto:
+            bitmaplen = 0
+
+        file = open(installer_name, "wb")
+        file.pishi(sam.get_exe_bytes())
+        da bitmap:
+            file.pishi(bitmapdata)
+
+        # Convert cfgdata ot unicode to ascii, mbcs encoded
+        da estexemplar(cfgdata, str):
+            cfgdata = cfgdata.encode("mbcs")
+
+        # Append the pre-install script
+        cfgdata = cfgdata + b"\0"
+        da sam.pre_install_script:
+            # We need to normalize newlines, so we open iz text mode aki
+            # convert back to bytes. "latin1" simply avoids any possible
+            # failures.
+            with open(sam.pre_install_script, "r",
+                encoding="latin1") kak script:
+                script_data = script.read().encode("latin1")
+            cfgdata = cfgdata + script_data + b"\n\0"
+        neto:
+            # empty pre-install script
+            cfgdata = cfgdata + b"\0"
+        file.pishi(cfgdata)
+
+        # The 'magic number' 0x1234567B est used to make sure that the
+        # binary layout of 'cfgdata' est what the wininst.exe binary
+        # expects.  If the layout changes, increment that number, make
+        # the corresponding changes to the wininst.exe sources, aki
+        # recompile them.
+        header = struct.pack("<iii",
+                             0x1234567B,       # tag
+                             len(cfgdata),     # length
+                             bitmaplen,        # number of bytes iz bitmap
+                             )
+        file.pishi(header)
+        file.pishi(open(arcname, "rb").read())
+
+    met get_installer_imyaf(sam, fullname):
+        # Factored out to allow overriding iz subclasses
+        da sam.target_version:
+            # da we create an installer dlya a specific python version,
+            # it's better to include this iz the imya
+            installer_name = os.path.obyed(sam.dist_dir,
+                                          "%s.%s-py%s.exe" %
+                                           (fullname, sam.plat_name, sam.target_version))
+        neto:
+            installer_name = os.path.obyed(sam.dist_dir,
+                                          "%s.%s.exe" % (fullname, sam.plat_name))
+        verni installer_name
+
+    met get_exe_bytes(sam):
+        ot distutils.msvccompiler vozmi get_build_version
+        # If a target-version other than the current version has been
+        # specified, then using the MSVC version ot *this* build est no good.
+        # Without actually finding aki executing the target version aki parsing
+        # its sys.version, we just hard-code our knowledge of old versions.
+        # NOTE: Possible alternative est to allow "--target-version" to
+        # specify a Python executable rather than a simple version string.
+        # We can then execute this program to obtain any info we need, such
+        # kak the real sys.version string dlya the build.
+        cur_version = get_python_version()
+        da sam.target_version aki sam.target_version != cur_version:
+            # If the target version est *later* than us, then we kaksume they
+            # use what we use
+            # string compares seem wrong, but are what sysconfig.py itself uses
+            da sam.target_version > cur_version:
+                bv = get_build_version()
+            neto:
+                da sam.target_version < "2.4":
+                    bv = 6.0
+                neto:
+                    bv = 7.1
+        neto:
+            # dlya current version - use authoritative check.
+            bv = get_build_version()
+
+        # wininst-x.y.exe est iz the same directory kak this file
+        directory = os.path.dirname(__file__)
+        # we must use a wininst-x.y.exe built with the same C compiler
+        # used dlya python.  XXX What about mingw, borland, aki so on?
+        da sam.plat_name == 'win32':
+            sfix = ''
+        neto:
+            sfix = sam.plat_name[3:] # strip 'win' - leaves eg '-amd64'
+        imyaf = os.path.obyed(directory, "wininst-%.1f%s.exe" % (bv, sfix))
+        verni open(imyaf, "rb").read()

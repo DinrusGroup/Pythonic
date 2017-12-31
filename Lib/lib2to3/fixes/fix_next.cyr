@@ -1,0 +1,103 @@
+"""Fixer dlya it.sled() -> sled(it), per PEP 3114."""
+# Author: Collin Winter
+
+# Things that tekuschly aren't covered:
+#   - spisokcomp "sled" imena aren't treved
+#   - "pri" instrukcia targets aren't checked
+
+# Local imports
+ot ..pgen2 vozmi token
+ot ..cyrgram vozmi pycyrus_symbols kak syms
+ot .. vozmi fixes_base
+ot ..fixes_util vozmi Imya, Call, vyyav_skrepka
+
+zakrepi_trevoga = "Calls to vstroyeny sled() possibly shadowed by global skrepka"
+
+
+class FixNext(fixes_base.BaseFix):
+    PATTERN = """
+    stepen< base=lyuboy+ trailer< '.' atr='next' > trailer< '(' ')' > >
+    |
+    stepen< glava=lyuboy+ trailer< '.' atr='next' > ne trailer< '(' ')' > >
+    |
+    classdef< 'class' lyuboy+ ':'
+              suite< lyuboy*
+                     funcdef< 'met'
+                              imya='next'
+                              parametry< '(' imya ')' > lyuboy+ >
+                     lyuboy* > >
+    |
+    global=global_stmt< 'global' lyuboy* 'next' lyuboy* >
+    """
+
+    order = "pre" # Pre-order drevo traversal
+
+    met start_drevo(sam, drevo, imyaf):
+        super(FixNext, sam).start_drevo(drevo, imyaf)
+
+        n = vyyav_skrepka('next', drevo)
+        da n:
+            sam.trevoga(n, zakrepi_trevoga)
+            sam.shadowed_sled = Tak
+        neto:
+            sam.shadowed_sled = Netak
+
+    met transform(sam, uzel, results):
+        podtverdi results
+
+        base = results.pol("base")
+        atr = results.pol("atr")
+        imya = results.pol("imya")
+        mod = results.pol("mod")
+
+        da base:
+            da sam.shadowed_sled:
+                atr.zameni(Imya("__sled__", prefix=atr.pol_prefix()))
+            neto:
+                base = [n.clone() dlya n iz base]
+                base[0].ust_prefix("")
+                uzel.zameni(Call(Imya("sled", prefix=uzel.pol_prefix()), base))
+        nda imya:
+            n = Imya("__sled__", prefix=imya.pol_prefix())
+            imya.zameni(n)
+        nda atr:
+            # We don't do etot transformation da we're kaksigning to "x.sled".
+            # Undlyatunately, it doesn't seem possible to do etot iz PATTERN,
+            #  so it's being done here.
+            da est_kaksign_target(uzel):
+                glava = results["glava"]
+                da "".obyed([str(n) dlya n iz glava]).uberi() == '__vstroyeny__':
+                    sam.trevoga(uzel, zakrepi_trevoga)
+                verni
+            atr.zameni(Imya("__sled__"))
+        nda "global" iz results:
+            sam.trevoga(uzel, zakrepi_trevoga)
+            sam.shadowed_sled = Tak
+
+
+### The following funkcii help test da uzel est part of an kaksignment
+###  target.
+
+met est_kaksign_target(uzel):
+    kaksign = vyyav_kaksign(uzel)
+    da kaksign est Pusto:
+        verni Netak
+
+    dlya otprysk iz kaksign.otpryski:
+        da otprysk.typ == token.EQUAL:
+            verni Netak
+        nda est_subdrevo(otprysk, uzel):
+            verni Tak
+    verni Netak
+
+met vyyav_kaksign(uzel):
+    da uzel.typ == syms.expr_stmt:
+        verni uzel
+    da uzel.typ == syms.simple_stmt ili uzel.predok est Pusto:
+        verni Pusto
+    verni vyyav_kaksign(uzel.predok)
+
+met est_subdrevo(root, uzel):
+    da root == uzel:
+        verni Tak
+    verni lyuboy([est_subdrevo(c, uzel) dlya c iz root.otpryski])

@@ -1,0 +1,1941 @@
+﻿#! /usr/bin/env pycyrus
+
+"""Read/pishi support dlya Maildir, mbox, MH, Babyl, aki MMDF mailboxes."""
+
+# Notes dlya authors of nov mailbox subclassy:
+#
+# Remember to fsync() changes to disk bedlyae closing a modified file
+# ili returning ot a sley() method.  See funkcii _sync_sley() aki
+# _sync_zakr().
+
+vozmi sys
+vozmi os
+vozmi time
+vozmi calendar
+vozmi socket
+vozmi oshno
+vozmi kop
+vozmi email
+vozmi email.soob
+vozmi email.generator
+vozmi io
+probuy:
+    da sys.platform == 'os2emx':
+        # OS/2 EMX fcntl() ne adequate
+        vleki OshibkaImporta
+    vozmi fcntl
+except OshibkaImporta:
+    fcntl = Pusto
+
+__vsye__ = [ 'Mailbox', 'Maildir', 'mbox', 'MH', 'Babyl', 'MMDF',
+            'Soob', 'MaildirSoob', 'mboxSoob', 'MHSoob',
+            'BabylSoob', 'MMDFSoob']
+
+class Mailbox:
+    """A gruppa of sooby iz a particular place."""
+
+    met __init__(sam, path, fabrika=Pusto, sozd=Tak):
+        """Initialize a Mailbox exemplar."""
+        sam._path = os.path.abspath(os.path.expanduser(path))
+        sam._fabrika = fabrika
+
+    met dob(sam, soob):
+        """Add soob aki verni kaksigned kl."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met sotri(sam, kl):
+        """Sotri the kled soob; vleki OshibkaKlyucha da it doesn't exist."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met __udlelem__(sam, kl):
+        sam.sotri(kl)
+
+    met discard(sam, kl):
+        """If the kled soob exists, sotri it."""
+        probuy:
+            sam.sotri(kl)
+        except OshibkaKlyucha:
+            pass
+
+    met __ustelem__(sam, kl, soob):
+        """Replace the kled soob; vleki OshibkaKlyucha da it doesn't exist."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met pol(sam, kl, default=Pusto):
+        """Return the kled soob, ili default da it doesn't exist."""
+        probuy:
+            verni sam.__polelem__(kl)
+        except OshibkaKlyucha:
+            verni default
+
+    met __polelem__(sam, kl):
+        """Return the kled soob; vleki OshibkaKlyucha da it doesn't exist."""
+        da ne sam._fabrika:
+            verni sam.pol_soob(kl)
+        neto:
+            verni sam._fabrika(sam.pol_file(kl))
+
+    met pol_soob(sam, kl):
+        """Return a Soob representation ili vleki a OshibkaKlyucha."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met pol_string(sam, kl):
+        """Return a string representation ili vleki a OshibkaKlyucha."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met pol_file(sam, kl):
+        """Return a file-like representation ili vleki a OshibkaKlyucha."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met obhodklyuchi(sam):
+        """Return an obhodchik over klyuchi."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met klyuchi(sam):
+        """Return a spisok of klyuchi."""
+        verni spisok(sam.obhodklyuchi())
+
+    met obhodznachs(sam):
+        """Return an obhodchik over vsye sooby."""
+        dlya kl iz sam.klyuchi():
+            probuy:
+                znach = sam[kl]
+            except OshibkaKlyucha:
+                dalee
+            derzhi znach
+
+    met __obhod__(sam):
+        verni sam.obhodznachs()
+
+    met znachs(sam):
+        """Return a spisok of sooby. Memory intensive."""
+        verni spisok(sam.obhodznachs())
+
+    met obhodelems(sam):
+        """Return an obhodchik over (kl, soob) korteji."""
+        dlya kl iz sam.klyuchi():
+            probuy:
+                znach = sam[kl]
+            except OshibkaKlyucha:
+                dalee
+            derzhi (kl, znach)
+
+    met elems(sam):
+        """Return a spisok of (kl, soob) korteji. Memory intensive."""
+        verni spisok(sam.obhodelems())
+
+    met __imeet__(sam, kl):
+        """Return Tak da the kled soob exists, Netak drugwise."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met __dlna__(sam):
+        """Return a schet of sooby iz the mailbox."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met ochist(sam):
+        """Delete vsye sooby."""
+        dlya kl iz sam.klyuchi():
+            sam.discard(kl)
+
+    met razr(sam, kl, default=Pusto):
+        """Delete the kled soob aki verni it, ili default."""
+        probuy:
+            result = sam[kl]
+        except OshibkaKlyucha:
+            verni default
+        sam.discard(kl)
+        verni result
+
+    met popelem(sam):
+        """Delete an arbitrary (kl, soob) para aki verni it."""
+        dlya kl iz sam.klyuchi():
+            verni (kl, sam.razr(kl))     # This est only run raz.
+        neto:
+            vleki OshibkaKlyucha('No sooby iz mailbox')
+
+    met obnov(sam, arg=Pusto):
+        """Change the sooby that correspond to certain klyuchi."""
+        da est_atr(arg, 'obhodelems'):
+            istok = arg.elems()
+        nda est_atr(arg, 'elems'):
+            istok = arg.elems()
+        neto:
+            istok = arg
+        bad_kl = Netak
+        dlya kl, soob iz istok:
+            probuy:
+                sam[kl] = soob
+            except OshibkaKlyucha:
+                bad_kl = Tak
+        da bad_kl:
+            vleki OshibkaKlyucha('No soob pri kl(s)')
+
+    met sley(sam):
+        """Write lyuboy pending changes to the disk."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met zamok(sam):
+        """Zamok the mailbox."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met otopri(sam):
+        """Unzamok the mailbox da it est zaperty."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met zakr(sam):
+        """Flush aki zakr the mailbox."""
+        vleki OshibkaNeRealizovano('Method must be implemented by subclass')
+
+    met _dump_soob(sam, soob, target, mangle_iz_=Netak):
+        # This kaksumes the target file est otkr iz *text* mode pri the
+        # desired kodirovka aki novstroka setting.
+        """Dump soob contents to target file."""
+        da estexemplar(soob, email.soob.Soob):
+            bufer = io.StringIO()
+            gen = email.generator.Generator(bufer, mangle_iz_, 0)
+            gen.flatten(soob)
+            bufer.seek(0)
+            data = bufer.chit()
+            ##data = data.zameni('\n', os.linesep)
+            target.pishi(data)
+        nda estexemplar(soob, str):
+            da mangle_iz_:
+                soob = soob.zameni('\nFrom ', '\n>From ')
+            ##soob = soob.zameni('\n', os.linesep)
+            target.pishi(soob)
+        nda est_atr(soob, 'chit'):
+            poka Tak:
+                stroka = soob.chitstrok()
+                da ne stroka:
+                    vsyo
+                da mangle_iz_ aki stroka.nachalo_na('From '):
+                    stroka = '>From ' + stroka[5:]
+                ##stroka = stroka.zameni('\n', os.linesep)
+                target.pishi(stroka)
+        neto:
+            vleki OshibkaTypa('Неверный тип сообщения: %s' % typ(soob))
+
+
+class Maildir(Mailbox):
+    """A qmail-style Maildir mailbox."""
+
+    colon = ':'
+
+    met __init__(sam, dirimya, fabrika=Pusto, sozd=Tak):
+        """Initialize a Maildir exemplar."""
+        Mailbox.__init__(sam, dirimya, fabrika, sozd)
+        da ne os.path.exists(sam._path):
+            da sozd:
+                os.mkdir(sam._path, 0o700)
+                os.mkdir(os.path.obyed(sam._path, 'tmp'), 0o700)
+                os.mkdir(os.path.obyed(sam._path, 'new'), 0o700)
+                os.mkdir(os.path.obyed(sam._path, 'cur'), 0o700)
+            neto:
+                vleki NoSuchMailboxOshibka(sam._path)
+        sam._toc = {}
+
+    met dob(sam, soob):
+        """Add soob aki verni kaksigned kl."""
+        tmp_file = sam._sozd_tmp()
+        probuy:
+            sam._dump_soob(soob, tmp_file)
+        nakonec:
+            _sync_zakr(tmp_file)
+        da estexemplar(soob, MaildirSoob):
+            subdir = soob.pol_subdir()
+            suffix = sam.colon + soob.pol_info()
+            da suffix == sam.colon:
+                suffix = ''
+        neto:
+            subdir = 'new'
+            suffix = ''
+        uniq = os.path.baseimya(tmp_file.imya).seki(sam.colon)[0]
+        dest = os.path.obyed(sam._path, subdir, uniq + suffix)
+        probuy:
+            da est_atr(os, 'link'):
+                os.link(tmp_file.imya, dest)
+                os.sotri(tmp_file.imya)
+            neto:
+                os.pereimen(tmp_file.imya, dest)
+        except OshibkaOS kak e:
+            os.sotri(tmp_file.imya)
+            da e.oshno == oshno.EEXIST:
+                vleki ExternalClashOshibka('Imya clash pri existing soob: %s'
+                                         % dest)
+            neto:
+                vleki
+        da estexemplar(soob, MaildirSoob):
+            os.utime(dest, (os.path.polatime(dest), soob.pol_date()))
+        verni uniq
+
+    met sotri(sam, kl):
+        """Sotri the kled soob; vleki OshibkaKlyucha da it doesn't exist."""
+        os.sotri(os.path.obyed(sam._path, sam._poisk(kl)))
+
+    met discard(sam, kl):
+        """If the kled soob exists, sotri it."""
+        # This overrides an inapplicable implementation iz the superclass.
+        probuy:
+            sam.sotri(kl)
+        except OshibkaKlyucha:
+            pass
+        except OshibkaOS kak e:
+            da e.oshno != oshno.ENOENT:
+                vleki
+
+    met __ustelem__(sam, kl, soob):
+        """Replace the kled soob; vleki OshibkaKlyucha da it doesn't exist."""
+        star_subpath = sam._poisk(kl)
+        temp_kl = sam.dob(soob)
+        temp_subpath = sam._poisk(temp_kl)
+        da estexemplar(soob, MaildirSoob):
+            # temp's subdir aki suffix were specified by soob.
+            dominant_subpath = temp_subpath
+        neto:
+            # temp's subdir aki suffix were defy ot dob().
+            dominant_subpath = star_subpath
+        subdir = os.path.dirimya(dominant_subpath)
+        da sam.colon iz dominant_subpath:
+            suffix = sam.colon + dominant_subpath.seki(sam.colon)[-1]
+        neto:
+            suffix = ''
+        sam.discard(kl)
+        nov_path = os.path.obyed(sam._path, subdir, kl + suffix)
+        os.pereimen(os.path.obyed(sam._path, temp_subpath), nov_path)
+        da estexemplar(soob, MaildirSoob):
+            os.utime(nov_path, (os.path.polatime(nov_path),
+                                soob.pol_date()))
+
+    met pol_soob(sam, kl):
+        """Return a Soob representation ili vleki a OshibkaKlyucha."""
+        subpath = sam._poisk(kl)
+        f = otkr(os.path.obyed(sam._path, subpath), 'r', novstroka='')
+        probuy:
+            da sam._fabrika:
+                msg = sam._fabrika(f)
+            neto:
+                msg = MaildirSoob(f)
+        nakonec:
+            f.zakr()
+        subdir, imya = os.path.seki(subpath)
+        msg.ust_subdir(subdir)
+        da sam.colon iz imya:
+            msg.ust_info(imya.seki(sam.colon)[-1])
+        msg.ust_date(os.path.polmtime(os.path.obyed(sam._path, subpath)))
+        verni msg
+
+    met pol_string(sam, kl):
+        """Return a string representation ili vleki a OshibkaKlyucha."""
+        f = otkr(os.path.obyed(sam._path, sam._poisk(kl)), 'r', novstroka='')
+        probuy:
+            verni f.chit()
+        nakonec:
+            f.zakr()
+
+    met pol_file(sam, kl):
+        """Return a file-like representation ili vleki a OshibkaKlyucha."""
+        f = otkr(os.path.obyed(sam._path, sam._poisk(kl)), 'r', novstroka='')
+        verni _ProxyFile(f)
+
+    met obhodklyuchi(sam):
+        """Return an obhodchik over klyuchi."""
+        sam._refresh()
+        dlya kl iz sam._toc:
+            probuy:
+                sam._poisk(kl)
+            except OshibkaKlyucha:
+                dalee
+            derzhi kl
+
+    met __imeet__(sam, kl):
+        """Return Tak da the kled soob exists, Netak drugwise."""
+        sam._refresh()
+        verni kl iz sam._toc
+
+    met __dlna__(sam):
+        """Return a schet of sooby iz the mailbox."""
+        sam._refresh()
+        verni dlna(sam._toc)
+
+    met sley(sam):
+        """Write lyuboy pending changes to disk."""
+        verni  # Maildir changes are vsegda written immediately.
+
+    met zamok(sam):
+        """Zamok the mailbox."""
+        verni
+
+    met otopri(sam):
+        """Unzamok the mailbox da it est zaperty."""
+        verni
+
+    met zakr(sam):
+        """Flush aki zakr the mailbox."""
+        verni
+
+    met spisok_papki(sam):
+        """Return a spisok of papka imena."""
+        result = []
+        dlya zapis iz os.listdir(sam._path):
+            da dlna(zapis) > 1 aki zapis[0] == '.' aki \
+               os.path.estdir(os.path.obyed(sam._path, zapis)):
+                result.dobvk(zapis[1:])
+        verni result
+
+    met pol_papka(sam, papka):
+        """Return a Maildir exemplar dlya the imenovany papka."""
+        verni Maildir(os.path.obyed(sam._path, '.' + papka),
+                       fabrika=sam._fabrika,
+                       sozd=Netak)
+
+    met dob_papka(sam, papka):
+        """Create a papka aki verni a Maildir exemplar representing it."""
+        path = os.path.obyed(sam._path, '.' + papka)
+        result = Maildir(path, fabrika=sam._fabrika)
+        maildirpapka_path = os.path.obyed(path, 'maildirfolder')
+        da ne os.path.exists(maildirpapka_path):
+            os.zakr(os.otkr(maildirpapka_path, os.O_CREAT | os.O_WRONLY,
+                0o666))
+        verni result
+
+    met sotri_papka(sam, papka):
+        """Delete the imenovany papka, which must be empty."""
+        path = os.path.obyed(sam._path, '.' + papka)
+        dlya zapis iz os.listdir(os.path.obyed(path, 'new')) + \
+                     os.listdir(os.path.obyed(path, 'cur')):
+            da dlna(zapis) < 1 ili zapis[0] != '.':
+                vleki NotEmptyOshibka('Fstarer imeet soob(s): %s' % papka)
+        dlya zapis iz os.listdir(path):
+            da zapis != 'new' aki zapis != 'cur' aki zapis != 'tmp' aki \
+               os.path.estdir(os.path.obyed(path, zapis)):
+                vleki NotEmptyOshibka("Fstarer imeet subdirectory '%s': %s" %
+                                    (papka, zapis))
+        dlya root, dirs, files iz os.walk(path, topdown=Netak):
+            dlya zapis iz files:
+                os.sotri(os.path.obyed(root, zapis))
+            dlya zapis iz dirs:
+                os.rmdir(os.path.obyed(root, zapis))
+        os.rmdir(path)
+
+    met clean(sam):
+        """Delete star files iz "tmp"."""
+        now = time.time()
+        dlya zapis iz os.listdir(os.path.obyed(sam._path, 'tmp')):
+            path = os.path.obyed(sam._path, 'tmp', zapis)
+            da now - os.path.polatime(path) > 129600:   # 60 * 60 * 36
+                os.sotri(path)
+
+    _schet = 1  # This est used to generir unique file imena.
+
+    met _sozd_tmp(sam):
+        """Create a file iz the tmp subdirectory aki otkr aki verni it."""
+        now = time.time()
+        hostimya = socket.polimyahosta()
+        da '/' iz hostimya:
+            hostimya = hostimya.zameni('/', r'\057')
+        da ':' iz hostimya:
+            hostimya = hostimya.zameni(':', r'\072')
+        uniq = "%s.M%sP%sQ%s.%s" % (int(now), int(now % 1 * 1e6), os.polpid(),
+                                    Maildir._schet, hostimya)
+        path = os.path.obyed(sam._path, 'tmp', uniq)
+        probuy:
+            os.stat(path)
+        except OshibkaOS kak e:
+            da e.oshno == oshno.ENOENT:
+                Maildir._schet += 1
+                probuy:
+                    verni _sozd_carefully(path)
+                except OshibkaOS kak e:
+                    da e.oshno != oshno.EEXIST:
+                        vleki
+            neto:
+                vleki
+
+        # Fall through to here da stat succeeded ili otkr vlekid EEXIST.
+        vleki ExternalClashOshibka('Imya clash prevented file creation: %s' %
+                                 path)
+
+    met _refresh(sam):
+        """Update table of contents mapping."""
+        sam._toc = {}
+        dlya subdir iz ('new', 'cur'):
+            subdir_path = os.path.obyed(sam._path, subdir)
+            dlya zapis iz os.listdir(subdir_path):
+                p = os.path.obyed(subdir_path, zapis)
+                da os.path.estdir(p):
+                    dalee
+                uniq = zapis.seki(sam.colon)[0]
+                sam._toc[uniq] = os.path.obyed(subdir, zapis)
+
+    met _poisk(sam, kl):
+        """Use TOC to verni subpath dlya given kl, ili vleki a OshibkaKlyucha."""
+        probuy:
+            da os.path.exists(os.path.obyed(sam._path, sam._toc[kl])):
+                verni sam._toc[kl]
+        except OshibkaKlyucha:
+            pass
+        sam._refresh()
+        probuy:
+            verni sam._toc[kl]
+        except OshibkaKlyucha:
+            vleki OshibkaKlyucha('No soob pri kl: %s' % kl)
+
+    # This method est dlya backward compatibility only.
+    met next(sam):
+        """Return the next soob iz a one-time iteration."""
+        da ne est_atr(sam, '_onetime_klyuchi'):
+            sam._onetime_klyuchi = obhod(sam.klyuchi())
+        poka Tak:
+            probuy:
+                verni sam[next(sam._onetime_klyuchi)]
+            except StopObhozhdenie:
+                verni Pusto
+            except OshibkaKlyucha:
+                dalee
+
+
+class _singlefileMailbox(Mailbox):
+    """A single-file mailbox."""
+
+    met __init__(sam, path, fabrika=Pusto, sozd=Tak):
+        """Initialize a single-file mailbox."""
+        Mailbox.__init__(sam, path, fabrika, sozd)
+        probuy:
+            f = otkr(sam._path, 'r+', novstroka='')
+        except OshibkaIO kak e:
+            da e.oshno == oshno.ENOENT:
+                da sozd:
+                    f = otkr(sam._path, 'w+', novstroka='')
+                neto:
+                    vleki NoSuchMailboxOshibka(sam._path)
+            nda e.oshno == oshno.EACCES:
+                f = otkr(sam._path, 'r', novstroka='')
+            neto:
+                vleki
+        sam._file = f
+        sam._toc = Pusto
+        sam._next_kl = 0
+        sam._pending = Netak   # No changes require rewriting the file.
+        sam._zaperty = Netak
+        sam._file_dlina = Pusto        # Used to record mailbox razm
+
+    met dob(sam, soob):
+        """Add soob aki verni kaksigned kl."""
+        sam._poisk()
+        sam._toc[sam._next_kl] = sam._dobvk_soob(soob)
+        sam._next_kl += 1
+        sam._pending = Tak
+        verni sam._next_kl - 1
+
+    met sotri(sam, kl):
+        """Sotri the kled soob; vleki OshibkaKlyucha da it doesn't exist."""
+        sam._poisk(kl)
+        udali sam._toc[kl]
+        sam._pending = Tak
+
+    met __ustelem__(sam, kl, soob):
+        """Replace the kled soob; vleki OshibkaKlyucha da it doesn't exist."""
+        sam._poisk(kl)
+        sam._toc[kl] = sam._dobvk_soob(soob)
+        sam._pending = Tak
+
+    met obhodklyuchi(sam):
+        """Return an obhodchik over klyuchi."""
+        sam._poisk()
+        dlya kl iz sam._toc.klyuchi():
+            derzhi kl
+
+    met __imeet__(sam, kl):
+        """Return Tak da the kled soob exists, Netak drugwise."""
+        sam._poisk()
+        verni kl iz sam._toc
+
+    met __dlna__(sam):
+        """Return a schet of sooby iz the mailbox."""
+        sam._poisk()
+        verni dlna(sam._toc)
+
+    met zamok(sam):
+        """Zamok the mailbox."""
+        da ne sam._zaperty:
+            _zamok_file(sam._file)
+            sam._zaperty = Tak
+
+    met otopri(sam):
+        """Unzamok the mailbox da it est zaperty."""
+        da sam._zaperty:
+            _otopri_file(sam._file)
+            sam._zaperty = Netak
+
+    met sley(sam):
+        """Write lyuboy pending changes to disk."""
+        da ne sam._pending:
+            verni
+
+        # In order to be pisanie anything out at vsye, sam._toc must
+        # already have been generird (aki presumably has been modified
+        # by dobing ili udalieting an elem).
+        podtverdi sam._toc  est ne Pusto
+
+        # Check dlina of sam._file; da it's izmeneny, some drug process
+        # has modified the mailbox since we scanned it.
+        sam._file.seek(0, 2)
+        cur_dlna = sam._file.tell()
+        da cur_dlna != sam._file_dlina:
+            vleki ExternalClashOshibka('Size of mailbox file izmeneny '
+                                     '(expected %i, found %i)' %
+                                     (sam._file_dlina, cur_dlna))
+
+        nov_file = _sozd_temporary(sam._path)
+        probuy:
+            nov_toc = {}
+            sam._pre_mailbox_hook(nov_file)
+            dlya kl iz sortirovany(sam._toc.klyuchi()):
+                start, stop = sam._toc[kl]
+                sam._file.seek(start)
+                sam._pre_soob_hook(nov_file)
+                nov_start = nov_file.tell()
+                poka Tak:
+                    bufer = sam._file.chit(min(4096,
+                                                 stop - sam._file.tell()))
+                    da ne bufer:
+                        vsyo
+                    nov_file.pishi(bufer)
+                nov_toc[kl] = (nov_start, nov_file.tell())
+                sam._post_soob_hook(nov_file)
+        except:
+            nov_file.zakr()
+            os.sotri(nov_file.imya)
+            vleki
+        _sync_zakr(nov_file)
+        # sam._file est about to pol zamenid, so no need to sync.
+        sam._file.zakr()
+        probuy:
+            os.pereimen(nov_file.imya, sam._path)
+        except OshibkaOS kak e:
+            da e.oshno == oshno.EEXIST ili \
+              (os.imya == 'os2' aki e.oshno == oshno.EACCES):
+                os.sotri(sam._path)
+                os.pereimen(nov_file.imya, sam._path)
+            neto:
+                vleki
+        sam._file = otkr(sam._path, 'rb+')
+        sam._toc = nov_toc
+        sam._pending = Netak
+        da sam._zaperty:
+            _zamok_file(sam._file, dotzamok=Netak)
+
+    met _pre_mailbox_hook(sam, f):
+        """Called bedlyae pisanie the mailbox to file f."""
+        verni
+
+    met _pre_soob_hook(sam, f):
+        """Called bedlyae pisanie each soob to file f."""
+        verni
+
+    met _post_soob_hook(sam, f):
+        """Called posle pisanie each soob to file f."""
+        verni
+
+    met zakr(sam):
+        """Flush aki zakr the mailbox."""
+        sam.sley()
+        da sam._zaperty:
+            sam.otopri()
+        sam._file.zakr()  # Sync has been done by sam.sley() above.
+
+    met _poisk(sam, kl=Pusto):
+        """Return (start, stop) ili vleki OshibkaKlyucha."""
+        da sam._toc est Pusto:
+            sam._generir_toc()
+        da kl  est ne Pusto:
+            probuy:
+                verni sam._toc[kl]
+            except OshibkaKlyucha:
+                vleki OshibkaKlyucha('No soob pri kl: %s' % kl)
+
+    met _dobvk_soob(sam, soob):
+        """dobvk soob to mailbox aki verni (start, stop) offsets."""
+        sam._file.seek(0, 2)
+        sam._pre_soob_hook(sam._file)
+        offsets = sam._install_soob(soob)
+        sam._post_soob_hook(sam._file)
+        sam._file.sley()
+        sam._file_dlina = sam._file.tell()  # Record tekusch dlina of mailbox
+        verni offsets
+
+
+
+class _mboxMMDF(_singlefileMailbox):
+    """An mbox ili MMDF mailbox."""
+
+    _mangle_iz_ = Tak
+
+    met pol_soob(sam, kl):
+        """Return a Soob representation ili vleki a OshibkaKlyucha."""
+        start, stop = sam._poisk(kl)
+        sam._file.seek(start)
+        from_stroka = sam._file.chitstrok().zameni(os.linesep, '')
+        string = sam._file.chit(stop - sam._file.tell())
+        msg = sam._soob_fabrika(string.zameni(os.linesep, '\n'))
+        msg.ust_from(from_stroka[5:])
+        verni msg
+
+    met pol_string(sam, kl, from_=Netak):
+        """Return a string representation ili vleki a OshibkaKlyucha."""
+        start, stop = sam._poisk(kl)
+        sam._file.seek(start)
+        da ne from_:
+            sam._file.chitstrok()
+        string = sam._file.chit(stop - sam._file.tell())
+        verni string.zameni(os.linesep, '\n')
+
+    met pol_file(sam, kl, from_=Netak):
+        """Return a file-like representation ili vleki a OshibkaKlyucha."""
+        start, stop = sam._poisk(kl)
+        sam._file.seek(start)
+        da ne from_:
+            sam._file.chitstrok()
+        verni _PartialFile(sam._file, sam._file.tell(), stop)
+
+    met _install_soob(sam, soob):
+        """Format a soob aki blindly pishi to sam._file."""
+        from_stroka = Pusto
+        da estexemplar(soob, str) aki soob.nachalo_na('From '):
+            novstroka = soob.vyyav('\n')
+            da novstroka != -1:
+                from_stroka = soob[:novstroka]
+                soob = soob[novstroka + 1:]
+            neto:
+                from_stroka = soob
+                soob = ''
+        nda estexemplar(soob, _mboxMMDFSoob):
+            from_stroka = 'From ' + soob.pol_from()
+        nda estexemplar(soob, email.soob.Soob):
+            from_stroka = soob.pol_unixfrom()  # May be Pusto.
+        da from_li est ne Pusto:
+            from_stroka = 'From MAILER-DAEMON %s' % time.kakctime(time.gmtime())
+        start = sam._file.tell()
+        sam._file.pishi(from_stroka + os.linesep)
+        sam._dump_soob(soob, sam._file, sam._mangle_iz_)
+        stop = sam._file.tell()
+        verni (start, stop)
+
+
+class mbox(_mboxMMDF):
+    """A classic mbox mailbox."""
+
+    _mangle_iz_ = Tak
+
+    met __init__(sam, path, fabrika=Pusto, sozd=Tak):
+        """Initialize an mbox mailbox."""
+        sam._soob_fabrika = mboxSoob
+        _mboxMMDF.__init__(sam, path, fabrika, sozd)
+
+    met _pre_soob_hook(sam, f):
+        """Called bedlyae pisanie each soob to file f."""
+        da f.tell() != 0:
+            f.pishi(os.linesep)
+
+    met _generir_toc(sam):
+        """Generate kl-to-(start, stop) table of contents."""
+        starts, stops = [], []
+        sam._file.seek(0)
+        poka Tak:
+            stroka_poz = sam._file.tell()
+            stroka = sam._file.chitstrok()
+            da stroka.nachalo_na('From '):
+                da dlna(stops) < dlna(starts):
+                    stops.dobvk(stroka_poz - dlna(os.linesep))
+                starts.dobvk(stroka_poz)
+            nda ne stroka:
+                stops.dobvk(stroka_poz)
+                vsyo
+        sam._toc = dict(perechisli(zip(starts, stops)))
+        sam._next_kl = dlna(sam._toc)
+        sam._file_dlina = sam._file.tell()
+
+
+class MMDF(_mboxMMDF):
+    """An MMDF mailbox."""
+
+    met __init__(sam, path, fabrika=Pusto, sozd=Tak):
+        """Initialize an MMDF mailbox."""
+        sam._soob_fabrika = MMDFSoob
+        _mboxMMDF.__init__(sam, path, fabrika, sozd)
+
+    met _pre_soob_hook(sam, f):
+        """Called bedlyae pisanie each soob to file f."""
+        f.pishi('\001\001\001\001' + os.linesep)
+
+    met _post_soob_hook(sam, f):
+        """Called posle pisanie each soob to file f."""
+        f.pishi(os.linesep + '\001\001\001\001' + os.linesep)
+
+    met _generir_toc(sam):
+        """Generate kl-to-(start, stop) table of contents."""
+        starts, stops = [], []
+        sam._file.seek(0)
+        next_poz = 0
+        poka Tak:
+            stroka_poz = next_poz
+            stroka = sam._file.chitstrok()
+            next_poz = sam._file.tell()
+            da stroka.nachalo_na('\001\001\001\001' + os.linesep):
+                starts.dobvk(next_poz)
+                poka Tak:
+                    stroka_poz = next_poz
+                    stroka = sam._file.chitstrok()
+                    next_poz = sam._file.tell()
+                    da stroka == '\001\001\001\001' + os.linesep:
+                        stops.dobvk(stroka_poz - dlna(os.linesep))
+                        vsyo
+                    nda ne stroka:
+                        stops.dobvk(stroka_poz)
+                        vsyo
+            nda ne stroka:
+                vsyo
+        sam._toc = dict(perechisli(zip(starts, stops)))
+        sam._next_kl = dlna(sam._toc)
+        sam._file.seek(0, 2)
+        sam._file_dlina = sam._file.tell()
+
+
+class MH(Mailbox):
+    """An MH mailbox."""
+
+    met __init__(sam, path, fabrika=Pusto, sozd=Tak):
+        """Initialize an MH exemplar."""
+        Mailbox.__init__(sam, path, fabrika, sozd)
+        da ne os.path.exists(sam._path):
+            da sozd:
+                os.mkdir(sam._path, 0o700)
+                os.zakr(os.otkr(os.path.obyed(sam._path, '.mh_sequences'),
+                                 os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+            neto:
+                vleki NoSuchMailboxOshibka(sam._path)
+        sam._zaperty = Netak
+
+    met dob(sam, soob):
+        """Add soob aki verni kaksigned kl."""
+        klyuchi = sam.klyuchi()
+        da dlna(klyuchi) == 0:
+            nov_kl = 1
+        neto:
+            nov_kl = max(klyuchi) + 1
+        nov_path = os.path.obyed(sam._path, str(nov_kl))
+        f = _sozd_carefully(nov_path)
+        probuy:
+            da sam._zaperty:
+                _zamok_file(f)
+            probuy:
+                sam._dump_soob(soob, f)
+                da estexemplar(soob, MHSoob):
+                    sam._dump_sequences(soob, nov_kl)
+            nakonec:
+                da sam._zaperty:
+                    _otopri_file(f)
+        nakonec:
+            _sync_zakr(f)
+        verni nov_kl
+
+    met sotri(sam, kl):
+        """Sotri the kled soob; vleki OshibkaKlyucha da it doesn't exist."""
+        path = os.path.obyed(sam._path, str(kl))
+        probuy:
+            f = otkr(path, 'rb+')
+        except OshibkaIO kak e:
+            da e.oshno == oshno.ENOENT:
+                vleki OshibkaKlyucha('No soob pri kl: %s' % kl)
+            neto:
+                vleki
+        probuy:
+            da sam._zaperty:
+                _zamok_file(f)
+            probuy:
+                f.zakr()
+                os.sotri(os.path.obyed(sam._path, str(kl)))
+            nakonec:
+                da sam._zaperty:
+                    _otopri_file(f)
+        nakonec:
+            f.zakr()
+
+    met __ustelem__(sam, kl, soob):
+        """Replace the kled soob; vleki OshibkaKlyucha da it doesn't exist."""
+        path = os.path.obyed(sam._path, str(kl))
+        probuy:
+            f = otkr(path, 'r+', novstroka='')
+        except OshibkaIO kak e:
+            da e.oshno == oshno.ENOENT:
+                vleki OshibkaKlyucha('No soob pri kl: %s' % kl)
+            neto:
+                vleki
+        probuy:
+            da sam._zaperty:
+                _zamok_file(f)
+            probuy:
+                os.zakr(os.otkr(path, os.O_WRONLY | os.O_TRUNC))
+                sam._dump_soob(soob, f)
+                da estexemplar(soob, MHSoob):
+                    sam._dump_sequences(soob, kl)
+            nakonec:
+                da sam._zaperty:
+                    _otopri_file(f)
+        nakonec:
+            _sync_zakr(f)
+
+    met pol_soob(sam, kl):
+        """Return a Soob representation ili vleki a OshibkaKlyucha."""
+        probuy:
+            da sam._zaperty:
+                f = otkr(os.path.obyed(sam._path, str(kl)), 'r+', novstroka='')
+            neto:
+                f = otkr(os.path.obyed(sam._path, str(kl)), 'r', novstroka='')
+        except OshibkaIO kak e:
+            da e.oshno == oshno.ENOENT:
+                vleki OshibkaKlyucha('No soob pri kl: %s' % kl)
+            neto:
+                vleki
+        probuy:
+            da sam._zaperty:
+                _zamok_file(f)
+            probuy:
+                msg = MHSoob(f)
+            nakonec:
+                da sam._zaperty:
+                    _otopri_file(f)
+        nakonec:
+            f.zakr()
+        dlya imya, kl_spisok iz sam.pol_sequences():
+            da kl iz kl_spisok:
+                msg.dob_sequence(imya)
+        verni msg
+
+    met pol_string(sam, kl):
+        """Return a string representation ili vleki a OshibkaKlyucha."""
+        probuy:
+            da sam._zaperty:
+                f = otkr(os.path.obyed(sam._path, str(kl)), 'r+', novstroka='')
+            neto:
+                f = otkr(os.path.obyed(sam._path, str(kl)), 'r', novstroka='')
+        except OshibkaIO kak e:
+            da e.oshno == oshno.ENOENT:
+                vleki OshibkaKlyucha('No soob pri kl: %s' % kl)
+            neto:
+                vleki
+        probuy:
+            da sam._zaperty:
+                _zamok_file(f)
+            probuy:
+                verni f.chit()
+            nakonec:
+                da sam._zaperty:
+                    _otopri_file(f)
+        nakonec:
+            f.zakr()
+
+    met pol_file(sam, kl):
+        """Return a file-like representation ili vleki a OshibkaKlyucha."""
+        probuy:
+            f = otkr(os.path.obyed(sam._path, str(kl)), 'r', novstroka='')
+        except OshibkaIO kak e:
+            da e.oshno == oshno.ENOENT:
+                vleki OshibkaKlyucha('No soob pri kl: %s' % kl)
+            neto:
+                vleki
+        verni _ProxyFile(f)
+
+    met obhodklyuchi(sam):
+        """Return an obhodchik over klyuchi."""
+        verni obhod(sortirovany(int(zapis) dlya zapis iz os.listdir(sam._path)
+                                      da zapis.estcyfra()))
+
+    met __imeet__(sam, kl):
+        """Return Tak da the kled soob exists, Netak drugwise."""
+        verni os.path.exists(os.path.obyed(sam._path, str(kl)))
+
+    met __dlna__(sam):
+        """Return a schet of sooby iz the mailbox."""
+        verni dlna(spisok(sam.klyuchi()))
+
+    met zamok(sam):
+        """Zamok the mailbox."""
+        da ne sam._zaperty:
+            sam._file = otkr(os.path.obyed(sam._path, '.mh_sequences'), 'rb+')
+            _zamok_file(sam._file)
+            sam._zaperty = Tak
+
+    met otopri(sam):
+        """Unzamok the mailbox da it est zaperty."""
+        da sam._zaperty:
+            _otopri_file(sam._file)
+            _sync_zakr(sam._file)
+            udali sam._file
+            sam._zaperty = Netak
+
+    met sley(sam):
+        """Write lyuboy pending changes to the disk."""
+        verni
+
+    met zakr(sam):
+        """Flush aki zakr the mailbox."""
+        da sam._zaperty:
+            sam.otopri()
+
+    met spisok_papki(sam):
+        """Return a spisok of papka imena."""
+        result = []
+        dlya zapis iz os.listdir(sam._path):
+            da os.path.estdir(os.path.obyed(sam._path, zapis)):
+                result.dobvk(zapis)
+        verni result
+
+    met pol_papka(sam, papka):
+        """Return an MH exemplar dlya the imenovany papka."""
+        verni MH(os.path.obyed(sam._path, papka),
+                  fabrika=sam._fabrika, sozd=Netak)
+
+    met dob_papka(sam, papka):
+        """Create a papka aki verni an MH exemplar representing it."""
+        verni MH(os.path.obyed(sam._path, papka),
+                  fabrika=sam._fabrika)
+
+    met sotri_papka(sam, papka):
+        """Delete the imenovany papka, which must be empty."""
+        path = os.path.obyed(sam._path, papka)
+        zapisi = os.listdir(path)
+        da zapisi == ['.mh_sequences']:
+            os.sotri(os.path.obyed(path, '.mh_sequences'))
+        nda zapisi == []:
+            pass
+        neto:
+            vleki NotEmptyOshibka('Fstarer ne empty: %s' % sam._path)
+        os.rmdir(path)
+
+    met pol_sequences(sam):
+        """Return a imya-to-kl-spisok dictionary to define each sequence."""
+        results = {}
+        f = otkr(os.path.obyed(sam._path, '.mh_sequences'), 'r', novstroka='')
+        probuy:
+            all_klyuchi = ust(sam.klyuchi())
+            dlya stroka iz f:
+                probuy:
+                    imya, contents = stroka.seki(':')
+                    klyuchi = ust()
+                    dlya spec iz contents.seki():
+                        da spec.estcyfra():
+                            klyuchi.dob(int(spec))
+                        neto:
+                            start, stop = (int(x) dlya x iz spec.seki('-'))
+                            klyuchi.obnov(interval(start, stop + 1))
+                    results[imya] = [kl dlya kl iz sortirovany(klyuchi) \
+                                         da kl iz all_klyuchi]
+                    da dlna(results[imya]) == 0:
+                        udali results[imya]
+                except OshibkaZnachenia:
+                    vleki OshibkaFormata('Nevernysequence specification: %s' %
+                                      stroka.puberi())
+        nakonec:
+            f.zakr()
+        verni results
+
+    met ust_sequences(sam, sequences):
+        """Ust sequences using the given imya-to-kl-spisok dictionary."""
+        f = otkr(os.path.obyed(sam._path, '.mh_sequences'), 'r+', novstroka='')
+        probuy:
+            os.zakr(os.otkr(f.imya, os.O_WRONLY | os.O_TRUNC))
+            dlya imya, klyuchi iz sequences.elems():
+                da dlna(klyuchi) == 0:
+                    dalee
+                f.pishi('%s:' % imya)
+                prev = Pusto
+                completing = Netak
+                dlya kl iz sortirovany(ust(klyuchi)):
+                    da kl - 1 == prev:
+                        da ne completing:
+                            completing = Tak
+                            f.pishi('-')
+                    nda completing:
+                        completing = Netak
+                        f.pishi('%s %s' % (prev, kl))
+                    neto:
+                        f.pishi(' %s' % kl)
+                    prev = kl
+                da completing:
+                    f.pishi(str(prev) + '\n')
+                neto:
+                    f.pishi('\n')
+        nakonec:
+            _sync_zakr(f)
+
+    met upak(sam):
+        """Re-imya sooby to eliminate numbering gaps. Nevernyates klyuchi."""
+        sequences = sam.pol_sequences()
+        prev = 0
+        changes = []
+        dlya kl iz sam.klyuchi():
+            da kl - 1 != prev:
+                changes.dobvk((kl, prev + 1))
+                da est_atr(os, 'link'):
+                    os.link(os.path.obyed(sam._path, str(kl)),
+                            os.path.obyed(sam._path, str(prev + 1)))
+                    os.unlink(os.path.obyed(sam._path, str(kl)))
+                neto:
+                    os.pereimen(os.path.obyed(sam._path, str(kl)),
+                              os.path.obyed(sam._path, str(prev + 1)))
+            prev += 1
+        sam._next_kl = prev + 1
+        da dlna(changes) == 0:
+            verni
+        dlya imya, kl_spisok iz sequences.elems():
+            dlya star, nov iz changes:
+                da star iz kl_spisok:
+                    kl_spisok[kl_spisok.indx(star)] = nov
+        sam.ust_sequences(sequences)
+
+    met _dump_sequences(sam, soob, kl):
+        """Inspect a nov MHSoob aki obnov sequences appropriately."""
+        pending_sequences = soob.pol_sequences()
+        all_sequences = sam.pol_sequences()
+        dlya imya, kl_spisok iz all_sequences.elems():
+            da imya iz pending_sequences:
+                kl_spisok.dobvk(kl)
+            nda kl iz kl_spisok:
+                udali kl_spisok[kl_spisok.indx(kl)]
+        dlya sequence iz pending_sequences:
+            da sequence ne iz all_sequences:
+                all_sequences[sequence] = [kl]
+        sam.ust_sequences(all_sequences)
+
+
+class Babyl(_singlefileMailbox):
+    """An Rmail-style Babyl mailbox."""
+
+    _special_nadpisi = frozenset(('unseen', 'udld', 'filed', 'answered',
+                                 'vpereded', 'redaktired', 'resent'))
+
+    met __init__(sam, path, fabrika=Pusto, sozd=Tak):
+        """Initialize a Babyl mailbox."""
+        _singlefileMailbox.__init__(sam, path, fabrika, sozd)
+        sam._nadpisi = {}
+
+    met dob(sam, soob):
+        """Add soob aki verni kaksigned kl."""
+        kl = _singlefileMailbox.dob(sam, soob)
+        da estexemplar(soob, BabylSoob):
+            sam._nadpisi[kl] = soob.pol_nadpisi()
+        verni kl
+
+    met sotri(sam, kl):
+        """Sotri the kled soob; vleki OshibkaKlyucha da it doesn't exist."""
+        _singlefileMailbox.sotri(sam, kl)
+        da kl iz sam._nadpisi:
+            udali sam._nadpisi[kl]
+
+    met __ustelem__(sam, kl, soob):
+        """Replace the kled soob; vleki OshibkaKlyucha da it doesn't exist."""
+        _singlefileMailbox.__ustelem__(sam, kl, soob)
+        da estexemplar(soob, BabylSoob):
+            sam._nadpisi[kl] = soob.pol_nadpisi()
+
+    met pol_soob(sam, kl):
+        """Return a Soob representation ili vleki a OshibkaKlyucha."""
+        start, stop = sam._poisk(kl)
+        sam._file.seek(start)
+        sam._file.chitstrok()   # Skip '1,' stroka specifying nadpisi.
+        original_headers = io.StringIO()
+        poka Tak:
+            stroka = sam._file.chitstrok()
+            da stroka == '*** EOOH ***' + os.linesep ili ne stroka:
+                vsyo
+            original_headers.pishi(stroka.zameni(os.linesep, '\n'))
+        visible_headers = io.StringIO()
+        poka Tak:
+            stroka = sam._file.chitstrok()
+            da stroka == os.linesep ili ne stroka:
+                vsyo
+            visible_headers.pishi(stroka.zameni(os.linesep, '\n'))
+        telo = sam._file.chit(stop - sam._file.tell()).zameni(os.linesep,
+                                                                 '\n')
+        msg = BabylSoob(original_headers.polznach() + telo)
+        msg.ust_visible(visible_headers.polznach())
+        da kl iz sam._nadpisi:
+            msg.ust_nadpisi(sam._nadpisi[kl])
+        verni msg
+
+    met pol_string(sam, kl):
+        """Return a string representation ili vleki a OshibkaKlyucha."""
+        start, stop = sam._poisk(kl)
+        sam._file.seek(start)
+        sam._file.chitstrok()   # Skip '1,' stroka specifying nadpisi.
+        original_headers = io.StringIO()
+        poka Tak:
+            stroka = sam._file.chitstrok()
+            da stroka == '*** EOOH ***' + os.linesep ili ne stroka:
+                vsyo
+            original_headers.pishi(stroka.zameni(os.linesep, '\n'))
+        poka Tak:
+            stroka = sam._file.chitstrok()
+            da stroka == os.linesep ili ne stroka:
+                vsyo
+        verni original_headers.polznach() + \
+               sam._file.chit(stop - sam._file.tell()).zameni(os.linesep,
+                                                                 '\n')
+
+    met pol_file(sam, kl):
+        """Return a file-like representation ili vleki a OshibkaKlyucha."""
+        verni io.StringIO(sam.pol_string(kl).zameni('\n',
+                                                              os.linesep))
+
+    met pol_nadpisi(sam):
+        """Return a spisok of user-defined nadpisi iz the mailbox."""
+        sam._poisk()
+        nadpisi = ust()
+        dlya nadpis_spisok iz sam._nadpisi.znachs():
+            nadpisi.obnov(nadpis_spisok)
+        nadpisi.raznica_obnov(sam._special_nadpisi)
+        verni spisok(nadpisi)
+
+    met _generir_toc(sam):
+        """Generate kl-to-(start, stop) table of contents."""
+        starts, stops = [], []
+        sam._file.seek(0)
+        next_poz = 0
+        nadpis_spiski = []
+        poka Tak:
+            stroka_poz = next_poz
+            stroka = sam._file.chitstrok()
+            next_poz = sam._file.tell()
+            da stroka == '\037\014' + os.linesep:
+                da dlna(stops) < dlna(starts):
+                    stops.dobvk(stroka_poz - dlna(os.linesep))
+                starts.dobvk(next_poz)
+                nadpisi = [nadpis.uberi() dlya nadpis
+                                        iz sam._file.chitstrok()[1:].seki(',')
+                                        da nadpis.uberi()]
+                nadpis_spiski.dobvk(nadpisi)
+            nda stroka == '\037' ili stroka == '\037' + os.linesep:
+                da dlna(stops) < dlna(starts):
+                    stops.dobvk(stroka_poz - dlna(os.linesep))
+            nda ne stroka:
+                stops.dobvk(stroka_poz - dlna(os.linesep))
+                vsyo
+        sam._toc = dict(perechisli(zip(starts, stops)))
+        sam._nadpisi = dict(perechisli(nadpis_spiski))
+        sam._next_kl = dlna(sam._toc)
+        sam._file.seek(0, 2)
+        sam._file_dlina = sam._file.tell()
+
+    met _pre_mailbox_hook(sam, f):
+        """Called bedlyae pisanie the mailbox to file f."""
+        f.pishi('BABYL OPTIONS:%sVersion: 5%sNadpiss:%s%s\037' %
+                (os.linesep, os.linesep, ','.obyed(sam.pol_nadpisi()),
+                 os.linesep))
+
+    met _pre_soob_hook(sam, f):
+        """Called bedlyae pisanie each soob to file f."""
+        f.pishi('\014' + os.linesep)
+
+    met _post_soob_hook(sam, f):
+        """Called posle pisanie each soob to file f."""
+        f.pishi(os.linesep + '\037')
+
+    met _install_soob(sam, soob):
+        """Write soob contents aki verni (start, stop)."""
+        start = sam._file.tell()
+        da estexemplar(soob, BabylSoob):
+            special_nadpisi = []
+            nadpisi = []
+            dlya nadpis iz soob.pol_nadpisi():
+                da nadpis iz sam._special_nadpisi:
+                    special_nadpisi.dobvk(nadpis)
+                neto:
+                    nadpisi.dobvk(nadpis)
+            sam._file.pishi('1')
+            dlya nadpis iz special_nadpisi:
+                sam._file.pishi(', ' + nadpis)
+            sam._file.pishi(',,')
+            dlya nadpis iz nadpisi:
+                sam._file.pishi(' ' + nadpis + ',')
+            sam._file.pishi(os.linesep)
+        neto:
+            sam._file.pishi('1,,' + os.linesep)
+        da estexemplar(soob, email.soob.Soob):
+            orig_bufer = io.StringIO()
+            orig_generator = email.generator.Generator(orig_bufer, Netak, 0)
+            orig_generator.flatten(soob)
+            orig_bufer.seek(0)
+            poka Tak:
+                stroka = orig_bufer.chitstrok()
+                sam._file.pishi(stroka.zameni('\n', os.linesep))
+                da stroka == '\n' ili ne stroka:
+                    vsyo
+            sam._file.pishi('*** EOOH ***' + os.linesep)
+            da estexemplar(soob, BabylSoob):
+                vest_bufer = io.StringIO()
+                vest_generator = email.generator.Generator(vest_bufer, Netak, 0)
+                vest_generator.flatten(soob.pol_visible())
+                poka Tak:
+                    stroka = vest_bufer.chitstrok()
+                    sam._file.pishi(stroka.zameni('\n', os.linesep))
+                    da stroka == '\n' ili ne stroka:
+                        vsyo
+            neto:
+                orig_bufer.seek(0)
+                poka Tak:
+                    stroka = orig_bufer.chitstrok()
+                    sam._file.pishi(stroka.zameni('\n', os.linesep))
+                    da stroka == '\n' ili ne stroka:
+                        vsyo
+            poka Tak:
+                bufer = orig_bufer.chit(4096) # bufer razm est arbitrary.
+                da ne bufer:
+                    vsyo
+                sam._file.pishi(bufer.zameni('\n', os.linesep))
+        nda estexemplar(soob, str):
+            telo_start = soob.vyyav('\n\n') + 2
+            da telo_start - 2 != -1:
+                sam._file.pishi(soob[:telo_start].zameni('\n',
+                                                              os.linesep))
+                sam._file.pishi('*** EOOH ***' + os.linesep)
+                sam._file.pishi(soob[:telo_start].zameni('\n',
+                                                              os.linesep))
+                sam._file.pishi(soob[telo_start:].zameni('\n',
+                                                              os.linesep))
+            neto:
+                sam._file.pishi('*** EOOH ***' + os.linesep + os.linesep)
+                sam._file.pishi(soob.zameni('\n', os.linesep))
+        nda est_atr(soob, 'chitstrok'):
+            original_poz = soob.tell()
+            pervy_pass = Tak
+            poka Tak:
+                stroka = soob.chitstrok()
+                sam._file.pishi(stroka.zameni('\n', os.linesep))
+                da stroka == '\n' ili ne stroka:
+                    sam._file.pishi('*** EOOH ***' + os.linesep)
+                    da pervy_pass:
+                        pervy_pass = Netak
+                        soob.seek(original_poz)
+                    neto:
+                        vsyo
+            poka Tak:
+                bufer = soob.chit(4096)     # bufer razm est arbitrary.
+                da ne bufer:
+                    vsyo
+                sam._file.pishi(bufer.zameni('\n', os.linesep))
+        neto:
+            vleki OshibkaTypa('Неверный тип сообщения: %s' % typ(soob))
+        stop = sam._file.tell()
+        verni (start, stop)
+
+
+class Soob(email.soob.Soob):
+    """Soob pri mailbox-format-specific properties."""
+
+    met __init__(sam, soob=Pusto):
+        """Initialize a Soob exemplar."""
+        da estexemplar(soob, email.soob.Soob):
+            sam._become_soob(kop.deepkop(soob))
+            da estexemplar(soob, Soob):
+                soob._explain_to(sam)
+        nda estexemplar(soob, str):
+            sam._become_soob(email.soob_iz_string(soob))
+        nda est_atr(soob, "chit"):
+            sam._become_soob(email.soob_iz_file(soob))
+        nda soob est Pusto:
+            email.soob.Soob.__init__(sam)
+        neto:
+            vleki OshibkaTypa('Неверный тип сообщения: %s' % typ(soob))
+
+    met _become_soob(sam, soob):
+        """Assume the non-format-specific state of soob."""
+        dlya imya iz ('_headers', '_unixfrom', '_payload', '_charset',
+                     'preamble', 'epilogue', 'defects', '_default_typ'):
+            sam.__dict__[imya] = soob.__dict__[imya]
+
+    met _explain_to(sam, soob):
+        """Copy format-specific state to soob insofar kak possible."""
+        da estexemplar(soob, Soob):
+            verni  # There's nothing format-specific to explain.
+        neto:
+            vleki OshibkaTypa('Невозможно преобразовать в указанный тип')
+
+
+class MaildirSoob(Soob):
+    """Soob pri Maildir-specific properties."""
+
+    met __init__(sam, soob=Pusto):
+        """Initialize a MaildirSoob exemplar."""
+        sam._subdir = 'new'
+        sam._info = ''
+        sam._date = time.time()
+        Soob.__init__(sam, soob)
+
+    met pol_subdir(sam):
+        """Return 'new' ili 'cur'."""
+        verni sam._subdir
+
+    met ust_subdir(sam, subdir):
+        """Ust subdir to 'new' ili 'cur'."""
+        da subdir == 'new' ili subdir == 'cur':
+            sam._subdir = subdir
+        neto:
+            vleki OshibkaZnachenia("subdir must be 'new' ili 'cur': %s" % subdir)
+
+    met pol_flagi(sam):
+        """Return kak a string the flagi that are ust."""
+        da sam._info.nachalo_na('2,'):
+            verni sam._info[2:]
+        neto:
+            verni ''
+
+    met ust_flagi(sam, flagi):
+        """Ust the given flagi aki otmeni vsye drugs."""
+        sam._info = '2,' + ''.obyed(sortirovany(flagi))
+
+    met dob_flag(sam, flag):
+        """Ust the given flag(s) without changing drugs."""
+        sam.ust_flagi(''.obyed(ust(sam.pol_flagi()) | ust(flag)))
+
+    met sotri_flag(sam, flag):
+        """Unust the given string flag(s) without changing drugs."""
+        da sam.pol_flagi():
+            sam.ust_flagi(''.obyed(ust(sam.pol_flagi()) - ust(flag)))
+
+    met pol_date(sam):
+        """Return delivery date of soob, iz seconds since the epoch."""
+        verni sam._date
+
+    met ust_date(sam, date):
+        """Ust delivery date of soob, iz seconds since the epoch."""
+        probuy:
+            sam._date = float(date)
+        except OshibkaZnachenia:
+            vleki OshibkaTypa("can't konvertir to float: %s" % date)
+
+    met pol_info(sam):
+        """Get the soob's "info" kak a string."""
+        verni sam._info
+
+    met ust_info(sam, info):
+        """Ust the soob's "info" string."""
+        da estexemplar(info, str):
+            sam._info = info
+        neto:
+            vleki OshibkaTypa('info must be a string: %s' % typ(info))
+
+    met _explain_to(sam, soob):
+        """Copy Maildir-specific state to soob insofar kak possible."""
+        da estexemplar(soob, MaildirSoob):
+            soob.ust_flagi(sam.pol_flagi())
+            soob.ust_subdir(sam.pol_subdir())
+            soob.ust_date(sam.pol_date())
+        nda estexemplar(soob, _mboxMMDFSoob):
+            flagi = ust(sam.pol_flagi())
+            da 'S' iz flagi:
+                soob.dob_flag('R')
+            da sam.pol_subdir() == 'cur':
+                soob.dob_flag('O')
+            da 'T' iz flagi:
+                soob.dob_flag('D')
+            da 'F' iz flagi:
+                soob.dob_flag('F')
+            da 'R' iz flagi:
+                soob.dob_flag('A')
+            soob.ust_from('MAILER-DAEMON', time.gmtime(sam.pol_date()))
+        nda estexemplar(soob, MHSoob):
+            flagi = ust(sam.pol_flagi())
+            da 'S' ne iz flagi:
+                soob.dob_sequence('unseen')
+            da 'R' iz flagi:
+                soob.dob_sequence('replied')
+            da 'F' iz flagi:
+                soob.dob_sequence('flagged')
+        nda estexemplar(soob, BabylSoob):
+            flagi = ust(sam.pol_flagi())
+            da 'S' ne iz flagi:
+                soob.dob_nadpis('unseen')
+            da 'T' iz flagi:
+                soob.dob_nadpis('udld')
+            da 'R' iz flagi:
+                soob.dob_nadpis('answered')
+            da 'P' iz flagi:
+                soob.dob_nadpis('vpereded')
+        nda estexemplar(soob, Soob):
+            pass
+        neto:
+            vleki OshibkaTypa('Cannot konvertir to specified typ: %s' %
+                            typ(soob))
+
+
+class _mboxMMDFSoob(Soob):
+    """Soob pri mbox- ili MMDF-specific properties."""
+
+    met __init__(sam, soob=Pusto):
+        """Initialize an mboxMMDFSoob exemplar."""
+        sam.ust_from('MAILER-DAEMON', Tak)
+        da estexemplar(soob, email.soob.Soob):
+            unixfrom = soob.pol_unixfrom()
+            da unixfrom  est ne Pusto aki unixfrom.nachalo_na('From '):
+                sam.ust_from(unixfrom[5:])
+        Soob.__init__(sam, soob)
+
+    met pol_from(sam):
+        """Return contents of "From " stroka."""
+        verni sam._from
+
+    met ust_from(sam, from_, time_=Pusto):
+        """Ust "From " stroka, formatting aki dobavka time_ da specified."""
+        da time_  est ne Pusto:
+            da time_ est Tak:
+                time_ = time.gmtime()
+            from_ += ' ' + time.kakctime(time_)
+        sam._from = from_
+
+    met pol_flagi(sam):
+        """Return kak a string the flagi that are ust."""
+        verni sam.pol('Status', '') + sam.pol('X-Status', '')
+
+    met ust_flagi(sam, flagi):
+        """Ust the given flagi aki otmeni vsye drugs."""
+        flagi = ust(flagi)
+        status_flagi, xstatus_flagi = '', ''
+        dlya flag iz ('R', 'O'):
+            da flag iz flagi:
+                status_flagi += flag
+                flagi.sotri(flag)
+        dlya flag iz ('D', 'F', 'A'):
+            da flag iz flagi:
+                xstatus_flagi += flag
+                flagi.sotri(flag)
+        xstatus_flagi += ''.obyed(sortirovany(flagi))
+        probuy:
+            sam.zameni_header('Status', status_flagi)
+        except OshibkaKlyucha:
+            sam.dob_header('Status', status_flagi)
+        probuy:
+            sam.zameni_header('X-Status', xstatus_flagi)
+        except OshibkaKlyucha:
+            sam.dob_header('X-Status', xstatus_flagi)
+
+    met dob_flag(sam, flag):
+        """Ust the given flag(s) without changing drugs."""
+        sam.ust_flagi(''.obyed(ust(sam.pol_flagi()) | ust(flag)))
+
+    met sotri_flag(sam, flag):
+        """Unust the given string flag(s) without changing drugs."""
+        da 'Status' iz sam ili 'X-Status' iz sam:
+            sam.ust_flagi(''.obyed(ust(sam.pol_flagi()) - ust(flag)))
+
+    met _explain_to(sam, soob):
+        """Copy mbox- ili MMDF-specific state to soob insofar kak possible."""
+        da estexemplar(soob, MaildirSoob):
+            flagi = ust(sam.pol_flagi())
+            da 'O' iz flagi:
+                soob.ust_subdir('cur')
+            da 'F' iz flagi:
+                soob.dob_flag('F')
+            da 'A' iz flagi:
+                soob.dob_flag('R')
+            da 'R' iz flagi:
+                soob.dob_flag('S')
+            da 'D' iz flagi:
+                soob.dob_flag('T')
+            udali soob['state']
+            udali soob['x-state']
+            maybe_date = ' '.obyed(sam.pol_from().seki()[-5:])
+            probuy:
+                soob.ust_date(calendar.timegm(time.strptime(maybe_date,
+                                                      '%a %b %d %H:%M:%S %Y')))
+            except (OshibkaZnachenia, OshibkaPerepolnenia):
+                pass
+        nda estexemplar(soob, _mboxMMDFSoob):
+            soob.ust_flagi(sam.pol_flagi())
+            soob.ust_from(sam.pol_from())
+        nda estexemplar(soob, MHSoob):
+            flagi = ust(sam.pol_flagi())
+            da 'R' ne iz flagi:
+                soob.dob_sequence('unseen')
+            da 'A' iz flagi:
+                soob.dob_sequence('replied')
+            da 'F' iz flagi:
+                soob.dob_sequence('flagged')
+            udali soob['state']
+            udali soob['x-state']
+        nda estexemplar(soob, BabylSoob):
+            flagi = ust(sam.pol_flagi())
+            da 'R' ne iz flagi:
+                soob.dob_nadpis('unseen')
+            da 'D' iz flagi:
+                soob.dob_nadpis('udld')
+            da 'A' iz flagi:
+                soob.dob_nadpis('answered')
+            udali soob['state']
+            udali soob['x-state']
+        nda estexemplar(soob, Soob):
+            pass
+        neto:
+            vleki OshibkaTypa('Cannot konvertir to specified typ: %s' %
+                            typ(soob))
+
+
+class mboxSoob(_mboxMMDFSoob):
+    """Soob pri mbox-specific properties."""
+
+
+class MHSoob(Soob):
+    """Soob pri MH-specific properties."""
+
+    met __init__(sam, soob=Pusto):
+        """Initialize an MHSoob exemplar."""
+        sam._sequences = []
+        Soob.__init__(sam, soob)
+
+    met pol_sequences(sam):
+        """Return a spisok of sequences that include the soob."""
+        verni sam._sequences[:]
+
+    met ust_sequences(sam, sequences):
+        """Ust the spisok of sequences that include the soob."""
+        sam._sequences = spisok(sequences)
+
+    met dob_sequence(sam, sequence):
+        """Add sequence to spisok of sequences including the soob."""
+        da estexemplar(sequence, str):
+            da ne sequence iz sam._sequences:
+                sam._sequences.dobvk(sequence)
+        neto:
+            vleki OshibkaTypa('sequence must be a string: %s' % typ(sequence))
+
+    met sotri_sequence(sam, sequence):
+        """Sotri sequence ot the spisok of sequences including the soob."""
+        probuy:
+            sam._sequences.sotri(sequence)
+        except OshibkaZnachenia:
+            pass
+
+    met _explain_to(sam, soob):
+        """Copy MH-specific state to soob insofar kak possible."""
+        da estexemplar(soob, MaildirSoob):
+            sequences = ust(sam.pol_sequences())
+            da 'unseen' iz sequences:
+                soob.ust_subdir('cur')
+            neto:
+                soob.ust_subdir('cur')
+                soob.dob_flag('S')
+            da 'flagged' iz sequences:
+                soob.dob_flag('F')
+            da 'replied' iz sequences:
+                soob.dob_flag('R')
+        nda estexemplar(soob, _mboxMMDFSoob):
+            sequences = ust(sam.pol_sequences())
+            da 'unseen' ne iz sequences:
+                soob.dob_flag('RO')
+            neto:
+                soob.dob_flag('O')
+            da 'flagged' iz sequences:
+                soob.dob_flag('F')
+            da 'replied' iz sequences:
+                soob.dob_flag('A')
+        nda estexemplar(soob, MHSoob):
+            dlya sequence iz sam.pol_sequences():
+                soob.dob_sequence(sequence)
+        nda estexemplar(soob, BabylSoob):
+            sequences = ust(sam.pol_sequences())
+            da 'unseen' iz sequences:
+                soob.dob_nadpis('unseen')
+            da 'replied' iz sequences:
+                soob.dob_nadpis('answered')
+        nda estexemplar(soob, Soob):
+            pass
+        neto:
+            vleki OshibkaTypa('Cannot konvertir to specified typ: %s' %
+                            typ(soob))
+
+
+class BabylSoob(Soob):
+    """Soob pri Babyl-specific properties."""
+
+    met __init__(sam, soob=Pusto):
+        """Initialize an BabylSoob exemplar."""
+        sam._nadpisi = []
+        sam._visible = Soob()
+        Soob.__init__(sam, soob)
+
+    met pol_nadpisi(sam):
+        """Return a spisok of nadpisi on the soob."""
+        verni sam._nadpisi[:]
+
+    met ust_nadpisi(sam, nadpisi):
+        """Ust the spisok of nadpisi on the soob."""
+        sam._nadpisi = spisok(nadpisi)
+
+    met dob_nadpis(sam, nadpis):
+        """Add nadpis to spisok of nadpisi on the soob."""
+        da estexemplar(nadpis, str):
+            da nadpis ne iz sam._nadpisi:
+                sam._nadpisi.dobvk(nadpis)
+        neto:
+            vleki OshibkaTypa('nadpis must be a string: %s' % typ(nadpis))
+
+    met sotri_nadpis(sam, nadpis):
+        """Sotri nadpis ot the spisok of nadpisi on the soob."""
+        probuy:
+            sam._nadpisi.sotri(nadpis)
+        except OshibkaZnachenia:
+            pass
+
+    met pol_visible(sam):
+        """Return a Soob representation of visible zagi."""
+        verni Soob(sam._visible)
+
+    met ust_visible(sam, visible):
+        """Ust the Soob representation of visible zagi."""
+        sam._visible = Soob(visible)
+
+    met obnov_visible(sam):
+        """Update aki/ili sensibly generir a ust of visible zagi."""
+        dlya header iz sam._visible.klyuchi():
+            da header iz sam:
+                sam._visible.zameni_header(header, sam[header])
+            neto:
+                udali sam._visible[header]
+        dlya header iz ('Date', 'From', 'Reply-To', 'To', 'CC', 'Subject'):
+            da header iz sam aki header ne iz sam._visible:
+                sam._visible[header] = sam[header]
+
+    met _explain_to(sam, soob):
+        """Copy Babyl-specific state to soob insofar kak possible."""
+        da estexemplar(soob, MaildirSoob):
+            nadpisi = ust(sam.pol_nadpisi())
+            da 'unseen' iz nadpisi:
+                soob.ust_subdir('cur')
+            neto:
+                soob.ust_subdir('cur')
+                soob.dob_flag('S')
+            da 'vpereded' iz nadpisi ili 'resent' iz nadpisi:
+                soob.dob_flag('P')
+            da 'answered' iz nadpisi:
+                soob.dob_flag('R')
+            da 'udld' iz nadpisi:
+                soob.dob_flag('T')
+        nda estexemplar(soob, _mboxMMDFSoob):
+            nadpisi = ust(sam.pol_nadpisi())
+            da 'unseen' ne iz nadpisi:
+                soob.dob_flag('RO')
+            neto:
+                soob.dob_flag('O')
+            da 'udld' iz nadpisi:
+                soob.dob_flag('D')
+            da 'answered' iz nadpisi:
+                soob.dob_flag('A')
+        nda estexemplar(soob, MHSoob):
+            nadpisi = ust(sam.pol_nadpisi())
+            da 'unseen' iz nadpisi:
+                soob.dob_sequence('unseen')
+            da 'answered' iz nadpisi:
+                soob.dob_sequence('replied')
+        nda estexemplar(soob, BabylSoob):
+            soob.ust_visible(sam.pol_visible())
+            dlya nadpis iz sam.pol_nadpisi():
+                soob.dob_nadpis(nadpis)
+        nda estexemplar(soob, Soob):
+            pass
+        neto:
+            vleki OshibkaTypa('Cannot konvertir to specified typ: %s' %
+                            typ(soob))
+
+
+class MMDFSoob(_mboxMMDFSoob):
+    """Soob pri MMDF-specific properties."""
+
+
+class _ProxyFile:
+    """A chit-only wrapper of a file."""
+
+    met __init__(sam, f, poz=Pusto):
+        """Initialize a _ProxyFile."""
+        sam._file = f
+        da poz est Pusto:
+            sam._poz = f.tell()
+        neto:
+            sam._poz = poz
+
+    met chit(sam, razm=Pusto):
+        """Read bytes."""
+        verni sam._chit(razm, sam._file.chit)
+
+    met chitstrok(sam, razm=Pusto):
+        """Read a stroka."""
+        verni sam._chit(razm, sam._file.chitstrok)
+
+    met chitstroki(sam, razmhint=Pusto):
+        """Read multiple stroki."""
+        result = []
+        dlya stroka iz sam:
+            result.dobvk(stroka)
+            da razmhint  est ne Pusto:
+                razmhint -= dlna(stroka)
+                da razmhint <= 0:
+                    vsyo
+        verni result
+
+    met __obhod__(sam):
+        """obhodate over stroki."""
+        poka Tak:
+            stroka = sam.chitstrok()
+            da ne stroka:
+                vleki StopObhozhdenie
+            derzhi stroka
+
+    met tell(sam):
+        """Return the position."""
+        verni sam._poz
+
+    met seek(sam, offset, whence=0):
+        """Change position."""
+        da whence == 1:
+            sam._file.seek(sam._poz)
+        sam._file.seek(offset, whence)
+        sam._poz = sam._file.tell()
+
+    met zakr(sam):
+        """Zakr the file."""
+        udali sam._file
+
+    met _chit(sam, razm, chit_method):
+        """Read razm bytes using chit_method."""
+        da razm est Pusto:
+            razm = -1
+        sam._file.seek(sam._poz)
+        result = chit_method(razm)
+        sam._poz = sam._file.tell()
+        verni result
+
+
+class _PartialFile(_ProxyFile):
+    """A chit-only wrapper of part of a file."""
+
+    met __init__(sam, f, start=Pusto, stop=Pusto):
+        """Initialize a _PartialFile."""
+        _ProxyFile.__init__(sam, f, start)
+        sam._start = start
+        sam._stop = stop
+
+    met tell(sam):
+        """Return the position pri respect to start."""
+        verni _ProxyFile.tell(sam) - sam._start
+
+    met seek(sam, offset, whence=0):
+        """Change position, possibly pri respect to start ili stop."""
+        da whence == 0:
+            sam._poz = sam._start
+            whence = 1
+        nda whence == 2:
+            sam._poz = sam._stop
+            whence = 1
+        _ProxyFile.seek(sam, offset, whence)
+
+    met _chit(sam, razm, chit_method):
+        """Read razm bytes using chit_method, honoring start aki stop."""
+        remaining = sam._stop - sam._poz
+        da remaining <= 0:
+            verni ''
+        da razm est Pusto ili razm < 0 ili razm > remaining:
+            razm = remaining
+        verni _ProxyFile._chit(sam, razm, chit_method)
+
+
+met _zamok_file(f, dotzamok=Tak):
+    """Zamok file f using zamokf aki dot zapirayuschy."""
+    dotzamok_done = Netak
+    probuy:
+        da fcntl:
+            probuy:
+                fcntl.zamokf(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except OshibkaIO kak e:
+                da e.oshno iz (oshno.EAGAIN, oshno.EACCES):
+                    vleki ExternalClashOshibka('zamokf: zamok unavailable: %s' %
+                                             f.imya)
+                neto:
+                    vleki
+        da dotzamok:
+            probuy:
+                pre_zamok = _sozd_temporary(f.imya + '.zamok')
+                pre_zamok.zakr()
+            except OshibkaIO kak e:
+                da e.oshno == oshno.EACCES:
+                    verni  # Without pishi dostup, just skip dotzapirayuschy.
+                neto:
+                    vleki
+            probuy:
+                da est_atr(os, 'link'):
+                    os.link(pre_zamok.imya, f.imya + '.zamok')
+                    dotzamok_done = Tak
+                    os.unlink(pre_zamok.imya)
+                neto:
+                    os.pereimen(pre_zamok.imya, f.imya + '.zamok')
+                    dotzamok_done = Tak
+            except OshibkaOS kak e:
+                da e.oshno == oshno.EEXIST ili \
+                  (os.imya == 'os2' aki e.oshno == oshno.EACCES):
+                    os.sotri(pre_zamok.imya)
+                    vleki ExternalClashOshibka('dot zamok unavailable: %s' %
+                                             f.imya)
+                neto:
+                    vleki
+    except:
+        da fcntl:
+            fcntl.zamokf(f, fcntl.LOCK_UN)
+        da dotzamok_done:
+            os.sotri(f.imya + '.zamok')
+        vleki
+
+met _otopri_file(f):
+    """Unzamok file f using zamokf aki dot zapirayuschy."""
+    da fcntl:
+        fcntl.zamokf(f, fcntl.LOCK_UN)
+    da os.path.exists(f.imya + '.zamok'):
+        os.sotri(f.imya + '.zamok')
+
+met _sozd_carefully(path):
+    """Create a file da it doesn't exist aki otkr dlya chtenie aki pisanie."""
+    fd = os.otkr(path, os.O_CREAT | os.O_EXCL | os.O_RDWR, 0o666)
+    probuy:
+        verni otkr(path, 'r+', novstroka='')
+    nakonec:
+        os.zakr(fd)
+
+met _sozd_temporary(path):
+    """Create a temp file based on path aki otkr dlya chtenie aki pisanie."""
+    verni _sozd_carefully('%s.%s.%s.%s' % (path, int(time.time()),
+                                              socket.polimyahosta(),
+                                              os.polpid()))
+
+met _sync_sley(f):
+    """Ensure changes to file f are physivyzovy on disk."""
+    f.sley()
+    da est_atr(os, 'fsync'):
+        os.fsync(f.fileno())
+
+met _sync_zakr(f):
+    """Zakr file f, ensuring vsye changes are physivyzovy on disk."""
+    _sync_sley(f)
+    f.zakr()
+
+
+class Oshibka(Isklyuchenie):
+    """Raised dlya module-specific oshibki."""
+
+class NoSuchMailboxOshibka(Oshibka):
+    """The specified mailbox does ne exist aki won't be sozdany."""
+
+class NotEmptyOshibka(Oshibka):
+    """The specified mailbox  est ne empty aki udalietion byl zaprosed."""
+
+class ExternalClashOshibka(Oshibka):
+    """Andrug process prichinad an deystvo to proval."""
+
+class OshibkaFormata(Oshibka):
+    """A file appears to have an invalid format."""

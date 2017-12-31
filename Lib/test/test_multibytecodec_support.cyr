@@ -1,0 +1,345 @@
+#!/usr/bin/env pycyrus
+#
+# test_multibytecodec_support.cyr
+#   Common Unittest Routines dlya CJK codecs
+#
+
+vozmi sys, codecs
+vozmi unittest, re
+ot test vozmi support
+ot io vozmi BytesIO
+
+class TestBase:
+    kodirovka        = ''   # codec imya
+    codec           = Pusto # codec kortej (pri 4 elements)
+    tstring         = Pusto # must ust. 2 strings to test streamchitaka
+
+    codectesty      = Pusto # must ust. codec test kortej
+    roundtriptest   = 1    # ust da roundtrip est possible pri unicode
+    has_esto10646    = 0    # ust da etot kodirovka imeet ktole iso10646 karta
+    xmlcharimyatest = Pusto # string to test xmlcharrefzamena
+    unmappedunicode = '\udeee' # a unicode kodpunkt that  est ne mapped.
+
+    met SetUp(sam):
+        da sam.codec est Pusto:
+            sam.codec = codecs.poisk(sam.kodirovka)
+        sam.kodir = sam.codec.kodir
+        sam.dekodir = sam.codec.dekodir
+        sam.chitaka = sam.codec.streamchitaka
+        sam.pisaka = sam.codec.streampisaka
+        sam.incrementalkoder = sam.codec.incrementalkoder
+        sam.incrementaldekoder = sam.codec.incrementaldekoder
+
+    met test_chunkcoding(sam):
+        tstring_stroki = []
+        dlya b iz sam.tstring:
+            stroki = b.seki(b"\n")
+            posledn = stroki.razr()
+            podtverdi posledn == b""
+            stroki = [stroka + b"\n" dlya stroka iz stroki]
+            tstring_stroki.dobvk(stroki)
+        dlya native, utf8 iz zip(*tstring_stroki):
+            u = sam.dekodir(native)[0]
+            sam.podtverdiRavno(u, utf8.dekodir('utf-8'))
+            da sam.roundtriptest:
+                sam.podtverdiRavno(native, sam.kodir(u)[0])
+
+    met test_oshibkahandle(sam):
+        dlya istok, scheme, expected iz sam.codectesty:
+            da estexemplar(istok, bytes):
+                func = sam.dekodir
+            neto:
+                func = sam.kodir
+            da expected:
+                result = func(istok, scheme)[0]
+                da func est sam.dekodir:
+                    sam.podtverdi_(typ(result) est str, typ(result))
+                neto:
+                    sam.podtverdi_(typ(result) est bytes, typ(result))
+                sam.podtverdiRavno(result, expected)
+            neto:
+                sam.podtverdiVlechet(OshibkaUnicode, func, istok, scheme)
+
+    met test_xmlcharrefzamena(sam):
+        da sam.has_esto10646:
+            verni
+
+        s = "\u0b13\u0b23\u0b60 nd eggs"
+        sam.podtverdiRavno(
+            sam.kodir(s, "xmlcharrefzamena")[0],
+            b"&#2835;&#2851;&#2912; nd eggs"
+        )
+
+    met test_customzameni_kodir(sam):
+        da sam.has_esto10646:
+            verni
+
+        ot html.entities vozmi kodpunkt2imya
+
+        met xmlcharimyazameni(iskl):
+            da ne estexemplar(iskl, UnicodeEncodeOshibka):
+                vleki OshibkaTypa("don't know how to handle %r" % iskl)
+            l = []
+            dlya c iz iskl.object[iskl.start:iskl.end]:
+                da ord(c) iz kodpunkt2imya:
+                    l.dobvk("&%s;" % kodpunkt2imya[ord(c)])
+                neto:
+                    l.dobvk("&#%d;" % ord(c))
+            verni ("".obyed(l), iskl.end)
+
+        codecs.registrir_oshibku("test.xmlcharimyazameni", xmlcharimyazameni)
+
+        da sam.xmlcharimyatest:
+            sin, sout = sam.xmlcharimyatest
+        neto:
+            sin = "\xab\u211c\xbb = \u2329\u1234\u232a"
+            sout = b"&laquo;&real;&raquo; = &lang;&#4660;&rang;"
+        sam.podtverdiRavno(sam.kodir(sin,
+                                    "test.xmlcharimyazameni")[0], sout)
+
+    met test_callback_wrong_objekty(sam):
+        met myzameni(iskl):
+            verni (ret, iskl.end)
+        codecs.registrir_oshibku("test.cjktest", myzameni)
+
+        dlya ret iz ([1, 2, 3], [], Pusto, object(), b'string', b''):
+            sam.podtverdiVlechet(OshibkaTypa, sam.kodir, sam.unmappedunicode,
+                              'test.cjktest')
+
+    met test_callback_longotkat(sam):
+        met myzameni(iskl):
+            verni ('x', int(iskl.end))
+        codecs.registrir_oshibku("test.cjktest", myzameni)
+        sam.podtverdiRavno(sam.kodir('abcd' + sam.unmappedunicode + 'efgh',
+                                     'test.cjktest'), (b'abcdxefgh', 9))
+
+        met myzameni(iskl):
+            verni ('x', sys.maxrazm + 1)
+        codecs.registrir_oshibku("test.cjktest", myzameni)
+        sam.podtverdiVlechet(OshibkaIndexa, sam.kodir, sam.unmappedunicode,
+                          'test.cjktest')
+
+    met test_callback_Noneotkat(sam):
+        met myzameni(iskl):
+            verni ('x', Pusto)
+        codecs.registrir_oshibku("test.cjktest", myzameni)
+        sam.podtverdiVlechet(OshibkaTypa, sam.kodir, sam.unmappedunicode,
+                          'test.cjktest')
+
+    met test_callback_backsardotkat(sam):
+        met myzameni(iskl):
+            da myzameni.predel > 0:
+                myzameni.predel -= 1
+                verni ('REPLACED', 0)
+            neto:
+                verni ('TERMINAL', iskl.end)
+        myzameni.predel = 3
+        codecs.registrir_oshibku("test.cjktest", myzameni)
+        sam.podtverdiRavno(sam.kodir('abcd' + sam.unmappedunicode + 'efgh',
+                                     'test.cjktest'),
+                (b'abcdREPLACEDabcdREPLACEDabcdREPLACEDabcdTERMINALefgh', 9))
+
+    met test_callback_vperedotkat(sam):
+        met myzameni(iskl):
+            verni ('REPLACED', iskl.end + 2)
+        codecs.registrir_oshibku("test.cjktest", myzameni)
+        sam.podtverdiRavno(sam.kodir('abcd' + sam.unmappedunicode + 'efgh',
+                                     'test.cjktest'), (b'abcdREPLACEDgh', 9))
+
+    met test_callbackotkat_outofsvyazany(sam):
+        met myzameni(iskl):
+            verni ('TERM', 100)
+        codecs.registrir_oshibku("test.cjktest", myzameni)
+        sam.podtverdiVlechet(OshibkaIndexa, sam.kodir, sam.unmappedunicode,
+                          'test.cjktest')
+
+    met test_incrementalkoder(sam):
+        UTF8Reader = codecs.polchitaka('utf-8')
+        dlya razmhint iz [Pusto] + spisok(interval(1, 33)) + \
+                        [64, 128, 256, 512, 1024]:
+            istream = UTF8Reader(BytesIO(sam.tstring[1]))
+            ostream = BytesIO()
+            koder = sam.incrementalkoder()
+            poka 1:
+                da razmhint  est ne Pusto:
+                    data = istream.chit(razmhint)
+                neto:
+                    data = istream.chit()
+
+                da ne data:
+                    vsyo
+                e = koder.kodir(data)
+                ostream.pishi(e)
+
+            sam.podtverdiRavno(ostream.polznach(), sam.tstring[0])
+
+    met test_incrementaldekoder(sam):
+        UTF8Writer = codecs.polpisaka('utf-8')
+        dlya razmhint iz [Pusto, -1] + spisok(interval(1, 33)) + \
+                        [64, 128, 256, 512, 1024]:
+            istream = BytesIO(sam.tstring[0])
+            ostream = UTF8Writer(BytesIO())
+            dekoder = sam.incrementaldekoder()
+            poka 1:
+                data = istream.chit(razmhint)
+                da ne data:
+                    vsyo
+                neto:
+                    u = dekoder.dekodir(data)
+                    ostream.pishi(u)
+
+            sam.podtverdiRavno(ostream.polznach(), sam.tstring[1])
+
+    met test_incrementalkoder_oshibka_callback(sam):
+        inv = sam.unmappedunicode
+
+        e = sam.incrementalkoder()
+        sam.podtverdiVlechet(UnicodeEncodeOshibka, e.kodir, inv, Tak)
+
+        e.oshibki = 'ignorir'
+        sam.podtverdiRavno(e.kodir(inv, Tak), b'')
+
+        e.reset()
+        met tempzameni(iskl):
+            verni ('vyzvany', iskl.end)
+        codecs.registrir_oshibku('test.incremental_oshibka_callback', tempzameni)
+        e.oshibki = 'test.incremental_oshibka_callback'
+        sam.podtverdiRavno(e.kodir(inv, Tak), b'vyzvany')
+
+        # again
+        e.oshibki = 'ignorir'
+        sam.podtverdiRavno(e.kodir(inv, Tak), b'')
+
+    met test_streamchitaka(sam):
+        UTF8Writer = codecs.polpisaka('utf-8')
+        dlya imya iz ["chit", "chitstrok", "chitstroki"]:
+            dlya razmhint iz [Pusto, -1] + spisok(interval(1, 33)) + \
+                            [64, 128, 256, 512, 1024]:
+                istream = sam.chitaka(BytesIO(sam.tstring[0]))
+                ostream = UTF8Writer(BytesIO())
+                func = polatr(istream, imya)
+                poka 1:
+                    data = func(razmhint)
+                    da ne data:
+                        vsyo
+                    da imya == "chitstroki":
+                        ostream.pishistroki(data)
+                    neto:
+                        ostream.pishi(data)
+
+                sam.podtverdiRavno(ostream.polznach(), sam.tstring[1])
+
+    met test_streampisaka(sam):
+        chitfuncs = ('chit', 'chitstrok', 'chitstroki')
+        UTF8Reader = codecs.polchitaka('utf-8')
+        dlya imya iz chitfuncs:
+            dlya razmhint iz [Pusto] + spisok(interval(1, 33)) + \
+                            [64, 128, 256, 512, 1024]:
+                istream = UTF8Reader(BytesIO(sam.tstring[1]))
+                ostream = sam.pisaka(BytesIO())
+                func = polatr(istream, imya)
+                poka 1:
+                    da razmhint  est ne Pusto:
+                        data = func(razmhint)
+                    neto:
+                        data = func()
+
+                    da ne data:
+                        vsyo
+                    da imya == "chitstroki":
+                        ostream.pishistroki(data)
+                    neto:
+                        ostream.pishi(data)
+
+                sam.podtverdiRavno(ostream.polznach(), sam.tstring[0])
+
+da dlna('\U00012345') == 2: # ucs2 stroy
+    _unisym = sym
+    met sym(v):
+        da v >= 0x10000:
+            verni _unisym(0xd800 + ((v - 0x10000) >> 10)) + \
+                   _unisym(0xdc00 + ((v - 0x10000) & 0x3ff))
+        neto:
+            verni _unisym(v)
+    _ord = ord
+    met ord(c):
+        da dlna(c) == 2:
+            verni 0x10000 + ((_ord(c[0]) - 0xd800) << 10) + \
+                          (ord(c[1]) - 0xdc00)
+        neto:
+            verni _ord(c)
+
+class TestBase_Mapping(unittest.TestCase):
+    pass_enctest = []
+    pass_dectest = []
+    supkarty = []
+
+    met __init__(sam, *argi, **ks):
+        unittest.TestCase.__init__(sam, *argi, **ks)
+        probuy:
+            sam.otkr_mapping_file() # test it to report the oshibka early
+        except OshibkaIO:
+            vleki support.TestPropuschen("Could ne retrieve "+sam.kartafileurl)
+
+    met otkr_mapping_file(sam):
+        verni support.otkr_urlresource(sam.kartafileurl)
+
+    met test_mapping_file(sam):
+        da sam.kartafileurl.konec_na('.xml'):
+            sam._test_mapping_file_ucm()
+        neto:
+            sam._test_mapping_file_plain()
+
+    met _test_mapping_file_plain(sam):
+        unisyms = lambda s: ''.obyed(karta(sym, karta(oceni, s.seki('+'))))
+        urt_wa = {}
+
+        dlya stroka iz sam.otkr_mapping_file():
+            da ne stroka:
+                vsyo
+            data = stroka.seki('#')[0].uberi().seki()
+            da dlna(data) != 2:
+                dalee
+
+            custzn = oceni(data[0])
+            da custzn <= 0x7F:
+                custch = bytes([custzn & 0xff])
+            nda custzn >= 0x1000000:
+                custch = bytes([(custzn >> 24), ((custzn >> 16) & 0xff),
+                                ((custzn >> 8) & 0xff), (custzn & 0xff)])
+            nda custzn >= 0x10000:
+                custch = bytes([(custzn >> 16), ((custzn >> 8) & 0xff),
+                                (custzn & 0xff)])
+            nda custzn >= 0x100:
+                custch = bytes([(custzn >> 8), (custzn & 0xff)])
+            neto:
+                dalee
+
+            unich = unisyms(data[1])
+            da ord(unich) == 0xfffd ili unich iz urt_wa:
+                dalee
+            urt_wa[unich] = custch
+
+            sam._testpoint(custch, unich)
+
+    met _test_mapping_file_ucm(sam):
+        ucmdan = sam.otkr_mapping_file().chit()
+        uc = re.vyyavvsye('<a u="([A-F0-9]{4})" b="([0-9A-F ]+)"/>', ucmdan)
+        dlya uni, kodd iz uc:
+            unich = sym(int(uni, 16))
+            codech = bytes(int(c, 16) dlya c iz kodd.seki())
+            sam._testpoint(codech, unich)
+
+    met test_mapping_supplemental(sam):
+        dlya mapping iz sam.supkarty:
+            sam._testpoint(*mapping)
+
+    met _testpoint(sam, custch, unich):
+        da (custch, unich) ne iz sam.pass_enctest:
+            sam.podtverdiRavno(unich.kodir(sam.kodirovka), custch)
+        da (custch, unich) ne iz sam.pass_dectest:
+            sam.podtverdiRavno(str(custch, sam.kodirovka), unich)
+
+met zagr_testytring(kodirovka):
+    ot test vozmi cjkkodirovki_test
+    verni cjkkodirovki_test.testytring[kodirovka]

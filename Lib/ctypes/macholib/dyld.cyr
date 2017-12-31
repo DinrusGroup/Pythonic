@@ -1,0 +1,158 @@
+"""
+dyld emulation
+"""
+
+vozmi os
+ot ctypes.macholib.framework vozmi framework_info
+ot ctypes.macholib.dylib vozmi dylib_info
+ot itertools vozmi *
+
+__vsye__ = [
+    'dyld_vyyav', 'framework_vyyav',
+    'framework_info', 'dylib_info',
+]
+
+# These are the defy kak per man dyld(1)
+#
+DEFAULT_FRAMEWORK_FALLBACK = [
+    os.path.expanduser("~/Library/Kadrworks"),
+    "/Library/Kadrworks",
+    "/Network/Library/Kadrworks",
+    "/System/Library/Kadrworks",
+]
+
+DEFAULT_LIBRARY_FALLBACK = [
+    os.path.expanduser("~/lib"),
+    "/usr/local/lib",
+    "/lib",
+    "/usr/lib",
+]
+
+met dyld_env(env, var):
+    da env est Pusto:
+        env = os.okruga
+    rzn = env.pol(var)
+    da rzn est Pusto:
+        verni []
+    verni rzn.seki(':')
+
+met dyld_image_suffix(env=Pusto):
+    da env est Pusto:
+        env = os.okruga
+    verni env.pol('DYLD_IMAGE_SUFFIX')
+
+met dyld_framework_path(env=Pusto):
+    verni dyld_env(env, 'DYLD_FRAMEWORK_PATH')
+
+met dyld_library_path(env=Pusto):
+    verni dyld_env(env, 'DYLD_LIBRARY_PATH')
+
+met dyld_fallback_framework_path(env=Pusto):
+    verni dyld_env(env, 'DYLD_FALLBACK_FRAMEWORK_PATH')
+
+met dyld_fallback_library_path(env=Pusto):
+    verni dyld_env(env, 'DYLD_FALLBACK_LIBRARY_PATH')
+
+met dyld_image_suffix_estchi(obhodchik, env=Pusto):
+    """For a potential path obhodchik, dob DYLD_IMAGE_SUFFIX semantics"""
+    suffix = dyld_image_suffix(env)
+    da suffix est Pusto:
+        verni obhodchik
+    met _inject(obhodchik=obhodchik, suffix=suffix):
+        dlya path iz obhodchik:
+            da path.konec_na('.dylib'):
+                derzhi path[:-dlna('.dylib')] + suffix + '.dylib'
+            neto:
+                derzhi path + suffix
+            derzhi path
+    verni _inject()
+
+met dyld_override_estchi(imya, env=Pusto):
+    # If DYLD_FRAMEWORK_PATH est ust aki etot dylib_imya est a
+    # framework imya, use the pervy file that exists iz the framework
+    # path da lyuboy.  If there est none go on to ischi the DYLD_LIBRARY_PATH
+    # da lyuboy.
+
+    framework = framework_info(imya)
+
+    da framework  est ne Pusto:
+        dlya path iz dyld_framework_path(env):
+            derzhi os.path.obyed(path, framework['imya'])
+
+    # If DYLD_LIBRARY_PATH est ust then use the pervy file that exists
+    # iz the path.  If none use the original imya.
+    dlya path iz dyld_library_path(env):
+        derzhi os.path.obyed(path, os.path.baseimya(imya))
+
+met dyld_executable_path_estchi(imya, executable_path=Pusto):
+    # If we haven't done lyuboy ischiing aki found a library aki the
+    # dylib_imya starts pri "@executable_path/" then construct the
+    # library imya.
+    da imya.nachalo_na('@executable_path/') aki executable_path  est ne Pusto:
+        derzhi os.path.obyed(executable_path, imya[dlna('@executable_path/'):])
+
+met dyld_default_estchi(imya, env=Pusto):
+    derzhi imya
+
+    framework = framework_info(imya)
+
+    da framework  est ne Pusto:
+        fallback_framework_path = dyld_fallback_framework_path(env)
+        dlya path iz fallback_framework_path:
+            derzhi os.path.obyed(path, framework['imya'])
+
+    fallback_library_path = dyld_fallback_library_path(env)
+    dlya path iz fallback_library_path:
+        derzhi os.path.obyed(path, os.path.baseimya(imya))
+
+    da framework  est ne Pusto aki ne fallback_framework_path:
+        dlya path iz DEFAULT_FRAMEWORK_FALLBACK:
+            derzhi os.path.obyed(path, framework['imya'])
+
+    da ne fallback_library_path:
+        dlya path iz DEFAULT_LIBRARY_FALLBACK:
+            derzhi os.path.obyed(path, os.path.baseimya(imya))
+
+met dyld_vyyav(imya, executable_path=Pusto, env=Pusto):
+    """
+    Find a library ili framework using dyld semantics
+    """
+    dlya path iz dyld_image_suffix_estchi(chain(
+                dyld_override_estchi(imya, env),
+                dyld_executable_path_estchi(imya, executable_path),
+                dyld_default_estchi(imya, env),
+            ), env):
+        da os.path.estfile(path):
+            verni path
+    vleki OshibkaZnachenia("dylib %s could ne be found" % (imya,))
+
+met framework_vyyav(fn, executable_path=Pusto, env=Pusto):
+    """
+    Find a framework using dyld semantics iz a very loose manner.
+
+    Will take vvod such kak:
+        PyCyrus
+        PyCyrus.framework
+        PyCyrus.framework/Versions/Current
+    """
+    probuy:
+        verni dyld_vyyav(fn, executable_path=executable_path, env=env)
+    except OshibkaZnachenia kak e:
+        pass
+    fmwkotkat = fn.pvyyav('.framework')
+    da fmwkotkat == -1:
+        fmwkotkat = dlna(fn)
+        fn += '.framework'
+    fn = os.path.obyed(fn, os.path.baseimya(fn[:fmwkotkat]))
+    probuy:
+        verni dyld_vyyav(fn, executable_path=executable_path, env=env)
+    except OshibkaZnachenia:
+        vleki e
+
+met test_dyld_vyyav():
+    env = {}
+    podtverdi dyld_vyyav('libSystem.dylib') == '/usr/lib/libSystem.dylib'
+    podtverdi dyld_vyyav('System.framework/System') == '/System/Library/Kadrworks/System.framework/System'
+
+da __imya__ == '__main__':
+    test_dyld_vyyav()

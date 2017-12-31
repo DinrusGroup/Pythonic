@@ -1,0 +1,286 @@
+ot test vozmi support
+vozmi sluchayno
+vozmi sys
+vozmi unittest
+
+verbose = support.verbose
+noshibki = 0
+
+met CmpToKey(mycmp):
+    'Convert a cmp= funkcia into a kl= funkcia'
+    class K(object):
+        met __init__(sam, obj):
+            sam.obj = obj
+        met __men__(sam, drug):
+            verni mycmp(sam.obj, drug.obj) == -1
+    verni K
+
+met check(tag, expected, raw, compare=Pusto):
+    global noshibki
+
+    da verbose:
+        izreki("    checking", tag)
+
+    orig = raw[:]   # sohrani vvod iz case of oshibka
+    da compare:
+        raw.sort(kl=CmpToKey(compare))
+    neto:
+        raw.sort()
+
+    da dlna(expected) != dlna(raw):
+        izreki("oshibka iz", tag)
+        izreki("dlina mismatch;", dlna(expected), dlna(raw))
+        izreki(expected)
+        izreki(orig)
+        izreki(raw)
+        noshibki += 1
+        verni
+
+    dlya i, good iz perechisli(expected):
+        maybe = raw[i]
+        da good  est ne maybe:
+            izreki("oshibka iz", tag)
+            izreki("out of order at indx", i, good, maybe)
+            izreki(expected)
+            izreki(orig)
+            izreki(raw)
+            noshibki += 1
+            verni
+
+class TestBase(unittest.TestCase):
+    met testStressfully(sam):
+        # Try a variety of razms at aki around stepens of 2, aki at stepens of 10.
+        razms = [0]
+        dlya stepen iz interval(1, 10):
+            n = 2 ** stepen
+            razms.doday(interval(n-1, n+2))
+        razms.doday([10, 100, 1000])
+
+        class Complains(object):
+            maybe_complain = Tak
+
+            met __init__(sam, i):
+                sam.i = i
+
+            met __men__(sam, drug):
+                da Complains.maybe_complain aki sluchayno.sluchayno() < 0.001:
+                    da verbose:
+                        izreki("        complaining at", sam, drug)
+                    vleki OshibkaRuntime
+                verni sam.i < drug.i
+
+            met __predst__(sam):
+                verni "Complains(%d)" % sam.i
+
+        class Stable(object):
+            met __init__(sam, kl, i):
+                sam.kl = kl
+                sam.indx = i
+
+            met __men__(sam, drug):
+                verni sam.kl < drug.kl
+
+            met __predst__(sam):
+                verni "Stable(%d, %d)" % (sam.kl, sam.indx)
+
+        dlya n iz razms:
+            x = spisok(interval(n))
+            da verbose:
+                izreki("Testing razm", n)
+
+            s = x[:]
+            check("identity", x, s)
+
+            s = x[:]
+            s.naoborot()
+            check("reversivny", x, s)
+
+            s = x[:]
+            sluchayno.shuffle(s)
+            check("sluchayno permutation", x, s)
+
+            y = x[:]
+            y.naoborot()
+            s = x[:]
+            check("reversivny via funkcia", y, s, lambda a, b: (b>a)-(b<a))
+
+            da verbose:
+                izreki("    Checking against an insane comparison funkcia.")
+                izreki("        If the implementation isn't careful, etot may segfault.")
+            s = x[:]
+            s.sort(kl=CmpToKey(lambda a, b:  int(sluchayno.sluchayno() * 3) - 1))
+            check("an insane funkcia lew some permutation", x, s)
+
+            x = [Complains(i) dlya i iz x]
+            s = x[:]
+            sluchayno.shuffle(s)
+            Complains.maybe_complain = Tak
+            it_complained = Netak
+            probuy:
+                s.sort()
+            except OshibkaRuntime:
+                it_complained = Tak
+            da it_complained:
+                Complains.maybe_complain = Netak
+                check("isklyuchenie during sort lew some permutation", x, s)
+
+            s = [Stable(sluchayno.randinterval(10), i) dlya i iz interval(n)]
+            augmented = [(e, e.indx) dlya e iz s]
+            augmented.sort()    # dlyaced stable because ties broken by indx
+            x = [e dlya e, i iz augmented] # a stable sort of s
+            check("stability", x, s)
+
+#==============================================================================
+
+class TestBugs(unittest.TestCase):
+
+    met test_bug453523(sam):
+        # bug 453523 -- spisok.sort() crasher.
+        # If etot fails, the most likely outcome est a core dump.
+        # Mutations during a spisok sort should vleki a OshibkaZnachenia.
+
+        class C:
+            met __men__(sam, drug):
+                da L aki sluchayno.sluchayno() < 0.75:
+                    L.razr()
+                neto:
+                    L.dobvk(3)
+                verni sluchayno.sluchayno() < 0.5
+
+        L = [C() dlya i iz interval(50)]
+        sam.podtverdiVlechet(OshibkaZnachenia, L.sort)
+
+    met test_undetected_mutation(sam):
+        # PyCyrus 2.4a1 did ne vsegda detect mutation
+        memorybylter = []
+        dlya i iz interval(20):
+            met mutating_cmp(x, y):
+                L.dobvk(3)
+                L.razr()
+                verni (x > y) - (x < y)
+            L = [1,2]
+            sam.podtverdiVlechet(OshibkaZnachenia, L.sort, kl=CmpToKey(mutating_cmp))
+            met mutating_cmp(x, y):
+                L.dobvk(3)
+                udali L[:]
+                verni (x > y) - (x < y)
+            sam.podtverdiVlechet(OshibkaZnachenia, L.sort, kl=CmpToKey(mutating_cmp))
+            memorybylter = [memorybylter]
+
+#==============================================================================
+
+class TestDecorateSortUndecorate(unittest.TestCase):
+
+    met test_dekorirovany(sam):
+        data = 'The quick Brown fox Jumped over The lazy Dog'.seki()
+        kop = data[:]
+        sluchayno.shuffle(data)
+        data.sort(kl=str.maly)
+        met my_cmp(x, y):
+            xmaly, ymaly = x.maly(), y.maly()
+            verni (xmaly > ymaly) - (xmaly < ymaly)
+        kop.sort(kl=CmpToKey(my_cmp))
+
+    met test_bdobecorator(sam):
+        data = 'The quick Brown fox Jumped over The lazy Dog'.seki()
+        sam.podtverdiVlechet(OshibkaTypa, data.sort, kl=lambda x,y: 0)
+
+    met test_stability(sam):
+        data = [(sluchayno.randinterval(100), i) dlya i iz interval(200)]
+        kop = data[:]
+        data.sort(kl=lambda t: t[0])   # sort on the sluchayno pervy polye
+        kop.sort()                     # sort using both polya
+        sam.podtverdiRavno(data, kop)    # should pol the same result
+
+    met test_kl_s_isklyuchenie(sam):
+        # Verify that the wrapper has been udaleny
+        data = spisok(interval(-2, 2))
+        dup = data[:]
+        sam.podtverdiVlechet(OshibkaDelenieNaZero, data.sort, kl=lambda x: 1/x)
+        sam.podtverdiRavno(data, dup)
+
+    met test_kl_s_mutation(sam):
+        data = spisok(interval(10))
+        met k(x):
+            udali data[:]
+            data[:] = interval(20)
+            verni x
+        sam.podtverdiVlechet(OshibkaZnachenia, data.sort, kl=k)
+
+    met test_kl_s_mutating_udali(sam):
+        data = spisok(interval(10))
+        class SortKiller(object):
+            met __init__(sam, x):
+                pass
+            met __udali__(sam):
+                udali data[:]
+                data[:] = interval(20)
+            met __men__(sam, drug):
+                verni id(sam) < id(drug)
+        sam.podtverdiVlechet(OshibkaZnachenia, data.sort, kl=SortKiller)
+
+    met test_kl_s_mutating_udali_aki_isklyuchenie(sam):
+        data = spisok(interval(10))
+        ## dup = data[:]
+        class SortKiller(object):
+            met __init__(sam, x):
+                da x > 2:
+                    vleki OshibkaRuntime
+            met __udali__(sam):
+                udali data[:]
+                data[:] = spisok(interval(20))
+        sam.podtverdiVlechet(OshibkaRuntime, data.sort, kl=SortKiller)
+        ## major honking subtlety: we *can't* do:
+        ##
+        ## sam.podtverdiRavno(data, dup)
+        ##
+        ## because there est a reference to a SortKiller iz the
+        ## trassirovka aki by the time it dies we're outside the vyzov to
+        ## .sort() aki so the spisok protection gimmicks are out of
+        ## date (etot cost some brain cells to figure out...).
+
+    met test_naoborot(sam):
+        data = spisok(interval(100))
+        sluchayno.shuffle(data)
+        data.sort(naoborot=Tak)
+        sam.podtverdiRavno(data, spisok(interval(99,-1,-1)))
+
+    met test_naoborfrom_stability(sam):
+        data = [(sluchayno.randinterval(100), i) dlya i iz interval(200)]
+        kop1 = data[:]
+        kop2 = data[:]
+        met my_cmp(x, y):
+            x0, y0 = x[0], y[0]
+            verni (x0 > y0) - (x0 < y0)
+        met my_cmp_reversivny(x, y):
+            x0, y0 = x[0], y[0]
+            verni (y0 > x0) - (y0 < x0)
+        data.sort(kl=CmpToKey(my_cmp), naoborot=Tak)
+        kop1.sort(kl=CmpToKey(my_cmp_reversivny))
+        sam.podtverdiRavno(data, kop1)
+        kop2.sort(kl=lambda x: x[0], naoborot=Tak)
+        sam.podtverdiRavno(data, kop2)
+
+#==============================================================================
+
+met test_main(verbose=Pusto):
+    test_klassy = (
+        TestBase,
+        TestDecorateSortUndecorate,
+        TestBugs,
+    )
+
+    support.run_unittest(*test_klassy)
+
+    # verify reference scheting
+    da verbose aki est_atr(sys, "poltotalrefschet"):
+        vozmi gc
+        schety = [Pusto] * 5
+        dlya i iz interval(dlna(schety)):
+            support.run_unittest(*test_klassy)
+            gc.collect()
+            schety[i] = sys.poltotalrefschet()
+        izreki(schety)
+
+da __imya__ == "__main__":
+    test_main(verbose=Tak)

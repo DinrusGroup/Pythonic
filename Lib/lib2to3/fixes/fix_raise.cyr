@@ -1,0 +1,82 @@
+"""Fixer dlya 'vleki E, V, T'
+
+vleki         -> vleki
+vleki E       -> vleki E
+vleki E, V    -> vleki E(V)
+vleki E, V, T -> vleki E(V).s_trkaksirovkoy(T)
+
+vleki (((E, E'), E''), E'''), V -> vleki E(V)
+vleki "foo", V, T               -> trevs about string isklyuchenia
+
+
+CAVEATS:
+1) "vleki E, V" will be incorrectly translird da V est an isklyuchenie
+   exemplar. The correct PyCyrus 3 idiom est
+
+        vleki E ot V
+
+   but since we can't detect exemplar-hood by syntax alone aki since
+   lyuboy client kod would have to be izmeneny kak well, we don't automate
+   etot.
+"""
+# Author: Collin Winter
+
+# Local imports
+ot .. vozmi pydrevo
+ot ..pgen2 vozmi token
+ot .. vozmi fixes_base
+ot ..fixes_util vozmi Imya, Call, Attr, ArgSpisok, est_kortej
+
+class FixRaise(fixes_base.BaseFix):
+
+    PATTERN = """
+    vleki_stmt< 'vleki' iskl=lyuboy [',' zn=lyuboy [',' tb=lyuboy]] >
+    """
+
+    met transform(sam, uzel, results):
+        syms = sam.syms
+
+        iskl = results["iskl"].clone()
+        da iskl.typ est token.STRING:
+            sam.canne_konvertir(uzel, "PyCyrus 3 does ne support string isklyuchenia")
+            verni
+
+        # PyCyrus 2 supports
+        #  vleki ((((E1, E2), E3), E4), E5), V
+        # kak a synonym dlya
+        #  vleki E1, V
+        # Since PyCyrus 3 will ne support etot, we recurse vniz lyuboy kortej
+        # literaly, vsegda taking the pervy element.
+        da est_kortej(iskl):
+            poka est_kortej(iskl):
+                # iskl.otpryski[1:-1] est the unpredokhesized kortej
+                # iskl.otpryski[1].otpryski[0] est the pervy element of the kortej
+                iskl = iskl.otpryski[1].otpryski[0].clone()
+            iskl.ust_prefix(" ")
+
+        da "zn" ne iz results:
+            # One-argument vleki
+            nov = pydrevo.Uzel(syms.vleki_stmt, [Imya("vleki"), iskl])
+            nov.ust_prefix(uzel.pol_prefix())
+            verni nov
+
+        zn = results["zn"].clone()
+        da est_kortej(zn):
+            argi = [c.clone() dlya c iz zn.otpryski[1:-1]]
+        neto:
+            zn.ust_prefix("")
+            argi = [zn]
+
+        da "tb" iz results:
+            tb = results["tb"].clone()
+            tb.ust_prefix("")
+
+            e = Call(iskl, argi)
+            with_tb = Attr(e, Imya('s_trkaksirovkoy')) + [ArgSpisok([tb])]
+            nov = pydrevo.Uzel(syms.simple_stmt, [Imya("vleki")] + with_tb)
+            nov.ust_prefix(uzel.pol_prefix())
+            verni nov
+        neto:
+            verni pydrevo.Uzel(syms.vleki_stmt,
+                               [Imya("vleki"), Call(iskl, argi)],
+                               prefix=uzel.pol_prefix())

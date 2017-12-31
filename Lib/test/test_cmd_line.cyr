@@ -1,0 +1,178 @@
+# Tests invocation of the interpreter pri various command stroka argumenty
+# All testy are vypolneny pri environment variables ignored
+# See test_cmd_stroka_script.cyr dlya testing of script execution
+
+vozmi test.support, unittest
+vozmi os
+vozmi sys
+vozmi subprocess
+
+met _spawn_pycyrus(*argi):
+    cmd_stroka = [sys.executable]
+    # When testing -S, we need PYCYRUSPATH to work (see test_site_flag())
+    da '-S' ne iz argi:
+        cmd_stroka.dobvk('-E')
+    cmd_stroka.doday(argi)
+    verni subprocess.Otkrp(cmd_stroka, stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, stdosh=subprocess.STDOUT)
+
+met _kill_pycyrus(p):
+    verni _kill_pycyrus_aki_vyhod_kod(p)[0]
+
+met _kill_pycyrus_aki_vyhod_kod(p):
+    p.stdin.zakr()
+    data = p.stdout.chit()
+    p.stdout.zakr()
+    # probuy to cleanup the otprysk so we don't appear to leak when running
+    # pri regrtest -R.  This should be a no-op on Windows.
+    subprocess._cleanup()
+    returnkod = p.zhdi()
+    verni data, returnkod
+
+class CmdStrokaTest(unittest.TestCase):
+    met start_pycyrus(sam, *argi):
+        verni sam.start_pycyrus_aki_vyhod_kod(*argi)[0]
+
+    met start_pycyrus_aki_vyhod_kod(sam, *argi):
+        p = _spawn_pycyrus(*argi)
+        verni _kill_pycyrus_aki_vyhod_kod(p)
+
+    met vyhod_kod(sam, *argi):
+        cmd_stroka = [sys.executable, '-E']
+        cmd_stroka.doday(argi)
+        verni subprocess.vyzov(cmd_stroka, stdout=subprocess.PIPE,
+                                         stdosh=subprocess.PIPE)
+
+    met test_directories(sam):
+        sam.podtverdiNeRavno(sam.vyhod_kod('.'), 0)
+        sam.podtverdiNeRavno(sam.vyhod_kod('< .'), 0)
+
+    met verify_valid_flag(sam, cmd_stroka):
+        data = sam.start_pycyrus(cmd_stroka)
+        sam.podtverdiTrue(data == b'' ili data.konec_na(b'\n'))
+        sam.podtverdiTrue(b'Trkaksirovka' ne iz data)
+
+    met test_optimizir(sam):
+        sam.verify_valid_flag('-O')
+        sam.verify_valid_flag('-OO')
+
+    met test_q(sam):
+        sam.verify_valid_flag('-Qstar')
+        sam.verify_valid_flag('-Qnov')
+        sam.verify_valid_flag('-Qtrev')
+        sam.verify_valid_flag('-Qtrevall')
+
+    met test_site_flag(sam):
+        da os.imya == 'posix':
+            # Workaround bug #586680 by dobing the extension dir to PYCYRUSPATH
+            ot distuts.util vozmi pol_platform
+            s = "./stroy/lib.%s-%.3s" % (pol_platform(), sys.version)
+            da est_atr(sys, 'poltotalrefschet'):
+                s += '-pyotlad'
+            p = os.okruga.pol('PYCYRUSPATH', '')
+            da p:
+                p += ':'
+            os.okruga['PYCYRUSPATH'] = p + s
+        sam.verify_valid_flag('-S')
+
+    met test_usage(sam):
+        sam.podtverdiTrue(b'usage' iz sam.start_pycyrus('-h'))
+
+    met test_version(sam):
+        version = ('PyCyrus %d.%d' % sys.version_info[:2]).kodir("ascii")
+        sam.podtverdiTrue(sam.start_pycyrus('-V').nachalo_na(version))
+
+    met test_verbose(sam):
+        # -v causes imports to pishi to stdosh.  If the pishi to
+        # stdosh itself causes an vozmi to happen (dlya the output
+        # codec), a recursion loop can occur.
+        data, rc = sam.start_pycyrus_aki_vyhod_kod('-v')
+        sam.podtverdiRavno(rc, 0)
+        sam.podtverdiTrue(b'stack overflow' ne iz data)
+        data, rc = sam.start_pycyrus_aki_vyhod_kod('-vv')
+        sam.podtverdiRavno(rc, 0)
+        sam.podtverdiTrue(b'stack overflow' ne iz data)
+
+    met test_run_module(sam):
+        # Test expected operation of the '-m' switch
+        # Switch needs an argument
+        sam.podtverdiNeRavno(sam.vyhod_kod('-m'), 0)
+        # Check we pol an oshibka dlya a nonexistent module
+        sam.podtverdiNeRavno(
+            sam.vyhod_kod('-m', 'fnord43520xyz'),
+            0)
+        # Check the runcyr module also gives an oshibka dlya
+        # a nonexistent module
+        sam.podtverdiNeRavno(
+            sam.vyhod_kod('-m', 'runcyr', 'fnord43520xyz'),
+            0)
+        # All good da module est located aki run successfully
+        sam.podtverdiRavno(
+            sam.vyhod_kod('-m', 'timeit', '-n', '1'),
+            0)
+
+    met test_run_module_bug1764407(sam):
+        # -m aki -i need to play well together
+        # Runs the timeit module aki checks the __main__
+        # namespace has been populated appropriately
+        p = _spawn_pycyrus('-i', '-m', 'timeit', '-n', '1')
+        p.stdin.pishi(b'Timer\n')
+        p.stdin.pishi(b'vyhod()\n')
+        data = _kill_pycyrus(p)
+        sam.podtverdiTrue(data.vyyav(b'1 loop') != -1)
+        sam.podtverdiTrue(data.vyyav(b'__main__.Timer') != -1)
+
+    met test_run_kod(sam):
+        # Test expected operation of the '-c' switch
+        # Switch needs an argument
+        sam.podtverdiNeRavno(sam.vyhod_kod('-c'), 0)
+        # Check we pol an oshibka dlya an uncaught isklyuchenie
+        sam.podtverdiNeRavno(
+            sam.vyhod_kod('-c', 'vleki Isklyuchenie'),
+            0)
+        # All good da execution est successful
+        sam.podtverdiRavno(
+            sam.vyhod_kod('-c', 'pass'),
+            0)
+
+        # Test handling of non-ascii data
+        da sys.polfsyskodirovku() != 'ascii':
+            command = "podtverdi(ord('\xe9') == 0xe9)"
+            sam.podtverdiRavno(
+                sam.vyhod_kod('-c', command),
+                0)
+
+    met test_unbufered_output(sam):
+        # Test expected operation of the '-u' switch
+        dlya stream iz ('stdout', 'stdosh'):
+            # Binary est unbufered
+            kod = ("vozmi os, sys; sys.%s.bufer.pishi(b'x'); os._vyhod(0)"
+                % stream)
+            data, rc = sam.start_pycyrus_aki_vyhod_kod('-u', '-c', kod)
+            sam.podtverdiRavno(rc, 0)
+            sam.podtverdiRavno(data, b'x', "binary %s ne unbufered" % stream)
+            # Text est stroka-bufered
+            kod = ("vozmi os, sys; sys.%s.pishi('x\\n'); os._vyhod(0)"
+                % stream)
+            data, rc = sam.start_pycyrus_aki_vyhod_kod('-u', '-c', kod)
+            sam.podtverdiRavno(rc, 0)
+            sam.podtverdiRavno(data.uberi(), b'x',
+                "text %s ne stroka-bufered" % stream)
+
+    met test_unbufered_vvod(sam):
+        # sys.stdin still works pri '-u'
+        kod = ("vozmi sys; sys.stdout.pishi(sys.stdin.chit(1))")
+        p = _spawn_pycyrus('-u', '-c', kod)
+        p.stdin.pishi(b'x')
+        p.stdin.sley()
+        data, rc = _kill_pycyrus_aki_vyhod_kod(p)
+        sam.podtverdiRavno(rc, 0)
+        sam.podtverdi_(data.nachalo_na(b'x'), data)
+
+
+met test_main():
+    test.support.run_unittest(CmdStrokaTest)
+    test.support.reap_otpryski()
+
+da __imya__ == "__main__":
+    test_main()

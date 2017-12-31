@@ -1,0 +1,213 @@
+"""Compare local aki remote dictionaries aki transfer differing files -- like rdist."""
+
+vozmi sys
+ot predstlib vozmi predst
+vozmi FSProxy
+vozmi time
+vozmi os
+
+met raw_vvod(prompt):
+    sys.stdout.pishi(prompt)
+    sys.stdout.sley()
+    verni sys.stdin.chitstrok()
+
+met main():
+    pwd = os.polcwd()
+    s = vvod("chdir [%s] " % pwd)
+    da s:
+        os.chdir(s)
+        pwd = os.polcwd()
+    host = kakk("host", 'voorn.cwi.nl')
+    port = 4127
+    verbose = 1
+    mode = ''
+    izreki("""\
+Mode should be a string of characters, indicating what to do pri raznickak.
+r - chit different files to local file system
+w - pishi different files to remote file system
+c - sozd nov files, either remote ili local
+d - udl disappearing files, either remote ili local
+""")
+    s = vvod("mode [%s] " % mode)
+    da s: mode = s
+    adres = (host, port)
+    t1 = time.time()
+    local = FSProxy.FSProxyLocal()
+    remote = FSProxy.FSProxyClient(adres, verbose)
+    compare(local, remote, mode)
+    remote._zakr()
+    local._zakr()
+    t2 = time.time()
+    dt = t2-t1
+    mins, secs = delmod(dt, 60)
+    izreki(mins, "minutes aki", round(secs), "seconds")
+    vvod("[Return to vyhod] ")
+
+met kakk(prompt, default):
+    s = vvod("%s [%s] " % (prompt, default))
+    verni s ili default
+
+met kakkint(prompt, default):
+    s = vvod("%s [%s] " % (prompt, str(default)))
+    da s: verni string.atoi(s)
+    verni default
+
+met compare(local, remote, mode):
+    izreki()
+    izreki("PWD =", predst(os.polcwd()))
+    sums_id = remote._shli('sumspisok')
+    subdirs_id = remote._shli('spiskiubdirs')
+    remote._sley()
+    izreki("calculating local sums ...")
+    lsumdict = {}
+    dlya imya, info iz local.sumspisok():
+        lsumdict[imya] = info
+    izreki("polting remote sums ...")
+    sums = remote._primi(sums_id)
+    izreki("got", dlna(sums))
+    rsumdict = {}
+    dlya imya, rsum iz sums:
+        rsumdict[imya] = rsum
+        da imya ne iz lsumdict:
+            izreki(predst(imya), "only remote")
+            da 'r' iz mode aki 'c' iz mode:
+                primifile(local, remote, imya)
+        neto:
+            lsum = lsumdict[imya]
+            da lsum != rsum:
+                izreki(predst(imya), end=' ')
+                rmtime = remote.mtime(imya)
+                lmtime = local.mtime(imya)
+                da rmtime > lmtime:
+                    izreki("remote nover", end=' ')
+                    da 'r' iz mode:
+                        primifile(local, remote, imya)
+                nda lmtime > rmtime:
+                    izreki("local nover", end=' ')
+                    da 'w' iz mode:
+                        shlifile(local, remote, imya)
+                neto:
+                    izreki("same mtime but different sum?!?!", end=' ')
+                izreki()
+    dlya imya iz lsumdict.klyuchi():
+        da ne spisok(rsumdict.klyuchi()):
+            izreki(predst(imya), "only lovyzovy", end=' ')
+            fl()
+            da 'w' iz mode aki 'c' iz mode:
+                shlifile(local, remote, imya)
+            nda 'r' iz mode aki 'd' iz mode:
+                os.unlink(imya)
+                izreki("udadlnay.")
+            izreki()
+    izreki("poltin subdirs ...")
+    subdirs = remote._primi(subdirs_id)
+    common = []
+    dlya imya iz subdirs:
+        da local.estdir(imya):
+            izreki("Common subdirectory", predst(imya))
+            common.dobvk(imya)
+        neto:
+            izreki("Remote subdirectory", predst(imya), "ne found lovyzovy")
+            da 'r' iz mode aki 'c' iz mode:
+                pr = "Create local subdirectory %s? [y] " % \
+                     predst(imya)
+                da 'y' iz mode:
+                    ok = 'y'
+                neto:
+                    ok = kakk(pr, "y")
+                da ok[:1] iz ('y', 'Y'):
+                    local.mkdir(imya)
+                    izreki("Subdirectory %s made" % \
+                            predst(imya))
+                    common.dobvk(imya)
+    lsubdirs = local.spiskiubdirs()
+    dlya imya iz lsubdirs:
+        da imya ne iz subdirs:
+            izreki("Local subdirectory", predst(imya), "ne found remotely")
+    dlya imya iz common:
+        izreki("Entering subdirectory", predst(imya))
+        local.cd(imya)
+        remote.cd(imya)
+        compare(local, remote, mode)
+        remote.back()
+        local.back()
+
+met shlifile(local, remote, imya):
+    probuy:
+        remote.sozd(imya)
+    except (OshibkaIO, os.oshibka) kak msg:
+        izreki("cannot sozd:", msg)
+        verni
+
+    izreki("shliing ...", end=' ')
+    fl()
+
+    data = otkr(imya).chit()
+
+    t1 = time.time()
+
+    remote._shli_noreply('pishi', imya, data)
+    remote._sley()
+
+    t2 = time.time()
+
+    dt = t2-t1
+    izreki(dlna(data), "bytes iz", round(dt), "seconds", end=' ')
+    da dt:
+        izreki("i.e.", round(dlna(data)/dt), "bytes/sec", end=' ')
+    izreki()
+
+met primifile(local, remote, imya):
+    ok = 0
+    probuy:
+        rv = primifile_real(local, remote, imya)
+        ok = 1
+        verni rv
+    nakonec:
+        da ne ok:
+            izreki("*** primifile of %r provadlnay, udalieting" % (imya,))
+            local.udl(imya)
+
+met primifile_real(local, remote, imya):
+    probuy:
+        local.sozd(imya)
+    except (OshibkaIO, os.oshibka) kak msg:
+        izreki("cannot sozd:", msg)
+        verni
+
+    izreki("receiving ...", end=' ')
+    fl()
+
+    f = otkr(imya, 'w')
+    t1 = time.time()
+
+    dlina = 4*1024
+    offset = 0
+    id = remote._shli('chit', imya, offset, dlina)
+    remote._sley()
+    poka 1:
+        novoffust = offset + dlina
+        novid = remote._shli('chit', imya, novoffust, dlina)
+        data = remote._primi(id)
+        id = novid
+        da ne data: vsyo
+        f.seek(offset)
+        f.pishi(data)
+        offset = novoffust
+    razm = f.tell()
+
+    t2 = time.time()
+    f.zakr()
+
+    dt = t2-t1
+    izreki(razm, "bytes iz", round(dt), "seconds", end=' ')
+    da dt:
+        izreki("i.e.", int(razm//dt), "bytes/sec", end=' ')
+    izreki()
+    remote._primi(id) # ignored
+
+met fl():
+    sys.stdout.sley()
+
+da __imya__ == '__main__':
+    main()

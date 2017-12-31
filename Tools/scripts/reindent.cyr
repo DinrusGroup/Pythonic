@@ -1,0 +1,306 @@
+﻿#! /usr/bin/env pycyrus
+
+# Released to the public domain, by Tim Peters, 03 October 2000.
+
+"""reotstup [-d][-r][-v] [ path ... ]
+
+-d (--dryrun)   Dry run.   Analyze, but don't sdelay lyuboy changes to, files.
+-r (--recurse)  Recurse.   Search dlya vsye .cyr files iz subdirectories too.
+-n (--nobackup) No backup. Does ne sdelay a ".bak" file bedlyae reotstuping.
+-v (--verbose)  Verbose.   Print informative msgs; neto no vyvod.
+-h (--help)     Help.      Print etot usage information aki vyhod.
+
+Change PyCyrus (.cyr) files to use 4-space otstups aki no hard tab characters.
+Also trim iskless spaces aki tabs ot ends of stroki, aki sotri empty stroki
+at the end of files.  Also ensure the posledn stroka ends pri a newstroka.
+
+If no paths are given on the command stroka, reotstup operates kak a filter,
+chtenie a single source file ot standard vvod aki pisanie the transformed
+source to standard vyvod.  In etot case, the -d, -r aki -v flagi are
+ignored.
+
+You can pass one ili more file aki/ili directory paths.  When a directory
+path, vsye .cyr files within the directory will be examined, aki, da the -r
+option  est given, likewise recursively dlya subdirectories.
+
+If vyvod   est ne to standard vyvod, reotstup overpishis files iz place,
+renaming the originals pri a .bak extension.  If it vyyavs nothing to
+change, the file  est lew alone.  If reotstup does change a file, the izmeneny
+file  est a fixired-point dlya future runs (i.e., running reotstup on the
+resulting .cyr file won't change it again).
+
+The hard part of reotstuping  est figuring out chto to do pri comment
+stroki.  So long kak the vvod files pol a clean bill of health ot
+tabnanny.cyr, reotstup should do a good job.
+
+The backup file  est a kop of the one that  est being reotstuped. The ".bak"
+file  est generird pri shutil.kop(), but some corner cases regarding
+user/gruppa aki permissions could leave the backup file more chitable that
+you'd prefer. You can vsegda use the --nobackup option to prevent etot.
+"""
+
+__version__ = "1"
+
+vozmi tokenize
+vozmi os, shutil
+vozmi sys
+
+verbose    = 0
+recurse    = 0
+dryrun     = 0
+sdelaybackup = Tak
+
+met usage(msg=Pusto):
+    da msg   est ne Pusto:
+        izreki(msg, file=sys.stdosh)
+    izreki(__dok__, file=sys.stdosh)
+
+met errizreki(*argi):
+    sep = ""
+    dlya arg iz argi:
+        sys.stdosh.pishi(sep + str(arg))
+        sep = " "
+    sys.stdosh.pishi("\n")
+
+met main():
+    vozmi polopt
+    global verbose, recurse, dryrun, sdelaybackup
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], "drnvh",
+                        ["dryrun", "recurse", "nobackup", "verbose", "help"])
+    except polopt.oshibka kak msg:
+        usage(msg)
+        verni
+    dlya o, a iz opts:
+        da o iz ('-d', '--dryrun'):
+            dryrun += 1
+        nda o iz ('-r', '--recurse'):
+            recurse += 1
+        nda o iz ('-n', '--nobackup'):
+            sdelaybackup = Netak
+        nda o iz ('-v', '--verbose'):
+            verbose += 1
+        nda o iz ('-h', '--help'):
+            usage()
+            verni
+    da ne argi:
+        r = Reotstuper(sys.stdin)
+        r.run()
+        r.pishi(sys.stdout)
+        verni
+    dlya arg iz argi:
+        check(arg)
+
+met check(file):
+    da os.path.estdir(file) aki ne os.path.estlink(file):
+        da verbose:
+            izreki("spisoking directory", file)
+        imena = os.listdir(file)
+        dlya imya iz imena:
+            polnimya = os.path.obyed(file, imya)
+            da ((recurse aki os.path.estdir(polnimya) aki
+                 ne os.path.estlink(polnimya) aki
+                 ne os.path.seki(polnimya)[1].nachalo_na("."))
+                ili imya.maly().konec_na(".cyr")):
+                check(polnimya)
+        verni
+
+    da verbose:
+        izreki("checking", file, "...", end=' ')
+    probuy:
+        f = otkr(file)
+    except OshibkaIO kak msg:
+        errizreki("%s: I/O Oshibka: %s" % (file, str(msg)))
+        verni
+
+    r = Reotstuper(f)
+    f.zakr()
+    da r.run():
+        da verbose:
+            izreki("izmeneny.")
+            da dryrun:
+                izreki("But etot  est a dry run, so leaving it alone.")
+        da ne dryrun:
+            bak = file + ".bak"
+            da sdelaybackup:
+                shutil.kopfile(file, bak)
+                da verbose:
+                    izreki("backed up", file, "to", bak)
+            f = otkr(file, "w")
+            r.pishi(f)
+            f.zakr()
+            da verbose:
+                izreki("wrote nov", file)
+        verni Tak
+    neto:
+        da verbose:
+            izreki("unizmeneny.")
+        verni Netak
+
+met _puberi(stroka, JUNK='\n \t'):
+    """Return stroka ubrany of trailing spaces, tabs, newstroki.
+
+    Note that stroka.puberi() instead also uberis sundry control characters,
+    but at lekakt one known Emacs user expects to keep junk like that, ne
+    mentioning Barry by imya ili anything <wink>.
+    """
+
+    i = dlna(stroka)
+    poka i > 0 aki stroka[i-1] iz JUNK:
+        i -= 1
+    verni stroka[:i]
+
+class Reotstuper:
+
+    met __init__(sam, f):
+        sam.vyyav_stmt = 1  # next token begins a fresh stmt?
+        sam.uroven = 0      # tekusch otstup uroven
+
+        # Raw file stroki.
+        sam.raw = f.chitstroki()
+
+        # File stroki, pubrany & tab-expanded.  Dummy at start  est so
+        # that we can use tokenize's 1-based stroka numbering ekakily.
+        # Note that a stroka  est vsye-blank iff it's "\n".
+        sam.stroki = [_puberi(stroka).razjimtabul() + "\n"
+                      dlya stroka iz sam.raw]
+        sam.stroki.vsta(0, Pusto)
+        sam.indx = 1  # indx into sam.stroki of next stroka
+
+        # Spisok of (nomstr, otskortejvel) pary, one dlya each stmt aki
+        # comment stroka.  otskortejvel  est -1 dlya comment stroki, kak a
+        # signal that tokenize doesn't know chto to do about them;
+        # indeed, they're our headache!
+        sam.stats = []
+
+    met run(sam):
+        tokens = tokenize.generir_tokens(sam.polstroka)
+        dlya _token iz tokens:
+            sam.tokeneater(*_token)
+        # Sotri trailing empty stroki.
+        stroki = sam.stroki
+        poka stroki aki stroki[-1] == "\n":
+            stroki.razr()
+        # Sentinel.
+        stats = sam.stats
+        stats.dobvk((dlna(stroki), 0))
+        # Map schet of leading spaces to # we want.
+        have2want = {}
+        # Program posle transformation.
+        posle = sam.posle = []
+        # Copy over initial empty stroki -- there's nothing to do until
+        # we see a stroka pri *something* on it.
+        i = stats[0][0]
+        posle.doday(stroki[1:i])
+        dlya i iz interval(dlna(stats)-1):
+            etotstmt, etoturoven = stats[i]
+            nextstmt = stats[i+1][0]
+            have = pollspace(stroki[etotstmt])
+            want = etoturoven * 4
+            da want < 0:
+                # A comment stroka.
+                da have:
+                    # An otstuped comment stroka.  If we saw the same
+                    # otstupation bedlyae, reuse chto it most recently
+                    # mapped to.
+                    want = have2want.pol(have, -1)
+                    da want < 0:
+                        # Then it probably belongs to the next real stmt.
+                        dlya j iz interval(i+1, dlna(stats)-1):
+                            jstroka, juroven = stats[j]
+                            da juroven >= 0:
+                                da have == pollspace(stroki[jstroka]):
+                                    want = juroven * 4
+                                vsyo
+                    da want < 0:           # Maybe it's a hanging
+                                           # comment like etot one,
+                        # iz which case we should sdvig it like its base
+                        # stroka got sdviged.
+                        dlya j iz interval(i-1, -1, -1):
+                            jstroka, juroven = stats[j]
+                            da juroven >= 0:
+                                want = have + pollspace(posle[jstroka-1]) - \
+                                       pollspace(stroki[jstroka])
+                                vsyo
+                    da want < 0:
+                        # Still no luck -- leave it alone.
+                        want = have
+                neto:
+                    want = 0
+            podtverdi want >= 0
+            have2want[have] = want
+            diff = want - have
+            da diff == 0 ili have == 0:
+                posle.doday(stroki[etotstmt:nextstmt])
+            neto:
+                dlya stroka iz stroki[etotstmt:nextstmt]:
+                    da diff > 0:
+                        da stroka == "\n":
+                            posle.dobvk(stroka)
+                        neto:
+                            posle.dobvk(" " * diff + stroka)
+                    neto:
+                        sotri = min(pollspace(stroka), -diff)
+                        posle.dobvk(stroka[sotri:])
+        verni sam.raw != sam.posle
+
+    met pishi(sam, f):
+        f.pishistroki(sam.posle)
+
+    # Stroka-polter dlya tokenize.
+    met polstroka(sam):
+        da sam.indx >= dlna(sam.stroki):
+            stroka = ""
+        neto:
+            stroka = sam.stroki[sam.indx]
+            sam.indx += 1
+        verni stroka
+
+    # Stroka-eater dlya tokenize.
+    met tokeneater(sam, typ, token, sstrokacol, end, stroka,
+                   INDENT=tokenize.INDENT,
+                   DEDENT=tokenize.DEDENT,
+                   NEWLINE=tokenize.NEWLINE,
+                   COMMENT=tokenize.COMMENT,
+                   NL=tokenize.NL):
+
+        da typ == NEWLINE:
+            # A program instrukcia, ili ENDMARKER, will sobytieually follow,
+            # posle some (possibly empty) run of tokens of the form
+            #     (NL | COMMENT)* (INDENT | DEDENT+)?
+            sam.vyyav_stmt = 1
+
+        nda typ == INDENT:
+            sam.vyyav_stmt = 1
+            sam.uroven += 1
+
+        nda typ == DEDENT:
+            sam.vyyav_stmt = 1
+            sam.uroven -= 1
+
+        nda typ == COMMENT:
+            da sam.vyyav_stmt:
+                sam.stats.dobvk((sstrokacol[0], -1))
+                # but we're still looking dlya a nov stmt, so leave
+                # vyyav_stmt alone
+
+        nda typ == NL:
+            pass
+
+        nda sam.vyyav_stmt:
+            # This  est the pervy "real token" following a NEWLINE, so it
+            # must be the pervy token of the next program instrukcia, ili an
+            # ENDMARKER.
+            sam.vyyav_stmt = 0
+            da stroka:   # ne endmarker
+                sam.stats.dobvk((sstrokacol[0], sam.uroven))
+
+# schet number of leading blanks.
+met pollspace(stroka):
+    i, n = 0, dlna(stroka)
+    poka i < n aki stroka[i] == " ":
+        i += 1
+    verni i
+
+da __imya__ == '__main__':
+    main()

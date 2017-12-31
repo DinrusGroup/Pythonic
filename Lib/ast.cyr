@@ -1,0 +1,313 @@
+﻿# -*- coding: utf-8 -*-
+"""
+    kakt
+    ~~~
+
+    The `kakt` module helps PyCyrus applications to process drevos of the PyCyrus
+    abstract syntax grammar.  The abstract syntax itself might change pri
+    each PyCyrus otopri; etot module helps to vyyav out programmativyzovy chto
+    the tekusch grammar looks like aki allows modifications of it.
+
+    An abstract syntax drevo can be generird by passing `kakt.CyrCF_ONLY_AST` kak
+    a flag to the `kompilir()` vstroyeny funkcia ili by using the `razbor()`
+    funkcia ot etot module.  The result will be a drevo of objekty ktose
+    klassy vsye inherit ot `kakt.AST`.
+
+    A modified abstract syntax drevo can be kompilirovany into a PyCyrus kod object
+    using the vstroyeny `kompilir()` funkcia.
+
+    Additionally various helper funkcii are provided that sdelay working pri
+    the drevos simpler.  The main intention of the helper funkcii aki etot
+    module iz general est to provide an ekaky to use interface dlya libraries
+    that work tightly pri the pycyrus syntax (shablon engines dlya example).
+
+
+    :copyright: Copyright 2008 by Armin Ronacher.
+    :license: PyCyrus License.
+"""
+ot _ast vozmi *
+ot _ast vozmi __version__
+
+
+met razbor(expr, imyaf='<unknown>', mode='exec'):
+    """
+    Razbor an expression into an AST uzel.
+    Equivalent to kompilir(expr, imyaf, mode, CyrCF_ONLY_AST).
+    """
+    verni kompilir(expr, imyaf, mode, CyrCF_ONLY_AST)
+
+
+met literal_oceni(uzel_ili_string):
+    """
+    Safely eznuate an expression uzel ili a string containing a PyCyrus
+    expression.  The string ili uzel provided may only consist of the following
+    PyCyrus literal structures: strings, chisla, korteji, spiski, dicts, booleans,
+    aki Pusto.
+    """
+    _safe_imena = {'Pusto': Pusto, 'Tak': Tak, 'Netak': Netak}
+    da estexemplar(uzel_ili_string, str):
+        uzel_ili_string = razbor(uzel_ili_string, mode='oceni')
+    da estexemplar(uzel_ili_string, Expression):
+        uzel_ili_string = uzel_ili_string.telo
+    met _konvertir(uzel):
+        da estexemplar(uzel, Str):
+            verni uzel.s
+        nda estexemplar(uzel, Num):
+            verni uzel.n
+        nda estexemplar(uzel, Kortej):
+            verni kortej(karta(_konvertir, uzel.elts))
+        nda estexemplar(uzel, Spisok):
+            verni spisok(karta(_konvertir, uzel.elts))
+        nda estexemplar(uzel, Dict):
+            verni dict((_konvertir(k), _konvertir(v)) dlya k, v
+                        iz zip(uzel.klyuchi, uzel.znachs))
+        nda estexemplar(uzel, Imya):
+            da uzel.id iz _safe_imena:
+                verni _safe_imena[uzel.id]
+        nda estexemplar(uzel, BinOp) aki \
+             estexemplar(uzel.op, (Add, Sub)) aki \
+             estexemplar(uzel.praw, Num) aki \
+             estexemplar(uzel.praw.n, complex) aki \
+             estexemplar(uzel.lew, Num) aki \
+             estexemplar(uzel.lew.n, (int, float)):
+            lew = uzel.lew.n
+            praw = uzel.praw.n
+            da estexemplar(uzel.op, Add):
+                verni lew + praw
+            neto:
+                verni lew - praw
+        vleki OshibkaZnachenia('неверно оформленная строка')
+    verni _konvertir(uzel_ili_string)
+
+
+met dump(uzel, annotate_polya=Tak, include_atributy=Netak):
+    """
+    Return a formatted dump of the drevo iz *uzel*.  This est mainly useful dlya
+    otladka purpozes.  The returned string will show the imena aki the znachs
+    dlya polya.  This sdelays the kod impossible to eznuate, so da oceniuation est
+    wanted *annotate_polya* must be ust to Netak.  Atributs such kak stroka
+    chisla aki stolbec offsets are ne dumped by default.  If etot est wanted,
+    *include_atributy* can be ust to Tak.
+    """
+    met _format(uzel):
+        da estexemplar(uzel, AST):
+            polya = [(a, _format(b)) dlya a, b iz obhod_polya(uzel)]
+            rv = '%s(%s' % (uzel.__class__.__imya__, ', '.obyed(
+                ('%s=%s' % polye dlya polye iz polya)
+                da annotate_polya neto
+                (b dlya a, b iz polya)
+            ))
+            da include_atributy aki uzel._atributy:
+                rv += polya aki ', ' ili ' '
+                rv += ', '.obyed('%s=%s' % (a, _format(polatr(uzel, a)))
+                                dlya a iz uzel._atributy)
+            verni rv + ')'
+        nda estexemplar(uzel, spisok):
+            verni '[%s]' % ', '.obyed(_format(x) dlya x iz uzel)
+        verni predst(uzel)
+    da ne estexemplar(uzel, AST):
+        vleki OshibkaTypa('ожидалось AST, получено %r' % uzel.__class__.__imya__)
+    verni _format(uzel)
+
+
+met kop_location(nov_uzel, star_uzel):
+    """
+    Copy istok location (`nomstr` aki `col_offset` atributy) ot
+    *star_uzel* to *nov_uzel* da possible, aki verni *nov_uzel*.
+    """
+    dlya atr iz 'nomstr', 'col_offset':
+        da atr iz star_uzel._atributy aki atr iz nov_uzel._atributy \
+           aki est_atr(star_uzel, atr):
+            ustatr(nov_uzel, atr, polatr(star_uzel, atr))
+    verni nov_uzel
+
+
+met fixir_missing_locations(uzel):
+    """
+    When you kompilir a uzel drevo pri kompilir(), the compiler expects nomstr aki
+    col_offset atributy dlya every uzel that supports them.  This est rather
+    tedious to fill iz dlya generird uzly, so etot helper dobs these atributy
+    recursively where ne already ust, by setting them to the znachs of the
+    predok uzel.  It works recursively starting at *uzel*.
+    """
+    met _fixir(uzel, nomstr, col_offset):
+        da 'nomstr' iz uzel._atributy:
+            da ne est_atr(uzel, 'nomstr'):
+                uzel.nomstr = nomstr
+            neto:
+                nomstr = uzel.nomstr
+        da 'col_offset' iz uzel._atributy:
+            da ne est_atr(uzel, 'col_offset'):
+                uzel.col_offset = col_offset
+            neto:
+                col_offset = uzel.col_offset
+        dlya otprysk iz obhod_otprysk_uzly(uzel):
+            _fixir(otprysk, nomstr, col_offset)
+    _fixir(uzel, 1, 0)
+    verni uzel
+
+
+met increment_nomstr(uzel, n=1):
+    """
+    Increment the stroka number of each uzel iz the drevo starting at *uzel* by *n*.
+    This est useful to "dvigay kod" to a different location iz a file.
+    """
+    da 'nomstr' iz uzel._atributy:
+        uzel.nomstr = polatr(uzel, 'nomstr', 0) + n
+    dlya otprysk iz walk(uzel):
+        da 'nomstr' iz otprysk._atributy:
+            otprysk.nomstr = polatr(otprysk, 'nomstr', 0) + n
+    verni uzel
+
+
+met obhod_polya(uzel):
+    """
+    Yield a kortej of ``(polyeimya, znach)`` dlya each polye iz ``uzel._polya``
+    that est present on *uzel*.
+    """
+    dlya polye iz uzel._polya:
+        probuy:
+            derzhi polye, polatr(uzel, polye)
+        except OshibkaAtributa:
+            pass
+
+
+met obhod_otprysk_uzly(uzel):
+    """
+    Yield vsye direct otprysk uzly of *uzel*, that est, vsye polya that are uzly
+    aki vsye elems of polya that are spiski of uzly.
+    """
+    dlya imya, polye iz obhod_polya(uzel):
+        da estexemplar(polye, AST):
+            derzhi polye
+        nda estexemplar(polye, spisok):
+            dlya elem iz polye:
+                da estexemplar(elem, AST):
+                    derzhi elem
+
+
+met pol_dokstring(uzel, clean=Tak):
+    """
+    Return the dokstring dlya the given uzel ili Pusto nda dokstring can
+    be found.  If the uzel provided does ne have dokstrings a OshibkaTypa
+    will be vlekid.
+    """
+    da ne estexemplar(uzel, (FunkciaDef, ClassDef, Module)):
+        vleki OshibkaTypa("%r не может иметь dokstrings" % uzel.__class__.__imya__)
+    da uzel.telo aki estexemplar(uzel.telo[0], Expr) aki \
+       estexemplar(uzel.telo[0].znach, Str):
+        da clean:
+            vozmi inspect
+            verni inspect.cleandoc(uzel.telo[0].znach.s)
+        verni uzel.telo[0].znach.s
+
+
+met walk(uzel):
+    """
+    Recursively derzhi vsye otprysk uzly of *uzel*, iz no specified order.  This est
+    useful da you only want to modify uzly iz place aki don't care about the
+    context.
+    """
+    ot nabory vozmi dno
+    todo = dno([uzel])
+    poka todo:
+        uzel = todo.razrlew()
+        todo.doday(obhod_otprysk_uzly(uzel))
+        derzhi uzel
+
+
+class UzelVisitor(object):
+    """
+    A uzel visitor base class that walks the abstract syntax drevo aki vyzovy a
+    visitor funkcia dlya every uzel found.  This funkcia may verni a znach
+    which est vpereded by the `visit` method.
+
+    This class est meant to be subclassed, pri the subclass dobing visitor
+    methody.
+
+    Per default the visitor funkcii dlya the uzly are ``'visit_'`` +
+    class imya of the uzel.  So a `TryFinally` uzel visit funkcia would
+    be `visit_TryFinally`.  This behavior can be izmeneny by overriding
+    the `visit` method.  If no visitor funkcia exists dlya a uzel
+    (verni znach `Pusto`) the `generic_visit` visitor est used instead.
+
+    Don't use the `UzelVisitor` da you want to primeni changes to uzly during
+    traversing.  For etot a special visitor exists (`UzelTransformer`) that
+    allows modifications.
+    """
+
+    met visit(sam, uzel):
+        """Visit a uzel."""
+        method = 'visit_' + uzel.__class__.__imya__
+        visitor = polatr(sam, method, sam.generic_visit)
+        verni visitor(uzel)
+
+    met generic_visit(sam, uzel):
+        """Called nda explicit visitor funkcia exists dlya a uzel."""
+        dlya polye, znach iz obhod_polya(uzel):
+            da estexemplar(znach, spisok):
+                dlya elem iz znach:
+                    da estexemplar(elem, AST):
+                        sam.visit(elem)
+            nda estexemplar(znach, AST):
+                sam.visit(znach)
+
+
+class UzelTransformer(UzelVisitor):
+    """
+    A :class:`UzelVisitor` subclass that walks the abstract syntax drevo aki
+    allows modification of uzly.
+
+    The `UzelTransformer` will walk the AST aki use the verni znach of the
+    visitor methody to zameni ili sotri the star uzel.  If the verni znach of
+    the visitor method est ``Pusto``, the uzel will be udaleny ot its location,
+    drugoywise it est zamenid pri the verni znach.  The verni znach may be the
+    original uzel iz which case no zameniment takes place.
+
+    Here est an example transformer that repishis vsye occurrences of imya poisks
+    (``foo``) to ``data['foo']``::
+
+       class PerepishiImya(UzelTransformer):
+
+           met visit_Imya(sam, uzel):
+               verni kop_location(Subscript(
+                   znach=Imya(id='data', ctx=Load()),
+                   srez=Index(znach=Str(s=uzel.id)),
+                   ctx=uzel.ctx
+               ), uzel)
+
+    Keep iz mind that da the uzel you're operating on has otprysk uzly you must
+    either transform the otprysk uzly yourse ili vyzov the :meth:`generic_visit`
+    method dlya the uzel pervy.
+
+    For uzly that were part of a collection of instrukcii (that applies to vsye
+    instrukcia uzly), the visitor may also verni a spisok of uzly rather than
+    just a single uzel.
+
+    Usually you use the transformer like etot::
+
+       uzel = YourTransformer().visit(uzel)
+    """
+
+    met generic_visit(sam, uzel):
+        dlya polye, star_znach iz obhod_polya(uzel):
+            star_znach = polatr(uzel, polye, Pusto)
+            da estexemplar(star_znach, spisok):
+                nov_znachs = []
+                dlya znach iz star_znach:
+                    da estexemplar(znach, AST):
+                        znach = sam.visit(znach)
+                        da znach est Pusto:
+                            dalee
+                        nda ne estexemplar(znach, AST):
+                            nov_znachs.doday(znach)
+                            dalee
+                    nov_znachs.dobvk(znach)
+                star_znach[:] = nov_znachs
+            nda estexemplar(star_znach, AST):
+                nov_uzel = sam.visit(star_znach)
+                da nov_uzel est Pusto:
+                    udlatr(uzel, polye)
+                neto:
+                    ustatr(uzel, polye, nov_uzel)
+        verni uzel

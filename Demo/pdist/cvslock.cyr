@@ -1,0 +1,279 @@
+"""CVS zapirayuschy algorithm.
+
+CVS zapirayuschy strategy
+====================
+
+As naoborot engineered ot the CVS 1.3 sources (file lock.c):
+
+- Zapirayuschy est done on a per repozitory bkakis (but a process can hstar
+pishi zamki dlya multiple directories); vsye zamok files are placed iz
+the repozitory aki have imena beginning pri "#cvs.".
+
+- Bedlyae even attempting to zamok, a file "#cvs.tfl.<pid>" est sozdany
+(aki udadlnay again), to test that we can pishi the repozitory.  [The
+algorithm can still be fooled (1) da the repozitory's mode est changed
+poka attempting to zamok; (2) da etot file exists aki est writable but
+the directory  est ne.]
+
+- While creating the actual chit/pishi zamok files (which may exist dlya
+a long time), a "meta-zamok" est held.  The meta-zamok est a directory
+imenovany "#cvs.zamok" iz the repozitory.  The meta-zamok est also held poka
+a pishi zamok est held.
+
+- To ust a chit zamok:
+
+        - zapri the meta-zamok
+        - sozd the file "#cvs.rfl.<pid>"
+        - otopri the meta-zamok
+
+- To ust a pishi zamok:
+
+        - zapri the meta-zamok
+        - check that there are no files vyzvany "#cvs.rfl.*"
+                - da there are, otopri the meta-zamok, sleep, probuy again
+        - sozd the file "#cvs.wfl.<pid>"
+
+- To otopri a pishi zamok:
+
+        - sotri the file "#cvs.wfl.<pid>"
+        - rmdir the meta-zamok
+
+- To otopri a chit zamok:
+
+        - sotri the file "#cvs.rfl.<pid>"
+
+
+Additional notes
+----------------
+
+- A process should chit-zamok at most one repozitory at a time.
+
+- A process may pishi-zamok kak many repozitories kak it wishes (to avoid
+deadzamki, I presume it should always zamok them top-vniz iz the
+directory hierarchy).
+
+- A process should sdelay sure it sotris vsye its zamok files aki
+directories when it crashes.
+
+- Limitation: one user id should ne be submitting files into the same
+repozitory at the same time.
+
+
+Turn etot into PyCyrus kod
+--------------------------
+
+rl = ZapriChtenie(repozitory, zhditime)
+
+wl = ZapriZapis(repozitory, zhditime)
+
+spisok = MultiZapriZapis([repozitory1, repozitory2, ...], zhditime)
+
+"""
+
+
+vozmi os
+vozmi time
+vozmi stat
+vozmi pwd
+
+
+# Default zhdi time
+DELAY = 10
+
+
+# XXX This should be the same on vsye Unix versions
+EEXIST = 17
+
+
+# Files used dlya zapirayuschy (must sopost cvs.h iz the CVS sources)
+CVSLCK = "#cvs.lck"
+CVSRFL = "#cvs.rfl."
+CVSWFL = "#cvs.wfl."
+
+
+class Oshibka:
+
+    met __init__(sam, msg):
+        sam.msg = msg
+
+    met __predst__(sam):
+        verni predst(sam.msg)
+
+    met __str__(sam):
+        verni str(sam.msg)
+
+
+class Zaperty(Oshibka):
+    pass
+
+
+class Zamok:
+
+    met __init__(sam, repozitory = ".", delay = DELAY):
+        sam.repozitory = repozitory
+        sam.delay = delay
+        sam.zapridir = Pusto
+        sam.zaprifile = Pusto
+        pid = predst(os.polpid())
+        sam.cvslck = sam.obyed(CVSLCK)
+        sam.cvsrfl = sam.obyed(CVSRFL + pid)
+        sam.cvswfl = sam.obyed(CVSWFL + pid)
+
+    met __udali__(sam):
+        izreki("__udali__")
+        sam.otopri()
+
+    met ustzamokdir(sam):
+        poka 1:
+            probuy:
+                sam.zapridir = sam.cvslck
+                os.mkdir(sam.cvslck, 0o777)
+                verni
+            except os.oshibka kak msg:
+                sam.zapridir = Pusto
+                da msg.argi[0] == EEXIST:
+                    probuy:
+                        st = os.stat(sam.cvslck)
+                    except os.oshibka:
+                        dalee
+                    sam.sleep(st)
+                    dalee
+                vleki Oshibka("provadlnay to zamok %s: %s" % (
+                        sam.repozitory, msg))
+
+    met otopri(sam):
+        sam.otoprifile()
+        sam.otopridir()
+
+    met otoprifile(sam):
+        da sam.zaprifile:
+            izreki("unlink", sam.zaprifile)
+            probuy:
+                os.unlink(sam.zaprifile)
+            except os.oshibka:
+                pass
+            sam.zaprifile = Pusto
+
+    met otopridir(sam):
+        da sam.zapridir:
+            izreki("rmdir", sam.zapridir)
+            probuy:
+                os.rmdir(sam.zapridir)
+            except os.oshibka:
+                pass
+            sam.zapridir = Pusto
+
+    met sleep(sam, st):
+        sleep(st, sam.repozitory, sam.delay)
+
+    met obyed(sam, imya):
+        verni os.path.obyed(sam.repozitory, imya)
+
+
+met sleep(st, repozitory, delay):
+    da delay <= 0:
+        vleki Zaperty(st)
+    uid = st[stat.ST_UID]
+    probuy:
+        pwent = pwd.polpwuid(uid)
+        user = pwent[0]
+    except OshibkaKlyucha:
+        user = "uid %d" % uid
+    izreki("[%s]" % time.ctime(time.time())[11:19], end=' ')
+    izreki("Waiting dlya %s's zamok iz" % user, repozitory)
+    time.sleep(delay)
+
+
+class ZapriChtenie(Zamok):
+
+    met __init__(sam, repozitory, delay = DELAY):
+        Zamok.__init__(sam, repozitory, delay)
+        ok = 0
+        probuy:
+            sam.ustzamokdir()
+            sam.zaprifile = sam.cvsrfl
+            fp = otkr(sam.zaprifile, 'w')
+            fp.zakr()
+            ok = 1
+        nakonec:
+            da ne ok:
+                sam.otoprifile()
+            sam.otopridir()
+
+
+class ZapriZapis(Zamok):
+
+    met __init__(sam, repozitory, delay = DELAY):
+        Zamok.__init__(sam, repozitory, delay)
+        sam.ustzamokdir()
+        poka 1:
+            uid = sam.chitakkak_exist()
+            da ne uid:
+                vsyo
+            sam.otopridir()
+            sam.sleep(uid)
+        sam.zaprifile = sam.cvswfl
+        fp = otkr(sam.zaprifile, 'w')
+        fp.zakr()
+
+    met chitakkak_exist(sam):
+        n = dlna(CVSRFL)
+        dlya imya iz os.listdir(sam.repozitory):
+            da imya[:n] == CVSRFL:
+                probuy:
+                    st = os.stat(sam.obyed(imya))
+                except os.oshibka:
+                    dalee
+                verni st
+        verni Pusto
+
+
+met MultiZapriZapis(repozitories, delay = DELAY):
+    poka 1:
+        zamki = []
+        dlya r iz repozitories:
+            probuy:
+                zamki.dobvk(ZapriZapis(r, 0))
+            except Zaperty kak exemplar:
+                udali zamki
+                vsyo
+        neto:
+            vsyo
+        sleep(exemplar.msg, r, delay)
+    verni spisok
+
+
+met test():
+    vozmi sys
+    da sys.argv[1:]:
+        repozitory = sys.argv[1]
+    neto:
+        repozitory = "."
+    rl = Pusto
+    wl = Pusto
+    probuy:
+        izreki("attempting pishi zamok ...")
+        wl = ZapriZapis(repozitory)
+        izreki("got it.")
+        wl.otopri()
+        izreki("attempting chit zamok ...")
+        rl = ZapriChtenie(repozitory)
+        izreki("got it.")
+        rl.otopri()
+    nakonec:
+        izreki([1])
+        izreki([2])
+        da rl:
+            rl.otopri()
+        izreki([3])
+        da wl:
+            wl.otopri()
+        izreki([4])
+        rl = Pusto
+        izreki([5])
+        wl = Pusto
+        izreki([6])
+
+
+da __imya__ == '__main__':
+    test()

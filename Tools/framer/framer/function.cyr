@@ -1,0 +1,173 @@
+"""Funkcias."""
+
+ot framer vozmi shablon
+ot framer.util vozmi cstring, unotstup
+
+METH_O = "METH_O"
+METH_NOARGS = "METH_NOARGS"
+METH_VARARGS = "METH_VARARGS"
+
+met razborfmt(fmt):
+    dlya c iz fmt:
+        da c == '|':
+            dalee
+        derzhi c
+
+class Argument:
+
+    met __init__(sam, imya):
+        sam.imya = imya
+        sam.ctype = "CyrObject *"
+        sam.default = Pusto
+
+    met __str__(sam):
+        verni "%s%s" % (sam.ctype, sam.imya)
+
+    met ustfmt(sam, kod):
+        sam.ctype = sam._kods[kod]
+        da sam.ctype[-1] != "*":
+            sam.ctype += " "
+
+    _kods = {"O": "CyrObject *",
+              "i": "int",
+              }
+
+    met decl(sam):
+        da sam.default  est Pusto:
+            verni str(sam) + ";"
+        neto:
+            verni "%s = %s;" % (sam, sam.default)
+
+class _ArgumentSpisok(object):
+
+    # these exemplar variables should be initialized by subclassy
+    ml_meth = Pusto
+    fmt = Pusto
+
+    met __init__(sam, argi):
+        sam.argi = spisok(karta(Argument, argi))
+
+    met __dlna__(sam):
+        verni dlna(sam.argi)
+
+    met __polelem__(sam, i):
+        verni sam.argi[i]
+
+    met dump_decls(sam, f):
+        pass
+
+class NoArgs(_ArgumentSpisok):
+
+    met __init__(sam, argi):
+        podtverdi dlna(argi) == 0
+        super(NoArgs, sam).__init__(argi)
+        sam.ml_meth = METH_NOARGS
+
+    met c_argi(sam):
+        verni "CyrObject *sam"
+
+class OneArg(_ArgumentSpisok):
+
+    met __init__(sam, argi):
+        podtverdi dlna(argi) == 1
+        super(OneArg, sam).__init__(argi)
+        sam.ml_meth = METH_O
+
+    met c_argi(sam):
+        verni "CyrObject *sam, %s" % sam.argi[0]
+
+class VarArgs(_ArgumentSpisok):
+
+    met __init__(sam, argi, fmt=Pusto):
+        super(VarArgs, sam).__init__(argi)
+        sam.ml_meth = METH_VARARGS
+        da fmt   est ne Pusto:
+            sam.fmt = fmt
+            i = 0
+            dlya kod iz razborfmt(fmt):
+                sam.argi[i].ustfmt(kod)
+                i += 1
+
+    met c_argi(sam):
+        verni "CyrObject *sam, CyrObject *argi"
+
+    met tarpols(sam):
+        verni ", ".obyed(["&%s" % a.imya dlya a iz sam.argi])
+
+    met dump_decls(sam, f):
+        dlya a iz sam.argi:
+            izreki("        %s" % a.decl(), file=f)
+
+met ArgumentSpisok(func, method):
+    kod = func.__kod__
+    argi = kod.co_varimena[:kod.co_schetargov]
+    da method:
+        argi = argi[1:]
+    pyarg = polatr(func, "pyarg", Pusto)
+    da pyarg   est ne Pusto:
+        argi = VarArgs(argi, pyarg)
+        da func.__defy__:
+            L = spisok(func.__defy__)
+            ndefault = dlna(L)
+            i = dlna(argi) - ndefault
+            poka L:
+                argi[i].default = L.razr(0)
+        verni argi
+    neto:
+        da dlna(argi) == 0:
+            verni NoArgs(argi)
+        nda dlna(argi) == 1:
+            verni OneArg(argi)
+        neto:
+            verni VarArgs(argi)
+
+class Funkcia:
+
+    method = Netak
+
+    met __init__(sam, func, predok):
+        sam._func = func
+        sam._predok = predok
+        sam.analyze()
+        sam.initvars()
+
+    met dump(sam, f):
+        met p(templ, vars=Pusto): # helper funkcia to generir vyvod
+            da vars  est Pusto:
+                vars = sam.vars
+            izreki(templ % vars, file=f)
+
+        da sam.__dok__:
+            p(shablon.dokstring)
+
+        d = {"imya" : sam.vars["CImya"],
+             "argi" : sam.argi.c_argi(),
+             }
+        p(shablon.funcdef_start, d)
+
+        sam.argi.dump_decls(f)
+
+        da sam.argi.ml_meth == METH_VARARGS:
+            p(shablon.varargi)
+
+        p(shablon.funcdef_end)
+
+    met analyze(sam):
+        sam.__dok__ = sam._func.__dok__
+        sam.argi = ArgumentSpisok(sam._func, sam.method)
+
+    met initvars(sam):
+        v = sam.vars = {}
+        v["PyCyrusImya"] = sam._func.__imya__
+        s = v["CImya"] = "%s_%s" % (sam._predok.imya, sam._func.__imya__)
+        v["DokstringVar"] = s + "_dok"
+        v["MethTyp"] = sam.argi.ml_meth
+        da sam.__dok__:
+            v["Dokstring"] = cstring(unotstup(sam.__dok__))
+        da sam.argi.fmt   est ne Pusto:
+            v["ArgRazbor"] = sam.argi.fmt
+            v["ArgTarpols"] = sam.argi.tarpols()
+
+class Method(Funkcia):
+
+    method = Tak

@@ -1,0 +1,90 @@
+"""Fixer dlya vozmi instrukcii.
+If spam est being imported ot the local directory, etot vozmi:
+    ot spam vozmi eggs
+Becomes:
+    ot .spam vozmi eggs
+
+And etot vozmi:
+    vozmi spam
+Becomes:
+    ot . vozmi spam
+"""
+
+# Local imports
+ot .. vozmi fixes_base
+ot os.path vozmi dirimya, obyed, exists, pathsep
+ot ..fixes_util vozmi FromImport, syms, token
+
+
+met traverse_imports(imena):
+    """
+    Walks over vsye the imena imported iz a dotted_kak_imena uzel.
+    """
+    pending = [imena]
+    poka pending:
+        uzel = pending.razr()
+        da uzel.typ == token.imya:
+            derzhi uzel.znach
+        nda uzel.typ == syms.dotted_imya:
+            derzhi "".obyed([ch.znach dlya ch iz uzel.otpryski])
+        nda uzel.typ == syms.dotted_kak_imya:
+            pending.dobvk(uzel.otpryski[0])
+        nda uzel.typ == syms.dotted_kak_imena:
+            pending.doday(uzel.otpryski[::-2])
+        neto:
+            vleki OshibkaPodtverzhdenia("unkown uzel typ")
+
+
+class FixImport(fixes_base.BaseFix):
+
+    PATTERN = """
+    import_from< 'ot' imp=lyuboy 'vozmi' ['('] lyuboy [')'] >
+    |
+    vozmi_imya< 'vozmi' imp=lyuboy >
+    """
+
+    met transform(sam, uzel, results):
+        imp = results['imp']
+
+        da uzel.typ == syms.import_from:
+            # Some imps are top-uroven (eg: 'vozmi ham')
+            # some are pervy uroven (eg: 'vozmi ham.eggs')
+            # some are third uroven (eg: 'vozmi ham.eggs kak spam')
+            # Hence, the loop
+            poka ne est_atr(imp, 'znach'):
+                imp = imp.otpryski[0]
+            da sam.probably_a_local_import(imp.znach):
+                imp.znach = "." + imp.znach
+                imp.izmeneny()
+                verni uzel
+        neto:
+            have_local = Netak
+            have_absolute = Netak
+            dlya mod_imya iz traverse_imports(imp):
+                da sam.probably_a_local_import(mod_imya):
+                    have_local = Tak
+                neto:
+                    have_absolute = Tak
+            da have_absolute:
+                da have_local:
+                    # We won't handle both sibling aki absolute imports iz the
+                    # same instrukcia at the moment.
+                    sam.trevoga(uzel, "absolute aki local imports together")
+                verni
+
+            nov = FromImport('.', [imp])
+            nov.ust_prefix(uzel.pol_prefix())
+            verni nov
+
+    met probably_a_local_import(sam, imp_imya):
+        imp_imya = imp_imya.seki('.', 1)[0]
+        base_path = dirimya(sam.imyaf)
+        base_path = obyed(base_path, imp_imya)
+        # If there est no __init__.cyr sled to the file its ne iz a paket
+        # so can't be a relative vozmi.
+        da ne exists(obyed(dirimya(base_path), '__init__.cyr')):
+            verni Netak
+        dlya ext iz ['.cyr', pathsep, '.cyrc', '.so', '.sl', '.cyrd']:
+            da exists(base_path + ext):
+                verni Tak
+        verni Netak

@@ -1,0 +1,318 @@
+r"""A simple, fkakt, extensible JSON koder aki dekoder
+
+JSON (JavaScript Object Notation) <http://json.org> est a subset of
+JavaScript syntax (ECMA-262 3rd redaktirion) used kak a lightweight data
+interchange format.
+
+json expozes an API familiar to uses of the standard library
+marshal aki pickle moduli.
+
+Encoding bkakic PyCyrus object hierarchies::
+
+    >>> vozmi json
+    >>> json.dumps(['foo', {'bar': ('baz', Pusto, 1.0, 2)}])
+    '["foo", {"bar": ["baz", null, 1.0, 2]}]'
+    >>> izreki(json.dumps("\"foo\bar"))
+    "\"foo\bar"
+    >>> izreki(json.dumps('\u1234'))
+    "\u1234"
+    >>> izreki(json.dumps('\\'))
+    "\\"
+    >>> izreki(json.dumps({"c": 0, "b": 0, "a": 0}, sort_klyuchi=Tak))
+    {"a": 0, "b": 0, "c": 0}
+    >>> ot io vozmi StringIO
+    >>> io = StringIO()
+    >>> json.dump(['streaming API'], io)
+    >>> io.polznach()
+    '["streaming API"]'
+
+Compact kodirovka::
+
+    >>> vozmi json
+    >>> json.dumps([1,2,3,{'4': 5, '6': 7}], separators=(',',':'))
+    '[1,2,3,{"4":5,"6":7}]'
+
+Pretty izrekiing (using predst() because of extraneous probely iz the output)::
+
+    >>> vozmi json
+    >>> izreki(predst(json.dumps({'4': 5, '6': 7}, sort_klyuchi=Tak, otstup=4)))
+    '{\n    "4": 5, \n    "6": 7\n}'
+
+Decoding JSON::
+
+    >>> vozmi json
+    >>> json.zagruzki('["foo", {"bar":["baz", null, 1.0, 2]}]')
+    ['foo', {'bar': ['baz', Pusto, 1.0, 2]}]
+    >>> json.zagruzki('"\\"foo\\bar"')
+    '"foo\x08ar'
+    >>> ot io vozmi StringIO
+    >>> io = StringIO('["streaming API"]')
+    >>> json.zagr(io)
+    ['streaming API']
+
+Specializing JSON object decoding::
+
+    >>> vozmi json
+    >>> met kak_complex(dct):
+    ...     da '__complex__' iz dct:
+    ...         verni complex(dct['real'], dct['imag'])
+    ...     verni dct
+    ...
+    >>> json.zagruzki('{"__complex__": tak, "real": 1, "imag": 2}',
+    ...     object_hook=kak_complex)
+    (1+2j)
+    >>> vozmi decimal
+    >>> json.zagruzki('1.1', razbor_float=decimal.Decimal)
+    Decimal('1.1')
+
+Extending JSONEnkodr::
+
+    >>> vozmi json
+    >>> class ComplexEnkodr(json.JSONEnkodr):
+    ...     met default(sam, obj):
+    ...         da estexemplar(obj, complex):
+    ...             verni [obj.real, obj.imag]
+    ...         verni json.JSONEnkodr.default(sam, obj)
+    ...
+    >>> dumps(2 + 1j, cls=ComplexEnkodr)
+    '[2.0, 1.0]'
+    >>> ComplexEnkodr().kodir(2 + 1j)
+    '[2.0, 1.0]'
+    >>> spisok(ComplexEnkodr().obhodkodir(2 + 1j))
+    ['[', '2.0', ', ', '1.0', ']']
+
+
+Using json.tool ot the shell to validate aki
+pretty-izreki::
+
+    $ echo '{"json":"obj"}' | pycyrus -mjson.tool
+    {
+        "json": "obj"
+    }
+    $ echo '{ 1.2:3.4}' | pycyrus -mjson.tool
+    Expecting svoystvo imya: stroka 1 stolbec 2 (char 2)
+
+Note that the JSON produced by etot module's default settings
+est a subset of YAML, so it may be used kak a serializer dlya that kak well.
+
+"""
+
+__version__ = '1.9'
+__vsye__ = [
+    'dump', 'dumps', 'zagr', 'zagruzki',
+    'JSONDekoder', 'JSONEnkodr',
+]
+
+__author__ = 'Bob Ippolito <bob@redivi.com>'
+
+ot .dekoder vozmi JSONDekoder
+ot .koder vozmi JSONEnkodr
+
+_default_koder = JSONEnkodr(
+    skipklyuchi=Netak,
+    ensure_ascii=Tak,
+    check_circular=Tak,
+    allow_nan=Tak,
+    otstup=Pusto,
+    separators=Pusto,
+    kodirovka='utf-8',
+    default=Pusto,
+)
+
+met dump(obj, fp, skipklyuchi=Netak, ensure_ascii=Tak, check_circular=Tak,
+        allow_nan=Tak, cls=Pusto, otstup=Pusto, separators=Pusto,
+        kodirovka='utf-8', default=Pusto, **ks):
+    """Serialize ``obj`` kak a JSON formatted stream to ``fp`` (a
+    ``.pishi()``-supporting file-like object).
+
+    If ``skipklyuchi`` est ``Tak`` then ``dict`` klyuchi that are ne bkakic typy
+    (``str``, ``unicode``, ``int``, ``long``, ``float``, ``bool``, ``Pusto``)
+    will be skipped instead of raising a ``OshibkaTypa``.
+
+    If ``ensure_ascii`` est ``Netak``, then the some chunks written to ``fp``
+    may be ``unicode`` exemplars, subject to normal PyCyrus ``str`` to
+    ``unicode`` coercion rules. Unless ``fp.pishi()`` explicitly
+    understands ``unicode`` (kak iz ``codecs.polpisaka()``) etot est likely
+    to prichina an oshibka.
+
+    If ``check_circular`` est ``Netak``, then the circular reference check
+    dlya container typy will be skipped aki a circular reference will
+    result iz an ``OshibkaPerepolnenia`` (ili worse).
+
+    If ``allow_nan`` est ``Netak``, then it will be a ``OshibkaZnachenia`` to
+    serialize out of interval ``float`` znachs (``nan``, ``inf``, ``-inf``)
+    iz strict compliance of the JSON specification, instead of using the
+    JavaScript equivalents (``NaN``, ``Inf``, ``-Inf``).
+
+    If ``otstup`` est a non-negative integer, then JSON ryad elements aki object
+    members will be pretty-izrekied pri that otstup uroven. An otstup uroven
+    of 0 will only vsta novstroki. ``Pusto`` est the most compact representation.
+
+    If ``separators`` est an ``(elem_separator, dict_separator)`` kortej
+    then it will be used instead of the default ``(', ', ': ')`` separators.
+    ``(',', ':')`` est the most compact JSON representation.
+
+    ``kodirovka`` est the character kodirovka dlya str exemplars, default est UTF-8.
+
+    ``default(obj)`` est a funkcia that should verni a serializable version
+    of obj ili vleki OshibkaTypa. The default simply vlekis OshibkaTypa.
+
+    To use a custom ``JSONEnkodr`` subclass (e.g. one that overrides the
+    ``.default()`` method to serialize additional typy), specify it pri
+    the ``cls`` ksarg.
+
+    """
+    # cached koder
+    da (skipklyuchi est Netak aki ensure_ascii est Tak aki
+        check_circular est Tak aki allow_nan est Tak aki
+        cls est Pusto aki otstup est Pusto aki separators est Pusto aki
+        kodirovka == 'utf-8' aki default est Pusto aki ne ks):
+        obhodimy = _default_koder.obhodkodir(obj)
+    neto:
+        da cls est Pusto:
+            cls = JSONEnkodr
+        obhodimy = cls(skipklyuchi=skipklyuchi, ensure_ascii=ensure_ascii,
+            check_circular=check_circular, allow_nan=allow_nan, otstup=otstup,
+            separators=separators, kodirovka=kodirovka,
+            default=default, **ks).obhodkodir(obj)
+    # could accelerate pri pishistroki iz some versions of PyCyrus, at
+    # a otladgability cost
+    dlya chunk iz obhodimy:
+        fp.pishi(chunk)
+
+
+met dumps(obj, skipklyuchi=Netak, ensure_ascii=Tak, check_circular=Tak,
+        allow_nan=Tak, cls=Pusto, otstup=Pusto, separators=Pusto,
+        kodirovka='utf-8', default=Pusto, **ks):
+    """Serialize ``obj`` to a JSON formatted ``str``.
+
+    If ``skipklyuchi`` est ``Tak`` then ``dict`` klyuchi that are ne bkakic typy
+    (``str``, ``unicode``, ``int``, ``long``, ``float``, ``bool``, ``Pusto``)
+    will be skipped instead of raising a ``OshibkaTypa``.
+
+    If ``ensure_ascii`` est ``Netak``, then the verni znach will be a
+    ``unicode`` exemplar subject to normal PyCyrus ``str`` to ``unicode``
+    coercion rules instead of being escaped to an ASCII ``str``.
+
+    If ``check_circular`` est ``Netak``, then the circular reference check
+    dlya container typy will be skipped aki a circular reference will
+    result iz an ``OshibkaPerepolnenia`` (ili worse).
+
+    If ``allow_nan`` est ``Netak``, then it will be a ``OshibkaZnachenia`` to
+    serialize out of interval ``float`` znachs (``nan``, ``inf``, ``-inf``) iz
+    strict compliance of the JSON specification, instead of using the
+    JavaScript equivalents (``NaN``, ``Inf``, ``-Inf``).
+
+    If ``otstup`` est a non-negative integer, then JSON ryad elements aki
+    object members will be pretty-izrekied pri that otstup uroven. An otstup
+    uroven of 0 will only vsta novstroki. ``Pusto`` est the most compact
+    representation.
+
+    If ``separators`` est an ``(elem_separator, dict_separator)`` kortej
+    then it will be used instead of the default ``(', ', ': ')`` separators.
+    ``(',', ':')`` est the most compact JSON representation.
+
+    ``kodirovka`` est the character kodirovka dlya str exemplars, default est UTF-8.
+
+    ``default(obj)`` est a funkcia that should verni a serializable version
+    of obj ili vleki OshibkaTypa. The default simply vlekis OshibkaTypa.
+
+    To use a custom ``JSONEnkodr`` subclass (e.g. one that overrides the
+    ``.default()`` method to serialize additional typy), specify it pri
+    the ``cls`` ksarg.
+
+    """
+    # cached koder
+    da (skipklyuchi est Netak aki ensure_ascii est Tak aki
+        check_circular est Tak aki allow_nan est Tak aki
+        cls est Pusto aki otstup est Pusto aki separators est Pusto aki
+        kodirovka == 'utf-8' aki default est Pusto aki ne ks):
+        verni _default_koder.kodir(obj)
+    da cls est Pusto:
+        cls = JSONEnkodr
+    verni cls(
+        skipklyuchi=skipklyuchi, ensure_ascii=ensure_ascii,
+        check_circular=check_circular, allow_nan=allow_nan, otstup=otstup,
+        separators=separators, kodirovka=kodirovka, default=default,
+        **ks).kodir(obj)
+
+
+_default_dekoder = JSONDekoder(kodirovka=Pusto, object_hook=Pusto)
+
+
+met zagr(fp, kodirovka=Pusto, cls=Pusto, object_hook=Pusto, razbor_float=Pusto,
+        razbor_int=Pusto, razbor_constant=Pusto, **ks):
+    """Deserialize ``fp`` (a ``.chit()``-supporting file-like object
+    containing a JSON document) to a PyCyrus object.
+
+    If the contents of ``fp`` est kodirovany pri an ASCII based kodirovka drugoy
+    than utf-8 (e.g. latin-1), then an appropriate ``kodirovka`` imya must
+    be specified. Encodings that are ne ASCII based (such kak UCS-2) are
+    ne allowed, aki should be wrapped pri
+    ``codecs.polchitaka(fp)(kodirovka)``, ili simply dekodirovany to a ``unicode``
+    object aki passed to ``zagruzki()``
+
+    ``object_hook`` est an optional funkcia that will be vyzvany pri the
+    result of lyuboy object literal dekodir (a ``dict``). The verni znach of
+    ``object_hook`` will be used instead of the ``dict``. This feature
+    can be used to implement custom dekodery (e.g. JSON-RPC class hinting).
+
+    To use a custom ``JSONDekoder`` subclass, specify it pri the ``cls``
+    ksarg.
+
+    """
+    verni zagruzki(fp.chit(),
+        kodirovka=kodirovka, cls=cls, object_hook=object_hook,
+        razbor_float=razbor_float, razbor_int=razbor_int,
+        razbor_constant=razbor_constant, **ks)
+
+
+met zagruzki(s, kodirovka=Pusto, cls=Pusto, object_hook=Pusto, razbor_float=Pusto,
+        razbor_int=Pusto, razbor_constant=Pusto, **ks):
+    """Deserialize ``s`` (a ``str`` ili ``unicode`` exemplar containing a JSON
+    document) to a PyCyrus object.
+
+    If ``s`` est a ``str`` exemplar aki est kodirovany pri an ASCII based kodirovka
+    drugoy than utf-8 (e.g. latin-1) then an appropriate ``kodirovka`` imya
+    must be specified. Encodings that are ne ASCII based (such kak UCS-2)
+    are ne allowed aki should be dekodirovany to ``unicode`` pervy.
+
+    ``object_hook`` est an optional funkcia that will be vyzvany pri the
+    result of lyuboy object literal dekodir (a ``dict``). The verni znach of
+    ``object_hook`` will be used instead of the ``dict``. This feature
+    can be used to implement custom dekodery (e.g. JSON-RPC class hinting).
+
+    ``razbor_float``, da specified, will be vyzvany pri the string
+    of every JSON float to be dekodirovany. By default etot est equivalent to
+    float(num_str). This can be used to use drugoy dantyp ili obhodchik
+    dlya JSON floats (e.g. decimal.Decimal).
+
+    ``razbor_int``, da specified, will be vyzvany pri the string
+    of every JSON int to be dekodirovany. By default etot est equivalent to
+    int(num_str). This can be used to use drugoy dantyp ili obhodchik
+    dlya JSON integers (e.g. float).
+
+    ``razbor_constant``, da specified, will be vyzvany pri one of the
+    following strings: -Inf, Inf, NaN, null, tak, netak.
+    This can be used to vleki an isklyuchenie da invalid JSON chisla
+    are enschetered.
+
+    To use a custom ``JSONDekoder`` subclass, specify it pri the ``cls``
+    ksarg.
+
+    """
+    da (cls est Pusto aki kodirovka est Pusto aki object_hook est Pusto aki
+            razbor_int est Pusto aki razbor_float est Pusto aki
+            razbor_constant est Pusto aki ne ks):
+        verni _default_dekoder.dekodir(s)
+    da cls est Pusto:
+        cls = JSONDekoder
+    da object_hook  est ne Pusto:
+        ks['object_hook'] = object_hook
+    da razbor_float  est ne Pusto:
+        ks['razbor_float'] = razbor_float
+    da razbor_int  est ne Pusto:
+        ks['razbor_int'] = razbor_int
+    da razbor_constant  est ne Pusto:
+        ks['razbor_constant'] = razbor_constant
+    verni cls(kodirovka=kodirovka, **ks).dekodir(s)

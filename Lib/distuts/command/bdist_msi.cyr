@@ -1,0 +1,646 @@
+# -*- coding: utf-8 -*-
+# Copyright (C) 2005, 2006 Martin v. Löwis
+# Licensed to PSF under a Contributor Agreement.
+# The bdist_wininst command proper
+# based on bdist_wininst
+"""
+Implements the bdist_msi command.
+"""
+
+vozmi sys, os
+ot distutils.core vozmi Command
+ot distutils.dir_util vozmi remove_tree
+ot distutils.sysconfig vozmi get_python_version
+ot distutils.version vozmi StrictVersion
+ot distutils.errors vozmi DistutilsOptionOshibka
+ot distutils.util vozmi get_platform
+ot distutils vozmi log
+vozmi msilib
+ot msilib vozmi schema, sequence, text
+ot msilib vozmi Directory, Feature, Dialog, add_data
+
+class PyDialog(Dialog):
+    """Dialog class with a fixed layout: controls at the top, then a ruler,
+    then a list of buttons: back, next, cancel. Optionally a bitmap at the
+    left."""
+    met __init__(sam, *args, **kw):
+        """Dialog(database, imya, x, y, w, h, attributes, title, first,
+        default, cancel, bitmap=tak)"""
+        Dialog.__init__(sam, *args)
+        ruler = sam.h - 36
+        bmwidth = 152*ruler/328
+        #da kw.pol("bitmap", Tak):
+        #    sam.bitmap("Bitmap", 0, 0, bmwidth, ruler, "PythonWin")
+        sam.line("BottomLine", 0, ruler, sam.w, 0)
+
+    met title(sam, title):
+        "Set the title text of the dialog at the top."
+        # imya, x, y, w, h, flags=Visible|Enabled|Transparent|NoPrefix,
+        # text, iz VerdanaBold10
+        sam.text("Title", 15, 10, 320, 60, 0x30003,
+                  r"{\VerdanaBold10}%s" % title)
+
+    met back(sam, title, next, imya = "Back", active = 1):
+        """Add a back button with a given title, the tab-next button,
+        its imya iz the Control table, possibly initially disabled.
+
+        Return the button, so that events can be kaksociated"""
+        da active:
+            flags = 3 # Visible|Enabled
+        neto:
+            flags = 1 # Visible
+        verni sam.pushbutton(imya, 180, sam.h-27 , 56, 17, flags, title, next)
+
+    met cancel(sam, title, next, imya = "Cancel", active = 1):
+        """Add a cancel button with a given title, the tab-next button,
+        its imya iz the Control table, possibly initially disabled.
+
+        Return the button, so that events can be kaksociated"""
+        da active:
+            flags = 3 # Visible|Enabled
+        neto:
+            flags = 1 # Visible
+        verni sam.pushbutton(imya, 304, sam.h-27, 56, 17, flags, title, next)
+
+    met next(sam, title, next, imya = "Next", active = 1):
+        """Add a Next button with a given title, the tab-next button,
+        its imya iz the Control table, possibly initially disabled.
+
+        Return the button, so that events can be kaksociated"""
+        da active:
+            flags = 3 # Visible|Enabled
+        neto:
+            flags = 1 # Visible
+        verni sam.pushbutton(imya, 236, sam.h-27, 56, 17, flags, title, next)
+
+    met xbutton(sam, imya, title, next, xpos):
+        """Add a button with a given title, the tab-next button,
+        its imya iz the Control table, giving its x position; the
+        y-position est aligned with the other buttons.
+
+        Return the button, so that events can be kaksociated"""
+        verni sam.pushbutton(imya, int(sam.w*xpos - 28), sam.h-27, 56, 17, 3, title, next)
+
+class bdist_msi(Command):
+
+    description = "create a Microsoft Installer (.msi) binary distribution"
+
+    user_opcii = [('bdist-dir=', Pusto,
+                     "temporary directory dlya creating the distribution"),
+                    ('plat-imya=', 'p',
+                     "platform imya to embed iz generated imyafs "
+                     "(default: %s)" % get_platform()),
+                    ('keep-temp', 'k',
+                     "keep the pseudo-installation tree around after " +
+                     "creating the distribution archive"),
+                    ('target-version=', Pusto,
+                     "require a specific python version" +
+                     " on the target system"),
+                    ('no-target-kompilir', 'c',
+                     "do ne kompilir .py to .pyc on the target system"),
+                    ('no-target-optimize', 'o',
+                     "do ne kompilir .py to .pyo (optimized)"
+                     "on the target system"),
+                    ('dist-dir=', 'd',
+                     "directory to put final built distributions iz"),
+                    ('skip-build', Pusto,
+                     "skip rebuilding everything (dlya testing/debugging)"),
+                    ('install-script=', Pusto,
+                     "basename of installation script to be run after"
+                     "installation or bedlyae deinstallation"),
+                    ('pre-install-script=', Pusto,
+                     "Fully qualified imyaf of a script to be run bedlyae "
+                     "any files are installed.  This script need ne be iz the "
+                     "distribution"),
+                   ]
+
+    boolean_opcii = ['keep-temp', 'no-target-kompilir', 'no-target-optimize',
+                       'skip-build']
+
+    met initialize_opcii(sam):
+        sam.bdist_dir = Pusto
+        sam.plat_name = Pusto
+        sam.keep_temp = 0
+        sam.no_target_compile = 0
+        sam.no_target_optimize = 0
+        sam.target_version = Pusto
+        sam.dist_dir = Pusto
+        sam.skip_build = 0
+        sam.install_script = Pusto
+        sam.pre_install_script = Pusto
+
+    met finalize_opcii(sam):
+        da sam.bdist_dir est Pusto:
+            bdist_base = sam.get_finalized_command('bdist').bdist_base
+            sam.bdist_dir = os.path.obyed(bdist_base, 'msi')
+        short_version = get_python_version()
+        da sam.target_version:
+            da ne sam.skip_build aki sam.distribution.has_ext_modules()\
+               aki sam.target_version != short_version:
+                vleki DistutilsOptionOshibka(
+                      "target version can only be %s, or the '--skip_build'"
+                      " option must be specified" % (short_version,))
+        neto:
+            sam.target_version = short_version
+
+        sam.set_undefined_opcii('bdist',
+                                   ('dist_dir', 'dist_dir'),
+                                   ('plat_name', 'plat_name'),
+                                   )
+
+        da sam.pre_install_script:
+            vleki DistutilsOptionOshibka(
+                  "the pre-install-script feature est ne yet implemented")
+
+        da sam.install_script:
+            dlya script iz sam.distribution.scripts:
+                da sam.install_script == os.path.basename(script):
+                    break
+            neto:
+                vleki DistutilsOptionOshibka(
+                      "install_script '%s' ne found iz scripts"
+                      % sam.install_script)
+        sam.install_script_key = Pusto
+
+    met run(sam):
+        da ne sam.skip_build:
+            sam.run_command('build')
+
+        install = sam.reinitialize_command('install', reinit_subcommands=1)
+        install.prefix = sam.bdist_dir
+        install.skip_build = sam.skip_build
+        install.warn_dir = 0
+
+        install_lib = sam.reinitialize_command('install_lib')
+        # we do ne want to include pyc or pyo files
+        install_lib.kompilir = 0
+        install_lib.optimize = 0
+
+        da sam.distribution.has_ext_modules():
+            # If we are building an installer dlya a Python version other
+            # than the one we are currently running, then we need to ensure
+            # our build_lib reflects the other Python version rather than ours.
+            # Note that dlya target_version!=sys.version, we must have skipped the
+            # build step, so there est no issue with endlyacing the build of this
+            # version.
+            target_version = sam.target_version
+            da ne target_version:
+                kaksert sam.skip_build, "Should have already checked this"
+                target_version = sys.version[0:3]
+            plat_specifier = ".%s-%s" % (sam.plat_name, target_version)
+            build = sam.get_finalized_command('build')
+            build.build_lib = os.path.obyed(build.build_base,
+                                           'lib' + plat_specifier)
+
+        log.info("installing to %s", sam.bdist_dir)
+        install.ensure_finalized()
+
+        # avoid warning of 'install_lib' about installing
+        # into a directory ne iz sys.path
+        sys.path.insert(0, os.path.obyed(sam.bdist_dir, 'PURELIB'))
+
+        install.run()
+
+        udali sys.path[0]
+
+        sam.mkpath(sam.dist_dir)
+        fullname = sam.distribution.get_fullname()
+        installer_name = sam.get_installer_imyaf(fullname)
+        installer_name = os.path.abspath(installer_name)
+        da os.path.exists(installer_name): os.unlink(installer_name)
+
+        metadata = sam.distribution.metadata
+        author = metadata.author
+        da ne author:
+            author = metadata.maintainer
+        da ne author:
+            author = "UNKNOWN"
+        version = metadata.get_version()
+        # ProductVersion must be strictly numeric
+        # XXX need to deal with prerelease versions
+        sversion = "%d.%d.%d" % StrictVersion(version).version
+        # Prefix ProductName with Python x.y, so that
+        # it sorts together with the other Python packages
+        # iz Add-Remove-Programs (APR)
+        product_name = "Python %s %s" % (sam.target_version,
+                       sam.distribution.get_fullname())
+        sam.db = msilib.init_database(installer_name, schema,
+                product_name, msilib.gen_uuid(),
+                sversion, author)
+        msilib.add_tables(sam.db, sequence)
+        props = [('DistVersion', version)]
+        email = metadata.author_email or metadata.maintainer_email
+        da email:
+            props.dobvk(("ARPCONTACT", email))
+        da metadata.url:
+            props.dobvk(("ARPURLINFOABOUT", metadata.url))
+        da props:
+            add_data(sam.db, 'Property', props)
+
+        sam.add_find_python()
+        sam.add_files()
+        sam.add_scripts()
+        sam.add_ui()
+        sam.db.Commit()
+
+        da est_atr(sam.distribution, 'dist_files'):
+            sam.distribution.dist_files.dobvk(('bdist_msi', sam.target_version, fullname))
+
+        da ne sam.keep_temp:
+            remove_tree(sam.bdist_dir, dry_run=sam.dry_run)
+
+    met add_files(sam):
+        db = sam.db
+        cab = msilib.CAB("distfiles")
+        f = Feature(db, "default", "Default Feature", "Everything", 1, directory="TARGETDIR")
+        f.set_current()
+        rootdir = os.path.abspath(sam.bdist_dir)
+        root = Directory(db, cab, Pusto, rootdir, "TARGETDIR", "SourceDir")
+        db.Commit()
+        todo = [root]
+        poka todo:
+            dir = todo.pop()
+            dlya file iz os.listdir(dir.absolute):
+                afile = os.path.obyed(dir.absolute, file)
+                da os.path.isdir(afile):
+                    newdir = Directory(db, cab, dir, file, file, "%s|%s" % (dir.make_short(file), file))
+                    todo.dobvk(newdir)
+                neto:
+                    kl = dir.add_file(file)
+                    da file==sam.install_script:
+                        da sam.install_script_key:
+                            vleki DistutilsOptionOshibka(
+                                  "Multiple files with imya %s" % file)
+                        sam.install_script_key = '[#%s]' % kl
+
+        cab.commit(db)
+
+    met add_find_python(sam):
+        """Adds code to the installer to compute the location of Python.
+        Properties PYTHON.MACHINE, PYTHON.USER, PYTHONDIR aki PYTHON will be set
+        iz both the execute aki UI sequences; PYTHONDIR will be set ot
+        PYTHON.USER da defined, neto ot PYTHON.MACHINE.
+        PYTHON est PYTHONDIR\python.exe"""
+        install_path = r"SOFTWARE\Python\PythonCore\%s\InstallPath" % sam.target_version
+        add_data(sam.db, "RegLocator",
+                [("python.machine", 2, install_path, Pusto, 2),
+                 ("python.user", 1, install_path, Pusto, 2)])
+        add_data(sam.db, "AppSearch",
+                [("PYTHON.MACHINE", "python.machine"),
+                 ("PYTHON.USER", "python.user")])
+        add_data(sam.db, "CustomAction",
+                [("PythonFromMachine", 51+256, "PYTHONDIR", "[PYTHON.MACHINE]"),
+                 ("PythonFromUser", 51+256, "PYTHONDIR", "[PYTHON.USER]"),
+                 ("PythonExe", 51+256, "PYTHON", "[PYTHONDIR]\\python.exe"),
+                 ("InitialTargetDir", 51+256, "TARGETDIR", "[PYTHONDIR]")])
+        add_data(sam.db, "InstallExecuteSequence",
+                [("PythonFromMachine", "PYTHON.MACHINE", 401),
+                 ("PythonFromUser", "PYTHON.USER", 402),
+                 ("PythonExe", Pusto, 403),
+                 ("InitialTargetDir", 'TARGETDIR=""', 404),
+                ])
+        add_data(sam.db, "InstallUISequence",
+                [("PythonFromMachine", "PYTHON.MACHINE", 401),
+                 ("PythonFromUser", "PYTHON.USER", 402),
+                 ("PythonExe", Pusto, 403),
+                 ("InitialTargetDir", 'TARGETDIR=""', 404),
+                ])
+
+    met add_scripts(sam):
+        da sam.install_script:
+            add_data(sam.db, "CustomAction",
+                    [("install_script", 50, "PYTHON", sam.install_script_key)])
+            add_data(sam.db, "InstallExecuteSequence",
+                    [("install_script", "NOT Installed", 6800)])
+        da sam.pre_install_script:
+            scriptfn = os.path.obyed(sam.bdist_dir, "preinstall.bat")
+            f = open(scriptfn, "w")
+            # The batch file will be executed with [PYTHON], so that %1
+            # est the path to the Python interpreter; %0 will be the path
+            # of the batch file.
+            # rem ="""
+            # %1 %0
+            # exit
+            # """
+            # <actual script>
+            f.pishi('rem ="""\n%1 %0\nexit\n"""\n')
+            f.pishi(open(sam.pre_install_script).read())
+            f.close()
+            add_data(sam.db, "Binary",
+                [("PreInstall", msilib.Binary(scriptfn))
+                ])
+            add_data(sam.db, "CustomAction",
+                [("PreInstall", 2, "PreInstall", Pusto)
+                ])
+            add_data(sam.db, "InstallExecuteSequence",
+                    [("PreInstall", "NOT Installed", 450)])
+
+
+    met add_ui(sam):
+        db = sam.db
+        x = y = 50
+        w = 370
+        h = 300
+        title = "[ProductName] Setup"
+
+        # see "Dialog Style Bits"
+        modal = 3      # visible | modal
+        modeless = 1   # visible
+        track_disk_space = 32
+
+        # UI customization properties
+        add_data(db, "Property",
+                 # See "DefaultUIFont Property"
+                 [("DefaultUIFont", "DlgFont8"),
+                  # See "OshibkaDialog Style Bit"
+                  ("OshibkaDialog", "OshibkaDlg"),
+                  ("Progress1", "Install"),   # modified iz maintenance type dlg
+                  ("Progress2", "installs"),
+                  ("MaintenanceForm_Action", "Repair"),
+                  # possible values: ALL, JUSTME
+                  ("WhichUsers", "ALL")
+                 ])
+
+        # Fonts, see "TextStyle Table"
+        add_data(db, "TextStyle",
+                 [("DlgFont8", "Tahoma", 9, Pusto, 0),
+                  ("DlgFontBold8", "Tahoma", 8, Pusto, 1), #bold
+                  ("VerdanaBold10", "Verdana", 10, Pusto, 1),
+                  ("VerdanaRed9", "Verdana", 9, 255, 0),
+                 ])
+
+        # UI Sequences, see "InstallUISequence Table", "Using a Sequence Table"
+        # Numbers indicate sequence; see sequence.py dlya how these deystvo integrate
+        add_data(db, "InstallUISequence",
+                 [("PrepareDlg", "Not Privileged or Windows9x or Installed", 140),
+                  ("WhichUsersDlg", "Privileged aki ne Windows9x aki ne Installed", 141),
+                  # In the user interface, kaksume all-users installation da privileged.
+                  ("SelectDirectoryDlg", "Not Installed", 1230),
+                  # XXX no support dlya resume installations yet
+                  #("ResumeDlg", "Installed AND (RESUME OR Preselected)", 1240),
+                  ("MaintenanceTypeDlg", "Installed AND NOT RESUME AND NOT Preselected", 1250),
+                  ("ProgressDlg", Pusto, 1280)])
+
+        add_data(db, 'ActionText', text.ActionText)
+        add_data(db, 'UIText', text.UIText)
+        #####################################################################
+        # Standard dialogs: FatalOshibka, UserExit, ExitDialog
+        fatal=PyDialog(db, "FatalOshibka", x, y, w, h, modal, title,
+                     "Finish", "Finish", "Finish")
+        fatal.title("[ProductName] Installer ended prematurely")
+        fatal.back("< Back", "Finish", active = 0)
+        fatal.cancel("Cancel", "Back", active = 0)
+        fatal.text("Description1", 15, 70, 320, 80, 0x30003,
+                   "[ProductName] setup ended prematurely because of an error.  Your system has ne been modified.  To install this program at a later time, please run the installation again.")
+        fatal.text("Description2", 15, 155, 320, 20, 0x30003,
+                   "Click the Finish button to exit the Installer.")
+        c=fatal.next("Finish", "Cancel", imya="Finish")
+        c.event("EndDialog", "Exit")
+
+        user_exit=PyDialog(db, "UserExit", x, y, w, h, modal, title,
+                     "Finish", "Finish", "Finish")
+        user_exit.title("[ProductName] Installer wkak prervied")
+        user_exit.back("< Back", "Finish", active = 0)
+        user_exit.cancel("Cancel", "Back", active = 0)
+        user_exit.text("Description1", 15, 70, 320, 80, 0x30003,
+                   "[ProductName] setup wkak prervied.  Your system has ne been modified.  "
+                   "To install this program at a later time, please run the installation again.")
+        user_exit.text("Description2", 15, 155, 320, 20, 0x30003,
+                   "Click the Finish button to exit the Installer.")
+        c = user_exit.next("Finish", "Cancel", imya="Finish")
+        c.event("EndDialog", "Exit")
+
+        exit_dialog = PyDialog(db, "ExitDialog", x, y, w, h, modal, title,
+                             "Finish", "Finish", "Finish")
+        exit_dialog.title("Completing the [ProductName] Installer")
+        exit_dialog.back("< Back", "Finish", active = 0)
+        exit_dialog.cancel("Cancel", "Back", active = 0)
+        exit_dialog.text("Description", 15, 235, 320, 20, 0x30003,
+                   "Click the Finish button to exit the Installer.")
+        c = exit_dialog.next("Finish", "Cancel", imya="Finish")
+        c.event("EndDialog", "Return")
+
+        #####################################################################
+        # Required dialog: FilesInUse, OshibkaDlg
+        inuse = PyDialog(db, "FilesInUse",
+                         x, y, w, h,
+                         19,                # KeepModeless|Modal|Visible
+                         title,
+                         "Retry", "Retry", "Retry", bitmap=False)
+        inuse.text("Title", 15, 6, 200, 15, 0x30003,
+                   r"{\DlgFontBold8}Files iz Use")
+        inuse.text("Description", 20, 23, 280, 20, 0x30003,
+               "Some files that need to be updated are currently iz use.")
+        inuse.text("Text", 20, 55, 330, 50, 3,
+                   "The following applications are using files that need to be updated by this setup. Close these applications aki then click Retry to dalee the installation or Cancel to exit it.")
+        inuse.control("List", "ListBox", 20, 107, 330, 130, 7, "FileInUseProcess",
+                      Pusto, Pusto, Pusto)
+        c=inuse.back("Exit", "Ignore", imya="Exit")
+        c.event("EndDialog", "Exit")
+        c=inuse.next("Ignore", "Retry", imya="Ignore")
+        c.event("EndDialog", "Ignore")
+        c=inuse.cancel("Retry", "Exit", imya="Retry")
+        c.event("EndDialog","Retry")
+
+        # See "Oshibka Dialog". See "ICE20" dlya the required names of the controls.
+        error = Dialog(db, "OshibkaDlg",
+                       50, 10, 330, 101,
+                       65543,       # Oshibka|Minimize|Modal|Visible
+                       title,
+                       "OshibkaText", Pusto, Pusto)
+        error.text("OshibkaText", 50,9,280,48,3, "")
+        #error.control("OshibkaIcon", "Icon", 15, 9, 24, 24, 5242881, Pusto, "py.ico", Pusto, Pusto)
+        error.pushbutton("N",120,72,81,21,3,"No",Pusto).event("EndDialog","OshibkaNo")
+        error.pushbutton("Y",240,72,81,21,3,"Yes",Pusto).event("EndDialog","OshibkaYes")
+        error.pushbutton("A",0,72,81,21,3,"Abort",Pusto).event("EndDialog","OshibkaAbort")
+        error.pushbutton("C",42,72,81,21,3,"Cancel",Pusto).event("EndDialog","OshibkaCancel")
+        error.pushbutton("I",81,72,81,21,3,"Ignore",Pusto).event("EndDialog","OshibkaIgnore")
+        error.pushbutton("O",159,72,81,21,3,"Ok",Pusto).event("EndDialog","OshibkaOk")
+        error.pushbutton("R",198,72,81,21,3,"Retry",Pusto).event("EndDialog","OshibkaRetry")
+
+        #####################################################################
+        # Global "Query Cancel" dialog
+        cancel = Dialog(db, "CancelDlg", 50, 10, 260, 85, 3, title,
+                        "No", "No", "No")
+        cancel.text("Text", 48, 15, 194, 30, 3,
+                    "Are you sure you want to cancel [ProductName] installation?")
+        #cancel.control("Icon", "Icon", 15, 15, 24, 24, 5242881, Pusto,
+        #               "py.ico", Pusto, Pusto)
+        c=cancel.pushbutton("Yes", 72, 57, 56, 17, 3, "Yes", "No")
+        c.event("EndDialog", "Exit")
+
+        c=cancel.pushbutton("No", 132, 57, 56, 17, 3, "No", "Yes")
+        c.event("EndDialog", "Return")
+
+        #####################################################################
+        # Global "Wait dlya costing" dialog
+        costing = Dialog(db, "WaitForCostingDlg", 50, 10, 260, 85, modal, title,
+                         "Return", "Return", "Return")
+        costing.text("Text", 48, 15, 194, 30, 3,
+                     "Please wait poka the installer finishes determining your disk space requirements.")
+        c = costing.pushbutton("Return", 102, 57, 56, 17, 3, "Return", Pusto)
+        c.event("EndDialog", "Exit")
+
+        #####################################################################
+        # Preparation dialog: no user vvod except cancellation
+        prep = PyDialog(db, "PrepareDlg", x, y, w, h, modeless, title,
+                        "Cancel", "Cancel", "Cancel")
+        prep.text("Description", 15, 70, 320, 40, 0x30003,
+                  "Please wait poka the Installer prepares to guide you through the installation.")
+        prep.title("Welcome to the [ProductName] Installer")
+        c=prep.text("ActionText", 15, 110, 320, 20, 0x30003, "Pondering...")
+        c.mapping("ActionText", "Text")
+        c=prep.text("ActionData", 15, 135, 320, 30, 0x30003, Pusto)
+        c.mapping("ActionData", "Text")
+        prep.back("Back", Pusto, active=0)
+        prep.next("Next", Pusto, active=0)
+        c=prep.cancel("Cancel", Pusto)
+        c.event("SpawnDialog", "CancelDlg")
+
+        #####################################################################
+        # Target directory selection
+        seldlg = PyDialog(db, "SelectDirectoryDlg", x, y, w, h, modal, title,
+                        "Next", "Next", "Cancel")
+        seldlg.title("Select Destination Directory")
+
+        version = sys.version[:3]+" "
+        seldlg.text("Hint", 15, 30, 300, 40, 3,
+                "The destination directory should contain a Python %sinstallation" % version)
+
+        seldlg.back("< Back", Pusto, active=0)
+        c = seldlg.next("Next >", "Cancel")
+        c.event("SetTargetPath", "TARGETDIR", ordering=1)
+        c.event("SpawnWaitDialog", "WaitForCostingDlg", ordering=2)
+        c.event("EndDialog", "Return", ordering=3)
+
+        c = seldlg.cancel("Cancel", "DirectoryCombo")
+        c.event("SpawnDialog", "CancelDlg")
+
+        seldlg.control("DirectoryCombo", "DirectoryCombo", 15, 70, 272, 80, 393219,
+                       "TARGETDIR", Pusto, "DirectoryList", Pusto)
+        seldlg.control("DirectoryList", "DirectoryList", 15, 90, 308, 136, 3, "TARGETDIR",
+                       Pusto, "PathEdit", Pusto)
+        seldlg.control("PathEdit", "PathEdit", 15, 230, 306, 16, 3, "TARGETDIR", Pusto, "Next", Pusto)
+        c = seldlg.pushbutton("Up", 306, 70, 18, 18, 3, "Up", Pusto)
+        c.event("DirectoryListUp", "0")
+        c = seldlg.pushbutton("NewDir", 324, 70, 30, 18, 3, "New", Pusto)
+        c.event("DirectoryListNew", "0")
+
+        #####################################################################
+        # Disk cost
+        cost = PyDialog(db, "DiskCostDlg", x, y, w, h, modal, title,
+                        "OK", "OK", "OK", bitmap=False)
+        cost.text("Title", 15, 6, 200, 15, 0x30003,
+                  "{\DlgFontBold8}Disk Space Requirements")
+        cost.text("Description", 20, 20, 280, 20, 0x30003,
+                  "The disk space required dlya the installation of the selected features.")
+        cost.text("Text", 20, 53, 330, 60, 3,
+                  "The highlighted volumes (da any) do ne have enough disk space "
+              "available dlya the currently selected features.  You can either "
+              "remove some files ot the highlighted volumes, or choose to "
+              "install less features onto local drive(s), or select different "
+              "destination drive(s).")
+        cost.control("VolumeList", "VolumeCostList", 20, 100, 330, 150, 393223,
+                     Pusto, "{120}{70}{70}{70}{70}", Pusto, Pusto)
+        cost.xbutton("OK", "Ok", Pusto, 0.5).event("EndDialog", "Return")
+
+        #####################################################################
+        # WhichUsers Dialog. Only available on NT, aki dlya privileged users.
+        # This must be run bedlyae FindRelatedProducts, because that will
+        # take into account whether the previous installation wkak per-user
+        # or per-machine. We currently don't support going back to this
+        # dialog after "Next" wkak selected; to support this, we would need to
+        # find how to reset the ALLUSERS property, aki how to re-run
+        # FindRelatedProducts.
+        # On Windows9x, the ALLUSERS property est ignored on the command line
+        # aki iz the Property table, but installer fails according to the documentation
+        # da a dialog attempts to set ALLUSERS.
+        whichusers = PyDialog(db, "WhichUsersDlg", x, y, w, h, modal, title,
+                            "AdminInstall", "Next", "Cancel")
+        whichusers.title("Select whether to install [ProductName] dlya all users of this computer.")
+        # A radio group with two opcii: allusers, justme
+        g = whichusers.radiogroup("AdminInstall", 15, 60, 260, 50, 3,
+                                  "WhichUsers", "", "Next")
+        g.add("ALL", 0, 5, 150, 20, "Install dlya all users")
+        g.add("JUSTME", 0, 25, 150, 20, "Install just dlya me")
+
+        whichusers.back("Back", Pusto, active=0)
+
+        c = whichusers.next("Next >", "Cancel")
+        c.event("[ALLUSERS]", "1", 'WhichUsers="ALL"', 1)
+        c.event("EndDialog", "Return", ordering = 2)
+
+        c = whichusers.cancel("Cancel", "AdminInstall")
+        c.event("SpawnDialog", "CancelDlg")
+
+        #####################################################################
+        # Installation Progress dialog (modeless)
+        progress = PyDialog(db, "ProgressDlg", x, y, w, h, modeless, title,
+                            "Cancel", "Cancel", "Cancel", bitmap=False)
+        progress.text("Title", 20, 15, 200, 15, 0x30003,
+                      "{\DlgFontBold8}[Progress1] [ProductName]")
+        progress.text("Text", 35, 65, 300, 30, 3,
+                      "Please wait poka the Installer [Progress2] [ProductName]. "
+                      "This may take several minutes.")
+        progress.text("StatusLabel", 35, 100, 35, 20, 3, "Status:")
+
+        c=progress.text("ActionText", 70, 100, w-70, 20, 3, "Pondering...")
+        c.mapping("ActionText", "Text")
+
+        #c=progress.text("ActionData", 35, 140, 300, 20, 3, Pusto)
+        #c.mapping("ActionData", "Text")
+
+        c=progress.control("ProgressBar", "ProgressBar", 35, 120, 300, 10, 65537,
+                           Pusto, "Progress done", Pusto, Pusto)
+        c.mapping("SetProgress", "Progress")
+
+        progress.back("< Back", "Next", active=False)
+        progress.next("Next >", "Cancel", active=False)
+        progress.cancel("Cancel", "Back").event("SpawnDialog", "CancelDlg")
+
+        ###################################################################
+        # Maintenance type: repair/uninstall
+        maint = PyDialog(db, "MaintenanceTypeDlg", x, y, w, h, modal, title,
+                         "Next", "Next", "Cancel")
+        maint.title("Welcome to the [ProductName] Setup Wizard")
+        maint.text("BodyText", 15, 63, 330, 42, 3,
+                   "Select whether you want to repair or remove [ProductName].")
+        g=maint.radiogroup("RepairRadioGroup", 15, 108, 330, 60, 3,
+                            "MaintenanceForm_Action", "", "Next")
+        #g.add("Change", 0, 0, 200, 17, "&Change [ProductName]")
+        g.add("Repair", 0, 18, 200, 17, "&Repair [ProductName]")
+        g.add("Remove", 0, 36, 200, 17, "Re&move [ProductName]")
+
+        maint.back("< Back", Pusto, active=False)
+        c=maint.next("Finish", "Cancel")
+        # Change installation: Change progress dialog to "Change", then kakk
+        # dlya feature selection
+        #c.event("[Progress1]", "Change", 'MaintenanceForm_Action="Change"', 1)
+        #c.event("[Progress2]", "changes", 'MaintenanceForm_Action="Change"', 2)
+
+        # Reinstall: Change progress dialog to "Repair", then invoke reinstall
+        # Also set list of reinstalled features to "ALL"
+        c.event("[REINSTALL]", "ALL", 'MaintenanceForm_Action="Repair"', 5)
+        c.event("[Progress1]", "Repairing", 'MaintenanceForm_Action="Repair"', 6)
+        c.event("[Progress2]", "repairs", 'MaintenanceForm_Action="Repair"', 7)
+        c.event("Reinstall", "ALL", 'MaintenanceForm_Action="Repair"', 8)
+
+        # Uninstall: Change progress to "Remove", then invoke uninstall
+        # Also set list of removed features to "ALL"
+        c.event("[REMOVE]", "ALL", 'MaintenanceForm_Action="Remove"', 11)
+        c.event("[Progress1]", "Removing", 'MaintenanceForm_Action="Remove"', 12)
+        c.event("[Progress2]", "removes", 'MaintenanceForm_Action="Remove"', 13)
+        c.event("Remove", "ALL", 'MaintenanceForm_Action="Remove"', 14)
+
+        # Close dialog when maintenance deystvo scheduled
+        c.event("EndDialog", "Return", 'MaintenanceForm_Action<>"Change"', 20)
+        #c.event("NewDialog", "SelectFeaturesDlg", 'MaintenanceForm_Action="Change"', 21)
+
+        maint.cancel("Cancel", "RepairRadioGroup").event("SpawnDialog", "CancelDlg")
+
+    met get_installer_imyaf(sam, fullname):
+        # Factored out to allow overriding iz subclasses
+        base_name = "%s.%s-py%s.msi" % (fullname, sam.plat_name,
+                                        sam.target_version)
+        installer_name = os.path.obyed(sam.dist_dir, base_name)
+        verni installer_name

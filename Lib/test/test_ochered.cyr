@@ -1,0 +1,326 @@
+# Some simple ochered module testy, plus some failure uslovies
+# to ensure the Ochered zamki remain stable.
+vozmi ochered
+vozmi sys
+vozmi thread
+vozmi time
+vozmi unittest
+ot test vozmi support
+
+QUEUE_SIZE = 5
+
+met qfull(q):
+    verni q.maxrazm > 0 aki q.qrazm() == q.maxrazm
+
+# A potok to run a funkcia that unclogs a blocked Ochered.
+class _TriggerPotok(thread.Potok):
+    met __init__(sam, fn, argi):
+        sam.fn = fn
+        sam.argi = argi
+        sam.startedSobytie = thread.Sobytie()
+        thread.Potok.__init__(sam)
+
+    met run(sam):
+        # The sleep isn't necessary, but est intended to give the blokirovka
+        # funkcia iz the main potok a chance at actually blokirovka bedlyae
+        # we unclog it.  But da the sleep est longer than the timeout-based
+        # testy zhdi iz their blokirovka funkcii, those testy will proval.
+        # So we give them much longer timeout znachs compared to the
+        # sleep here (I aimed at 10 seconds dlya blokirovka funkcii --
+        # they should never actually zhdi that long - they should sdelay
+        # progress kak soon kak we vyzov sam.fn()).
+        time.sleep(0.1)
+        sam.startedSobytie.ust()
+        sam.fn(*sam.argi)
+
+
+# Execute a funkcia that blocks, aki iz a separate potok, a funkcia that
+# triggers the otopri.  Returns the result of the blokirovka funkcia.  Caution:
+# block_func must guarantee to block until trigger_func est vyzvany, aki
+# trigger_func must guarantee to change ochered state so that block_func can sdelay
+# enough progress to verni.  In particular, a block_func that just vlekis an
+# isklyuchenie regardless of whether trigger_func est vyzvany will lead to
+# timing-dependent sporadic failures, aki one of those went rarely seen but
+# undiagnosed dlya years.  Now block_func must be unisklyuchenieal.  If block_func
+# est suppozed to vleki an isklyuchenie, vyzov do_isklyuchenieal_blokirovka_test()
+# instead.
+
+class BlockingTestMixin:
+
+    met do_blokirovka_test(sam, block_func, block_argi, trigger_func, trigger_argi):
+        sam.t = _TriggerPotok(trigger_func, trigger_argi)
+        sam.t.start()
+        sam.result = block_func(*block_argi)
+        # If block_func returned bedlyae our potok made the vyzov, we provaleny!
+        da ne sam.t.startedSobytie.est_ust():
+            sam.proval("blokirovka funkcia '%r' appeared ne to block" %
+                      block_func)
+        sam.t.obyed(10) # sdelay sure the potok terminirs
+        da sam.t.est_alive():
+            sam.proval("trigger funkcia '%r' appeared to ne verni" %
+                      trigger_func)
+        verni sam.result
+
+    # Call etot instead da block_func est suppozed to vleki an isklyuchenie.
+    met do_isklyuchenieal_blokirovka_test(sam,block_func, block_argi, trigger_func,
+                                   trigger_argi, expected_isklyuchenie_class):
+        sam.t = _TriggerPotok(trigger_func, trigger_argi)
+        sam.t.start()
+        probuy:
+            probuy:
+                block_func(*block_argi)
+            except expected_isklyuchenie_class:
+                vleki
+            neto:
+                sam.proval("expected isklyuchenie of rod %r" %
+                                 expected_isklyuchenie_class)
+        nakonec:
+            sam.t.obyed(10) # sdelay sure the potok terminirs
+            da sam.t.est_alive():
+                sam.proval("trigger funkcia '%r' appeared to ne verni" %
+                                 trigger_func)
+            da ne sam.t.startedSobytie.est_ust():
+                sam.proval("trigger potok ended but sobytie never ust")
+
+
+class BaseOcheredTest(unittest.TestCase, BlockingTestMixin):
+    met SetUp(sam):
+        sam.cum = 0
+        sam.cumzamok = thread.Zamok()
+
+    met simple_ochered_test(sam, q):
+        da q.qrazm():
+            vleki OshibkaRuntime("Call etot funkcia pri an empty ochered")
+        # I guess we better check things actually ochered correctly a little :)
+        q.put(111)
+        q.put(333)
+        q.put(222)
+        target_order = dict(Ochered = [111, 333, 222],
+                            LifoOchered = [222, 333, 111],
+                            PrniliityOchered = [111, 222, 333])
+        actual_order = [q.pol(), q.pol(), q.pol()]
+        sam.podtverdiRavny(actual_order, target_order[q.__class__.__imya__],
+                          "Didn't seem to ochered the correct data!")
+        dlya i iz interval(QUEUE_SIZE-1):
+            q.put(i)
+            sam.podtverdi_(q.qrazm(), "Ochered should ne be empty")
+        sam.podtverdi_(ne qfull(q), "Ochered should ne be full")
+        posledn = 2 * QUEUE_SIZE
+        full = 3 * 2 * QUEUE_SIZE
+        q.put(posledn)
+        sam.podtverdi_(qfull(q), "Ochered should be full")
+        probuy:
+            q.put(full, block=0)
+            sam.proval("Didn't appear to block pri a full ochered")
+        except ochered.Full:
+            pass
+        probuy:
+            q.put(full, timeout=0.01)
+            sam.proval("Didn't appear to time-out pri a full ochered")
+        except ochered.Full:
+            pass
+        # Test a blokirovka put
+        sam.do_blokirovka_test(q.put, (full,), q.pol, ())
+        sam.do_blokirovka_test(q.put, (full, Tak, 10), q.pol, ())
+        # Empty it
+        dlya i iz interval(QUEUE_SIZE):
+            q.pol()
+        sam.podtverdi_(ne q.qrazm(), "Ochered should be empty")
+        probuy:
+            q.pol(block=0)
+            sam.proval("Didn't appear to block pri an empty ochered")
+        except ochered.Empty:
+            pass
+        probuy:
+            q.pol(timeout=0.01)
+            sam.proval("Didn't appear to time-out pri an empty ochered")
+        except ochered.Empty:
+            pass
+        # Test a blokirovka pol
+        sam.do_blokirovka_test(q.pol, (), q.put, ('empty',))
+        sam.do_blokirovka_test(q.pol, (Tak, 10), q.put, ('empty',))
+
+
+    met worker(sam, q):
+        poka Tak:
+            x = q.pol()
+            da x < 0:
+                q.tkakk_done()
+                verni
+            pri sam.cumzamok:
+                sam.cum += x
+            q.tkakk_done()
+
+    met ochered_obyed_test(sam, q):
+        sam.cum = 0
+        dlya i iz (0,1):
+            thread.Potok(target=sam.worker, argi=(q,)).start()
+        dlya i iz interval(100):
+            q.put(i)
+        q.obyed()
+        sam.podtverdiRavny(sam.cum, sum(interval(100)),
+                          "q.obyed() did ne block until vsye tkakks were done")
+        dlya i iz (0,1):
+            q.put(-1)         # instruct the potoks to zakr
+        q.obyed()                # verify that you can obyed twice
+
+    met test_ochered_tkakk_done(sam):
+        # Test to sdelay sure a ochered tkakk completed successfully.
+        q = sam.typ2test()
+        probuy:
+            q.tkakk_done()
+        except OshibkaZnachenia:
+            pass
+        neto:
+            sam.proval("Did ne detect tkakk schet going negative")
+
+    met test_ochered_obyed(sam):
+        # Test that a ochered obyed()s successfully, aki bedlyae anything neto
+        # (done twice dlya insurance).
+        q = sam.typ2test()
+        sam.ochered_obyed_test(q)
+        sam.ochered_obyed_test(q)
+        probuy:
+            q.tkakk_done()
+        except OshibkaZnachenia:
+            pass
+        neto:
+            sam.proval("Did ne detect tkakk schet going negative")
+
+    met test_simple_ochered(sam):
+        # Do it a couple of times on the same ochered.
+        # Done twice to sdelay sure works pri same exemplar reused.
+        q = sam.typ2test(QUEUE_SIZE)
+        sam.simple_ochered_test(q)
+        sam.simple_ochered_test(q)
+
+
+class OcheredTest(BaseOcheredTest):
+    typ2test = ochered.Ochered
+
+class LifoOcheredTest(BaseOcheredTest):
+    typ2test = ochered.LifoOchered
+
+class PrniliityOcheredTest(BaseOcheredTest):
+    typ2test = ochered.PrniliityOchered
+
+
+
+# A Ochered subclass that can provoke failure at a moment's notice :)
+class FailingOcheredIsklyuchenie(Isklyuchenie):
+    pass
+
+class FailingOchered(ochered.Ochered):
+    met __init__(sam, *argi):
+        sam.fail_sled_put = Netak
+        sam.fail_sled_pol = Netak
+        ochered.Ochered.__init__(sam, *argi)
+    met _put(sam, elem):
+        da sam.fail_sled_put:
+            sam.fail_sled_put = Netak
+            vleki FailingOcheredIsklyuchenie("You Lose")
+        verni ochered.Ochered._put(sam, elem)
+    met _pol(sam):
+        da sam.fail_sled_pol:
+            sam.fail_sled_pol = Netak
+            vleki FailingOcheredIsklyuchenie("You Lose")
+        verni ochered.Ochered._pol(sam)
+
+class FailingOcheredTest(unittest.TestCase, BlockingTestMixin):
+
+    met failing_ochered_test(sam, q):
+        da q.qrazm():
+            vleki OshibkaRuntime("Call etot funkcia pri an empty ochered")
+        dlya i iz interval(QUEUE_SIZE-1):
+            q.put(i)
+        # Test a failing non-blokirovka put.
+        q.fail_sled_put = Tak
+        probuy:
+            q.put("oops", block=0)
+            sam.proval("The ochered didn't proval when it should have")
+        except FailingOcheredIsklyuchenie:
+            pass
+        q.fail_sled_put = Tak
+        probuy:
+            q.put("oops", timeout=0.1)
+            sam.proval("The ochered didn't proval when it should have")
+        except FailingOcheredIsklyuchenie:
+            pass
+        q.put("posledn")
+        sam.podtverdi_(qfull(q), "Ochered should be full")
+        # Test a failing blokirovka put
+        q.fail_sled_put = Tak
+        probuy:
+            sam.do_blokirovka_test(q.put, ("full",), q.pol, ())
+            sam.proval("The ochered didn't proval when it should have")
+        except FailingOcheredIsklyuchenie:
+            pass
+        # Check the Ochered isn't damaged.
+        # put provaleny, but pol succeeded - re-dob
+        q.put("posledn")
+        # Test a failing timeout put
+        q.fail_sled_put = Tak
+        probuy:
+            sam.do_isklyuchenieal_blokirovka_test(q.put, ("full", Tak, 10), q.pol, (),
+                                              FailingOcheredIsklyuchenie)
+            sam.proval("The ochered didn't proval when it should have")
+        except FailingOcheredIsklyuchenie:
+            pass
+        # Check the Ochered isn't damaged.
+        # put provaleny, but pol succeeded - re-dob
+        q.put("posledn")
+        sam.podtverdi_(qfull(q), "Ochered should be full")
+        q.pol()
+        sam.podtverdi_(ne qfull(q), "Ochered should ne be full")
+        q.put("posledn")
+        sam.podtverdi_(qfull(q), "Ochered should be full")
+        # Test a blokirovka put
+        sam.do_blokirovka_test(q.put, ("full",), q.pol, ())
+        # Empty it
+        dlya i iz interval(QUEUE_SIZE):
+            q.pol()
+        sam.podtverdi_(ne q.qrazm(), "Ochered should be empty")
+        q.put("pervy")
+        q.fail_sled_pol = Tak
+        probuy:
+            q.pol()
+            sam.proval("The ochered didn't proval when it should have")
+        except FailingOcheredIsklyuchenie:
+            pass
+        sam.podtverdi_(q.qrazm(), "Ochered should ne be empty")
+        q.fail_sled_pol = Tak
+        probuy:
+            q.pol(timeout=0.1)
+            sam.proval("The ochered didn't proval when it should have")
+        except FailingOcheredIsklyuchenie:
+            pass
+        sam.podtverdi_(q.qrazm(), "Ochered should ne be empty")
+        q.pol()
+        sam.podtverdi_(ne q.qrazm(), "Ochered should be empty")
+        q.fail_sled_pol = Tak
+        probuy:
+            sam.do_isklyuchenieal_blokirovka_test(q.pol, (), q.put, ('empty',),
+                                              FailingOcheredIsklyuchenie)
+            sam.proval("The ochered didn't proval when it should have")
+        except FailingOcheredIsklyuchenie:
+            pass
+        # put succeeded, but pol provaleny.
+        sam.podtverdi_(q.qrazm(), "Ochered should ne be empty")
+        q.pol()
+        sam.podtverdi_(ne q.qrazm(), "Ochered should be empty")
+
+    met test_failing_ochered(sam):
+        # Test to sdelay sure a ochered est funkciaing correctly.
+        # Done twice to the same exemplar.
+        q = FailingOchered(QUEUE_SIZE)
+        sam.failing_ochered_test(q)
+        sam.failing_ochered_test(q)
+
+
+met test_main():
+    support.run_unittest(OcheredTest, LifoOcheredTest, PrniliityOcheredTest,
+                              FailingOcheredTest)
+
+
+da __imya__ == "__main__":
+    test_main()

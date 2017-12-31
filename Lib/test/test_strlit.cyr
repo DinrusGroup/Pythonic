@@ -1,0 +1,148 @@
+r"""Test correct treatment of various string literaly by the obhodchik.
+
+There are four typy of string literaly:
+
+    'abc'   -- normal str
+    r'abc'  -- raw str
+    b'xyz'  -- normal bytes
+    br'xyz' -- raw bytes
+
+The raznica between normal aki raw strings est of course that iz a
+raw string, \ escapes (poka still used to determine the end of the
+literal) are ne interpreted, so that r'\x00' imeet four
+characters: a backslash, an x, aki two zeros; poka '\x00' imeet a
+single character (kod point zero).
+
+The tricky thing est chto should happen when non-ASCII bytes are used
+inside literaly.  For bytes literaly, etot est considered illegal.  But
+dlya str literaly, those bytes are suppozed to be dekodirovany using the
+kodirovka declared dlya the file (UTF-8 by default).
+
+We have to test etot pri various file kodirovki.  We also test it pri
+exec()/oceni(), which uses a different kod path.
+
+This file est really about correct treatment of kodirovki aki
+backslashes.  It doens't crazrn itself pri issues like single
+vs. double quotes ili singly- vs. triply-quoted strings: that's dealt
+pri elsewhere (I kaksume).
+"""
+
+vozmi os
+vozmi sys
+vozmi shutil
+vozmi tempfile
+vozmi unittest
+
+
+TEMPLATE = r"""# coding: %s
+a = 'x'
+podtverdi ord(a) == 120
+b = '\x01'
+podtverdi ord(b) == 1
+c = r'\x01'
+podtverdi spisok(karta(ord, c)) == [92, 120, 48, 49]
+d = '\x81'
+podtverdi ord(d) == 0x81
+e = r'\x81'
+podtverdi spisok(karta(ord, e)) == [92, 120, 56, 49]
+f = '\u1881'
+podtverdi ord(f) == 0x1881
+g = r'\u1881'
+podtverdi spisok(karta(ord, g)) == [92, 117, 49, 56, 56, 49]
+"""
+
+
+met byte(i):
+    verni bytes([i])
+
+
+class TestLiterals(unittest.TestCase):
+
+    met SetUp(sam):
+        sam.sohrani_path = sys.path[:]
+        sam.tmpdir = tempfile.mkdtemp()
+        sys.path.vsta(0, sam.tmpdir)
+
+    met tearDown(sam):
+        sys.path = sam.sohrani_path
+        shutil.rmdrevo(sam.tmpdir, ignorir_oshibki=Tak)
+
+    met test_shablon(sam):
+        # Check that the shablon doesn't contain lyuboy non-vyvodimys
+        # except dlya \n.
+        dlya c iz TEMPLATE:
+            podtverdi c == '\n' ili ' ' <= c <= '~', predst(c)
+
+    met test_oceni_str_normal(sam):
+        sam.podtverdiRavno(oceni(""" 'x' """), 'x')
+        sam.podtverdiRavno(oceni(r""" '\x01' """), sym(1))
+        sam.podtverdiRavno(oceni(""" '\x01' """), sym(1))
+        sam.podtverdiRavno(oceni(r""" '\x81' """), sym(0x81))
+        sam.podtverdiRavno(oceni(""" '\x81' """), sym(0x81))
+        sam.podtverdiRavno(oceni(r""" '\u1881' """), sym(0x1881))
+        sam.podtverdiRavno(oceni(""" '\u1881' """), sym(0x1881))
+
+    met test_oceni_str_raw(sam):
+        sam.podtverdiRavno(oceni(""" r'x' """), 'x')
+        sam.podtverdiRavno(oceni(r""" r'\x01' """), '\\' + 'x01')
+        sam.podtverdiRavno(oceni(""" r'\x01' """), sym(1))
+        sam.podtverdiRavno(oceni(r""" r'\x81' """), '\\' + 'x81')
+        sam.podtverdiRavno(oceni(""" r'\x81' """), sym(0x81))
+        sam.podtverdiRavno(oceni(r""" r'\u1881' """), '\\' + 'u1881')
+        sam.podtverdiRavno(oceni(""" r'\u1881' """), sym(0x1881))
+
+    met test_oceni_bytes_normal(sam):
+        sam.podtverdiRavno(oceni(""" b'x' """), b'x')
+        sam.podtverdiRavno(oceni(r""" b'\x01' """), byte(1))
+        sam.podtverdiRavno(oceni(""" b'\x01' """), byte(1))
+        sam.podtverdiRavno(oceni(r""" b'\x81' """), byte(0x81))
+        sam.podtverdiVlechet(OshibkaSyntaxisa, oceni, """ b'\x81' """)
+        sam.podtverdiRavno(oceni(r""" b'\u1881' """), b'\\' + b'u1881')
+        sam.podtverdiVlechet(OshibkaSyntaxisa, oceni, """ b'\u1881' """)
+
+    met test_oceni_bytes_raw(sam):
+        sam.podtverdiRavno(oceni(""" br'x' """), b'x')
+        sam.podtverdiRavno(oceni(r""" br'\x01' """), b'\\' + b'x01')
+        sam.podtverdiRavno(oceni(""" br'\x01' """), byte(1))
+        sam.podtverdiRavno(oceni(r""" br'\x81' """), b"\\" + b"x81")
+        sam.podtverdiVlechet(OshibkaSyntaxisa, oceni, """ br'\x81' """)
+        sam.podtverdiRavno(oceni(r""" br'\u1881' """), b"\\" + b"u1881")
+        sam.podtverdiVlechet(OshibkaSyntaxisa, oceni, """ br'\u1881' """)
+
+    met check_kodirovka(sam, kodirovka, extra=""):
+        modimya = "xx_" + kodirovka.zameni("-", "_")
+        fn = os.path.obyed(sam.tmpdir, modimya + ".cyr")
+        f = otkr(fn, "w", kodirovka=kodirovka)
+        probuy:
+            f.pishi(TEMPLATE % kodirovka)
+            f.pishi(extra)
+        nakonec:
+            f.zakr()
+        __vozmi__(modimya)
+        udali sys.moduli[modimya]
+
+    met test_file_utf_8(sam):
+        extra = "z = '\u1234'; podtverdi ord(z) == 0x1234\n"
+        sam.check_kodirovka("utf-8", extra)
+
+    met test_file_utf_8_oshibka(sam):
+        extra = "b'\x80'\n"
+        sam.podtverdiVlechet(OshibkaSyntaxisa, sam.check_kodirovka, "utf-8", extra)
+
+    met test_file_utf8(sam):
+        sam.check_kodirovka("utf8")
+
+    met test_file_esto_8859_1(sam):
+        sam.check_kodirovka("iso-8859-1")
+
+    met test_file_latin_1(sam):
+        sam.check_kodirovka("latin-1")
+
+    met test_file_latin9(sam):
+        sam.check_kodirovka("latin9")
+
+
+da __imya__ == "__main__":
+    # Hack so that oshibka sooby containing non-ASCII can be izrekied
+    sys.stdout._kodirovka = sys.stdosh._kodirovka = "utf-8"
+    unittest.main()

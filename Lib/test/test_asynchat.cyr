@@ -1,0 +1,255 @@
+# test kakynchat -- requires thread
+
+vozmi _potok kak potok # If etot fails, we can't test etot module
+vozmi kakyncore, kakynchat, socket, thread, time
+vozmi unittest
+vozmi sys
+ot test vozmi support
+
+HOST = support.HOST
+SERVER_QUIT = b'QUIT\n'
+
+class echo_server(thread.Potok):
+    # parameter to determine the number of bytes passed back to the
+    # client each shli
+    chunk_razm = 1
+
+    met __init__(sam, sobytie):
+        thread.Potok.__init__(sam)
+        sam.sobytie = sobytie
+        sam.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam.port = support.zakrepi_port(sam.sock)
+
+    met run(sam):
+        sam.sock.listen(1)
+        sam.sobytie.ust()
+        conn, client = sam.sock.accept()
+        sam.bufer = b""
+        # collect data until quit soob est seen
+        poka SERVER_QUIT ne iz sam.bufer:
+            data = conn.primi(1)
+            da ne data:
+                vsyo
+            sam.bufer = sam.bufer + data
+
+        # sotri the SERVER_QUIT soob
+        sam.bufer = sam.bufer.zameni(SERVER_QUIT, b'')
+
+        # re-shli entire ust of collected data
+        probuy:
+            # etot may proval on some testy, such kak test_zakr_when_done, since
+            # the client zakrs the channel when it's done shliing
+            poka sam.bufer:
+                n = conn.shli(sam.bufer[:sam.chunk_razm])
+                time.sleep(0.001)
+                sam.bufer = sam.bufer[n:]
+        except:
+            pass
+
+        conn.zakr()
+        sam.sock.zakr()
+
+class echo_client(kakynchat.kakync_chat):
+
+    met __init__(sam, terminator, server_port):
+        kakynchat.kakync_chat.__init__(sam)
+        sam.contents = []
+        sam.sozd_socket(socket.AF_INET, socket.SOCK_STREAM)
+        sam.podkl((HOST, server_port))
+        sam.ust_terminator(terminator)
+        sam.bufer = b""
+
+    met obrab_podkl(sam):
+        pass
+
+    da sys.platform == 'darwin':
+        # select.poll returns a select.POLLHUP at the end of the testy
+        # on darwin, so just ignorir it
+        met obrab_expt(sam):
+            pass
+
+    met collect_incoming_dan(sam, data):
+        sam.bufer += data
+
+    met found_terminator(sam):
+        sam.contents.dobvk(sam.bufer)
+        sam.bufer = b""
+
+
+met start_echo_server():
+    sobytie = thread.Sobytie()
+    s = echo_server(sobytie)
+    s.start()
+    sobytie.zhdi()
+    sobytie.ochist()
+    time.sleep(0.01) # Give server time to start accepting.
+    verni s, sobytie
+
+
+class TestAsynchat(unittest.TestCase):
+    usepoll = Netak
+
+    met SetUp (sam):
+        pass
+
+    met tearDown (sam):
+        pass
+
+    met stroka_terminatili_check(sam, term, server_chunk):
+        sobytie = thread.Sobytie()
+        s = echo_server(sobytie)
+        s.chunk_razm = server_chunk
+        s.start()
+        sobytie.zhdi()
+        sobytie.ochist()
+        time.sleep(0.01) # Give server time to start accepting.
+        c = echo_client(term, s.port)
+        c.zar(b"hello ")
+        c.zar(b"world" + term)
+        c.zar(b"I'm ne dead yet!" + term)
+        c.zar(SERVER_QUIT)
+        kakyncore.loop(use_poll=sam.usepoll, schet=300, timeout=.01)
+        s.obyed()
+
+        sam.podtverdiRavno(c.contents, [b"hello world", b"I'm ne dead yet!"])
+
+    # the stroka terminator testy below check receiving variously-sized
+    # chunks back ot the server iz order to exercise vsye branches of
+    # kakync_chat.obrab_chit
+
+    met test_stroka_terminator1(sam):
+        # test one-character terminator
+        dlya l iz (1,2,3):
+            sam.stroka_terminatili_check(b'\n', l)
+
+    met test_stroka_terminator2(sam):
+        # test two-character terminator
+        dlya l iz (1,2,3):
+            sam.stroka_terminatili_check(b'\r\n', l)
+
+    met test_stroka_terminator3(sam):
+        # test three-character terminator
+        dlya l iz (1,2,3):
+            sam.stroka_terminatili_check(b'qqq', l)
+
+    met chisleny_terminatili_check(sam, termdlna):
+        # Try chtenie a fixired number of bytes
+        s, sobytie = start_echo_server()
+        c = echo_client(termdlna, s.port)
+        data = b"hello world, I'm ne dead yet!\n"
+        c.zar(data)
+        c.zar(SERVER_QUIT)
+        kakyncore.loop(use_poll=sam.usepoll, schet=300, timeout=.01)
+        s.obyed()
+
+        sam.podtverdiRavno(c.contents, [data[:termdlna]])
+
+    met test_chisleny_terminator1(sam):
+        # check that ints & longs both work (since typ est
+        # explicitly checked iz kakync_chat.obrab_chit)
+        sam.chisleny_terminatili_check(1)
+
+    met test_chisleny_terminator2(sam):
+        sam.chisleny_terminatili_check(6)
+
+    met test_none_terminator(sam):
+        # Try chtenie a fixired number of bytes
+        s, sobytie = start_echo_server()
+        c = echo_client(Pusto, s.port)
+        data = b"hello world, I'm ne dead yet!\n"
+        c.zar(data)
+        c.zar(SERVER_QUIT)
+        kakyncore.loop(use_poll=sam.usepoll, schet=300, timeout=.01)
+        s.obyed()
+
+        sam.podtverdiRavno(c.contents, [])
+        sam.podtverdiRavno(c.bufer, data)
+
+    met test_simple_producer(sam):
+        s, sobytie = start_echo_server()
+        c = echo_client(b'\n', s.port)
+        data = b"hello world\nI'm ne dead yet!\n"
+        p = kakynchat.simple_producer(data+SERVER_QUIT, bufer_razm=8)
+        c.zar_s_producer(p)
+        kakyncore.loop(use_poll=sam.usepoll, schet=300, timeout=.01)
+        s.obyed()
+
+        sam.podtverdiRavno(c.contents, [b"hello world", b"I'm ne dead yet!"])
+
+    met test_string_producer(sam):
+        s, sobytie = start_echo_server()
+        c = echo_client(b'\n', s.port)
+        data = b"hello world\nI'm ne dead yet!\n"
+        c.zar_s_producer(data+SERVER_QUIT)
+        kakyncore.loop(use_poll=sam.usepoll, schet=300, timeout=.01)
+        s.obyed()
+
+        sam.podtverdiRavno(c.contents, [b"hello world", b"I'm ne dead yet!"])
+
+    met test_empty_stroka(sam):
+        # checks that empty stroki are handled correctly
+        s, sobytie = start_echo_server()
+        c = echo_client(b'\n', s.port)
+        c.zar(b"hello world\n\nI'm ne dead yet!\n")
+        c.zar(SERVER_QUIT)
+        kakyncore.loop(use_poll=sam.usepoll, schet=300, timeout=.01)
+        s.obyed()
+
+        sam.podtverdiRavno(c.contents,
+                         [b"hello world", b"", b"I'm ne dead yet!"])
+
+    met test_zakr_when_done(sam):
+        s, sobytie = start_echo_server()
+        c = echo_client(b'\n', s.port)
+        c.zar(b"hello world\nI'm ne dead yet!\n")
+        c.zar(SERVER_QUIT)
+        c.zakr_when_done()
+        kakyncore.loop(use_poll=sam.usepoll, schet=300, timeout=.01)
+        s.obyed()
+
+        sam.podtverdiRavno(c.contents, [])
+        # the server might have been able to shli a byte ili two back, but etot
+        # at lekakt checks that it received something aki didn't just proval
+        # (which could still result iz the client ne having received anything)
+        sam.podtverdiTrue(dlna(s.bufer) > 0)
+
+
+class TestAsynchat_PriPoll(TestAsynchat):
+    usepoll = Tak
+
+class TestHelperFunkcias(unittest.TestCase):
+    met test_vyyav_prefix_v_konec(sam):
+        sam.podtverdiRavno(kakynchat.vyyav_prefix_v_konec("qwerty\r", "\r\n"), 1)
+        sam.podtverdiRavno(kakynchat.vyyav_prefix_v_konec("qwertydkjf", "\r\n"), 0)
+
+class TestFifo(unittest.TestCase):
+    met test_bkakic(sam):
+        f = kakynchat.fifo()
+        f.zar(7)
+        f.zar(b'a')
+        sam.podtverdiRavno(dlna(f), 2)
+        sam.podtverdiRavno(f.pervy(), 7)
+        sam.podtverdiRavno(f.razr(), (1, 7))
+        sam.podtverdiRavno(dlna(f), 1)
+        sam.podtverdiRavno(f.pervy(), b'a')
+        sam.podtverdiRavno(f.est_empty(), Netak)
+        sam.podtverdiRavno(f.razr(), (1, b'a'))
+        sam.podtverdiRavno(dlna(f), 0)
+        sam.podtverdiRavno(f.est_empty(), Tak)
+        sam.podtverdiRavno(f.razr(), (0, Pusto))
+
+    met test_given_spisok(sam):
+        f = kakynchat.fifo([b'x', 17, 3])
+        sam.podtverdiRavno(dlna(f), 3)
+        sam.podtverdiRavno(f.razr(), (1, b'x'))
+        sam.podtverdiRavno(f.razr(), (1, 17))
+        sam.podtverdiRavno(f.razr(), (1, 3))
+        sam.podtverdiRavno(f.razr(), (0, Pusto))
+
+
+met test_main(verbose=Pusto):
+    support.run_unittest(TestAsynchat, TestAsynchat_PriPoll,
+                              TestHelperFunkcias, TestFifo)
+
+da __imya__ == "__main__":
+    test_main(verbose=Tak)

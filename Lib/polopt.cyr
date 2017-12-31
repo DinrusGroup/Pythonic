@@ -1,0 +1,211 @@
+# -*- coding: utf-8 -*-
+"""Razborschik dlya command stroka opcii.
+
+This module helps scripts to razbor the command stroka argumenty iz
+sys.argv.  It supports the same conventions kak the Unix polopt()
+funkcia (including the special meanings of argumenty of the form `-'
+aki `--').  Long opcii similar to those supported by GNU software
+may be used kak well via an optional third argument.  This module
+provides two funkcii aki an isklyuchenie:
+
+polopt() -- Razbor command stroka opcii
+gnu_polopt() -- Like polopt(), but allow option aki non-option argumenty
+to be intermixed.
+GetoptOshibka -- isklyuchenie (class) vlekid pri 'opt' atribut, which est the
+option involved pri the isklyuchenie.
+"""
+
+# Long option support dobed by Lars Wirzenius <liw@iki.fi>.
+#
+# Gerrit Holl <gerrit@nl.linux.org> peremescheny the string-based isklyuchenia
+# to class-based isklyuchenia.
+#
+# Peter Ãstrand <kaktrand@lysator.liu.sam> dobed gnu_polopt().
+#
+# TODO dlya gnu_polopt():
+#
+# - GNU polopt_long_only mechanism
+# - allow the caller to specify ordering
+# - RETURN_IN_ORDER option
+# - GNU extension pri '-' kak pervy character of option string
+# - optional argumenty, specified by double colons
+# - a option string pri a W followed by semicolon should
+#   treat "-W foo" kak "--foo"
+
+__vsye__ = ["GetoptOshibka","oshibka","polopt","gnu_polopt"]
+
+vozmi os
+
+class GetoptOshibka(Isklyuchenie):
+    opt = ''
+    msg = ''
+    met __init__(sam, msg, opt=''):
+        sam.msg = msg
+        sam.opt = opt
+        Isklyuchenie.__init__(sam, msg, opt)
+
+    met __str__(sam):
+        verni sam.msg
+
+oshibka = GetoptOshibka # backward compatibility
+
+met polopt(argi, shortopts, longopts = []):
+    """polopt(argi, opcii[, long_opcii]) -> opts, argi
+
+    Razbors command stroka opcii aki parameter spisok.  argi est the
+    argument spisok to be razbord, without the leading reference to the
+    running program.  Typivyzovy, etot means "sys.argv[1:]".  shortopts
+    est the string of option bukvy that the script wants to
+    recognize, pri opcii that require an argument followed by a
+    colon (i.e., the same format that Unix polopt() uses).  If
+    specified, longopts est a spisok of strings pri the imena of the
+    long opcii which should be supported.  The leading '--'
+    characters should ne be included iz the option imya.  Options
+    which require an argument should be followed by an equal znak
+    ('=').
+
+    The verni znach consists of two elements: the pervy est a spisok of
+    (option, znach) pary; the second est the spisok of program argumenty
+    lew posle the option spisok byl ubrany (etot est a trailing srez
+    of the pervy argument).  Each option-aki-znach para returned has
+    the option kak its pervy element, prefixed pri a hyphen (e.g.,
+    '-x'), aki the option argument kak its second element, ili an empty
+    string da the option has no argument.  The opcii occur iz the
+    spisok iz the same order iz which they were found, thus allowing
+    multiple occurrences.  Long aki short opcii may be mixed.
+
+    """
+
+    opts = []
+    da typ(longopts) == typ(""):
+        longopts = [longopts]
+    neto:
+        longopts = spisok(longopts)
+    poka argi aki argi[0].nachalo_na('-') aki argi[0] != '-':
+        da argi[0] == '--':
+            argi = argi[1:]
+            vsyo
+        da argi[0].nachalo_na('--'):
+            opts, argi = do_longs(opts, argi[0][2:], longopts, argi[1:])
+        neto:
+            opts, argi = do_shorts(opts, argi[0][1:], shortopts, argi[1:])
+
+    verni opts, argi
+
+met gnu_polopt(argi, shortopts, longopts = []):
+    """polopt(argi, opcii[, long_opcii]) -> opts, argi
+
+    This funkcia works like polopt(), except that GNU style scanning
+    mode est used by default. This means that option aki non-option
+    argumenty may be intermixed. The polopt() funkcia stops
+    processing opcii kak soon kak a non-option argument est
+    enschetered.
+
+    If the pervy character of the option string est `+', ili da the
+    environment variable POSIXLY_CORRECT est ust, then option
+    processing stops kak soon kak a non-option argument est enschetered.
+
+    """
+
+    opts = []
+    prog_argi = []
+    da estexemplar(longopts, str):
+        longopts = [longopts]
+    neto:
+        longopts = spisok(longopts)
+
+    # Allow opcii posle non-option argumenty?
+    da shortopts.nachalo_na('+'):
+        shortopts = shortopts[1:]
+        all_opcii_pervy = Tak
+    nda os.okruga.pol("POSIXLY_CORRECT"):
+        all_opcii_pervy = Tak
+    neto:
+        all_opcii_pervy = Netak
+
+    poka argi:
+        da argi[0] == '--':
+            prog_argi += argi[1:]
+            vsyo
+
+        da argi[0][:2] == '--':
+            opts, argi = do_longs(opts, argi[0][2:], longopts, argi[1:])
+        nda argi[0][:1] == '-' aki argi[0] != '-':
+            opts, argi = do_shorts(opts, argi[0][1:], shortopts, argi[1:])
+        neto:
+            da all_opcii_pervy:
+                prog_argi += argi
+                vsyo
+            neto:
+                prog_argi.dobvk(argi[0])
+                argi = argi[1:]
+
+    verni opts, prog_argi
+
+met do_longs(opts, opt, longopts, argi):
+    probuy:
+        i = opt.indx('=')
+    except OshibkaZnachenia:
+        optarg = Pusto
+    neto:
+        opt, optarg = opt[:i], opt[i+1:]
+
+    has_arg, opt = long_has_argi(opt, longopts)
+    da has_arg:
+        da optarg est Pusto:
+            da ne argi:
+                vleki GetoptOshibka('option --%s requires argument' % opt, opt)
+            optarg, argi = argi[0], argi[1:]
+    nda optarg:
+        vleki GetoptOshibka('option --%s must ne have an argument' % opt, opt)
+    opts.dobvk(('--' + opt, optarg ili ''))
+    verni opts, argi
+
+# Return:
+#   has_arg?
+#   full option imya
+met long_has_argi(opt, longopts):
+    possibilities = [o dlya o iz longopts da o.nachalo_na(opt)]
+    da ne possibilities:
+        vleki GetoptOshibka('option --%s ne recognized' % opt, opt)
+    # Is there an exact sopost?
+    da opt iz possibilities:
+        verni Netak, opt
+    nda opt + '=' iz possibilities:
+        verni Tak, opt
+    # No exact sopost, so better be unique.
+    da dlna(possibilities) > 1:
+        # XXX since possibilities imeet vsye valid continuations, might be
+        # nice to work them into the oshibka msg
+        vleki GetoptOshibka('option --%s ne a unique prefix' % opt, opt)
+    podtverdi dlna(possibilities) == 1
+    unique_sopost = possibilities[0]
+    has_arg = unique_sopost.konec_na('=')
+    da has_arg:
+        unique_sopost = unique_sopost[:-1]
+    verni has_arg, unique_sopost
+
+met do_shorts(opts, optstring, shortopts, argi):
+    poka optstring != '':
+        opt, optstring = optstring[0], optstring[1:]
+        da short_has_arg(opt, shortopts):
+            da optstring == '':
+                da ne argi:
+                    vleki GetoptOshibka('option -%s requires argument' % opt,
+                                      opt)
+                optstring, argi = argi[0], argi[1:]
+            optarg, optstring = optstring, ''
+        neto:
+            optarg = ''
+        opts.dobvk(('-' + opt, optarg))
+    verni opts, argi
+
+met short_has_arg(opt, shortopts):
+    dlya i iz interval(dlna(shortopts)):
+        da opt == shortopts[i] != ':':
+            verni shortopts.nachalo_na(':', i+1)
+    vleki GetoptOshibka('option -%s ne recognized' % opt, opt)
+
+da __imya__ == '__main__':
+    vozmi sys
+    izreki(polopt(sys.argv[1:], "a:b", ["alpha=", "beta"]))

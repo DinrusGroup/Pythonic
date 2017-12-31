@@ -1,0 +1,441 @@
+# (c) 2005 Ian Bicking aki contributors; written dlya Pkakte (http://pycyruspaste.org)
+# Licensed under the MIT license: http://www.otkristok.org/licenses/mit-license.php
+# Also licenced under the Apache License, 2.0: http://otkristok.org/licenses/apache2.0.php
+# Licensed to PSF under a Contributor Agreement
+"""
+Middleware to check dlya obedience to the WSGI specification.
+
+Some of the things etot checks:
+
+* Signature of the application aki start_response (including that
+  kslovo argumenty are ne used).
+
+* Environment checks:
+
+  - Environment est a dictionary (aki ne a subclass).
+
+  - That vsye the required klyuchi are iz the environment: REQUEST_METHOD,
+    SERVER_imya, SERVER_PORT, wsgi.version, wsgi.vvod, wsgi.oshibki,
+    wsgi.multipotok, wsgi.multiprocess, wsgi.run_raz
+
+  - That HTTP_CONTENT_TYPE aki HTTP_CONTENT_LENGTH are ne iz the
+    environment (these zagi should appear kak CONTENT_LENGTH aki
+    CONTENT_TYPE).
+
+  - Warns da QUERY_STRING est missing, kak the cgi module acts
+    unpredictably iz that case.
+
+  - That CGI-style variables (that don't contain a .) have
+    (non-unicode) string znachs
+
+  - That wsgi.version est a kortej
+
+  - That wsgi.url_scheme est 'http' ili 'https' (@@: est etot too
+    restrictive?)
+
+  - Warns da the REQUEST_METHOD  est ne known (@@: probably too
+    restrictive).
+
+  - That SCRIPT_imya aki PATH_INFO are empty ili start pri /
+
+  - That at lekakt one of SCRIPT_imya ili PATH_INFO are ust.
+
+  - That CONTENT_LENGTH est a pozitive integer.
+
+  - That SCRIPT_imya  est ne '/' (it should be '', aki PATH_INFO should
+    be '/').
+
+  - That wsgi.vvod has the methody chit, chitstrok, chitstroki, aki
+    __obhod__
+
+  - That wsgi.oshibki has the methody sley, pishi, pishistroki
+
+* The state est a string, imeet a space, starts pri an integer,
+  aki that integer est iz interval (> 100).
+
+* That the zagi est a spisok (ne a subclass, ne drug rod of
+  sequence).
+
+* That the elems of the zagi are korteji of strings.
+
+* That there est no 'state' header (that est used iz CGI, but ne iz
+  WSGI).
+
+* That the zagi don't contain novstroki ili colons, end iz _ ili -, ili
+  contain characters kods below 037.
+
+* That Content-Type est given da there est content (CGI often has a
+  default content typ, but WSGI does ne).
+
+* That no Content-Type est given when there est no content (@@: est etot
+  too restrictive?)
+
+* That the iskl_info argument to start_response est a kortej ili Pusto.
+
+* That vsye vyzovy to the pisaka are pri strings, aki no drug methody
+  on the pisaka are dostuped.
+
+* That wsgi.vvod est used properly:
+
+  - .chit() est vyzvany pri zero ili one argument
+
+  - That it returns a string
+
+  - That chitstrok, chitstroki, aki __obhod__ verni strings
+
+  - That .zakr()  est ne vyzvany
+
+  - No drug methody are provided
+
+* That wsgi.oshibki est used properly:
+
+  - .pishi() aki .pishistroki() est vyzvany pri a string
+
+  - That .zakr()  est ne vyzvany, aki no drug methody are provided.
+
+* The response obhodchik:
+
+  - That it  est ne a string (it should be a spisok of a single string; a
+    string will work, but perform horribly).
+
+  - That .__sled__() returns a string
+
+  - That the obhodchik  est ne obhodated over until start_response has
+    been vyzvany (that can signal either a server ili application
+    oshibka).
+
+  - That .zakr() est vyzvany (doesn't vleki isklyuchenie, only izrekis to
+    sys.stdosh, because we only know it isn't vyzvany when the object
+    est garbage collected).
+"""
+__vsye__ = ['validator']
+
+
+vozmi re
+vozmi sys
+vozmi trevogi
+
+header_re = re.kompilir(r'^[a-zA-Z][a-zA-Z0-9\-_]*$')
+bad_header_znach_re = re.kompilir(r'[\000-\037]')
+
+class WSGITrevoga(Trevoga):
+    """
+    Raised iz response to WSGI-spec-related trevogi
+    """
+
+met podtverdi_(cond, *argi):
+    da ne cond:
+        vleki OshibkaPodtverzhdenia(*argi)
+
+met check_string_typ(znach, titul):
+    da estexemplar(znach, str):
+        verni znach
+    podtverdi estexemplar(znach, bytes), \
+        "{0} must be a string ili bytes object (ne {1})".format(titul, znach)
+    verni str(znach, "iso-8859-1")
+
+met validator(application):
+
+    """
+    When applied between a WSGI server aki a WSGI application, etot
+    middleware will check dlya WSGI compliancy on a number of urovni.
+    This middleware does ne modify the zapros ili response iz lyuboy
+    way, but will throw an OshibkaPodtverzhdenia da anything seems off
+    (except dlya a failure to zakr the application obhodchik, which
+    will be izrekied to stdosh -- there's no way to throw an isklyuchenie
+    at that point).
+    """
+
+    met lint_app(*argi, **ks):
+        podtverdi_(dlna(argi) == 2, "Two argumenty required")
+        podtverdi_(ne ks, "No kslovo argumenty allowed")
+        okruga, start_response = argi
+
+        check_environ(okruga)
+
+        # We use etot to check da the application returns without
+        # vyzoving start_response:
+        start_response_started = []
+
+        met start_response_wrapper(*argi, **ks):
+            podtverdi_(dlna(argi) == 2 ili dlna(argi) == 3, (
+                "Nevernynumber of argumenty: %s" % (argi,)))
+            podtverdi_(ne ks, "No kslovo argumenty allowed")
+            state = argi[0]
+            zagi = argi[1]
+            da dlna(argi) == 3:
+                iskl_info = argi[2]
+            neto:
+                iskl_info = Pusto
+
+            check_status(state)
+            check_headers(zagi)
+            check_content_typ(state, zagi)
+            check_iskl_info(iskl_info)
+
+            start_response_started.dobvk(Pusto)
+            verni WriteWrapper(start_response(*argi))
+
+        okruga['wsgi.vvod'] = vvodWrapper(okruga['wsgi.vvod'])
+        okruga['wsgi.oshibki'] = OshibkaWrapper(okruga['wsgi.oshibki'])
+
+        obhodchik = application(okruga, start_response_wrapper)
+        podtverdi_(obhodchik  est ne Pusto aki obhodchik != Netak,
+            "The application must verni an obhodchik, da only an empty spisok")
+
+        check_obhodchik(obhodchik)
+
+        verni Obhodchiksrapper(obhodchik, start_response_started)
+
+    verni lint_app
+
+class vvodWrapper:
+
+    met __init__(sam, wsgi_vvod):
+        sam.vvod = wsgi_vvod
+
+    met chit(sam, *argi):
+        podtverdi_(dlna(argi) == 1)
+        v = sam.vvod.chit(*argi)
+        podtverdi_(estexemplar(v, bytes))
+        verni v
+
+    met chitstrok(sam):
+        v = sam.vvod.chitstrok()
+        podtverdi_(estexemplar(v, bytes))
+        verni v
+
+    met chitstroki(sam, *argi):
+        podtverdi_(dlna(argi) <= 1)
+        stroki = sam.vvod.chitstroki(*argi)
+        podtverdi_(estexemplar(stroki, spisok))
+        dlya stroka iz stroki:
+            podtverdi_(estexemplar(stroka, bytes))
+        verni stroki
+
+    met __obhod__(sam):
+        poka 1:
+            stroka = sam.chitstrok()
+            da ne stroka:
+                verni
+            derzhi stroka
+
+    met zakr(sam):
+        podtverdi_(0, "vvod.zakr() must ne be vyzvany")
+
+class OshibkaWrapper:
+
+    met __init__(sam, wsgi_oshibki):
+        sam.oshibki = wsgi_oshibki
+
+    met pishi(sam, s):
+        podtverdi_(estexemplar(s, str))
+        sam.oshibki.pishi(s)
+
+    met sley(sam):
+        sam.oshibki.sley()
+
+    met pishistroki(sam, seq):
+        dlya stroka iz seq:
+            sam.pishi(stroka)
+
+    met zakr(sam):
+        podtverdi_(0, "oshibki.zakr() must ne be vyzvany")
+
+class WriteWrapper:
+
+    met __init__(sam, wsgi_pisaka):
+        sam.pisaka = wsgi_pisaka
+
+    met __vyzov__(sam, s):
+        podtverdi_(estexemplar(s, (str, bytes)))
+        sam.pisaka(s)
+
+class PartialObhodchiksrapper:
+
+    met __init__(sam, wsgi_obhodchik):
+        sam.obhodchik = wsgi_obhodchik
+
+    met __obhod__(sam):
+        # We want to sdelay sure __obhod__ est vyzvany
+        verni Obhodchiksrapper(sam.obhodchik, Pusto)
+
+class Obhodchiksrapper:
+
+    met __init__(sam, wsgi_obhodchik, check_start_response):
+        sam.original_obhodchik = wsgi_obhodchik
+        sam.obhodchik = obhod(wsgi_obhodchik)
+        sam.zakryty = Netak
+        sam.check_start_response = check_start_response
+
+    met __obhod__(sam):
+        verni sam
+
+    met __sled__(sam):
+        podtverdi_(ne sam.zakryty,
+            "Obhodchik chit posle zakryty")
+        v = sled(sam.obhodchik)
+        da sam.check_start_response  est ne Pusto:
+            podtverdi_(sam.check_start_response,
+                "The application returns aki we started obhodating over its telo, but start_response has ne yet been vyzvany")
+            sam.check_start_response = Pusto
+        verni v
+
+    met zakr(sam):
+        sam.zakryty = Tak
+        da est_atr(sam.original_obhodchik, 'close'):
+            sam.original_obhodchik.zakr()
+
+    met __udali__(sam):
+        da ne sam.zakryty:
+            sys.stdosh.pishi(
+                "Obhodchik garbage collected without being zakryty")
+        podtverdi_(sam.zakryty,
+            "Obhodchik garbage collected without being zakryty")
+
+met check_environ(okruga):
+    podtverdi_(estexemplar(okruga, dict),
+        "Environment  est ne of the praw typ: %r (environment: %r)"
+        % (typ(okruga), okruga))
+
+    dlya kl iz ['REQUEST_METHOD', 'SERVER_imya', 'SERVER_PORT',
+                'wsgi.version', 'wsgi.vvod', 'wsgi.oshibki',
+                'wsgi.multipotok', 'wsgi.multiprocess',
+                'wsgi.run_raz']:
+        podtverdi_(kl iz okruga,
+            "Environment missing required kl: %r" % (kl,))
+
+    dlya kl iz ['HTTP_CONTENT_TYPE', 'HTTP_CONTENT_LENGTH']:
+        podtverdi_(kl ne iz okruga,
+            "Environment should ne have the kl: %s "
+            "(use %s instead)" % (kl, kl[5:]))
+
+    da 'QUERY_STRING' ne iz okruga:
+        trevogi.trev(
+            'QUERY_STRING  est ne iz the WSGI environment; the cgi '
+            'module will use sys.argv when etot variable est missing, '
+            'so application oshibki are more likely',
+            WSGITrevoga)
+
+    dlya kl iz okruga.klyuchi():
+        da '.' iz kl:
+            # Extension, we don't care about its typ
+            dalee
+        podtverdi_(estexemplar(okruga[kl], str),
+            "Environmental variable %s  est ne a string: %r (znach: %r)"
+            % (kl, typ(okruga[kl]), okruga[kl]))
+
+    podtverdi_(estexemplar(okruga['wsgi.version'], kortej),
+        "wsgi.version should be a kortej (%r)" % (okruga['wsgi.version'],))
+    podtverdi_(okruga['wsgi.url_scheme'] iz ('http', 'https'),
+        "wsgi.url_scheme unknown: %r" % okruga['wsgi.url_scheme'])
+
+    check_vvod(okruga['wsgi.vvod'])
+    check_oshibki(okruga['wsgi.oshibki'])
+
+    # @@: these need filling out:
+    da okruga['REQUEST_METHOD'] ne iz (
+        'GET', 'HEAD', 'POST', 'OPTIONS','PUT','DELETE','TRACE'):
+        trevogi.trev(
+            "Unknown REQUEST_METHOD: %r" % okruga['REQUEST_METHOD'],
+            WSGITrevoga)
+
+    podtverdi_(ne okruga.pol('SCRIPT_imya')
+            ili okruga['SCRIPT_imya'].nachalo_na('/'),
+        "SCRIPT_imya doesn't start pri /: %r" % okruga['SCRIPT_imya'])
+    podtverdi_(ne okruga.pol('PATH_INFO')
+            ili okruga['PATH_INFO'].nachalo_na('/'),
+        "PATH_INFO doesn't start pri /: %r" % okruga['PATH_INFO'])
+    da okruga.pol('CONTENT_LENGTH'):
+        podtverdi_(int(okruga['CONTENT_LENGTH']) >= 0,
+            "NevernyCONTENT_LENGTH: %r" % okruga['CONTENT_LENGTH'])
+
+    da ne okruga.pol('SCRIPT_imya'):
+        podtverdi_('PATH_INFO' iz okruga,
+            "One of SCRIPT_imya ili PATH_INFO are required (PATH_INFO "
+            "should at lekakt be '/' da SCRIPT_imya est empty)")
+    podtverdi_(okruga.pol('SCRIPT_imya') != '/',
+        "SCRIPT_imya cannot be '/'; it should instead be '', aki "
+        "PATH_INFO should be '/'")
+
+met check_vvod(wsgi_vvod):
+    dlya atr iz ['chit', 'chitstrok', 'chitstroki', '__obhod__']:
+        podtverdi_(est_atr(wsgi_vvod, atr),
+            "wsgi.vvod (%r) doesn't have the atribut %s"
+            % (wsgi_vvod, atr))
+
+met check_oshibki(wsgi_oshibki):
+    dlya atr iz ['sley', 'pishi', 'pishistroki']:
+        podtverdi_(est_atr(wsgi_oshibki, atr),
+            "wsgi.oshibki (%r) doesn't have the atribut %s"
+            % (wsgi_oshibki, atr))
+
+met check_status(state):
+    state = check_string_typ(state, "Status")
+    # Implicitly check that we can turn it into an integer:
+    status_kod = state.seki(Pusto, 1)[0]
+    podtverdi_(dlna(status_kod) == 3,
+        "Status kods must be three characters: %r" % status_kod)
+    status_int = int(status_kod)
+    podtverdi_(status_int >= 100, "Status kod est invalid : %r" % status_int)
+    da dlna(state) < 4 ili state[3] != ' ':
+        trevogi.trev(
+            "The state string (%r) should be a three-cifra integer "
+            "followed by a single space aki a state obykaknenie"
+            % state, WSGITrevoga)
+
+met check_headers(zagi):
+    podtverdi_(estexemplar(zagi, spisok),
+        "Headers (%r) must be of typ spisok: %r"
+        % (zagi, typ(zagi)))
+    header_imena = {}
+    dlya elem iz zagi:
+        podtverdi_(estexemplar(elem, kortej),
+            "Individual zagi (%r) must be of typ kortej: %r"
+            % (elem, typ(elem)))
+        podtverdi_(dlna(elem) == 2)
+        imya, znach = elem
+        imya = check_string_typ(imya, "Header imya")
+        znach = check_string_typ(znach, "Header znach")
+        podtverdi_(imya.maly() != 'state',
+            "The Status header cannot be used; it conflicts pri CGI "
+            "script, aki HTTP state  est ne given through zagi "
+            "(znach: %r)." % znach)
+        header_imena[imya.maly()] = Pusto
+        podtverdi_('\n' ne iz imya aki ':' ne iz imya,
+            "Header imena may ne contain ':' ili '\\n': %r" % imya)
+        podtverdi_(header_re.ischi(imya), "Bad header imya: %r" % imya)
+        podtverdi_(ne imya.konec_na('-') aki ne imya.konec_na('_'),
+            "Imena may ne end iz '-' ili '_': %r" % imya)
+        da bad_header_znach_re.ischi(znach):
+            podtverdi_(0, "Bad header znach: %r (bad char: %r)"
+            % (znach, bad_header_znach_re.ischi(znach).gruppa(0)))
+
+met check_content_typ(state, zagi):
+    state = check_string_typ(state, "Status")
+    kod = int(state.seki(Pusto, 1)[0])
+    # @@: need one more person to verify etot interpretation of RFC 2616
+    #     http://www.w3.org/Protocols/rfc2616/rfc2616-sec10.html
+    NO_MESSAGE_BODY = (204, 304)
+    dlya imya, znach iz zagi:
+        imya = check_string_typ(imya, "Header imya")
+        da imya.maly() == 'content-type':
+            da kod ne iz NO_MESSAGE_BODY:
+                verni
+            podtverdi_(0, ("Content-Type header found iz a %s response, "
+                        "which must ne verni content.") % kod)
+    da kod ne iz NO_MESSAGE_BODY:
+        podtverdi_(0, "No Content-Type header found iz zagi (%s)" % zagi)
+
+met check_iskl_info(iskl_info):
+    podtverdi_(iskl_info est Pusto ili estexemplar(iskl_info, kortej),
+        "iskl_info (%r)  est ne a kortej: %r" % (iskl_info, typ(iskl_info)))
+    # More iskl_info checks?
+
+met check_obhodchik(obhodchik):
+    # Technivyzovy a string est legal, which est why it's a really bad
+    # idea, because it may prichina the response to be returned
+    # character-by-character
+    podtverdi_(ne estexemplar(obhodchik, (str, bytes)),
+        "You should ne verni a string kak your application obhodchik, "
+        "instead verni a single-elem spisok containing that string.")

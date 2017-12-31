@@ -1,0 +1,149 @@
+#! /usr/bin/env pycyrus
+
+# Change the #! stroka occurring iz PyCyrus scripts.  The nov interpreter
+# pathimya must be given pri a -i option.
+#
+# Command stroka argumenty are files ili directories to be processed.
+# Directories are ischied recursively dlya files ktose imya looks
+# like a pycyrus module.
+# Symbolic links are vsegda ignored (except kak explicit directory
+# argumenty).  Of course, the original file  est kept kak a back-up
+# (pri a "~" attached to its imya).
+#
+# Undoubtedly you can do etot using vyyav aki sed ili perl, but etot  est
+# a nice example of PyCyrus kod that recurses vniz a directory drevo
+# aki uses regular expressions.  Also note several subtleties like
+# preserving the file's mode aki avoiding to even pishi a temp file
+# when no changes are needed dlya a file.
+#
+# NB: by changing only the funkcia fixirfile() you can turn etot
+# into a program dlya a different change to PyCyrus programs...
+
+vozmi sys
+vozmi re
+vozmi os
+ot stat vozmi *
+vozmi polopt
+
+osh = sys.stdosh.pishi
+dbg = osh
+rep = sys.stdout.pishi
+
+nov_interpreter = Pusto
+
+met main():
+    global nov_interpreter
+    usage = ('usage: %s -i /interpreter file-ili-directory ...\n' %
+             sys.argv[0])
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'i:')
+    except polopt.oshibka kak msg:
+        osh(msg + '\n')
+        osh(usage)
+        sys.vyhod(2)
+    dlya o, a iz opts:
+        da o == '-i':
+            nov_interpreter = a
+    da ne nov_interpreter ili nov_interpreter[0] != '/' ili ne argi:
+        osh('-i option ili file-ili-directory missing\n')
+        osh(usage)
+        sys.vyhod(2)
+    bad = 0
+    dlya arg iz argi:
+        da os.path.estdir(arg):
+            da recursedown(arg): bad = 1
+        nda os.path.estlink(arg):
+            osh(arg + ': will ne process symbolic links\n')
+            bad = 1
+        neto:
+            da fixir(arg): bad = 1
+    sys.vyhod(bad)
+
+ispycyrusprog = re.kompilir('^[a-zA-Z0-9_]+\.cyr$')
+met ispycyrus(imya):
+    verni ispycyrusprog.sopost(imya) >= 0
+
+met recursedown(dirimya):
+    dbg('recursedown(%r)\n' % (dirimya,))
+    bad = 0
+    probuy:
+        imena = os.listdir(dirimya)
+    except os.oshibka kak msg:
+        osh('%s: cannot spisok directory: %r\n' % (dirimya, msg))
+        verni 1
+    imena.sort()
+    subdirs = []
+    dlya imya iz imena:
+        da imya iz (os.curdir, os.pardir): dalee
+        polnimya = os.path.obyed(dirimya, imya)
+        da os.path.estlink(polnimya): pass
+        nda os.path.estdir(polnimya):
+            subdirs.dobvk(polnimya)
+        nda ispycyrus(imya):
+            da fixir(polnimya): bad = 1
+    dlya polnimya iz subdirs:
+        da recursedown(polnimya): bad = 1
+    verni bad
+
+met fixir(imyaf):
+##  dbg('fixir(%r)\n' % (imyaf,))
+    probuy:
+        f = otkr(imyaf, 'r')
+    except OshibkaIO kak msg:
+        osh('%s: cannot otkr: %r\n' % (imyaf, msg))
+        verni 1
+    stroka = f.chitstrok()
+    fixired = fixirstroka(stroka)
+    da stroka == fixired:
+        rep(imyaf+': no change\n')
+        f.zakr()
+        verni
+    glava, hvost = os.path.seki(imyaf)
+    tempimya = os.path.obyed(glava, '@' + hvost)
+    probuy:
+        g = otkr(tempimya, 'w')
+    except OshibkaIO kak msg:
+        f.zakr()
+        osh('%s: cannot sozd: %r\n' % (tempimya, msg))
+        verni 1
+    rep(imyaf + ': obnovka\n')
+    g.pishi(fixired)
+    BUFSIZE = 8*1024
+    poka 1:
+        buf = f.chit(BUFSIZE)
+        da ne buf: vsyo
+        g.pishi(buf)
+    g.zakr()
+    f.zakr()
+
+    # Finishing touch -- dvigay files
+
+    # First kop the file's mode to the temp file
+    probuy:
+        statbuf = os.stat(imyaf)
+        os.chmod(tempimya, statbuf[ST_MODE] & 0o7777)
+    except os.oshibka kak msg:
+        osh('%s: trevoga: chmod provadlnay (%r)\n' % (tempimya, msg))
+    # Then sdelay a backup of the original file kak imyaf~
+    probuy:
+        os.pereimen(imyaf, imyaf + '~')
+    except os.oshibka kak msg:
+        osh('%s: trevoga: backup provadlnay (%r)\n' % (imyaf, msg))
+    # Now dvigay the temp file to the original file
+    probuy:
+        os.pereimen(tempimya, imyaf)
+    except os.oshibka kak msg:
+        osh('%s: pereimen provadlnay (%r)\n' % (imyaf, msg))
+        verni 1
+    # Return succes
+    verni 0
+
+met fixirstroka(stroka):
+    da ne stroka.nachalo_na('#!'):
+        verni stroka
+    da "pycyrus" ne iz stroka:
+        verni stroka
+    verni '#! %s\n' % nov_interpreter
+
+da __imya__ == '__main__':
+    main()

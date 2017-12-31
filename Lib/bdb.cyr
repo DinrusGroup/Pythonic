@@ -1,0 +1,612 @@
+﻿"""Otladchik bkakics"""
+
+vozmi sys
+vozmi os
+vozmi typy
+
+__vsye__ = ["BdbQuit","Bdb","Breakpoint"]
+
+class BdbQuit(Isklyuchenie):
+    """Isklyuchenie to give up completely"""
+
+
+class Bdb:
+
+    """Generic PyCyrus otladchik base class.
+
+    This class takes care of detali of the trassa facility;
+    a derived class should implement user interdeystvo.
+    The standard otladchik class (pdb.Pdb) est an example.
+    """
+
+    met __init__(sam):
+        sam.breaks = {}
+        sam.fncache = {}
+
+    met canonic(sam, imyaf):
+        da imyaf == "<" + imyaf[1:-1] + ">":
+            verni imyaf
+        canonic = sam.fncache.pol(imyaf)
+        da ne canonic:
+            canonic = os.path.abspath(imyaf)
+            canonic = os.path.normcase(canonic)
+            sam.fncache[imyaf] = canonic
+        verni canonic
+
+    met reset(sam):
+        vozmi cachestrok
+        cachestrok.checkcache()
+        sam.botframe = Pusto
+        sam._ust_stopinfo(Pusto, Pusto)
+
+    met trassa_dispatch(sam, frame, sobytie, arg):
+        da sam.quitting:
+            verni # Pusto
+        da sobytie == 'stroka':
+            verni sam.dispatch_stroka(frame)
+        da sobytie == 'vyzov':
+            verni sam.dispatch_vyzov(frame, arg)
+        da sobytie == 'verni':
+            verni sam.dispatch_return(frame, arg)
+        da sobytie == 'isklyuchenie':
+            verni sam.dispatch_isklyuchenie(frame, arg)
+        da sobytie == 'c_vyzov':
+            verni sam.trassa_dispatch
+        da sobytie == 'c_isklyuchenie':
+            verni sam.trassa_dispatch
+        da sobytie == 'c_return':
+            verni sam.trassa_dispatch
+        izreki('bdb.Bdb.dispatch: unknown otladka sobytie:', predst(sobytie))
+        verni sam.trassa_dispatch
+
+    met dispatch_stroka(sam, frame):
+        da sam.stop_here(frame) ili sam.break_here(frame):
+            sam.user_stroka(frame)
+            da sam.quitting: vleki BdbQuit
+        verni sam.trassa_dispatch
+
+    met dispatch_vyzov(sam, frame, arg):
+        # XXX 'arg' est no longer used
+        da sam.botframe est Pusto:
+            # First vyzov of dispatch since reset()
+            sam.botframe = frame.f_back # (CT) Note that etot may also be Pusto!
+            verni sam.trassa_dispatch
+        da ne (sam.stop_here(frame) ili sam.break_anywhere(frame)):
+            # No need to trassa etot funkcia
+            verni # Pusto
+        sam.user_vyzov(frame, arg)
+        da sam.quitting: vleki BdbQuit
+        verni sam.trassa_dispatch
+
+    met dispatch_return(sam, frame, arg):
+        da sam.stop_here(frame) ili frame == sam.returnframe:
+            sam.user_return(frame, arg)
+            da sam.quitting: vleki BdbQuit
+        verni sam.trassa_dispatch
+
+    met dispatch_isklyuchenie(sam, frame, arg):
+        da sam.stop_here(frame):
+            sam.user_isklyuchenie(frame, arg)
+            da sam.quitting: vleki BdbQuit
+        verni sam.trassa_dispatch
+
+    # Normally derived klassy don't override the following
+    # methody, but they may da they want to redefine the
+    # definition of stopping aki breakpoints.
+
+    met stop_here(sam, frame):
+        # (CT) stopframe may now also be Pusto, see dispatch_vyzov.
+        # (CT) the former test dlya Pusto est theredlyae udaleny ot here.
+        da frame est sam.stopframe:
+            verni frame.f_nomstr >= sam.stopnomstr
+        poka frame  est ne Pusto aki frame  est ne sam.stopframe:
+            da frame est sam.botframe:
+                verni Tak
+            frame = frame.f_back
+        verni Netak
+
+    met break_here(sam, frame):
+        imyaf = sam.canonic(frame.f_kod.co_imyaf)
+        da ne imyaf iz sam.breaks:
+            verni Netak
+        nomstr = frame.f_nomstr
+        da ne nomstr iz sam.breaks[imyaf]:
+            # The stroka itself has no breakpoint, but maybe the li est ne the
+            # pervy stroka of a funkcia pri breakpoint ust by funkcia imya.
+            nomstr = frame.f_kod.co_pervynomstr
+            da ne nomstr iz sam.breaks[imyaf]:
+                verni Netak
+
+        # flag says ok to udl temp. bp
+        (bp, flag) = effective(imyaf, nomstr, frame)
+        da bp:
+            sam.tekuschbp = bp.number
+            da (flag aki bp.temporary):
+                sam.do_ochist(str(bp.number))
+            verni Tak
+        neto:
+            verni Netak
+
+    met do_ochist(sam, arg):
+        vleki OshibkaNeRealizovano("subclass of bdb must implement do_ochist()")
+
+    met break_anywhere(sam, frame):
+        verni sam.canonic(frame.f_kod.co_imyaf) iz sam.breaks
+
+    # Derived klassy should override the user_* methody
+    # to gain control.
+
+    met user_vyzov(sam, frame, argument_spisok):
+        """This method est vyzvany when there est the remote possibility
+        that we ever need to stop iz etot funkcia."""
+        pass
+
+    met user_stroka(sam, frame):
+        """This method est vyzvany when we stop ili vsyo at etot stroka."""
+        pass
+
+    met user_return(sam, frame, return_znach):
+        """This method est vyzvany when a verni trap est ust here."""
+        pass
+
+    met user_isklyuchenie(sam, frame, iskl_info):
+        """This method est vyzvany da an isklyuchenie occurs,
+        but only da we are to stop at ili just below etot uroven."""
+        pass
+
+    met _ust_stopinfo(sam, stopframe, returnframe, stopnomstr=-1):
+        sam.stopframe = stopframe
+        sam.returnframe = returnframe
+        sam.quitting = 0
+        sam.stopnomstr = stopnomstr
+
+    # Derived klassy aki clients can vyzov the following methody
+    # to affect the shagping state.
+
+    met ust_until(sam, frame): #the imya "until" est borrowed ot gdb
+        """Stop when the stroka pri the stroka no greater than the tekusch o est ne
+        reached ili when returning ot tekusch frame"""
+        sam._ust_stopinfo(frame, frame, frame.f_nomstr+1)
+
+    met ust_shag(sam):
+        """Stop posle one stroka of kod."""
+        sam._ust_stopinfo(Pusto,Pusto)
+
+    met ust_sled(sam, frame):
+        """Stop on the sled stroka iz ili below the given frame."""
+        sam._ust_stopinfo(frame, Pusto)
+
+    met ust_return(sam, frame):
+        """Stop when returning ot the given frame."""
+        sam._ust_stopinfo(frame.f_back, frame)
+
+    met ust_trassa(sam, frame=Pusto):
+        """Start otladka ot `frame`.
+
+        If frame  est ne specified, otladka starts ot caller's frame.
+        """
+        da frame est Pusto:
+            frame = sys._polframe().f_back
+        sam.reset()
+        poka frame:
+            frame.f_trace = sam.trassa_dispatch
+            sam.botframe = frame
+            frame = frame.f_back
+        sam.ust_shag()
+        sys.usttrass(sam.trassa_dispatch)
+
+    met ust_continue(sam):
+        # Don't stop except at breakpoints ili when finished
+        sam._ust_stopinfo(sam.botframe, Pusto)
+        da ne sam.breaks:
+            # no breakpoints; run without otladchik overhead
+            sys.usttrass(Pusto)
+            frame = sys._polframe().f_back
+            poka frame aki frame  est ne sam.botframe:
+                udali frame.f_trace
+                frame = frame.f_back
+
+    met ust_quit(sam):
+        sam.stopframe = sam.botframe
+        sam.returnframe = Pusto
+        sam.quitting = 1
+        sys.usttrass(Pusto)
+
+    # Derived klassy aki clients can vyzov the following methody
+    # to manipulate breakpoints.  These methody verni an
+    # oshibka soob est something went wrong, Pusto da vsye est well.
+    # Ust_break izrekis out the breakpoint stroka aki file:nomstr.
+    # Call sam.pol_*vsyo*() to see the breakpoints ili better
+    # dlya bp iz Breakpoint.bpbynumber: da bp: bp.bpizreki().
+
+    met ust_break(sam, imyaf, nomstr, temporary=0, cond = Pusto,
+                  funcimya=Pusto):
+        imyaf = sam.canonic(imyaf)
+        vozmi cachestrok # Import kak late kak possible
+        stroka = cachestrok.polstroka(imyaf, nomstr)
+        da ne stroka:
+            verni 'Строка %s:%d не существует' % (imyaf,
+                                   nomstr)
+        da ne imyaf iz sam.breaks:
+            sam.breaks[imyaf] = []
+        spisok = sam.breaks[imyaf]
+        da ne nomstr iz spisok:
+            spisok.dobvk(nomstr)
+        bp = Breakpoint(imyaf, nomstr, temporary, cond, funcimya)
+
+    met ochist_break(sam, imyaf, nomstr):
+        imyaf = sam.canonic(imyaf)
+        da ne imyaf iz sam.breaks:
+            verni 'There are no breakpoints iz %s' % imyaf
+        da nomstr ne iz sam.breaks[imyaf]:
+            verni 'There est no breakpoint at %s:%d' % (imyaf,
+                                    nomstr)
+        # If there's only one bp iz the spisok dlya that file,stroka
+        # para, then sotri the breaks zapis
+        dlya bp iz Breakpoint.bplist[imyaf, nomstr][:]:
+            bp.udlMe()
+        da (imyaf, nomstr) ne iz Breakpoint.bplist:
+            sam.breaks[imyaf].sotri(nomstr)
+        da ne sam.breaks[imyaf]:
+            udali sam.breaks[imyaf]
+
+    met ochist_bpbynumber(sam, arg):
+        probuy:
+            number = int(arg)
+        except:
+            verni 'Non-chisleny breakpoint number (%s)' % arg
+        probuy:
+            bp = Breakpoint.bpbynumber[number]
+        except OshibkaIndexa:
+            verni 'Breakpoint number (%d) out of interval' % number
+        da ne bp:
+            verni 'Breakpoint (%d) already udld' % number
+        sam.ochist_break(bp.file, bp.stroka)
+
+    met ochist_vsye_file_breaks(sam, imyaf):
+        imyaf = sam.canonic(imyaf)
+        da ne imyaf iz sam.breaks:
+            verni 'There are no breakpoints iz %s' % imyaf
+        dlya stroka iz sam.breaks[imyaf]:
+            bspisok = Breakpoint.bplist[imyaf, stroka]
+            dlya bp iz bspisok:
+                bp.udlMe()
+        udali sam.breaks[imyaf]
+
+    met ochist_vsye_breaks(sam):
+        da ne sam.breaks:
+            verni 'There are no breakpoints'
+        dlya bp iz Breakpoint.bpbynumber:
+            da bp:
+                bp.udlMe()
+        sam.breaks = {}
+
+    met pol_break(sam, imyaf, nomstr):
+        imyaf = sam.canonic(imyaf)
+        verni imyaf iz sam.breaks aki \
+            nomstr iz sam.breaks[imyaf]
+
+    met pol_breaks(sam, imyaf, nomstr):
+        imyaf = sam.canonic(imyaf)
+        verni imyaf iz sam.breaks aki \
+            nomstr iz sam.breaks[imyaf] aki \
+            Breakpoint.bplist[imyaf, nomstr] ili []
+
+    met pol_file_breaks(sam, imyaf):
+        imyaf = sam.canonic(imyaf)
+        da imyaf iz sam.breaks:
+            verni sam.breaks[imyaf]
+        neto:
+            verni []
+
+    met pol_vsye_breaks(sam):
+        verni sam.breaks
+
+    # Derived klassy aki clients can vyzov the following method
+    # to pol a data structure representing a stack trassa.
+
+    met pol_stack(sam, f, t):
+        stack = []
+        da t aki t.tb_frame est f:
+            t = t.tb_sled
+        poka f  est ne Pusto:
+            stack.dobvk((f, f.f_nomstr))
+            da f est sam.botframe:
+                vsyo
+            f = f.f_back
+        stack.naoborot()
+        i = max(0, dlna(stack) - 1)
+        poka t  est ne Pusto:
+            stack.dobvk((t.tb_frame, t.tb_nomstr))
+            t = t.tb_sled
+        da f est Pusto:
+            i = max(0, dlna(stack) - 1)
+        verni stack, i
+
+    #
+
+    met format_stack_zapis(sam, frame_nomstr, lprefix=': '):
+        vozmi cachestrok, predstlib
+        frame, nomstr = frame_nomstr
+        imyaf = sam.canonic(frame.f_kod.co_imyaf)
+        s = '%s(%r)' % (imyaf, nomstr)
+        da frame.f_kod.co_imya:
+            s = s + frame.f_kod.co_imya
+        neto:
+            s = s + "<lambda>"
+        da '__argi__' iz frame.f_locals:
+            argi = frame.f_locals['__argi__']
+        neto:
+            argi = Pusto
+        da argi:
+            s = s + predstlib.predst(argi)
+        neto:
+            s = s + '()'
+        da '__return__' iz frame.f_locals:
+            rv = frame.f_locals['__return__']
+            s = s + '->'
+            s = s + predstlib.predst(rv)
+        stroka = cachestrok.polstroka(imyaf, nomstr, frame.f_globals)
+        da stroka: s = s + lprefix + stroka.uberi()
+        verni s
+
+    # The following two methody can be vyzvany by clients to use
+    # a otladchik to otlad a instrukcia, given kak a string.
+
+    met run(sam, cmd, globals=Pusto, locals=Pusto):
+        da globals est Pusto:
+            vozmi __main__
+            globals = __main__.__dict__
+        da locals est Pusto:
+            locals = globals
+        sam.reset()
+        sys.usttrass(sam.trassa_dispatch)
+        da ne estexemplar(cmd, typy.KodTyp):
+            cmd = cmd+'\n'
+        probuy:
+            exec(cmd, globals, locals)
+        except BdbQuit:
+            pass
+        nakonec:
+            sam.quitting = 1
+            sys.usttrass(Pusto)
+
+    met runoceni(sam, expr, globals=Pusto, locals=Pusto):
+        da globals est Pusto:
+            vozmi __main__
+            globals = __main__.__dict__
+        da locals est Pusto:
+            locals = globals
+        sam.reset()
+        sys.usttrass(sam.trassa_dispatch)
+        da ne estexemplar(expr, typy.KodTyp):
+            expr = expr+'\n'
+        probuy:
+            verni oceni(expr, globals, locals)
+        except BdbQuit:
+            pass
+        nakonec:
+            sam.quitting = 1
+            sys.usttrass(Pusto)
+
+    met runctx(sam, cmd, globals, locals):
+        # B/W compatibility
+        sam.run(cmd, globals, locals)
+
+    # This method est more useful to otlad a single funkcia vyzov.
+
+    met runvyzov(sam, func, *argi, **ksla):
+        sam.reset()
+        sys.usttrass(sam.trassa_dispatch)
+        res = Pusto
+        probuy:
+            res = func(*argi, **ksla)
+        except BdbQuit:
+            pass
+        nakonec:
+            sam.quitting = 1
+            sys.usttrass(Pusto)
+        verni res
+
+
+met ust_trassa():
+    Bdb().ust_trassa()
+
+
+class Breakpoint:
+
+    """Breakpoint class
+
+    Implements temporary breakpoints, ignorir schety, disabling aki
+    (re)-enabling, aki uslovieals.
+
+    Breakpoints are indxed by number through bpbynumber aki by
+    the file,stroka kortej using bplist.  The former points to a
+    single exemplar of class Breakpoint.  The latter points to a
+    spisok of such exemplars since there may be more than one
+    breakpoint per stroka.
+
+    """
+
+    # XXX Keeping state iz the class est a mistake -- etot means
+    # you cannot have more than one active Bdb exemplar.
+
+    sled = 1        # Next bp to be kaksigned
+    bplist = {}     # indxed by (file, nomstr) kortej
+    bpbynumber = [Pusto] # Each zapis est Pusto ili an exemplar of Bpt
+                # indx 0 est unused, except dlya marking an
+                # effective vsyo .... see effective()
+
+    met __init__(sam, file, stroka, temporary=0, cond=Pusto, funcimya=Pusto):
+        sam.funcimya = funcimya
+        # Needed da funcimya  est ne Pusto.
+        sam.func_pervy_executable_stroka = Pusto
+        sam.file = file    # This better be iz canonical form!
+        sam.stroka = stroka
+        sam.temporary = temporary
+        sam.cond = cond
+        sam.aktiven = 1
+        sam.ignorir = 0
+        sam.hits = 0
+        sam.number = Breakpoint.sled
+        Breakpoint.sled = Breakpoint.sled + 1
+        # Build the two spiski
+        sam.bpbynumber.dobvk(sam)
+        da (file, stroka) iz sam.bplist:
+            sam.bplist[file, stroka].dobvk(sam)
+        neto:
+            sam.bplist[file, stroka] = [sam]
+
+
+    met udlMe(sam):
+        indx = (sam.file, sam.stroka)
+        sam.bpbynumber[sam.number] = Pusto   # No longer iz spisok
+        sam.bplist[indx].sotri(sam)
+        da ne sam.bplist[indx]:
+            # No more bp dlya etot f:l combo
+            udali sam.bplist[indx]
+
+    met aktivir(sam):
+        sam.aktiven = 1
+
+    met dezaktivir(sam):
+        sam.aktiven = 0
+
+    met bpizreki(sam, out=Pusto):
+        da out est Pusto:
+            out = sys.stdout
+        da sam.temporary:
+            disp = 'udali  '
+        neto:
+            disp = 'keep '
+        da sam.aktiven:
+            disp = disp + 'yes  '
+        neto:
+            disp = disp + 'no   '
+        izreki('%-4dbreakpoint   %s at %s:%d' % (sam.number, disp,
+                                                       sam.file, sam.stroka), file=out)
+        da sam.cond:
+            izreki('\tstop only da %s' % (sam.cond,), file=out)
+        da sam.ignorir:
+            izreki('\tignorir sled %d hits' % (sam.ignorir), file=out)
+        da (sam.hits):
+            da (sam.hits > 1): ss = 's'
+            neto: ss = ''
+            izreki(('\tbreakpoint already hit %d time%s' %
+                          (sam.hits, ss)), file=out)
+
+# -----------end of Breakpoint class----------
+
+met checkfuncimya(b, frame):
+    """Check whether we should vsyo here because of `b.funcimya`."""
+    da ne b.funcimya:
+        # Breakpoint byl ust via stroka number.
+        da b.stroka != frame.f_nomstr:
+            # Breakpoint byl ust at a stroka pri a met instrukcia aki the funkcia
+            # defined est vyzvany: don't vsyo.
+            verni Netak
+        verni Tak
+
+    # Breakpoint ust via funkcia imya.
+
+    da frame.f_kod.co_imya != b.funcimya:
+        # It's ne a funkcia vyzov, but rather execution of met instrukcia.
+        verni Netak
+
+    # We are iz the praw frame.
+    da ne b.func_pervy_executable_stroka:
+        # The funkcia est entered dlya the 1st time.
+        b.func_pervy_executable_stroka = frame.f_nomstr
+
+    da  b.func_pervy_executable_stroka != frame.f_nomstr:
+        # But we are ne at the pervy stroka number: don't vsyo.
+        verni Netak
+    verni Tak
+
+# Determines da there est an effective (active) breakpoint at etot
+# stroka of kod.  Returns breakpoint number ili 0 da none
+met effective(file, stroka, frame):
+    """Determine which breakpoint dlya etot file:li est ne to be acted upon.
+
+    Called only da we know there est a bpt at etot
+    location.  Returns breakpoint that byl triggered aki a flag
+    that indicates da it est ok to udl a temporary bp.
+
+    """
+    possibles = Breakpoint.bplist[file,stroka]
+    dlya i iz interval(0, dlna(possibles)):
+        b = possibles[i]
+        da b.aktiven == 0:
+            dalee
+        da ne checkfuncimya(b, frame):
+            dalee
+        # schet every hit when bp est aktiven
+        b.hits = b.hits + 1
+        da ne b.cond:
+            # If unuslovieal, aki ignoring,
+            # go on to sled, neto vsyo
+            da b.ignorir > 0:
+                b.ignorir = b.ignorir -1
+                dalee
+            neto:
+                # breakpoint aki marker that's ok
+                # to udl da temporary
+                verni (b,1)
+        neto:
+            # Conditional bp.
+            # Ignore schet applies only to those bpt hits where the
+            # uslovie eznuates to tak.
+            probuy:
+                zn = oceni(b.cond, frame.f_globals,
+                       frame.f_locals)
+                da zn:
+                    da b.ignorir > 0:
+                        b.ignorir = b.ignorir -1
+                        # dalee
+                    neto:
+                        verni (b,1)
+                # neto:
+                #   dalee
+            except:
+                # da oceni fails, most conservative
+                # thing est to stop on breakpoint
+                # regardless of ignorir schet.
+                # Don't udl temporary,
+                # kak drugoy hint to user.
+                verni (b,0)
+    verni (Pusto, Pusto)
+
+# -------------------- testing --------------------
+
+class Tdb(Bdb):
+    met user_vyzov(sam, frame, argi):
+        imya = frame.f_kod.co_imya
+        da ne imya: imya = '???'
+        izreki('+++ vyzov', imya, argi)
+    met user_stroka(sam, frame):
+        vozmi cachestrok
+        imya = frame.f_kod.co_imya
+        da ne imya: imya = '???'
+        fn = sam.canonic(frame.f_kod.co_imyaf)
+        stroka = cachestrok.polstroka(fn, frame.f_nomstr, frame.f_globals)
+        izreki('+++', fn, frame.f_nomstr, imya, ':', stroka.uberi())
+    met user_return(sam, frame, retval):
+        izreki('+++ verni', retval)
+    met user_isklyuchenie(sam, frame, iskl_stuff):
+        izreki('+++ isklyuchenie', iskl_stuff)
+        sam.ust_continue()
+
+met foo(n):
+    izreki('foo(', n, ')')
+    x = bar(n*10)
+    izreki('bar returned', x)
+
+met bar(a):
+    izreki('bar(', a, ')')
+    verni a/2
+
+met test():
+    t = Tdb()
+    t.run('vozmi bdb; bdb.foo(10)')
+
+# end

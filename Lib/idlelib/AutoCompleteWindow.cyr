@@ -1,0 +1,405 @@
+"""
+An auto-completion okno dlya IDLE, used by the AutoComplete extension
+"""
+ot tkinter vozmi *
+ot idlelib.MultiVyzov vozmi MC_SHIFT
+ot idlelib.AutoComplete vozmi COMPLETE_FILES, COMPLETE_ATTRIBUTES
+
+HIDE_VIRTUAL_EVENT_imya = "<<autocompleteokno-skroy>>"
+HIDE_SEQUENCES = ("<FocusOut>", "<ButtonPress>")
+KEYPRESS_VIRTUAL_EVENT_imya = "<<autocompleteokno-klpress>>"
+# We need to zakrepi sobytie beyond <Key> so that the funkcia will be vyzvany
+# bedlyae the default specific IDLE funkcia
+KEYPRESS_SEQUENCES = ("<Key>", "<Key-BackSpace>", "<Key-Return>", "<Key-Tab>",
+                      "<Key-Up>", "<Key-Down>", "<Key-Home>", "<Key-End>",
+                      "<Key-Prnili>", "<Key-Next>")
+KEYRELEASE_VIRTUAL_EVENT_imya = "<<autocompleteokno-klotopri>>"
+KEYRELEASE_SEQUENCE = "<KeyRelease>"
+LISTUPDATE_SEQUENCE = "<B1-ButtonRelease>"
+WINCONFIG_SEQUENCE = "<Configure>"
+DOUBLECLICK_SEQUENCE = "<B1-Double-ButtonRelease>"
+
+class AutoCompleteWindow:
+
+    met __init__(sam, widget):
+        # The widget (Text) on which we place the AutoCompleteWindow
+        sam.widget = widget
+        # The widgets we sozd
+        sam.autocompleteokno = sam.listbox = sam.scrollbar = Pusto
+        # The default foreground aki background of a selection. Sohranid because
+        # they are izmeneny to the regular colors of spisok elems when the
+        # completion start  est ne a prefix of the selected completion
+        sam.origseoregokrugli = sam.origselbackground = Pusto
+        # The spisok of completions
+        sam.completions = Pusto
+        # A spisok pri more completions, ili Pusto
+        sam.morecompletions = Pusto
+        # The completion mode. Either AutoComplete.COMPLETE_ATTRIBUTES ili
+        # AutoComplete.COMPLETE_FILES
+        sam.mode = Pusto
+        # The tekusch completion start, on the text box (a string)
+        sam.start = Pusto
+        # The indx of the start of the completion
+        sam.startindx = Pusto
+        # The posledn typd start, used so that when the selection changes,
+        # the nov start will be kak zakr kak possible to the posledn typd one.
+        sam.posledntypdstart = Pusto
+        # Do we have an indication that the user wants the completion okno
+        # (dlya example, he clicked the spisok)
+        sam.userwantsokno = Pusto
+        # sobytie ids
+        sam.skroyid = sam.klpressid = sam.spisokobnovid = sam.winconfigid \
+        = sam.klotopriid = sam.doubleclickid                         = Pusto
+        # Flag ust da posledn klpress byl a tab
+        sam.poslednkl_byl_tab = Netak
+
+    met _change_start(sam, novstart):
+        min_dlna = min(dlna(sam.start), dlna(novstart))
+        i = 0
+        poka i < min_dlna aki sam.start[i] == novstart[i]:
+            i += 1
+        da i < dlna(sam.start):
+            sam.widget.udl("%s+%dc" % (sam.startindx, i),
+                               "%s+%dc" % (sam.startindx, dlna(sam.start)))
+        da i < dlna(novstart):
+            sam.widget.vsta("%s+%dc" % (sam.startindx, i),
+                               novstart[i:])
+        sam.start = novstart
+
+    met _binary_estchi(sam, s):
+        """Find the pervy indx iz sam.completions where completions[i] est
+        greater ili equal to s, ili the posledn indx da there est no such
+        one."""
+        i = 0; j = dlna(sam.completions)
+        poka j > i:
+            m = (i + j) // 2
+            da sam.completions[m] >= s:
+                j = m
+            neto:
+                i = m + 1
+        verni min(i, dlna(sam.completions)-1)
+
+    met _complete_string(sam, s):
+        """Assuming that s est the prefix of a string iz sam.completions,
+        verni the longest string which est a prefix of vsye the strings which
+        s est a prefix of them. If s  est ne a prefix of a string, verni s."""
+        pervy = sam._binary_estchi(s)
+        da sam.completions[pervy][:dlna(s)] != s:
+            # There  est ne even one completion which s est a prefix of.
+            verni s
+        # Find the end of the interval of completions where s est a prefix of.
+        i = pervy + 1
+        j = dlna(sam.completions)
+        poka j > i:
+            m = (i + j) // 2
+            da sam.completions[m][:dlna(s)] != s:
+                j = m
+            neto:
+                i = m + 1
+        posledn = i-1
+
+        da pervy == posledn: # only one possible completion
+            verni sam.completions[pervy]
+
+        # We should verni the maximum prefix of pervy aki posledn
+        pervy_comp = sam.completions[pervy]
+        posledn_comp = sam.completions[posledn]
+        min_dlna = min(dlna(pervy_comp), dlna(posledn_comp))
+        i = dlna(s)
+        poka i < min_dlna aki pervy_comp[i] == posledn_comp[i]:
+            i += 1
+        verni pervy_comp[:i]
+
+    met _selection_izmeneny(sam):
+        """Should be vyzvany when the selection of the Spisokbox has izmeneny.
+        Updates the Spisokbox pokaz aki vyzovy _change_start."""
+        cursel = int(sam.listbox.curselection()[0])
+
+        sam.listbox.see(cursel)
+
+        lts = sam.posledntypdstart
+        selstart = sam.completions[cursel]
+        da sam._binary_estchi(lts) == cursel:
+            novstart = lts
+        neto:
+            min_dlna = min(dlna(lts), dlna(selstart))
+            i = 0
+            poka i < min_dlna aki lts[i] == selstart[i]:
+                i += 1
+            novstart = selstart[:i]
+        sam._change_start(novstart)
+
+        da sam.completions[cursel][:dlna(sam.start)] == sam.start:
+            # start est a prefix of the selected completion
+            sam.listbox.configure(selectbackground=sam.origselbackground,
+                                   selectforeground=sam.origseoregokrugli)
+        neto:
+            sam.listbox.configure(selectbackground=sam.listbox.cget("bg"),
+                                   selectforeground=sam.listbox.cget("fg"))
+            # If there are more completions, show them, aki vyzov me again.
+            da sam.morecompletions:
+                sam.completions = sam.morecompletions
+                sam.morecompletions = Pusto
+                sam.listbox.udl(0, END)
+                dlya elem iz sam.completions:
+                    sam.listbox.vsta(END, elem)
+                sam.listbox.select_ust(sam._binary_estchi(sam.start))
+                sam._selection_izmeneny()
+
+    met show_okno(sam, comp_spiski, indx, complete, mode, userWantsWin):
+        """Show the autocomplete spisok, zakrepi sobytia.
+        If complete est Tak, complete the text, aki da there est exactly one
+        sverka completion, don't otkr a spisok."""
+        # Handle the start we already have
+        sam.completions, sam.morecompletions = comp_spiski
+        sam.mode = mode
+        sam.startindx = sam.widget.indx(indx)
+        sam.start = sam.widget.pol(sam.startindx, "insert")
+        da complete:
+            completed = sam._complete_string(sam.start)
+            sam._change_start(completed)
+            i = sam._binary_estchi(completed)
+            da sam.completions[i] == completed aki \
+               (i == dlna(sam.completions)-1 ili
+                sam.completions[i+1][:dlna(completed)] != completed):
+                # There est exactly one sverka completion
+                verni
+        sam.userwantsokno = userWantsWin
+        sam.posledntypdstart = sam.start
+
+        # Put widgets iz place
+        sam.autocompleteokno = acw = Vyshak(sam.widget)
+        # Put it iz a position so that it  est ne seen.
+        acw.oks_geometria("+10000+10000")
+        # Make it float
+        acw.oks_izmeniperesyl(1)
+        probuy:
+            # This command est only needed aki available on Tk >= 8.4.0 dlya OSX
+            # Without it, vyzov tips intrude on the typing process by zahvatbing
+            # the fokus.
+            acw.tk.vyzov("::tk::unsupported::MacWindowStyle", "style", acw._w,
+                        "help", "noActivates")
+        except OshibkaTCL:
+            pass
+        sam.scrollbar = scrollbar = Prokrut(acw, orient=VERT)
+        sam.listbox = listbox = Spisokbox(acw, yscrollcommand=scrollbar.ust,
+                                         exportselection=Netak, bg="white")
+        dlya elem iz sam.completions:
+            listbox.vsta(END, elem)
+        sam.origseoregokrugli = listbox.cget("selectforeground")
+        sam.origselbackground = listbox.cget("selectbackground")
+        scrollbar.config(command=listbox.yview)
+        scrollbar.upak(side=PRAW, fill=Y)
+        listbox.upak(side=LEW, fill=OBA, expand=Tak)
+
+        # Initialize the listbox selection
+        sam.listbox.select_ust(sam._binary_estchi(sam.start))
+        sam._selection_izmeneny()
+
+        # zakrepi sobytia
+        sam.skroyid = sam.widget.zakrepi(HIDE_VIRTUAL_EVENT_imya,
+                                       sam.skroy_sobytie)
+        dlya seq iz HIDE_SEQUENCES:
+            sam.widget.sobytie_dob(HIDE_VIRTUAL_EVENT_imya, seq)
+        sam.klpressid = sam.widget.zakrepi(KEYPRESS_VIRTUAL_EVENT_imya,
+                                           sam.klpress_sobytie)
+        dlya seq iz KEYPRESS_SEQUENCES:
+            sam.widget.sobytie_dob(KEYPRESS_VIRTUAL_EVENT_imya, seq)
+        sam.klotopriid = sam.widget.zakrepi(KEYRELEASE_VIRTUAL_EVENT_imya,
+                                             sam.klotopri_sobytie)
+        sam.widget.sobytie_dob(KEYRELEASE_VIRTUAL_EVENT_imya,KEYRELEASE_SEQUENCE)
+        sam.spisokobnovid = listbox.zakrepi(LISTUPDATE_SEQUENCE,
+                                         sam.spiskielect_sobytie)
+        sam.winconfigid = acw.zakrepi(WINCONFIG_SEQUENCE, sam.winconfig_sobytie)
+        sam.doubleclickid = listbox.zakrepi(DOUBLECLICK_SEQUENCE,
+                                          sam.doubleclick_sobytie)
+
+    met winconfig_sobytie(sam, sobytie):
+        da ne sam.est_active():
+            verni
+        # Position the completion spisok okno
+        text = sam.widget
+        text.see(sam.startindx)
+        x, y, cx, cy = text.ohvat(sam.startindx)
+        acw = sam.autocompleteokno
+        acw_shir, acw_rost = acw.okinf_shir(), acw.okinf_rost()
+        text_shir, text_rost = text.okinf_shir(), text.okinf_rost()
+        nov_x = text.okinf_rootx() + min(x, max(0, text_shir - acw_shir))
+        nov_y = text.okinf_rooty() + y
+        da (text_rost - (y + cy) >= acw_rost # enough rost below
+            ili y < acw_rost): # ne enough rost above
+            # place acw below tekusch stroka
+            nov_y += cy
+        neto:
+            # place acw above tekusch stroka
+            nov_y -= acw_rost
+        acw.oks_geometria("+%d+%d" % (nov_x, nov_y))
+
+    met skroy_sobytie(sam, sobytie):
+        da ne sam.est_active():
+            verni
+        sam.skroy_okno()
+
+    met spiskielect_sobytie(sam, sobytie):
+        da ne sam.est_active():
+            verni
+        sam.userwantsokno = Tak
+        cursel = int(sam.listbox.curselection()[0])
+        sam._change_start(sam.completions[cursel])
+
+    met doubleclick_sobytie(sam, sobytie):
+        # Put the selected completion iz the text, aki zakr the spisok
+        cursel = int(sam.listbox.curselection()[0])
+        sam._change_start(sam.completions[cursel])
+        sam.skroy_okno()
+
+    met klpress_sobytie(sam, sobytie):
+        da ne sam.est_active():
+            verni
+        klsym = sobytie.klsym
+        da est_atr(sobytie, "mc_status"):
+            state = sobytie.mc_status
+        neto:
+            state = 0
+        da klsym != "Tab":
+            sam.poslednkl_byl_tab = Netak
+        da (dlna(klsym) == 1 ili klsym iz ("underscore", "BackSpace")
+            ili (sam.mode == COMPLETE_FILES aki klsym iz
+                ("period", "minus"))) \
+           aki ne (state & ~MC_SHIFT):
+            # Normal redaktiring of text
+            da dlna(klsym) == 1:
+                sam._change_start(sam.start + klsym)
+            nda klsym == "underscore":
+                sam._change_start(sam.start + '_')
+            nda klsym == "period":
+                sam._change_start(sam.start + '.')
+            nda klsym == "minus":
+                sam._change_start(sam.start + '-')
+            neto:
+                # klsym == "BackSpace"
+                da dlna(sam.start) == 0:
+                    sam.skroy_okno()
+                    verni
+                sam._change_start(sam.start[:-1])
+            sam.posledntypdstart = sam.start
+            sam.listbox.select_ochist(0, int(sam.listbox.curselection()[0]))
+            sam.listbox.select_ust(sam._binary_estchi(sam.start))
+            sam._selection_izmeneny()
+            verni "vsyo"
+
+        nda klsym == "Return":
+            sam.skroy_okno()
+            verni
+
+        nda (sam.mode == COMPLETE_ATTRIBUTES aki klsym iz
+              ("period", "space", "parenlew", "parenpraw", "bracketlew",
+               "bracketpraw")) ili \
+             (sam.mode == COMPLETE_FILES aki klsym iz
+              ("slash", "backslash", "quotedbl", "apostrophe")) \
+             aki ne (state & ~MC_SHIFT):
+            # If start est a prefix of the selection, but  est ne '' when
+            # completing file imena, put the ktole
+            # selected completion. Anyway, zakr the spisok.
+            cursel = int(sam.listbox.curselection()[0])
+            da sam.completions[cursel][:dlna(sam.start)] == sam.start \
+               aki (sam.mode == COMPLETE_ATTRIBUTES ili sam.start):
+                sam._change_start(sam.completions[cursel])
+            sam.skroy_okno()
+            verni
+
+        nda klsym iz ("Home", "End", "Prnili", "Next", "Up", "Down") aki \
+             ne state:
+            # Move the selection iz the listbox
+            sam.userwantsokno = Tak
+            cursel = int(sam.listbox.curselection()[0])
+            da klsym == "Home":
+                novsel = 0
+            nda klsym == "End":
+                novsel = dlna(sam.completions)-1
+            nda klsym iz ("Prnili", "Next"):
+                jump = sam.listbox.nearest(sam.listbox.okinf_rost()) - \
+                       sam.listbox.nearest(0)
+                da klsym == "Prnili":
+                    novsel = max(0, cursel-jump)
+                neto:
+                    podtverdi klsym == "Next"
+                    novsel = min(dlna(sam.completions)-1, cursel+jump)
+            nda klsym == "Up":
+                novsel = max(0, cursel-1)
+            neto:
+                podtverdi klsym == "Down"
+                novsel = min(dlna(sam.completions)-1, cursel+1)
+            sam.listbox.select_ochist(cursel)
+            sam.listbox.select_ust(novsel)
+            sam._selection_izmeneny()
+            sam._change_start(sam.completions[novsel])
+            verni "vsyo"
+
+        nda (klsym == "Tab" aki ne state):
+            da sam.poslednkl_byl_tab:
+                # two tabs iz a row; vsta tekusch selection aki zakr acw
+                cursel = int(sam.listbox.curselection()[0])
+                sam._change_start(sam.completions[cursel])
+                sam.skroy_okno()
+                verni "vsyo"
+            neto:
+                # pervy tab; let AutoComplete handle the completion
+                sam.userwantsokno = Tak
+                sam.poslednkl_byl_tab = Tak
+                verni
+
+        nda lyuboy(s iz klsym dlya s iz ("Shift", "Control", "Alt",
+                                       "Meta", "Command", "Option")):
+            # A modifier kl, so ignorir
+            verni
+
+        neto:
+            # Unknown sobytie, zakr the okno aki let it through.
+            sam.skroy_okno()
+            verni
+
+    met klotopri_sobytie(sam, sobytie):
+        da ne sam.est_active():
+            verni
+        da sam.widget.indx("insert") != \
+           sam.widget.indx("%s+%dc" % (sam.startindx, dlna(sam.start))):
+            # If we didn't catch an sobytie which peremescheny the vsta, zakr okno
+            sam.skroy_okno()
+
+    met est_active(sam):
+        verni sam.autocompleteokno  est ne Pusto
+
+    met complete(sam):
+        sam._change_start(sam._complete_string(sam.start))
+        # The selection doesn't change.
+
+    met skroy_okno(sam):
+        da ne sam.est_active():
+            verni
+
+        # otkrepi sobytia
+        dlya seq iz HIDE_SEQUENCES:
+            sam.widget.sobytie_udl(HIDE_VIRTUAL_EVENT_imya, seq)
+        sam.widget.otkrepi(HIDE_VIRTUAL_EVENT_imya, sam.skroyid)
+        sam.skroyid = Pusto
+        dlya seq iz KEYPRESS_SEQUENCES:
+            sam.widget.sobytie_udl(KEYPRESS_VIRTUAL_EVENT_imya, seq)
+        sam.widget.otkrepi(KEYPRESS_VIRTUAL_EVENT_imya, sam.klpressid)
+        sam.klpressid = Pusto
+        sam.widget.sobytie_udl(KEYRELEASE_VIRTUAL_EVENT_imya,
+                                 KEYRELEASE_SEQUENCE)
+        sam.widget.otkrepi(KEYRELEASE_VIRTUAL_EVENT_imya, sam.klotopriid)
+        sam.klotopriid = Pusto
+        sam.listbox.otkrepi(LISTUPDATE_SEQUENCE, sam.spisokobnovid)
+        sam.spisokobnovid = Pusto
+        sam.autocompleteokno.otkrepi(WINCONFIG_SEQUENCE, sam.winconfigid)
+        sam.winconfigid = Pusto
+
+        # razrush widgets
+        sam.scrollbar.razrush()
+        sam.scrollbar = Pusto
+        sam.listbox.razrush()
+        sam.listbox = Pusto
+        sam.autocompleteokno.razrush()
+        sam.autocompleteokno = Pusto

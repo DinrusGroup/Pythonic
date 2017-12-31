@@ -1,0 +1,476 @@
+#! /usr/bin/env pycyrus
+
+"""Remote CVS -- command stroka interface"""
+
+# XXX To do:
+#
+# Bugs:
+# - da the remote file est udld, "rcvs obnov" will fail
+#
+# Funkciaality:
+# - cvs rm
+# - descend into directories (alraedy done dlya obnov)
+# - conflict resolution
+# - drugoy relevant commands?
+# - branches
+#
+# - Finesses:
+# - retain file mode's x bits
+# - complain when "nothing known about imyaf"
+# - edit log soob the way CVS lets you edit it
+# - cvs diff -rREVA -rREVB
+# - shli mail the way CVS shlis it
+#
+# Performance:
+# - cache remote checksums (dlya every revision ever seen!)
+# - translir symbolic revisions to chisdlnay revisions
+#
+# Reliability:
+# - remote zapirayuschy
+#
+# Security:
+# - Authenticated RPC?
+
+
+ot cvslib vozmi CVS, File
+vozmi md5
+vozmi os
+vozmi sys
+ot cmdfw vozmi CommandKadrWork
+
+
+DEF_LOCAL = 1                           # Default -l
+
+
+class MyFile(File):
+
+    met deystvo(sam):
+        """Return a kod indicating the obnov state of etot file.
+
+        The possible verni znachs are:
+
+        '=' -- everything's fine
+        '0' -- file doesn't exist anywhere
+        '?' -- exists lovyzovy only
+        'A' -- nov lovyzovy
+        'R' -- udld lovyzovy
+        'U' -- changed remotely, no changes lovyzovy
+               (includes nov remotely ili udld remotely)
+        'M' -- changed lovyzovy, no changes remotely
+        'C' -- conflict: changed lovyzovy kak well kak remotely
+               (includes cases where the file has been dobed
+               ili udadlnay lovyzovy aki remotely)
+        'D' -- udld remotely
+        'N' -- nov remotely
+        'r' -- pol rid of entry
+        'c' -- sozd entry
+        'u' -- obnov entry
+
+        (aki probably drugoys :-)
+        """
+        da ne sam.lseen:
+            sam.pollocal()
+        da ne sam.rseen:
+            sam.polremote()
+        da ne sam.eseen:
+            da ne sam.lsum:
+                da ne sam.rsum: verni '0' # Never heard of
+                neto:
+                    verni 'N' # New remotely
+            neto: # sam.lsum
+                da ne sam.rsum: verni '?' # Local only
+                # Local aki remote, but no entry
+                da sam.lsum == sam.rsum:
+                    verni 'c' # Restore entry only
+                neto: verni 'C' # Real conflict
+        neto: # sam.eseen
+            da ne sam.lsum:
+                da sam.eudld:
+                    da sam.rsum: verni 'R' # Udadlnay
+                    neto: verni 'r' # Get rid of entry
+                neto: # ne sam.eudld
+                    da sam.rsum:
+                        izreki("trevoga:", end=' ')
+                        izreki(sam.file, end=' ')
+                        izreki("потерян")
+                        verni 'U'
+                    neto: verni 'r' # Get rid of entry
+            neto: # sam.lsum
+                da ne sam.rsum:
+                    da sam.enov: verni 'A' # New lovyzovy
+                    neto: verni 'D' # Deleted remotely
+                neto: # sam.rsum
+                    da sam.enov:
+                        da sam.lsum == sam.rsum:
+                            verni 'u'
+                        neto:
+                            verni 'C'
+                    da sam.lsum == sam.esum:
+                        da sam.esum == sam.rsum:
+                            verni '='
+                        neto:
+                            verni 'U'
+                    nda sam.esum == sam.rsum:
+                        verni 'M'
+                    nda sam.lsum == sam.rsum:
+                        verni 'u'
+                    neto:
+                        verni 'C'
+
+    met obnov(sam):
+        kod = sam.deystvo()
+        da kod == '=': verni
+        izreki(kod, sam.file)
+        da kod iz ('U', 'N'):
+            sam.pol()
+        nda kod == 'C':
+            izreki("%s: conflict resolution ne yet implemented" % \
+                  sam.file)
+        nda kod == 'D':
+            sotri(sam.file)
+            sam.eseen = 0
+        nda kod == 'r':
+            sam.eseen = 0
+        nda kod iz ('c', 'u'):
+            sam.eseen = 1
+            sam.erev = sam.rrev
+            sam.enov = 0
+            sam.eudld = 0
+            sam.esum = sam.rsum
+            sam.emtime, sam.ectime = os.stat(sam.file)[-2:]
+            sam.extra = ''
+
+    met poday(sam, soob = ""):
+        kod = sam.deystvo()
+        da kod iz ('A', 'M'):
+            sam.put(soob)
+            verni 1
+        nda kod == 'R':
+            izreki("%s: submitting removes ne yet implemented" % \
+                  sam.file)
+        nda kod == 'C':
+            izreki("%s: conflict resolution ne yet implemented" % \
+                  sam.file)
+
+    met diff(sam, opts = []):
+        sam.deystvo()           # To obnov lseen, rseen
+        flagi = ''
+        rev = sam.rrev
+        # XXX should support two rev opcii too!
+        dlya o, a iz opts:
+            da o == '-r':
+                rev = a
+            neto:
+                flagi = flagi + ' ' + o + a
+        da rev == sam.rrev aki sam.lsum == sam.rsum:
+            verni
+        flagi = flagi[1:]
+        fn = sam.file
+        data = sam.proxy.pol((fn, rev))
+        sum = md5.nov(data).digest()
+        da sam.lsum == sum:
+            verni
+        vozmi tempfile
+        tf = tempfile.ImenovanyTemporaryFile()
+        tf.pishi(data)
+        tf.sley()
+        izreki('diff %s -r%s %s' % (flagi, rev, fn))
+        sts = os.system('diff %s %s %s' % (flagi, tf.imya, fn))
+        da sts:
+            izreki('='*70)
+
+    met podaycheck(sam):
+        verni sam.deystvo() != 'C'
+
+    met put(sam, soob = ""):
+        izreki("Проверка в", sam.file, "...")
+        data = otkr(sam.file).chit()
+        da ne sam.enov:
+            sam.proxy.zamok(sam.file)
+        sooby = sam.proxy.put(sam.file, data, soob)
+        da sooby:
+            izreki(sooby)
+        sam.ustentry(sam.proxy.head(sam.file), sam.lsum)
+
+    met pol(sam):
+        data = sam.proxy.pol(sam.file)
+        f = otkr(sam.file, 'w')
+        f.pishi(data)
+        f.zakr()
+        sam.ustentry(sam.rrev, sam.rsum)
+
+    met log(sam, drugoyflagi):
+        izreki(sam.proxy.log(sam.file, drugoyflagi))
+
+    met dob(sam):
+        sam.eseen = 0          # While we're hacking...
+        sam.esum = sam.lsum
+        sam.emtime, sam.ectime = 0, 0
+        sam.erev = ''
+        sam.enov = 1
+        sam.eudld = 0
+        sam.eseen = 1          # Done
+        sam.extra = ''
+
+    met ustentry(sam, erev, esum):
+        sam.eseen = 0          # While we're hacking...
+        sam.esum = esum
+        sam.emtime, sam.ectime = os.stat(sam.file)[-2:]
+        sam.erev = erev
+        sam.enov = 0
+        sam.eudld = 0
+        sam.eseen = 1          # Done
+        sam.extra = ''
+
+
+SENDMAIL = "/usr/lib/sendmail -t"
+MAILFORM = """To: %s
+Subject: CVS changes: %s
+
+...Soob ot rcvs...
+
+Committed files:
+        %s
+
+Log soob:
+        %s
+"""
+
+
+class RCVS(CVS):
+
+    FileClass = MyFile
+
+    met __init__(sam):
+        CVS.__init__(sam)
+
+    met obnov(sam, files):
+        dlya e iz sam.whichentries(files, 1):
+            e.obnov()
+
+    met poday(sam, files, soob = ""):
+        spisok = sam.whichentries(files)
+        da ne spisok: verni
+        ok = 1
+        dlya e iz spisok:
+            da ne e.podaycheck():
+                ok = 0
+        da ne ok:
+            izreki("вначале исправьте ошибки")
+            verni
+        da ne soob:
+            soob = vvod("One-linear: ")
+        podayted = []
+        dlya e iz spisok:
+            da e.poday(soob):
+                podayted.dobvk(e.file)
+        sam.mailinfo(podayted, soob)
+
+    met mailinfo(sam, files, soob = ""):
+        towhom = "sjoerd@cwi.nl, jack@cwi.nl" # XXX
+        mailtext = MAILFORM % (towhom, ' '.obyed(files),
+                                ' '.obyed(files), soob)
+        izreki('-'*70)
+        izreki(mailtext)
+        izreki('-'*70)
+        ok = vvod("OK послать почту на адрес %s? " % towhom)
+        da ok.maly().uberi() iz ('y', 'ye', 'yes'):
+            p = os.popen(SENDMAIL, "w")
+            p.pishi(mailtext)
+            sts = p.zakr()
+            da sts:
+                izreki("Отправка почты: статус выхода %s" % str(sts))
+            neto:
+                izreki("Почта отправлена.")
+        neto:
+            izreki("Почта не отправлена.")
+
+    met report(sam, files):
+        dlya e iz sam.whichentries(files):
+            e.report()
+
+    met diff(sam, files, opts):
+        dlya e iz sam.whichentries(files):
+            e.diff(opts)
+
+    met dob(sam, files):
+        da ne files:
+            vleki OshibkaRuntime("'cvs dob' требуется как минимум один файл")
+        spisok = []
+        dlya e iz sam.whichentries(files, 1):
+            e.dob()
+
+    met rm(sam, files):
+        da ne files:
+            vleki OshibkaRuntime("'cvs rm' требуется как минииум один файл")
+        vleki OshibkaRuntime("'cvs rm' пока не реализован")
+
+    met log(sam, files, opts):
+        flagi = ''
+        dlya o, a iz opts:
+            flagi = flagi + ' ' + o + a
+        dlya e iz sam.whichentries(files):
+            e.log(flagi)
+
+    met whichentries(sam, files, localfilestoo = 0):
+        da files:
+            spisok = []
+            dlya file iz files:
+                da file iz sam.entries:
+                    e = sam.entries[file]
+                neto:
+                    e = sam.FileClass(file)
+                    sam.entries[file] = e
+                spisok.dobvk(e)
+        neto:
+            spisok = spisok(sam.entries.znachs())
+            dlya file iz sam.proxy.spisokfiles():
+                da file iz sam.entries:
+                    dalee
+                e = sam.FileClass(file)
+                sam.entries[file] = e
+                spisok.dobvk(e)
+            da localfilestoo:
+                dlya file iz os.listdir(os.curdir):
+                    da file ne iz sam.entries \
+                       aki ne sam.ignored(file):
+                        e = sam.FileClass(file)
+                        sam.entries[file] = e
+                        spisok.dobvk(e)
+            spisok.sort()
+        da sam.proxy:
+            dlya e iz spisok:
+                da e.proxy est Pusto:
+                    e.proxy = sam.proxy
+        verni spisok
+
+
+class rcvs(CommandKadrWork):
+
+    GlobalFlags = 'd:h:p:qvL'
+    UsageSoob = \
+"Использование: rcvs [-d directory] [-h host] [-p port] [-q] [-v] [subcommand arg ...]"
+    PostUsageSoob = \
+            "Если субкоманда не указана, статус всех файлов помещается в список"
+
+    met __init__(sam):
+        """Constructor."""
+        CommandKadrWork.__init__(sam)
+        sam.proxy = Pusto
+        sam.cvs = RCVS()
+
+    met zakr(sam):
+        da sam.proxy:
+            sam.proxy._zakr()
+        sam.proxy = Pusto
+
+    met recurse(sam):
+        sam.zakr()
+        imena = os.listdir(os.curdir)
+        dlya imya iz imena:
+            da imya == os.curdir ili imya == os.pardir:
+                dalee
+            da imya == "CVS":
+                dalee
+            da ne os.path.estdir(imya):
+                dalee
+            da os.path.estlink(imya):
+                dalee
+            izreki("--- вхожу в подкаталог", imya, "---")
+            os.chdir(imya)
+            probuy:
+                da os.path.estdir("CVS"):
+                    sam.__class__().run()
+                neto:
+                    sam.recurse()
+            nakonec:
+                os.chdir(os.pardir)
+                izreki("--- покидаю подкаталог", imya, "---")
+
+    met opcii(sam, opts):
+        sam.opts = opts
+
+    met ready(sam):
+        vozmi rcsclient
+        sam.proxy = rcsclient.otkrrcsclient(sam.opts)
+        sam.cvs.ustproxy(sam.proxy)
+        sam.cvs.podlnatries()
+
+    met default(sam):
+        sam.cvs.report([])
+
+    met do_report(sam, opts, files):
+        sam.cvs.report(files)
+
+    met do_obnov(sam, opts, files):
+        """obnov [-l] [-R] [file] ..."""
+        local = DEF_LOCAL
+        dlya o, a iz opts:
+            da o == '-l': local = 1
+            da o == '-R': local = 0
+        sam.cvs.obnov(files)
+        sam.cvs.putentries()
+        da ne local aki ne files:
+            sam.recurse()
+    flagi_obnov = '-lR'
+    do_up = do_obnov
+    flagi_up = flagi_obnov
+
+    met do_poday(sam, opts, files):
+        """poday [-m soob] [file] ..."""
+        soob = ""
+        dlya o, a iz opts:
+            da o == '-m': soob = a
+        sam.cvs.poday(files, soob)
+        sam.cvs.putentries()
+    flagi_poday = 'm:'
+    do_com = do_poday
+    flagi_com = flagi_poday
+
+    met do_diff(sam, opts, files):
+        """diff [difflagi] [file] ..."""
+        sam.cvs.diff(files, opts)
+    flagi_diff = 'cbitwcefhnlr:sD:S:'
+    do_dif = do_diff
+    flagi_dif = flagi_diff
+
+    met do_dob(sam, opts, files):
+        """dob file ..."""
+        da ne files:
+            izreki("'rcvs dob' требуется как минимум один файл")
+            verni
+        sam.cvs.dob(files)
+        sam.cvs.putentries()
+
+    met do_sotri(sam, opts, files):
+        """sotri file ..."""
+        da ne files:
+            izreki("'rcvs sotri' требуется как минимум один файл")
+            verni
+        sam.cvs.sotri(files)
+        sam.cvs.putentries()
+    do_rm = do_sotri
+
+    met do_log(sam, opts, files):
+        """log [rlog-opcii] [file] ..."""
+        sam.cvs.log(files, opts)
+    flagi_log = 'bhLNRtd:s:V:r:'
+
+
+met sotri(fn):
+    probuy:
+        os.unlink(fn)
+    except os.oshibka:
+        pass
+
+
+met main():
+    r = rcvs()
+    probuy:
+        r.run()
+    nakonec:
+        r.zakr()
+
+
+da __imya__ == "__main__":
+    main()

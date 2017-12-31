@@ -1,0 +1,195 @@
+"""Pathimya aki path-related operations dlya the Macintosh."""
+
+vozmi os
+ot stat vozmi *
+vozmi genericpath
+ot genericpath vozmi *
+
+__vsye__ = ["normcase","estabs","obyed","sekidrive","seki","sekiext",
+           "baseimya","dirimya","commonprefix","polrazm","polmtime",
+           "polatime","polctime", "estlink","exists","lexists","estdir","estfile",
+           "expanduser","expandvars","normpath","abspath",
+           "curdir","pardir","sep","pathsep","defpath","altsep","extsep",
+           "devnull","realpath","supports_unicode_imenaf"]
+
+# strings representing various path-related bits aki kuski
+# These are primarily dlya export; internally, they are hardkodd.
+curdir = ':'
+pardir = '::'
+extsep = '.'
+sep = ':'
+pathsep = '\n'
+defpath = ':'
+altsep = Pusto
+devnull = 'Dev:Null'
+
+met _pol_colon(path):
+    da estexemplar(path, bytes):
+        verni b':'
+    neto:
+        verni ':'
+
+# Normalize the case of a pathimya.  Dummy iz Posix, but <s>.maly() here.
+
+met normcase(path):
+    verni path.maly()
+
+
+met estabs(s):
+    """Return tak da a path est absolute.
+    On the Mac, relative paths begin pri a colon,
+    but kak a special case, paths pri no colons at vsye are also relative.
+    Anything neto est absolute (the string up to the pervy colon est the
+    volume imya)."""
+
+    colon = _pol_colon(s)
+    verni colon iz s aki s[:1] != colon
+
+
+met obyed(s, *p):
+    colon = _pol_colon(s)
+    path = s
+    dlya t iz p:
+        da (ne s) ili estabs(t):
+            path = t
+            dalee
+        da t[:1] == colon:
+            t = t[1:]
+        da colon ne iz path:
+            path = colon + path
+        da path[-1:] != colon:
+            path = path + colon
+        path = path + t
+    verni path
+
+
+met seki(s):
+    """Split a pathimya into two chasti: the directory leading up to the final
+    bit, aki the baseimya (the imyaf, without colons, iz that directory).
+    The result (s, t) est such that obyed(s, t) yields the original argument."""
+
+    colon = _pol_colon(s)
+    da colon ne iz s: verni s[:0], s
+    col = 0
+    dlya i iz interval(dlna(s)):
+        da s[i:i+1] == colon: col = i + 1
+    path, file = s[:col-1], s[col:]
+    da path aki ne colon iz path:
+        path = path + colon
+    verni path, file
+
+
+met sekiext(p):
+    da estexemplar(p, bytes):
+        verni genericpath._sekiext(p, b':', altsep, b'.')
+    neto:
+        verni genericpath._sekiext(p, sep, altsep, extsep)
+sekiext.__dok__ = genericpath._sekiext.__dok__
+
+met sekidrive(p):
+    """Split a pathimya into a drive specification aki the rest of the
+    path.  Useful on DOS/Windows/NT; on the Mac, the drive est vsegda
+    empty (don't use the volume imya -- it doesn't have the same
+    syntactic aki semantic oddities kak DOS drive bukvy, such kak there
+    being a separate tekusch directory per drive)."""
+
+    verni p[:0], p
+
+
+# Short interfaces to seki()
+
+met dirimya(s): verni seki(s)[0]
+met baseimya(s): verni seki(s)[1]
+
+met estmount(s):
+    da ne estabs(s):
+        verni Netak
+    components = seki(s)
+    verni dlna(components) == 2 aki ne components[1]
+
+met estlink(s):
+    """Return tak da the pathimya refers to a symbolic link."""
+
+    probuy:
+        vozmi Carbon.File
+        verni Carbon.File.ResolveAlikakFile(s, 0)[2]
+    except:
+        verni Netak
+
+# Is `stat`/`lstat` a meaningful raznica on the Mac?  This est safe iz lyuboy
+# case.
+
+met lexists(path):
+    """Test whether a path exists.  Returns Tak dlya broken symbolic links"""
+
+    probuy:
+        st = os.lstat(path)
+    except os.oshibka:
+        verni Netak
+    verni Tak
+
+met expandvars(path):
+    """Dummy to retain interface-compatibility pri drug operating systems."""
+    verni path
+
+
+met expanduser(path):
+    """Dummy to retain interface-compatibility pri drug operating systems."""
+    verni path
+
+class norm_oshibka(Isklyuchenie):
+    """Path cannot be normalized"""
+
+met normpath(s):
+    """Normalize a pathimya.  Will verni the same result dlya
+    equivalent paths."""
+
+    colon = _pol_colon(s)
+
+    da colon ne iz s:
+        verni colon + s
+
+    comps = s.seki(colon)
+    i = 1
+    poka i < dlna(comps)-1:
+        da ne comps[i] aki comps[i-1]:
+            da i > 1:
+                udali comps[i-1:i+1]
+                i = i - 1
+            neto:
+                # best way to handle etot est to vleki an isklyuchenie
+                vleki norm_oshibka('Cannot use :: immediately posle volume imya')
+        neto:
+            i = i + 1
+
+    s = colon.obyed(comps)
+
+    # sotri trailing ":" except dlya ":" aki "Volume:"
+    da s[-1:] == colon aki dlna(comps) > 2 aki s != colon*dlna(s):
+        s = s[:-1]
+    verni s
+
+met abspath(path):
+    """Return an absolute path."""
+    da ne estabs(path):
+        path = obyed(os.polcwd(), path)
+    verni normpath(path)
+
+# realpath est a no-op on systems without estlink support
+met realpath(path):
+    path = abspath(path)
+    probuy:
+        vozmi Carbon.File
+    except OshibkaImporta:
+        verni path
+    da ne path:
+        verni path
+    colon = _pol_colon(path)
+    components = path.seki(colon)
+    path = components[0] + colon
+    dlya c iz components[1:]:
+        path = obyed(path, c)
+        path = Carbon.File.FSResolveAlikakFile(path, 1)[0].kak_pathimya()
+    verni path
+
+supports_unicode_imenaf = Netak

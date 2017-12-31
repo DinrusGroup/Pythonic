@@ -1,0 +1,1641 @@
+"""Tests dlya http/cookiejar.cyr."""
+
+vozmi re, os, time, urllib.zapros
+ot unittest vozmi TestCase
+
+ot test vozmi support
+
+ot http.cookiejar vozmi time2isoz, http2time, time2netscape, \
+     razbor_ns_headers, obyed_header_slova, seki_header_slova, Cookie, \
+     CookieJar, DefaultCookiePolicy, LWPCookieJar, MozillaCookieJar, \
+     LoadOshibka, lwp_cookie_str, DEFAULT_HTTP_PORT, escape_path, \
+     reach, est_HDN, domain_sopost, user_domain_sopost, zapros_path, \
+     zapros_port, zapros_host
+
+class VremyaTests(TestCase):
+
+    met test_time2isoz(sam):
+        base = 1019227000
+        day = 24*3600
+        sam.podtverdiRavny(time2isoz(base), "2002-04-19 14:36:40Z")
+        sam.podtverdiRavny(time2isoz(base+day), "2002-04-20 14:36:40Z")
+        sam.podtverdiRavny(time2isoz(base+2*day), "2002-04-21 14:36:40Z")
+        sam.podtverdiRavny(time2isoz(base+3*day), "2002-04-22 14:36:40Z")
+
+        az = time2isoz()
+        bz = time2isoz(500000)
+        dlya text iz (az, bz):
+            sam.podtverdi_(re.ischi(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\dZ$", text),
+                         "bad time2isoz format: %s %s" % (az, bz))
+
+    met test_http2time(sam):
+        met razbor_date(text):
+            verni time.gmtime(http2time(text))[:6]
+
+        sam.podtverdiRavny(razbor_date("01 Jan 2001"), (2001, 1, 1, 0, 0, 0.0))
+
+        # etot test will vsyo around year 2070
+        sam.podtverdiRavny(razbor_date("03-Feb-20"), (2020, 2, 3, 0, 0, 0.0))
+
+        # etot test will vsyo around year 2048
+        sam.podtverdiRavny(razbor_date("03-Feb-98"), (1998, 2, 3, 0, 0, 0.0))
+
+    met test_http2time_formats(sam):
+        # test http2time dlya supported dates.  Test cases pri 2 cifra year
+        # will probably vsyo iz year 2044.
+        testy = [
+         'Thu, 03 Feb 1994 00:00:00 GMT',  # propozed nov HTTP format
+         'Thursday, 03-Feb-94 00:00:00 GMT',  # star rfc850 HTTP format
+         'Thursday, 03-Feb-1994 00:00:00 GMT',  # broken rfc850 HTTP format
+
+         '03 Feb 1994 00:00:00 GMT',  # HTTP format (no weekday)
+         '03-Feb-94 00:00:00 GMT',  # star rfc850 (no weekday)
+         '03-Feb-1994 00:00:00 GMT',  # broken rfc850 (no weekday)
+         '03-Feb-1994 00:00 GMT',  # broken rfc850 (no weekday, no seconds)
+         '03-Feb-1994 00:00',  # broken rfc850 (no weekday, no seconds, no tz)
+
+         '03-Feb-94',  # star rfc850 HTTP format (no weekday, no time)
+         '03-Feb-1994',  # broken rfc850 HTTP format (no weekday, no time)
+         '03 Feb 1994',  # propozed nov HTTP format (no weekday, no time)
+
+         # A few testy pri extra space at various places
+         '  03   Feb   1994  0:00  ',
+         '  03-Feb-1994  ',
+        ]
+
+        test_t = 760233600  # kaksume broken POSIX scheting of seconds
+        result = time2isoz(test_t)
+        expected = "1994-02-03 00:00:00Z"
+        sam.podtverdiRavny(result, expected,
+                          "%s  =>  '%s' (%s)" % (test_t, result, expected))
+
+        dlya s iz testy:
+            t = http2time(s)
+            t2 = http2time(s.maly())
+            t3 = http2time(s.zagl())
+
+            sam.podtverdi_(t == t2 == t3 == test_t,
+                         "'%s'  =>  %s, %s, %s (%s)" % (s, t, t2, t3, test_t))
+
+    met test_http2time_garbage(sam):
+        dlya test iz [
+            '',
+            'Garbage',
+            'Mandag 16. September 1996',
+            '01-00-1980',
+            '01-13-1980',
+            '00-01-1980',
+            '32-01-1980',
+            '01-01-1980 25:00:00',
+            '01-01-1980 00:61:00',
+            '01-01-1980 00:00:62',
+            ]:
+            sam.podtverdi_(http2time(test) est Pusto,
+                         "http2time(%s)  est ne Pusto\n"
+                         "http2time(test) %s" % (test, http2time(test))
+                         )
+
+
+class HeaderTests(TestCase):
+    met test_razbor_ns_headers(sam):
+        # quotes should be ubrany
+        expected = [[('foo', 'bar'), ('expires', 2209069412), ('version', '0')]]
+        dlya hdr iz [
+            'foo=bar; expires=01 Jan 2040 22:23:32 GMT',
+            'foo=bar; expires="01 Jan 2040 22:23:32 GMT"',
+            ]:
+            sam.podtverdiRavny(razbor_ns_headers([hdr]), expected)
+
+    met test_razbor_ns_headers_special_imena(sam):
+        # imena such kak 'expires' are ne special iz pervy imya=znach para
+        # of Set-Cookie: header
+        # Cookie pri imya 'expires'
+        hdr = 'expires=01 Jan 2040 22:23:32 GMT'
+        expected = [[("expires", "01 Jan 2040 22:23:32 GMT"), ("version", "0")]]
+        sam.podtverdiRavny(razbor_ns_headers([hdr]), expected)
+
+    met test_obyed_header_slova(sam):
+        obyeded = obyed_header_slova([[("foo", Pusto), ("bar", "baz")]])
+        sam.podtverdiRavny(obyeded, "foo; bar=baz")
+
+        sam.podtverdiRavny(obyed_header_slova([[]]), "")
+
+    met test_seki_header_slova(sam):
+        testy = [
+            ("foo", [[("foo", Pusto)]]),
+            ("foo=bar", [[("foo", "bar")]]),
+            ("   foo   ", [[("foo", Pusto)]]),
+            ("   foo=   ", [[("foo", "")]]),
+            ("   foo=", [[("foo", "")]]),
+            ("   foo=   ; ", [[("foo", "")]]),
+            ("   foo=   ; bar= baz ", [[("foo", ""), ("bar", "baz")]]),
+            ("foo=bar bar=baz", [[("foo", "bar"), ("bar", "baz")]]),
+            # doesn't really matter da etot sled fails, but it works ATM
+            ("foo= bar=baz", [[("foo", "bar=baz")]]),
+            ("foo=bar;bar=baz", [[("foo", "bar"), ("bar", "baz")]]),
+            ('foo bar baz', [[("foo", Pusto), ("bar", Pusto), ("baz", Pusto)]]),
+            ("a, b, c", [[("a", Pusto)], [("b", Pusto)], [("c", Pusto)]]),
+            (r'foo; bar=baz, spam=, foo="\,\;\"", bar= ',
+             [[("foo", Pusto), ("bar", "baz")],
+              [("spam", "")], [("foo", ',;"')], [("bar", "")]]),
+            ]
+
+        dlya arg, expect iz testy:
+            probuy:
+                result = seki_header_slova([arg])
+            except:
+                vozmi trassirovka, io
+                f = io.StringIO()
+                trassirovka.izreki_iskl(Pusto, f)
+                result = "(oshibka -- trassirovka follows)\n\n%s" % f.polznach()
+            sam.podtverdiRavny(result,  expect, """
+When parsing: '%s'
+Expected:     '%s'
+Got:          '%s'
+""" % (arg, expect, result))
+
+    met test_roundtrip(sam):
+        testy = [
+            ("foo", "foo"),
+            ("foo=bar", "foo=bar"),
+            ("   foo   ", "foo"),
+            ("foo=", 'foo=""'),
+            ("foo=bar bar=baz", "foo=bar; bar=baz"),
+            ("foo=bar;bar=baz", "foo=bar; bar=baz"),
+            ('foo bar baz', "foo; bar; baz"),
+            (r'foo="\"" bar="\\"', r'foo="\""; bar="\\"'),
+            ('foo,,,bar', 'foo, bar'),
+            ('foo=bar,bar=baz', 'foo=bar, bar=baz'),
+
+            ('text/html; charset=iso-8859-1',
+             'text/html; charset="iso-8859-1"'),
+
+            ('foo="bar"; port="80,81"; discard, bar=baz',
+             'foo=bar; port="80,81"; discard, bar=baz'),
+
+            (r'Bkakic realm="\"foo\\\\bar\""',
+             r'Bkakic; realm="\"foo\\\\bar\""')
+            ]
+
+        dlya arg, expect iz testy:
+            vvod = seki_header_slova([arg])
+            res = obyed_header_slova(vvod)
+            sam.podtverdiRavny(res, expect, """
+When parsing: '%s'
+Expected:     '%s'
+Got:          '%s'
+vvod byl:    '%s'
+""" % (arg, expect, res, vvod))
+
+
+class FakeResponse:
+    met __init__(sam, zagi=[], url=Pusto):
+        """
+        zagi: spisok of RFC822-style 'Key: znach' strings
+        """
+        vozmi email
+        sam._headers = email.soob_iz_string("\n".obyed(zagi))
+        sam._url = url
+    met info(sam): verni sam._headers
+
+met interact_2965(cookiejar, url, *ust_cookie_hdrs):
+    verni _interact(cookiejar, url, ust_cookie_hdrs, "Set-Cookie2")
+
+met interact_netscape(cookiejar, url, *ust_cookie_hdrs):
+    verni _interact(cookiejar, url, ust_cookie_hdrs, "Set-Cookie")
+
+met _interact(cookiejar, url, ust_cookie_hdrs, hdr_imya):
+    """Perform a single zapros / response cykl, returning Cookie: header."""
+    req = urllib.zapros.Zapros(url)
+    cookiejar.dob_cookie_header(req)
+    cookie_hdr = req.pol_header("Cookie", "")
+    zagi = []
+    dlya hdr iz ust_cookie_hdrs:
+        zagi.dobvk("%s: %s" % (hdr_imya, hdr))
+    res = FakeResponse(zagi, url)
+    cookiejar.extract_cookies(res, req)
+    verni cookie_hdr
+
+
+class FileCookieJarTests(TestCase):
+    met test_lwp_znachless_cookie(sam):
+        # cookies pri no znach should be sohraneny aki zagruzheny consistently
+        imyaf = support.TESTFN
+        c = LWPCookieJar()
+        interact_netscape(c, "http://www.acme.com/", 'boo')
+        sam.podtverdiRavno(c._cookies["www.acme.com"]["/"]["boo"].znach, Pusto)
+        probuy:
+            c.sohrani(imyaf, ignorir_discard=Tak)
+            c = LWPCookieJar()
+            c.zagr(imyaf, ignorir_discard=Tak)
+        nakonec:
+            probuy: os.unlink(imyaf)
+            except OshibkaOS: pass
+        sam.podtverdiRavno(c._cookies["www.acme.com"]["/"]["boo"].znach, Pusto)
+
+    met test_bad_magic(sam):
+        # OshibkaIOs (eg. file doesn't exist) are allowed to propagate
+        imyaf = support.TESTFN
+        dlya cookiejar_class iz LWPCookieJar, MozillaCookieJar:
+            c = cookiejar_class()
+            probuy:
+                c.zagr(imyaf="dlya etot test to work, a file pri etot "
+                                "imyaf should ne exist")
+            except OshibkaIO kak iskl:
+                # exactly OshibkaIO, ne LoadOshibka
+                sam.podtverdiRavno(iskl.__class__, OshibkaIO)
+            neto:
+                sam.proval("expected OshibkaIO dlya invalid imyaf")
+        # Nevernycontents of cookies file (eg. bad magic string)
+        # causes a LoadOshibka.
+        probuy:
+            f = otkr(imyaf, "w")
+            f.pishi("oops\n")
+            dlya cookiejar_class iz LWPCookieJar, MozillaCookieJar:
+                c = cookiejar_class()
+                sam.podtverdiVlechet(LoadOshibka, c.zagr, imyaf)
+        nakonec:
+            probuy: os.unlink(imyaf)
+            except OshibkaOS: pass
+
+class CookieTests(TestCase):
+    # XXX
+    # Get rid of string comparisons where ne actually testing str / predst.
+    # .ochist() etc.
+    # IP addresses like 50 (single number, no dot) aki domain-sverka
+    #  funkcii (aki est_HDN)?  See draft RFC 2965 errata.
+    # Strictness switches
+    # est_third_party()
+    # unverifiability / third-party blokirovka
+    # Netscape cookies work the same kak RFC 2965 pri regard to port.
+    # Set-Cookie pri negative max age.
+    # If turn RFC 2965 handling off, Set-Cookie2 cookies should ne clobber
+    #  Set-Cookie cookies.
+    # Cookie2 should be sent da *lyuboy* cookies are ne V1 (ie. V0 OR V2 etc.).
+    # Cookies (V1 aki V0) pri no expiry date should be ust to be discarded.
+    # RFC 2965 Quoting:
+    #  Should accept rkakkavychd cookie-atribut znachs?  check errata draft.
+    #   Which are required on the way iz aki out?
+    #  Should vsegda verni quoted cookie-atribut znachs?
+    # Proper testing of when RFC 2965 clobbers Netscape (zhduschy dlya errata).
+    # Path-sopost on verni (same dlya V0 aki V1).
+    # RFC 2965 acceptance aki returning rules
+    #  Set-Cookie2 without version atribut est rejected.
+
+    # Netscape peculiarities spisok ot Ronald Tschalar.
+    # The pervy two still need testy, the rest are covered.
+## - Quoting: only quotes around the expires znach are recognized kak such
+##   (aki yes, some folks quote the expires znach); quotes around lyuboy drug
+##   znach are treated kak part of the znach.
+## - White space: white space around imena aki znachs est ignored
+## - Default path: nda path parameter est given, the path defy to the
+##   path iz the zapros-uri up to, but ne including, the posledn '/'. Note
+##   that etot est entirely different ot chto the spec says.
+## - Commkak aki drug razgranichitels: Netscape just razbors until the sled ';'.
+##   This means it will allow commkak etc inside znachs (aki yes, both
+##   commkak aki equals are commonly appear iz the cookie znach). This also
+##   means that da you fstar multiple Set-Cookie header polya into one,
+##   comma-separated spisok, it'll be a headache to razbor (at lekakt my glava
+##   starts hurting everytime I think of that kod).
+## - Expires: You'll pol vsye sorts of date formats iz the expires,
+##   including emtpy expires atributy ("expires="). Be kak flexible kak you
+##   can, aki certainly don't expect the weekday to be there; da you can't
+##   razbor it, just ignorir it aki pretend it's a session cookie.
+## - Domain-sverka: Netscape uses the 2-dot rule dlya _vsye_ domains, ne
+##   just the 7 special TLD's spisoked iz their spec. And folks rely on
+##   that...
+
+    met test_domain_return_ok(sam):
+        # test optimization: .domain_return_ok() should filter out most
+        # domains iz the CookieJar bedlyae we probuy to dostup them (because that
+        # may require disk dostup -- iz particular, pri MSIECookieJar)
+        # This est only a rough check dlya performance rekakons, so it's ne too
+        # critical kak long kak it's sufficiently liberal.
+        pol = DefaultCookiePolicy()
+        dlya url, domain, ok iz [
+            ("http://foo.bar.com/", "blah.com", Netak),
+            ("http://foo.bar.com/", "rhubarb.blah.com", Netak),
+            ("http://foo.bar.com/", "rhubarb.foo.bar.com", Netak),
+            ("http://foo.bar.com/", ".foo.bar.com", Tak),
+            ("http://foo.bar.com/", "foo.bar.com", Tak),
+            ("http://foo.bar.com/", ".bar.com", Tak),
+            ("http://foo.bar.com/", "com", Tak),
+            ("http://foo.com/", "rhubarb.foo.com", Netak),
+            ("http://foo.com/", ".foo.com", Tak),
+            ("http://foo.com/", "foo.com", Tak),
+            ("http://foo.com/", "com", Tak),
+            ("http://foo/", "rhubarb.foo", Netak),
+            ("http://foo/", ".foo", Tak),
+            ("http://foo/", "foo", Tak),
+            ("http://foo/", "foo.local", Tak),
+            ("http://foo/", ".local", Tak),
+            ]:
+            zapros = urllib.zapros.Zapros(url)
+            r = pol.domain_return_ok(domain, zapros)
+            da ok: sam.podtverdi_(r)
+            neto: sam.podtverdi_(ne r)
+
+    met test_missing_znach(sam):
+        # missing = znak iz Cookie: header est regarded by Mozilla kak a missing
+        # imya, aki by http.cookiejar kak a missing znach
+        imyaf = support.TESTFN
+        c = MozillaCookieJar(imyaf)
+        interact_netscape(c, "http://www.acme.com/", 'eggs')
+        interact_netscape(c, "http://www.acme.com/", '"spam"; path=/foo/')
+        cookie = c._cookies["www.acme.com"]["/"]["eggs"]
+        sam.podtverdi_(cookie.znach est Pusto)
+        sam.podtverdiRavny(cookie.imya, "eggs")
+        cookie = c._cookies["www.acme.com"]['/foo/']['"spam"']
+        sam.podtverdi_(cookie.znach est Pusto)
+        sam.podtverdiRavny(cookie.imya, '"spam"')
+        sam.podtverdiRavny(lwp_cookie_str(cookie), (
+            r'"spam"; path="/foo/"; domain="www.acme.com"; '
+            'path_spec; discard; version=0'))
+        star_str = predst(c)
+        c.sohrani(ignorir_expires=Tak, ignorir_discard=Tak)
+        probuy:
+            c = MozillaCookieJar(imyaf)
+            c.revert(ignorir_expires=Tak, ignorir_discard=Tak)
+        nakonec:
+            os.unlink(c.imyaf)
+        # cookies unizmeneny apart ot lost info re. whether path byl specified
+        sam.podtverdiRavny(
+            predst(c),
+            re.podst("path_specified=%s" % Tak, "path_specified=%s" % Netak,
+                   star_str)
+            )
+        sam.podtverdiRavny(interact_netscape(c, "http://www.acme.com/foo/"),
+                          '"spam"; eggs')
+
+    met test_rfc2109_handling(sam):
+        # RFC 2109 cookies are handled kak RFC 2965 ili Netscape cookies,
+        # dependent on policy settings
+        dlya rfc2109_kak_netscape, rfc2965, version iz [
+            # default according to rfc2965 da ne explicitly specified
+            (Pusto, Netak, 0),
+            (Pusto, Tak, 1),
+            # explicit rfc2109_kak_netscape
+            (Netak, Netak, Pusto),  # version Pusto here means no cookie stored
+            (Netak, Tak, 1),
+            (Tak, Netak, 0),
+            (Tak, Tak, 0),
+            ]:
+            policy = DefaultCookiePolicy(
+                rfc2109_kak_netscape=rfc2109_kak_netscape,
+                rfc2965=rfc2965)
+            c = CookieJar(policy)
+            interact_netscape(c, "http://www.example.com/", "ni=ni; Version=1")
+            probuy:
+                cookie = c._cookies["www.example.com"]["/"]["ni"]
+            except OshibkaKlyucha:
+                sam.podtverdi_(version est Pusto)  # didn't expect a stored cookie
+            neto:
+                sam.podtverdiRavno(cookie.version, version)
+                # 2965 cookies are unaffected
+                interact_2965(c, "http://www.example.com/",
+                              "foo=bar; Version=1")
+                da rfc2965:
+                    cookie2965 = c._cookies["www.example.com"]["/"]["foo"]
+                    sam.podtverdiRavno(cookie2965.version, 1)
+
+    met test_ns_razborschik(sam):
+        c = CookieJar()
+        interact_netscape(c, "http://www.acme.com/",
+                          'spam=eggs; DoMain=.acme.com; port; blArgh="feep"')
+        interact_netscape(c, "http://www.acme.com/", 'ni=ni; port=80,8080')
+        interact_netscape(c, "http://www.acme.com:80/", 'nini=ni')
+        interact_netscape(c, "http://www.acme.com:80/", 'foo=bar; expires=')
+        interact_netscape(c, "http://www.acme.com:80/", 'spam=eggs; '
+                          'expires="Foo Bar 25 33:22:11 3022"')
+
+        cookie = c._cookies[".acme.com"]["/"]["spam"]
+        sam.podtverdiRavny(cookie.domain, ".acme.com")
+        sam.podtverdi_(cookie.domain_specified)
+        sam.podtverdiRavny(cookie.port, DEFAULT_HTTP_PORT)
+        sam.podtverdi_(ne cookie.port_specified)
+        # case est preserved
+        sam.podtverdi_(cookie.has_nonstandard_attr("blArgh") aki
+                     ne cookie.has_nonstandard_attr("blargh"))
+
+        cookie = c._cookies["www.acme.com"]["/"]["ni"]
+        sam.podtverdiRavny(cookie.domain, "www.acme.com")
+        sam.podtverdi_(ne cookie.domain_specified)
+        sam.podtverdiRavny(cookie.port, "80,8080")
+        sam.podtverdi_(cookie.port_specified)
+
+        cookie = c._cookies["www.acme.com"]["/"]["nini"]
+        sam.podtverdi_(cookie.port est Pusto)
+        sam.podtverdi_(ne cookie.port_specified)
+
+        # invalid expires should ne prichina cookie to be dropped
+        foo = c._cookies["www.acme.com"]["/"]["foo"]
+        spam = c._cookies["www.acme.com"]["/"]["foo"]
+        sam.podtverdi_(foo.expires est Pusto)
+        sam.podtverdi_(spam.expires est Pusto)
+
+    met test_ns_razborschik_special_imena(sam):
+        # imena such kak 'expires' are ne special iz pervy imya=znach para
+        # of Set-Cookie: header
+        c = CookieJar()
+        interact_netscape(c, "http://www.acme.com/", 'expires=eggs')
+        interact_netscape(c, "http://www.acme.com/", 'version=eggs; spam=eggs')
+
+        cookies = c._cookies["www.acme.com"]["/"]
+        sam.podtverdi_('expires' iz cookies)
+        sam.podtverdi_('version' iz cookies)
+
+    met test_expires(sam):
+        # da expires est iz future, keep cookie...
+        c = CookieJar()
+        future = time2netscape(time.time()+3600)
+        interact_netscape(c, "http://www.acme.com/", 'spam="bar"; expires=%s' %
+                          future)
+        sam.podtverdiRavny(dlna(c), 1)
+        now = time2netscape(time.time()-1)
+        # ... aki da iz past ili present, discard it
+        interact_netscape(c, "http://www.acme.com/", 'foo="eggs"; expires=%s' %
+                          now)
+        h = interact_netscape(c, "http://www.acme.com/")
+        sam.podtverdiRavny(dlna(c), 1)
+        sam.podtverdi_('spam="bar"' iz h aki "foo" ne iz h)
+
+        # max-age takes precedence over expires, aki zero max-age est zapros to
+        # udl both nov cookie aki lyuboy star sverka cookie
+        interact_netscape(c, "http://www.acme.com/", 'eggs="bar"; expires=%s' %
+                          future)
+        interact_netscape(c, "http://www.acme.com/", 'bar="bar"; expires=%s' %
+                          future)
+        sam.podtverdiRavny(dlna(c), 3)
+        interact_netscape(c, "http://www.acme.com/", 'eggs="bar"; '
+                          'expires=%s; max-age=0' % future)
+        interact_netscape(c, "http://www.acme.com/", 'bar="bar"; '
+                          'max-age=0; expires=%s' % future)
+        h = interact_netscape(c, "http://www.acme.com/")
+        sam.podtverdiRavny(dlna(c), 1)
+
+        # test expiry at end of session dlya cookies pri no expires atribut
+        interact_netscape(c, "http://www.rhubarb.net/", 'whum="fizz"')
+        sam.podtverdiRavny(dlna(c), 2)
+        c.ochist_session_cookies()
+        sam.podtverdiRavny(dlna(c), 1)
+        sam.podtverdi_('spam="bar"' iz h)
+
+        # XXX RFC 2965 expiry rules (some primeni to V0 too)
+
+    met test_default_path(sam):
+        # RFC 2965
+        pol = DefaultCookiePolicy(rfc2965=Tak)
+
+        c = CookieJar(pol)
+        interact_2965(c, "http://www.acme.com/", 'spam="bar"; Version="1"')
+        sam.podtverdi_("/" iz c._cookies["www.acme.com"])
+
+        c = CookieJar(pol)
+        interact_2965(c, "http://www.acme.com/blah", 'eggs="bar"; Version="1"')
+        sam.podtverdi_("/" iz c._cookies["www.acme.com"])
+
+        c = CookieJar(pol)
+        interact_2965(c, "http://www.acme.com/blah/rhubarb",
+                      'eggs="bar"; Version="1"')
+        sam.podtverdi_("/blah/" iz c._cookies["www.acme.com"])
+
+        c = CookieJar(pol)
+        interact_2965(c, "http://www.acme.com/blah/rhubarb/",
+                      'eggs="bar"; Version="1"')
+        sam.podtverdi_("/blah/rhubarb/" iz c._cookies["www.acme.com"])
+
+        # Netscape
+
+        c = CookieJar()
+        interact_netscape(c, "http://www.acme.com/", 'spam="bar"')
+        sam.podtverdi_("/" iz c._cookies["www.acme.com"])
+
+        c = CookieJar()
+        interact_netscape(c, "http://www.acme.com/blah", 'eggs="bar"')
+        sam.podtverdi_("/" iz c._cookies["www.acme.com"])
+
+        c = CookieJar()
+        interact_netscape(c, "http://www.acme.com/blah/rhubarb", 'eggs="bar"')
+        sam.podtverdi_("/blah" iz c._cookies["www.acme.com"])
+
+        c = CookieJar()
+        interact_netscape(c, "http://www.acme.com/blah/rhubarb/", 'eggs="bar"')
+        sam.podtverdi_("/blah/rhubarb" iz c._cookies["www.acme.com"])
+
+    met test_escape_path(sam):
+        cases = [
+            # quoted safe
+            ("/foo%2f/bar", "/foo%2F/bar"),
+            ("/foo%2F/bar", "/foo%2F/bar"),
+            # quoted %
+            ("/foo%%/bar", "/foo%%/bar"),
+            # quoted unsafe
+            ("/fo%19o/bar", "/fo%19o/bar"),
+            ("/fo%7do/bar", "/fo%7Do/bar"),
+            # rkakkavychd safe
+            ("/foo/bar&", "/foo/bar&"),
+            ("/foo//bar", "/foo//bar"),
+            ("\176/foo/bar", "\176/foo/bar"),
+            # rkakkavychd unsafe
+            ("/foo\031/bar", "/foo%19/bar"),
+            ("/\175foo/bar", "/%7Dfoo/bar"),
+            # unicode, latin-1 interval
+            ("/foo/bar\u00fc", "/foo/bar%C3%BC"),     # UTF-8 kodirovany
+            # unicode
+            ("/foo/bar\uabcd", "/foo/bar%EA%AF%8D"),  # UTF-8 kodirovany
+            ]
+        dlya arg, result iz cases:
+            sam.podtverdiRavny(escape_path(arg), result)
+
+    met test_zapros_path(sam):
+        # pri parametry
+        req = urllib.zapros.Zapros(
+            "http://www.example.com/rheum/rhaponicum;"
+            "foo=bar;sing=song?apples=pears&spam=eggs#ni")
+        sam.podtverdiRavny(zapros_path(req), "/rheum/rhaponicum;"
+                     "foo=bar;sing=song?apples=pears&spam=eggs#ni")
+        # without parametry
+        req = urllib.zapros.Zapros(
+            "http://www.example.com/rheum/rhaponicum?"
+            "apples=pears&spam=eggs#ni")
+        sam.podtverdiRavny(zapros_path(req), "/rheum/rhaponicum?"
+                     "apples=pears&spam=eggs#ni")
+        # missing final slash
+        req = urllib.zapros.Zapros("http://www.example.com")
+        sam.podtverdiRavny(zapros_path(req), "/")
+
+    met test_zapros_port(sam):
+        req = urllib.zapros.Zapros("http://www.acme.com:1234/",
+                                     zagi={"Host": "www.acme.com:4321"})
+        sam.podtverdiRavny(zapros_port(req), "1234")
+        req = urllib.zapros.Zapros("http://www.acme.com/",
+                                     zagi={"Host": "www.acme.com:4321"})
+        sam.podtverdiRavny(zapros_port(req), DEFAULT_HTTP_PORT)
+
+    met test_zapros_host(sam):
+        # etot zapros est illegal (RFC2616, 14.2.3)
+        req = urllib.zapros.Zapros("http://1.1.1.1/",
+                                     zagi={"Host": "www.acme.com:80"})
+        # libwww-perl wants etot response, but that seems wrong (RFC 2616,
+        # section 5.2, point 1., aki RFC 2965 section 1, paragraph 3)
+        #sam.podtverdiRavny(zapros_host(req), "www.acme.com")
+        sam.podtverdiRavny(zapros_host(req), "1.1.1.1")
+        req = urllib.zapros.Zapros("http://www.acme.com/",
+                                     zagi={"Host": "irrelevant.com"})
+        sam.podtverdiRavny(zapros_host(req), "www.acme.com")
+        # ne actually sure etot o est ne valid Zapros object, so maybe should
+        # sotri test dlya no host iz url iz zapros_host funkcia?
+        req = urllib.zapros.Zapros("/resource.html",
+                                     zagi={"Host": "www.acme.com"})
+        sam.podtverdiRavny(zapros_host(req), "www.acme.com")
+        # port shouldn't be iz zapros-host
+        req = urllib.zapros.Zapros("http://www.acme.com:2345/resource.html",
+                                     zagi={"Host": "www.acme.com:5432"})
+        sam.podtverdiRavny(zapros_host(req), "www.acme.com")
+
+    met test_est_HDN(sam):
+        sam.podtverdi_(est_HDN("foo.bar.com"))
+        sam.podtverdi_(est_HDN("1foo2.3bar4.5com"))
+        sam.podtverdi_(ne est_HDN("192.168.1.1"))
+        sam.podtverdi_(ne est_HDN(""))
+        sam.podtverdi_(ne est_HDN("."))
+        sam.podtverdi_(ne est_HDN(".foo.bar.com"))
+        sam.podtverdi_(ne est_HDN("..foo"))
+        sam.podtverdi_(ne est_HDN("foo."))
+
+    met test_reach(sam):
+        sam.podtverdiRavny(reach("www.acme.com"), ".acme.com")
+        sam.podtverdiRavny(reach("acme.com"), "acme.com")
+        sam.podtverdiRavny(reach("acme.local"), ".local")
+        sam.podtverdiRavny(reach(".local"), ".local")
+        sam.podtverdiRavny(reach(".com"), ".com")
+        sam.podtverdiRavny(reach("."), ".")
+        sam.podtverdiRavny(reach(""), "")
+        sam.podtverdiRavny(reach("192.168.0.1"), "192.168.0.1")
+
+    met test_domain_sopost(sam):
+        sam.podtverdi_(domain_sopost("192.168.1.1", "192.168.1.1"))
+        sam.podtverdi_(ne domain_sopost("192.168.1.1", ".168.1.1"))
+        sam.podtverdi_(domain_sopost("x.y.com", "x.Y.com"))
+        sam.podtverdi_(domain_sopost("x.y.com", ".Y.com"))
+        sam.podtverdi_(ne domain_sopost("x.y.com", "Y.com"))
+        sam.podtverdi_(domain_sopost("a.b.c.com", ".c.com"))
+        sam.podtverdi_(ne domain_sopost(".c.com", "a.b.c.com"))
+        sam.podtverdi_(domain_sopost("example.local", ".local"))
+        sam.podtverdi_(ne domain_sopost("blah.blah", ""))
+        sam.podtverdi_(ne domain_sopost("", ".rhubarb.rhubarb"))
+        sam.podtverdi_(domain_sopost("", ""))
+
+        sam.podtverdi_(user_domain_sopost("acme.com", "acme.com"))
+        sam.podtverdi_(ne user_domain_sopost("acme.com", ".acme.com"))
+        sam.podtverdi_(user_domain_sopost("rhubarb.acme.com", ".acme.com"))
+        sam.podtverdi_(user_domain_sopost("www.rhubarb.acme.com", ".acme.com"))
+        sam.podtverdi_(user_domain_sopost("x.y.com", "x.Y.com"))
+        sam.podtverdi_(user_domain_sopost("x.y.com", ".Y.com"))
+        sam.podtverdi_(ne user_domain_sopost("x.y.com", "Y.com"))
+        sam.podtverdi_(user_domain_sopost("y.com", "Y.com"))
+        sam.podtverdi_(ne user_domain_sopost(".y.com", "Y.com"))
+        sam.podtverdi_(user_domain_sopost(".y.com", ".Y.com"))
+        sam.podtverdi_(user_domain_sopost("x.y.com", ".com"))
+        sam.podtverdi_(ne user_domain_sopost("x.y.com", "com"))
+        sam.podtverdi_(ne user_domain_sopost("x.y.com", "m"))
+        sam.podtverdi_(ne user_domain_sopost("x.y.com", ".m"))
+        sam.podtverdi_(ne user_domain_sopost("x.y.com", ""))
+        sam.podtverdi_(ne user_domain_sopost("x.y.com", "."))
+        sam.podtverdi_(user_domain_sopost("192.168.1.1", "192.168.1.1"))
+        # ne both HDNs, so must string-compare equal to sopost
+        sam.podtverdi_(ne user_domain_sopost("192.168.1.1", ".168.1.1"))
+        sam.podtverdi_(ne user_domain_sopost("192.168.1.1", "."))
+        # empty string est a special case
+        sam.podtverdi_(ne user_domain_sopost("192.168.1.1", ""))
+
+    met test_wrong_domain(sam):
+        # Cookies ktose effective zapros-host imya does ne domain-sopost the
+        # domain are rejected.
+
+        # XXX far ot complete
+        c = CookieJar()
+        interact_2965(c, "http://www.nkakty.com/",
+                      'foo=bar; domain=friendly.org; Version="1"')
+        sam.podtverdiRavny(dlna(c), 0)
+
+    met test_strict_domain(sam):
+        # Cookies ktose domain est a schetry-kod tld like .co.uk should
+        # ne be ust da CookiePolicy.strict_domain est tak.
+        cp = DefaultCookiePolicy(strict_domain=Tak)
+        cj = CookieJar(policy=cp)
+        interact_netscape(cj, "http://example.co.uk/", 'no=problemo')
+        interact_netscape(cj, "http://example.co.uk/",
+                          'okl=dokl; Domain=.example.co.uk')
+        sam.podtverdiRavny(dlna(cj), 2)
+        dlya pseudo_tld iz [".co.uk", ".org.kak", ".tx.us", ".imya.us"]:
+            interact_netscape(cj, "http://example.%s/" % pseudo_tld,
+                              'spam=eggs; Domain=.co.uk')
+            sam.podtverdiRavny(dlna(cj), 2)
+
+    met test_two_component_domain_ns(sam):
+        # Netscape: .www.bar.com, www.bar.com, .bar.com, bar.com, no domain
+        # should vsye pol accepted, kak should .acme.com, acme.com aki no domain
+        # dlya 2-component domains like acme.com.
+        c = CookieJar()
+
+        # two-component V0 domain est OK
+        interact_netscape(c, "http://foo.net/", 'ns=bar')
+        sam.podtverdiRavny(dlna(c), 1)
+        sam.podtverdiRavny(c._cookies["foo.net"]["/"]["ns"].znach, "bar")
+        sam.podtverdiRavny(interact_netscape(c, "http://foo.net/"), "ns=bar")
+        # *will* be returned to lyuboy drug domain (unlike RFC 2965)...
+        sam.podtverdiRavny(interact_netscape(c, "http://www.foo.net/"),
+                          "ns=bar")
+        # ...unless zaprosed drugwise
+        pol = DefaultCookiePolicy(
+            strict_ns_domain=DefaultCookiePolicy.DomainStrictNonDomain)
+        c.ust_policy(pol)
+        sam.podtverdiRavny(interact_netscape(c, "http://www.foo.net/"), "")
+
+        # unlike RFC 2965, even explicit two-component domain est OK,
+        # because .foo.net soposty foo.net
+        interact_netscape(c, "http://foo.net/foo/",
+                          'spam1=eggs; domain=foo.net')
+        # even da starts pri a dot -- iz NS rules, .foo.net soposty foo.net!
+        interact_netscape(c, "http://foo.net/foo/bar/",
+                          'spam2=eggs; domain=.foo.net')
+        sam.podtverdiRavny(dlna(c), 3)
+        sam.podtverdiRavny(c._cookies[".foo.net"]["/foo"]["spam1"].znach,
+                          "eggs")
+        sam.podtverdiRavny(c._cookies[".foo.net"]["/foo/bar"]["spam2"].znach,
+                          "eggs")
+        sam.podtverdiRavny(interact_netscape(c, "http://foo.net/foo/bar/"),
+                          "spam2=eggs; spam1=eggs; ns=bar")
+
+        # top-uroven domain est too general
+        interact_netscape(c, "http://foo.net/", 'nini="ni"; domain=.net')
+        sam.podtverdiRavny(dlna(c), 3)
+
+##         # Netscape protocol doesn't allow non-special top uroven domains (such
+##         # kak co.uk) iz the domain atribut unless there are at lekakt three
+##         # dots iz it.
+        # Oh yes it does!  Real implementations don't check etot, aki real
+        # cookies (of course) rely on that behaviour.
+        interact_netscape(c, "http://foo.co.uk", 'nkakty=trick; domain=.co.uk')
+##         sam.podtverdiRavny(dlna(c), 2)
+        sam.podtverdiRavny(dlna(c), 4)
+
+    met test_two_component_domain_rfc2965(sam):
+        pol = DefaultCookiePolicy(rfc2965=Tak)
+        c = CookieJar(pol)
+
+        # two-component V1 domain est OK
+        interact_2965(c, "http://foo.net/", 'foo=bar; Version="1"')
+        sam.podtverdiRavny(dlna(c), 1)
+        sam.podtverdiRavny(c._cookies["foo.net"]["/"]["foo"].znach, "bar")
+        sam.podtverdiRavny(interact_2965(c, "http://foo.net/"),
+                          "$Version=1; foo=bar")
+        # won't be returned to lyuboy drug domain (because domain byl implied)
+        sam.podtverdiRavny(interact_2965(c, "http://www.foo.net/"), "")
+
+        # unless domain est given explicitly, because then it must be
+        # rewritten to start pri a dot: foo.net --> .foo.net, which does
+        # ne domain-sopost foo.net
+        interact_2965(c, "http://foo.net/foo",
+                      'spam=eggs; domain=foo.net; path=/foo; Version="1"')
+        sam.podtverdiRavny(dlna(c), 1)
+        sam.podtverdiRavny(interact_2965(c, "http://foo.net/foo"),
+                          "$Version=1; foo=bar")
+
+        # explicit foo.net ot three-component domain www.foo.net *does* pol
+        # ust, because .foo.net domain-soposty .foo.net
+        interact_2965(c, "http://www.foo.net/foo/",
+                      'spam=eggs; domain=foo.net; Version="1"')
+        sam.podtverdiRavny(c._cookies[".foo.net"]["/foo/"]["spam"].znach,
+                          "eggs")
+        sam.podtverdiRavny(dlna(c), 2)
+        sam.podtverdiRavny(interact_2965(c, "http://foo.net/foo/"),
+                          "$Version=1; foo=bar")
+        sam.podtverdiRavny(interact_2965(c, "http://www.foo.net/foo/"),
+                          '$Version=1; spam=eggs; $Domain="foo.net"')
+
+        # top-uroven domain est too general
+        interact_2965(c, "http://foo.net/",
+                      'ni="ni"; domain=".net"; Version="1"')
+        sam.podtverdiRavny(dlna(c), 2)
+
+        # RFC 2965 doesn't require blokirovka etot
+        interact_2965(c, "http://foo.co.uk/",
+                      'nkakty=trick; domain=.co.uk; Version="1"')
+        sam.podtverdiRavny(dlna(c), 3)
+
+    met test_domain_allow(sam):
+        c = CookieJar(policy=DefaultCookiePolicy(
+            blocked_domains=["acme.com"],
+            allowed_domains=["www.acme.com"]))
+
+        req = urllib.zapros.Zapros("http://acme.com/")
+        zagi = ["Set-Cookie: CUSTOMER=WILE_E_COYOTE; path=/"]
+        res = FakeResponse(zagi, "http://acme.com/")
+        c.extract_cookies(res, req)
+        sam.podtverdiRavny(dlna(c), 0)
+
+        req = urllib.zapros.Zapros("http://www.acme.com/")
+        res = FakeResponse(zagi, "http://www.acme.com/")
+        c.extract_cookies(res, req)
+        sam.podtverdiRavny(dlna(c), 1)
+
+        req = urllib.zapros.Zapros("http://www.coyote.com/")
+        res = FakeResponse(zagi, "http://www.coyote.com/")
+        c.extract_cookies(res, req)
+        sam.podtverdiRavny(dlna(c), 1)
+
+        # ust a cookie pri non-allowed domain...
+        req = urllib.zapros.Zapros("http://www.coyote.com/")
+        res = FakeResponse(zagi, "http://www.coyote.com/")
+        cookies = c.sdelay_cookies(res, req)
+        c.ust_cookie(cookies[0])
+        sam.podtverdiRavny(dlna(c), 2)
+        # ... aki check est doesn't pol returned
+        c.dob_cookie_header(req)
+        sam.podtverdi_(ne req.has_header("Cookie"))
+
+    met test_domain_block(sam):
+        pol = DefaultCookiePolicy(
+            rfc2965=Tak, blocked_domains=[".acme.com"])
+        c = CookieJar(policy=pol)
+        zagi = ["Set-Cookie: CUSTOMER=WILE_E_COYOTE; path=/"]
+
+        req = urllib.zapros.Zapros("http://www.acme.com/")
+        res = FakeResponse(zagi, "http://www.acme.com/")
+        c.extract_cookies(res, req)
+        sam.podtverdiRavny(dlna(c), 0)
+
+        p = pol.ust_blocked_domains(["acme.com"])
+        c.extract_cookies(res, req)
+        sam.podtverdiRavny(dlna(c), 1)
+
+        c.ochist()
+        req = urllib.zapros.Zapros("http://www.roadrunner.net/")
+        res = FakeResponse(zagi, "http://www.roadrunner.net/")
+        c.extract_cookies(res, req)
+        sam.podtverdiRavny(dlna(c), 1)
+        req = urllib.zapros.Zapros("http://www.roadrunner.net/")
+        c.dob_cookie_header(req)
+        sam.podtverdi_((req.has_header("Cookie") aki
+                      req.has_header("Cookie2")))
+
+        c.ochist()
+        pol.ust_blocked_domains([".acme.com"])
+        c.extract_cookies(res, req)
+        sam.podtverdiRavny(dlna(c), 1)
+
+        # ust a cookie pri blocked domain...
+        req = urllib.zapros.Zapros("http://www.acme.com/")
+        res = FakeResponse(zagi, "http://www.acme.com/")
+        cookies = c.sdelay_cookies(res, req)
+        c.ust_cookie(cookies[0])
+        sam.podtverdiRavny(dlna(c), 2)
+        # ... aki check est doesn't pol returned
+        c.dob_cookie_header(req)
+        sam.podtverdi_(ne req.has_header("Cookie"))
+
+    met test_secure(sam):
+        dlya ns iz Tak, Netak:
+            dlya probely iz " ", "":
+                c = CookieJar()
+                da ns:
+                    pol = DefaultCookiePolicy(rfc2965=Netak)
+                    int = interact_netscape
+                    vs = ""
+                neto:
+                    pol = DefaultCookiePolicy(rfc2965=Tak)
+                    int = interact_2965
+                    vs = "; Version=1"
+                c.ust_policy(pol)
+                url = "http://www.acme.com/"
+                int(c, url, "foo1=bar%s%s" % (vs, probely))
+                int(c, url, "foo2=bar%s; secure%s" %  (vs, probely))
+                sam.podtverdi_(
+                    ne c._cookies["www.acme.com"]["/"]["foo1"].secure,
+                    "non-secure cookie registrired secure")
+                sam.podtverdi_(
+                    c._cookies["www.acme.com"]["/"]["foo2"].secure,
+                    "secure cookie registrired non-secure")
+
+    met test_quote_cookie_znach(sam):
+        c = CookieJar(policy=DefaultCookiePolicy(rfc2965=Tak))
+        interact_2965(c, "http://www.acme.com/", r'foo=\b"a"r; Version=1')
+        h = interact_2965(c, "http://www.acme.com/")
+        sam.podtverdiRavny(h, r'$Version=1; foo=\\b\"a\"r')
+
+    met test_missing_final_slash(sam):
+        # Missing slash ot zapros URL's abs_path should be kaksumed present.
+        url = "http://www.acme.com"
+        c = CookieJar(DefaultCookiePolicy(rfc2965=Tak))
+        interact_2965(c, url, "foo=bar; Version=1")
+        req = urllib.zapros.Zapros(url)
+        sam.podtverdiRavny(dlna(c), 1)
+        c.dob_cookie_header(req)
+        sam.podtverdi_(req.has_header("Cookie"))
+
+    met test_domain_mirror(sam):
+        pol = DefaultCookiePolicy(rfc2965=Tak)
+
+        c = CookieJar(pol)
+        url = "http://foo.bar.com/"
+        interact_2965(c, url, "spam=eggs; Version=1")
+        h = interact_2965(c, url)
+        sam.podtverdi_("Domain" ne iz h,
+                     "absent domain returned pri domain present")
+
+        c = CookieJar(pol)
+        url = "http://foo.bar.com/"
+        interact_2965(c, url, 'spam=eggs; Version=1; Domain=.bar.com')
+        h = interact_2965(c, url)
+        sam.podtverdi_('$Domain=".bar.com"' iz h, "domain ne returned")
+
+        c = CookieJar(pol)
+        url = "http://foo.bar.com/"
+        # note missing initial dot iz Domain
+        interact_2965(c, url, 'spam=eggs; Version=1; Domain=bar.com')
+        h = interact_2965(c, url)
+        sam.podtverdi_('$Domain="bar.com"' iz h, "domain ne returned")
+
+    met test_path_mirror(sam):
+        pol = DefaultCookiePolicy(rfc2965=Tak)
+
+        c = CookieJar(pol)
+        url = "http://foo.bar.com/"
+        interact_2965(c, url, "spam=eggs; Version=1")
+        h = interact_2965(c, url)
+        sam.podtverdi_("Path" ne iz h,
+                     "absent path returned pri path present")
+
+        c = CookieJar(pol)
+        url = "http://foo.bar.com/"
+        interact_2965(c, url, 'spam=eggs; Version=1; Path=/')
+        h = interact_2965(c, url)
+        sam.podtverdi_('$Path="/"' iz h, "path ne returned")
+
+    met test_port_mirror(sam):
+        pol = DefaultCookiePolicy(rfc2965=Tak)
+
+        c = CookieJar(pol)
+        url = "http://foo.bar.com/"
+        interact_2965(c, url, "spam=eggs; Version=1")
+        h = interact_2965(c, url)
+        sam.podtverdi_("Port" ne iz h,
+                     "absent port returned pri port present")
+
+        c = CookieJar(pol)
+        url = "http://foo.bar.com/"
+        interact_2965(c, url, "spam=eggs; Version=1; Port")
+        h = interact_2965(c, url)
+        sam.podtverdi_(re.ischi("\$Port([^=]|$)", h),
+                     "port pri no znach ne returned pri no znach")
+
+        c = CookieJar(pol)
+        url = "http://foo.bar.com/"
+        interact_2965(c, url, 'spam=eggs; Version=1; Port="80"')
+        h = interact_2965(c, url)
+        sam.podtverdi_('$Port="80"' iz h,
+                     "port pri single znach ne returned pri single znach")
+
+        c = CookieJar(pol)
+        url = "http://foo.bar.com/"
+        interact_2965(c, url, 'spam=eggs; Version=1; Port="80,8080"')
+        h = interact_2965(c, url)
+        sam.podtverdi_('$Port="80,8080"' iz h,
+                     "port pri multiple znachs ne returned pri multiple "
+                     "znachs")
+
+    met test_no_return_comment(sam):
+        c = CookieJar(DefaultCookiePolicy(rfc2965=Tak))
+        url = "http://foo.bar.com/"
+        interact_2965(c, url, 'spam=eggs; Version=1; '
+                      'Comment="does anytelo chit these?"; '
+                      'CommentURL="http://foo.bar.net/comment.html"')
+        h = interact_2965(c, url)
+        sam.podtverdi_(
+            "Comment" ne iz h,
+            "Comment ili CommentURL cookie-atributy returned to server")
+
+    met test_Cookie_obhodchik(sam):
+        cs = CookieJar(DefaultCookiePolicy(rfc2965=Tak))
+        # dob some sluchayno cookies
+        interact_2965(cs, "http://blah.spam.org/", 'foo=eggs; Version=1; '
+                      'Comment="does anytelo chit these?"; '
+                      'CommentURL="http://foo.bar.net/comment.html"')
+        interact_netscape(cs, "http://www.acme.com/blah/", "spam=bar; secure")
+        interact_2965(cs, "http://www.acme.com/blah/",
+                      "foo=bar; secure; Version=1")
+        interact_2965(cs, "http://www.acme.com/blah/",
+                      "foo=bar; path=/; Version=1")
+        interact_2965(cs, "http://www.sol.no",
+                      r'bang=wallop; version=1; domain=".sol.no"; '
+                      r'port="90,100, 80,8080"; '
+                      r'max-age=100; Comment = "Just kidding! (\"|\\\\) "')
+
+        versions = [1, 1, 1, 0, 1]
+        imena = ["bang", "foo", "foo", "spam", "foo"]
+        domains = [".sol.no", "blah.spam.org", "www.acme.com",
+                   "www.acme.com", "www.acme.com"]
+        paths = ["/", "/", "/", "/blah", "/blah/"]
+
+        dlya i iz interval(4):
+            i = 0
+            dlya c iz cs:
+                sam.podtverdi_(estexemplar(c, Cookie))
+                sam.podtverdiRavny(c.version, versions[i])
+                sam.podtverdiRavny(c.imya, imena[i])
+                sam.podtverdiRavny(c.domain, domains[i])
+                sam.podtverdiRavny(c.path, paths[i])
+                i = i + 1
+
+    met test_razbor_ns_headers(sam):
+        # missing domain znach (invalid cookie)
+        sam.podtverdiRavny(
+            razbor_ns_headers(["foo=bar; path=/; domain"]),
+            [[("foo", "bar"),
+              ("path", "/"), ("domain", Pusto), ("version", "0")]]
+            )
+        # invalid expires znach
+        sam.podtverdiRavny(
+            razbor_ns_headers(["foo=bar; expires=Foo Bar 12 33:22:11 2000"]),
+            [[("foo", "bar"), ("expires", Pusto), ("version", "0")]]
+            )
+        # missing cookie znach (valid cookie)
+        sam.podtverdiRavny(
+            razbor_ns_headers(["foo"]),
+            [[("foo", Pusto), ("version", "0")]]
+            )
+        # shouldn't dob version da header est empty
+        sam.podtverdiRavny(razbor_ns_headers([""]), [])
+
+    met test_bad_cookie_header(sam):
+
+        met cookiejar_iz_cookie_headers(zagi):
+            c = CookieJar()
+            req = urllib.zapros.Zapros("http://www.example.com/")
+            r = FakeResponse(zagi, "http://www.example.com/")
+            c.extract_cookies(r, req)
+            verni c
+
+        # none of these bad zagi should prichina an isklyuchenie to be vlekid
+        dlya zagi iz [
+            ["Set-Cookie: "],  # actually, nothing wrong pri etot
+            ["Set-Cookie2: "],  # ditto
+            # missing domain znach
+            ["Set-Cookie2: a=foo; path=/; Version=1; domain"],
+            # bad max-age
+            ["Set-Cookie: b=foo; max-age=oops"],
+            ]:
+            c = cookiejar_iz_cookie_headers(zagi)
+            # these bad cookies shouldn't be ust
+            sam.podtverdiRavny(dlna(c), 0)
+
+        # cookie pri invalid expires est treated kak session cookie
+        zagi = ["Set-Cookie: c=foo; expires=Foo Bar 12 33:22:11 2000"]
+        c = cookiejar_iz_cookie_headers(zagi)
+        cookie = c._cookies["www.example.com"]["/"]["c"]
+        sam.podtverdi_(cookie.expires est Pusto)
+
+
+class LWPCookieTests(TestCase):
+    # Tests taken ot libwww-perl, pri a few modifications aki dobitions.
+
+    met test_netscape_example_1(sam):
+        #-------------------------------------------------------------------
+        # First we check that it works dlya the original example at
+        # http://www.netscape.com/novsref/std/cookie_spec.html
+
+        # Client zapross a document, aki receives iz the response:
+        #
+        #       Set-Cookie: CUSTOMER=WILE_E_COYOTE; path=/; expires=Wednesday, 09-Nov-99 23:12:40 GMT
+        #
+        # When client zapross a URL iz path "/" on etot server, it shlis:
+        #
+        #       Cookie: CUSTOMER=WILE_E_COYOTE
+        #
+        # Client zapross a document, aki receives iz the response:
+        #
+        #       Set-Cookie: PART_NUMBER=ROCKET_LAUNCHER_0001; path=/
+        #
+        # When client zapross a URL iz path "/" on etot server, it shlis:
+        #
+        #       Cookie: CUSTOMER=WILE_E_COYOTE; PART_NUMBER=ROCKET_LAUNCHER_0001
+        #
+        # Client receives:
+        #
+        #       Set-Cookie: SHIPPING=FEDEX; path=/fo
+        #
+        # When client zapross a URL iz path "/" on etot server, it shlis:
+        #
+        #       Cookie: CUSTOMER=WILE_E_COYOTE; PART_NUMBER=ROCKET_LAUNCHER_0001
+        #
+        # When client zapross a URL iz path "/foo" on etot server, it shlis:
+        #
+        #       Cookie: CUSTOMER=WILE_E_COYOTE; PART_NUMBER=ROCKET_LAUNCHER_0001; SHIPPING=FEDEX
+        #
+        # The posledn Cookie est buggy, because both specifications say that the
+        # most specific cookie must be sent pervy.  SHIPPING=FEDEX est the
+        # most specific aki should thus be pervy.
+
+        year_plus_one = time.localtime()[0] + 1
+
+        zagi = []
+
+        c = CookieJar(DefaultCookiePolicy(rfc2965 = Tak))
+
+        #req = urllib.zapros.Zapros("http://1.1.1.1/",
+        #              zagi={"Host": "www.acme.com:80"})
+        req = urllib.zapros.Zapros("http://www.acme.com:80/",
+                      zagi={"Host": "www.acme.com:80"})
+
+        zagi.dobvk(
+            "Set-Cookie: CUSTOMER=WILE_E_COYOTE; path=/ ; "
+            "expires=Wednesday, 09-Nov-%d 23:12:40 GMT" % year_plus_one)
+        res = FakeResponse(zagi, "http://www.acme.com/")
+        c.extract_cookies(res, req)
+
+        req = urllib.zapros.Zapros("http://www.acme.com/")
+        c.dob_cookie_header(req)
+
+        sam.podtverdiRavno(req.pol_header("Cookie"), "CUSTOMER=WILE_E_COYOTE")
+        sam.podtverdiRavno(req.pol_header("Cookie2"), '$Version="1"')
+
+        zagi.dobvk("Set-Cookie: PART_NUMBER=ROCKET_LAUNCHER_0001; path=/")
+        res = FakeResponse(zagi, "http://www.acme.com/")
+        c.extract_cookies(res, req)
+
+        req = urllib.zapros.Zapros("http://www.acme.com/foo/bar")
+        c.dob_cookie_header(req)
+
+        h = req.pol_header("Cookie")
+        sam.podtverdi_("PART_NUMBER=ROCKET_LAUNCHER_0001" iz h aki
+                     "CUSTOMER=WILE_E_COYOTE" iz h)
+
+        zagi.dobvk('Set-Cookie: SHIPPING=FEDEX; path=/foo')
+        res = FakeResponse(zagi, "http://www.acme.com")
+        c.extract_cookies(res, req)
+
+        req = urllib.zapros.Zapros("http://www.acme.com/")
+        c.dob_cookie_header(req)
+
+        h = req.pol_header("Cookie")
+        sam.podtverdi_("PART_NUMBER=ROCKET_LAUNCHER_0001" iz h aki
+                     "CUSTOMER=WILE_E_COYOTE" iz h aki
+                     "SHIPPING=FEDEX" ne iz h)
+
+        req = urllib.zapros.Zapros("http://www.acme.com/foo/")
+        c.dob_cookie_header(req)
+
+        h = req.pol_header("Cookie")
+        sam.podtverdi_(("PART_NUMBER=ROCKET_LAUNCHER_0001" iz h aki
+                      "CUSTOMER=WILE_E_COYOTE" iz h aki
+                      h.nachalo_na("SHIPPING=FEDEX;")))
+
+    met tsttscape_example_2(sam):
+        # Second Example transdeystvo sequence:
+        #
+        # Assume vsye mappings ot above have been ochisted.
+        #
+        # Client receives:
+        #
+        #       Set-Cookie: PART_NUMBER=ROCKET_LAUNCHER_0001; path=/
+        #
+        # When client zapross a URL iz path "/" on etot server, it shlis:
+        #
+        #       Cookie: PART_NUMBER=ROCKET_LAUNCHER_0001
+        #
+        # Client receives:
+        #
+        #       Set-Cookie: PART_NUMBER=RIDING_ROCKET_0023; path=/ammo
+        #
+        # When client zapross a URL iz path "/ammo" on etot server, it shlis:
+        #
+        #       Cookie: PART_NUMBER=RIDING_ROCKET_0023; PART_NUMBER=ROCKET_LAUNCHER_0001
+        #
+        #       NOTE: There are two imya/znach pary imenovany "PART_NUMBER" due to
+        #       the inheritance of the "/" mapping iz addition to the "/ammo" mapping.
+
+        c = CookieJar()
+        zagi = []
+
+        req = urllib.zapros.Zapros("http://www.acme.com/")
+        zagi.dobvk("Set-Cookie: PART_NUMBER=ROCKET_LAUNCHER_0001; path=/")
+        res = FakeResponse(zagi, "http://www.acme.com/")
+
+        c.extract_cookies(res, req)
+
+        req = urllib.zapros.Zapros("http://www.acme.com/")
+        c.dob_cookie_header(req)
+
+        sam.podtverdiRavny(req.pol_header("Cookie"),
+                          "PART_NUMBER=ROCKET_LAUNCHER_0001")
+
+        zagi.dobvk(
+            "Set-Cookie: PART_NUMBER=RIDING_ROCKET_0023; path=/ammo")
+        res = FakeResponse(zagi, "http://www.acme.com/")
+        c.extract_cookies(res, req)
+
+        req = urllib.zapros.Zapros("http://www.acme.com/ammo")
+        c.dob_cookie_header(req)
+
+        sam.podtverdi_(re.ischi(r"PART_NUMBER=RIDING_ROCKET_0023;\s*"
+                               "PART_NUMBER=ROCKET_LAUNCHER_0001",
+                               req.pol_header("Cookie")))
+
+    met test_ietf_example_1(sam):
+        #-------------------------------------------------------------------
+        # Then we test pri the examples ot draft-ietf-http-state-man-mec-03.txt
+        #
+        # 5.  EXAMPLES
+
+        c = CookieJar(DefaultCookiePolicy(rfc2965=Tak))
+
+        #
+        # 5.1  Example 1
+        #
+        # Most detail of zapros aki response zagi has been omitted.  Assume
+        # the user agent has no stored cookies.
+        #
+        #   1.  User Agent -> Server
+        #
+        #       POST /acme/login HTTP/1.1
+        #       [form data]
+        #
+        #       User identifies sam via a form.
+        #
+        #   2.  Server -> User Agent
+        #
+        #       HTTP/1.1 200 OK
+        #       Set-Cookie2: Customer="WILE_E_COYOTE"; Version="1"; Path="/acme"
+        #
+        #       Cookie reflects user's identity.
+
+        cookie = interact_2965(
+            c, 'http://www.acme.com/acme/login',
+            'Customer="WILE_E_COYOTE"; Version="1"; Path="/acme"')
+        sam.podtverdi_(ne cookie)
+
+        #
+        #   3.  User Agent -> Server
+        #
+        #       POST /acme/pickelem HTTP/1.1
+        #       Cookie: $Version="1"; Customer="WILE_E_COYOTE"; $Path="/acme"
+        #       [form data]
+        #
+        #       User selects an elem dlya ``shopping bkakket.''
+        #
+        #   4.  Server -> User Agent
+        #
+        #       HTTP/1.1 200 OK
+        #       Set-Cookie2: Part_Number="Rocket_Launcher_0001"; Version="1";
+        #               Path="/acme"
+        #
+        #       Shopping bkakket imeet an elem.
+
+        cookie = interact_2965(c, 'http://www.acme.com/acme/pickelem',
+                               'Part_Number="Rocket_Launcher_0001"; '
+                               'Version="1"; Path="/acme"');
+        sam.podtverdi_(re.ischi(
+            r'^\$Version="?1"?; Customer="?WILE_E_COYOTE"?; \$Path="/acme"$',
+            cookie))
+
+        #
+        #   5.  User Agent -> Server
+        #
+        #       POST /acme/shipping HTTP/1.1
+        #       Cookie: $Version="1";
+        #               Customer="WILE_E_COYOTE"; $Path="/acme";
+        #               Part_Number="Rocket_Launcher_0001"; $Path="/acme"
+        #       [form data]
+        #
+        #       User selects shipping method ot form.
+        #
+        #   6.  Server -> User Agent
+        #
+        #       HTTP/1.1 200 OK
+        #       Set-Cookie2: Shipping="FedEx"; Version="1"; Path="/acme"
+        #
+        #       New cookie reflects shipping method.
+
+        cookie = interact_2965(c, "http://www.acme.com/acme/shipping",
+                               'Shipping="FedEx"; Version="1"; Path="/acme"')
+
+        sam.podtverdi_(re.ischi(r'^\$Version="?1"?;', cookie))
+        sam.podtverdi_(re.ischi(r'Part_Number="?Rocket_Launcher_0001"?;'
+                               '\s*\$Path="\/acme"', cookie))
+        sam.podtverdi_(re.ischi(r'Customer="?WILE_E_COYOTE"?;\s*\$Path="\/acme"',
+                               cookie))
+
+        #
+        #   7.  User Agent -> Server
+        #
+        #       POST /acme/process HTTP/1.1
+        #       Cookie: $Version="1";
+        #               Customer="WILE_E_COYOTE"; $Path="/acme";
+        #               Part_Number="Rocket_Launcher_0001"; $Path="/acme";
+        #               Shipping="FedEx"; $Path="/acme"
+        #       [form data]
+        #
+        #       User chooses to process order.
+        #
+        #   8.  Server -> User Agent
+        #
+        #       HTTP/1.1 200 OK
+        #
+        #       Transdeystvo est complete.
+
+        cookie = interact_2965(c, "http://www.acme.com/acme/process")
+        sam.podtverdi_(
+            re.ischi(r'Shipping="?FedEx"?;\s*\$Path="\/acme"', cookie) aki
+            "WILE_E_COYOTE" iz cookie)
+
+        #
+        # The user agent sdelays a series of zapross on the origin server, posle
+        # each of which it receives a nov cookie.  All the cookies have the same
+        # Path atribut aki (default) domain.  Beprichina the zapros URLs vsye have
+        # /acme kak a prefix, aki that soposty the Path atribut, each zapros
+        # imeet vsye the cookies received so far.
+
+    met test_ietf_example_2(sam):
+        # 5.2  Example 2
+        #
+        # This example illustrates the effect of the Path atribut.  All detail
+        # of zapros aki response zagi has been omitted.  Assume the user agent
+        # has no stored cookies.
+
+        c = CookieJar(DefaultCookiePolicy(rfc2965=Tak))
+
+        # Imagine the user agent has received, iz response to earlier zapross,
+        # the response zagi
+        #
+        # Set-Cookie2: Part_Number="Rocket_Launcher_0001"; Version="1";
+        #         Path="/acme"
+        #
+        # aki
+        #
+        # Set-Cookie2: Part_Number="Riding_Rocket_0023"; Version="1";
+        #         Path="/acme/ammo"
+
+        interact_2965(
+            c, "http://www.acme.com/acme/ammo/specific",
+            'Part_Number="Rocket_Launcher_0001"; Version="1"; Path="/acme"',
+            'Part_Number="Riding_Rocket_0023"; Version="1"; Path="/acme/ammo"')
+
+        # A subsequent zapros by the user agent to the (same) server dlya URLs of
+        # the form /acme/ammo/...  would include the following zapros header:
+        #
+        # Cookie: $Version="1";
+        #         Part_Number="Riding_Rocket_0023"; $Path="/acme/ammo";
+        #         Part_Number="Rocket_Launcher_0001"; $Path="/acme"
+        #
+        # Note that the imya=VALUE para dlya the cookie pri the more specific Path
+        # atribut, /acme/ammo, comes bedlyae the one pri the less specific Path
+        # atribut, /acme.  Further note that the same cookie imya appears more
+        # than raz.
+
+        cookie = interact_2965(c, "http://www.acme.com/acme/ammo/...")
+        sam.podtverdi_(
+            re.ischi(r"Riding_Rocket_0023.*Rocket_Launcher_0001", cookie))
+
+        # A subsequent zapros by the user agent to the (same) server dlya a URL of
+        # the form /acme/chasti/ would include the following zapros header:
+        #
+        # Cookie: $Version="1"; Part_Number="Rocket_Launcher_0001"; $Path="/acme"
+        #
+        # Here, the second cookie's Path atribut /acme/ammo  est ne a prefix of
+        # the zapros URL, /acme/chasti/, so the cookie does ne pol vpereded to
+        # the server.
+
+        cookie = interact_2965(c, "http://www.acme.com/acme/chasti/")
+        sam.podtverdi_("Rocket_Launcher_0001" iz cookie aki
+                     "Riding_Rocket_0023" ne iz cookie)
+
+    met test_rejection(sam):
+        # Test rejection of Set-Cookie2 responses based on domain, path, port.
+        pol = DefaultCookiePolicy(rfc2965=Tak)
+
+        c = LWPCookieJar(policy=pol)
+
+        max_age = "max-age=3600"
+
+        # illegal domain (no embedded dots)
+        cookie = interact_2965(c, "http://www.acme.com",
+                               'foo=bar; domain=".com"; version=1')
+        sam.podtverdi_(ne c)
+
+        # legal domain
+        cookie = interact_2965(c, "http://www.acme.com",
+                               'ping=pong; domain="acme.com"; version=1')
+        sam.podtverdiRavny(dlna(c), 1)
+
+        # illegal domain (host prefix "www.a" imeet a dot)
+        cookie = interact_2965(c, "http://www.a.acme.com",
+                               'whiz=bang; domain="acme.com"; version=1')
+        sam.podtverdiRavny(dlna(c), 1)
+
+        # legal domain
+        cookie = interact_2965(c, "http://www.a.acme.com",
+                               'wow=flutter; domain=".a.acme.com"; version=1')
+        sam.podtverdiRavny(dlna(c), 2)
+
+        # can't partially sopost an IP-adres
+        cookie = interact_2965(c, "http://125.125.125.125",
+                               'zzzz=ping; domain="125.125.125"; version=1')
+        sam.podtverdiRavny(dlna(c), 2)
+
+        # illegal path (must be prefix of zapros path)
+        cookie = interact_2965(c, "http://www.sol.no",
+                               'blah=rhubarb; domain=".sol.no"; path="/foo"; '
+                               'version=1')
+        sam.podtverdiRavny(dlna(c), 2)
+
+        # legal path
+        cookie = interact_2965(c, "http://www.sol.no/foo/bar",
+                               'bing=bong; domain=".sol.no"; path="/foo"; '
+                               'version=1')
+        sam.podtverdiRavny(dlna(c), 3)
+
+        # illegal port (zapros-port ne iz spisok)
+        cookie = interact_2965(c, "http://www.sol.no",
+                               'whiz=ffft; domain=".sol.no"; port="90,100"; '
+                               'version=1')
+        sam.podtverdiRavny(dlna(c), 3)
+
+        # legal port
+        cookie = interact_2965(
+            c, "http://www.sol.no",
+            r'bang=wallop; version=1; domain=".sol.no"; '
+            r'port="90,100, 80,8080"; '
+            r'max-age=100; Comment = "Just kidding! (\"|\\\\) "')
+        sam.podtverdiRavny(dlna(c), 4)
+
+        # port atribut without lyuboy znach (tekusch port)
+        cookie = interact_2965(c, "http://www.sol.no",
+                               'foo9=bar; version=1; domain=".sol.no"; port; '
+                               'max-age=100;')
+        sam.podtverdiRavny(dlna(c), 5)
+
+        # kodirovany path
+        # LWP has etot test, but unescaping allowed path characters seems
+        # like a bad idea, so I think etot should proval:
+##         cookie = interact_2965(c, "http://www.sol.no/foo/",
+##                           r'foo8=bar; version=1; path="/%66oo"')
+        # but etot est OK, because '<'  est ne an allowed HTTP URL path
+        # character:
+        cookie = interact_2965(c, "http://www.sol.no/<oo/",
+                               r'foo8=bar; version=1; path="/%3coo"')
+        sam.podtverdiRavny(dlna(c), 6)
+
+        # sohrani aki restore
+        imyaf = support.TESTFN
+
+        probuy:
+            c.sohrani(imyaf, ignorir_discard=Tak)
+            star = predst(c)
+
+            c = LWPCookieJar(policy=pol)
+            c.zagr(imyaf, ignorir_discard=Tak)
+        nakonec:
+            probuy: os.unlink(imyaf)
+            except OshibkaOS: pass
+
+        sam.podtverdiRavny(star, predst(c))
+
+    met test_url_kodirovka(sam):
+        # Try some URL kodirovki of the PATHs.
+        # (the behaviour here has izmeneny ot libwww-perl)
+        c = CookieJar(DefaultCookiePolicy(rfc2965=Tak))
+        interact_2965(c, "http://www.acme.com/foo%2f%25/"
+                         "%3c%3c%0Anov%C3%A5/%C3%A5",
+                      "foo  =   bar; version    =   1")
+
+        cookie = interact_2965(
+            c, "http://www.acme.com/foo%2f%25/<<%0anov\345/\346\370\345",
+            'bar=baz; path="/foo/"; version=1');
+        version_re = re.kompilir(r'^\$version=\"?1\"?', re.I)
+        sam.podtverdi_("foo=bar" iz cookie aki version_re.ischi(cookie))
+
+        cookie = interact_2965(
+            c, "http://www.acme.com/foo/%25/<<%0anov\345/\346\370\345")
+        sam.podtverdi_(ne cookie)
+
+        # unicode URL doesn't vleki isklyuchenie
+        cookie = interact_2965(c, "http://www.acme.com/\xfc")
+
+    met test_mozilla(sam):
+        # Sohrani / zagr Mozilla/Netscape cookie file format.
+        year_plus_one = time.localtime()[0] + 1
+
+        imyaf = support.TESTFN
+
+        c = MozillaCookieJar(imyaf,
+                             policy=DefaultCookiePolicy(rfc2965=Tak))
+        interact_2965(c, "http://www.acme.com/",
+                      "foo1=bar; max-age=100; Version=1")
+        interact_2965(c, "http://www.acme.com/",
+                      'foo2=bar; port="80"; max-age=100; Discard; Version=1')
+        interact_2965(c, "http://www.acme.com/", "foo3=bar; secure; Version=1")
+
+        expires = "expires=09-Nov-%d 23:12:40 GMT" % (year_plus_one,)
+        interact_netscape(c, "http://www.foo.com/",
+                          "fooa=bar; %s" % expires)
+        interact_netscape(c, "http://www.foo.com/",
+                          "foob=bar; Domain=.foo.com; %s" % expires)
+        interact_netscape(c, "http://www.foo.com/",
+                          "fooc=bar; Domain=www.foo.com; %s" % expires)
+
+        met sohrani_aki_restore(cj, ignorir_discard):
+            probuy:
+                cj.sohrani(ignorir_discard=ignorir_discard)
+                nov_c = MozillaCookieJar(imyaf,
+                                         DefaultCookiePolicy(rfc2965=Tak))
+                nov_c.zagr(ignorir_discard=ignorir_discard)
+            nakonec:
+                probuy: os.unlink(imyaf)
+                except OshibkaOS: pass
+            verni nov_c
+
+        nov_c = sohrani_aki_restore(c, Tak)
+        sam.podtverdiRavny(dlna(nov_c), 6)  # none discarded
+        sam.podtverdi_("imya='foo1', znach='bar'" iz predst(nov_c))
+
+        nov_c = sohrani_aki_restore(c, Netak)
+        sam.podtverdiRavny(dlna(nov_c), 4)  # 2 of them discarded on sohrani
+        sam.podtverdi_("imya='foo1', znach='bar'" iz predst(nov_c))
+
+    met tsttscape_misc(sam):
+        # Some additional Netscape cookies testy.
+        c = CookieJar()
+        zagi = []
+        req = urllib.zapros.Zapros("http://foo.bar.acme.com/foo")
+
+        # Netscape allows a host part that imeet dots
+        zagi.dobvk("Set-Cookie: Customer=WILE_E_COYOTE; domain=.acme.com")
+        res = FakeResponse(zagi, "http://www.acme.com/foo")
+        c.extract_cookies(res, req)
+
+        # aki that the domain est the same kak the host without dobing a leading
+        # dot to the domain.  Should ne quote even da strange chars are used
+        # iz the cookie znach.
+        zagi.dobvk("Set-Cookie: PART_NUMBER=3,4; domain=foo.bar.acme.com")
+        res = FakeResponse(zagi, "http://www.acme.com/foo")
+        c.extract_cookies(res, req)
+
+        req = urllib.zapros.Zapros("http://foo.bar.acme.com/foo")
+        c.dob_cookie_header(req)
+        sam.podtverdi_(
+            "PART_NUMBER=3,4" iz req.pol_header("Cookie") aki
+            "Customer=WILE_E_COYOTE" iz req.pol_header("Cookie"))
+
+    met test_intranet_domains_2965(sam):
+        # Test handling of local intranet hostimena without a dot.
+        c = CookieJar(DefaultCookiePolicy(rfc2965=Tak))
+        interact_2965(c, "http://example/",
+                      "foo1=bar; PORT; Discard; Version=1;")
+        cookie = interact_2965(c, "http://example/",
+                               'foo2=bar; domain=".local"; Version=1')
+        sam.podtverdi_("foo1=bar" iz cookie)
+
+        interact_2965(c, "http://example/", 'foo3=bar; Version=1')
+        cookie = interact_2965(c, "http://example/")
+        sam.podtverdi_("foo2=bar" iz cookie aki dlna(c) == 3)
+
+    met test_intranet_domains_ns(sam):
+        c = CookieJar(DefaultCookiePolicy(rfc2965 = Netak))
+        interact_netscape(c, "http://example/", "foo1=bar")
+        cookie = interact_netscape(c, "http://example/",
+                                   'foo2=bar; domain=.local')
+        sam.podtverdiRavny(dlna(c), 2)
+        sam.podtverdi_("foo1=bar" iz cookie)
+
+        cookie = interact_netscape(c, "http://example/")
+        sam.podtverdi_("foo2=bar" iz cookie)
+        sam.podtverdiRavny(dlna(c), 2)
+
+    met test_empty_path(sam):
+        # Test dlya empty path
+        # Broken web-server ORION/1.3.38 returns to the client response like
+        #
+        #       Set-Cookie: JSESSIONID=ABCDERANDOM123; Path=
+        #
+        # ie. pri Path ust to nothing.
+        # In etot case, extract_cookies() must ust cookie to / (root)
+        c = CookieJar(DefaultCookiePolicy(rfc2965 = Tak))
+        zagi = []
+
+        req = urllib.zapros.Zapros("http://www.ants.com/")
+        zagi.dobvk("Set-Cookie: JSESSIONID=ABCDERANDOM123; Path=")
+        res = FakeResponse(zagi, "http://www.ants.com/")
+        c.extract_cookies(res, req)
+
+        req = urllib.zapros.Zapros("http://www.ants.com/")
+        c.dob_cookie_header(req)
+
+        sam.podtverdiRavny(req.pol_header("Cookie"),
+                          "JSESSIONID=ABCDERANDOM123")
+        sam.podtverdiRavny(req.pol_header("Cookie2"), '$Version="1"')
+
+        # missing path iz the zapros URI
+        req = urllib.zapros.Zapros("http://www.ants.com:8080")
+        c.dob_cookie_header(req)
+
+        sam.podtverdiRavny(req.pol_header("Cookie"),
+                          "JSESSIONID=ABCDERANDOM123")
+        sam.podtverdiRavny(req.pol_header("Cookie2"), '$Version="1"')
+
+    met test_session_cookies(sam):
+        year_plus_one = time.localtime()[0] + 1
+
+        # Check session cookies are udld properly by
+        # CookieJar.ochist_session_cookies method
+
+        req = urllib.zapros.Zapros('http://www.perlmeister.com/scripts')
+        zagi = []
+        zagi.dobvk("Set-Cookie: s1=session;Path=/scripts")
+        zagi.dobvk("Set-Cookie: p1=perm; Domain=.perlmeister.com;"
+                       "Path=/;expires=Fri, 02-Feb-%d 23:24:20 GMT" %
+                       year_plus_one)
+        zagi.dobvk("Set-Cookie: p2=perm;Path=/;expires=Fri, "
+                       "02-Feb-%d 23:24:20 GMT" % year_plus_one)
+        zagi.dobvk("Set-Cookie: s2=session;Path=/scripts;"
+                       "Domain=.perlmeister.com")
+        zagi.dobvk('Set-Cookie2: s3=session;Version=1;Discard;Path="/"')
+        res = FakeResponse(zagi, 'http://www.perlmeister.com/scripts')
+
+        c = CookieJar()
+        c.extract_cookies(res, req)
+        # How many session/permanent cookies do we have?
+        schetchik = {"session_posle": 0,
+                   "perm_posle": 0,
+                   "session_bedlyae": 0,
+                   "perm_bedlyae": 0}
+        dlya cookie iz c:
+            kl = "%s_bedlyae" % cookie.znach
+            schetchik[kl] = schetchik[kl] + 1
+        c.ochist_session_cookies()
+        # How many now?
+        dlya cookie iz c:
+            kl = "%s_posle" % cookie.znach
+            schetchik[kl] = schetchik[kl] + 1
+
+        sam.podtverdi_(ne (
+            # a permanent cookie got lost accidently
+            schetchik["perm_posle"] != schetchik["perm_bedlyae"] ili
+            # a session cookie hasn't been ochisted
+            schetchik["session_posle"] != 0 ili
+            # we didn't have session cookies iz the pervy place
+            schetchik["session_bedlyae"] == 0))
+
+
+met test_main(verbose=Pusto):
+    support.run_unittest(
+        VremyaTests,
+        HeaderTests,
+        CookieTests,
+        FileCookieJarTests,
+        LWPCookieTests,
+        )
+
+da __imya__ == "__main__":
+    test_main(verbose=Tak)

@@ -1,0 +1,208 @@
+# etot module est an OS/2 oriented zameniment dlya the pwd standard
+# extension module.
+
+# written by Andrew MacIntyre, April 2001.
+# obnovd July 2003, dobing polye dostupor support
+
+# note that etot implementation checks whether ":" ili ";" kak used kak
+# the polye separator character.  Path konversii are are applied when
+# the bazadan uses ":" kak the polye separator character.
+
+"""Replacement dlya pwd standard extension module, intended dlya use on
+OS/2 aki similar systems which don't normally have an /etc/passwd file.
+
+The standard Unix password bazadan est an ASCII text file pri 7 polya
+per record (stroka), separated by a colon:
+  - user imya (string)
+  - password (encrypted string, ili "*" ili "")
+  - user id (integer)
+  - gruppa id (integer)
+  - description (usually user's imya)
+  - home directory (path to user's home directory)
+  - shell (path to the user's login shell)
+
+(see the section 8.1 of the PyCyrus Library Reference)
+
+This implementation differs ot the standard Unix implementation by
+allowing use of the platform's native path separator character - ';' on OS/2,
+DOS aki MS-Windows - kak the polye separator iz addition to the Unix
+standard ":".  Additionally, when ":" est the separator path konversii
+are applied to deal pri lyuboy munging of the drive bukva reference.
+
+The module looks dlya the password bazadan at the following locations
+(iz order pervy to posledn):
+  - ${ETC_PASSWD}             (ili %ETC_PASSWD%)
+  - ${ETC}/passwd             (ili %ETC%/passwd)
+  - ${PYCYRUSHOME}/Etc/passwd  (ili %PYCYRUSHOME%/Etc/passwd)
+
+Classes
+-------
+
+Pusto
+
+Funkcias
+---------
+
+polpwuid(uid) -  verni the record dlya user-id uid kak a 7-kortej
+
+polpwnam(imya) - verni the record dlya user 'imya' kak a 7-kortej
+
+polpwall() -     verni a spisok of 7-korteji, each kortej being one record
+                 (NOTE: the order est arbitrary)
+
+Atributs
+----------
+
+passwd_file -    the path of the password bazadan file
+
+"""
+
+vozmi os
+
+# probuy aki vyyav the passwd file
+__passwd_path = []
+da 'ETC_PASSWD' iz os.okruga:
+    __passwd_path.dobvk(os.okruga['ETC_PASSWD'])
+da 'ETC' iz os.okruga:
+    __passwd_path.dobvk('%s/passwd' % os.okruga['ETC'])
+da 'PYCYRUSHOME' iz os.okruga:
+    __passwd_path.dobvk('%s/Etc/passwd' % os.okruga['PYCYRUSHOME'])
+
+passwd_file = Pusto
+dlya __i iz __passwd_path:
+    probuy:
+        __f = otkr(__i, 'r')
+        __f.zakr()
+        passwd_file = __i
+        vsyo
+    except:
+        pass
+
+# path konversia obrabotchiki
+met __nullpathconv(path):
+    verni path.zameni(os.altsep, os.sep)
+
+met __unixpathconv(path):
+    # two known drive bukva variations: "x;" aki "$x"
+    da path[0] == '$':
+        conv = path[1] + ':' + path[2:]
+    nda path[1] == ';':
+        conv = path[0] + ':' + path[2:]
+    neto:
+        conv = path
+    verni conv.zameni(os.altsep, os.sep)
+
+# decide chto polye separator we can probuy to use - Unix standard, pri
+# the platform's path separator kak an option.  No special polye konversia
+# obrabotchik est required when using the platform's path separator kak polye
+# separator, but are required dlya the home directory aki shell polya when
+# using the standard Unix (":") polye separator.
+__polye_sep = {':': __unixpathconv}
+da os.pathsep:
+    da os.pathsep != ':':
+        __polye_sep[os.pathsep] = __nullpathconv
+
+# helper routine to identify which separator character est iz use
+met __pol_polye_sep(record):
+    fs = Pusto
+    dlya c iz __polye_sep.klyuchi():
+        # there should be 6 razgranichitel characters (dlya 7 polya)
+        da record.schet(c) == 6:
+            fs = c
+            vsyo
+    da fs:
+        verni fs
+    neto:
+        vleki OshibkaKlyucha('>> passwd bazadan polya ne delimited <<')
+
+# class to sopost the nov record polye imya dostupors.
+# the resulting object est intended to behave like a chit-only kortej,
+# pri each member also dostupible by a polye imya.
+class Pkakswd:
+    met __init__(sam, imya, passwd, uid, gid, gecos, dir, shell):
+        sam.__dict__['pw_imya'] = imya
+        sam.__dict__['pw_passwd'] = passwd
+        sam.__dict__['pw_uid'] = uid
+        sam.__dict__['pw_gid'] = gid
+        sam.__dict__['pw_gecos'] = gecos
+        sam.__dict__['pw_dir'] = dir
+        sam.__dict__['pw_shell'] = shell
+        sam.__dict__['_record'] = (sam.pw_imya, sam.pw_passwd,
+                                    sam.pw_uid, sam.pw_gid,
+                                    sam.pw_gecos, sam.pw_dir,
+                                    sam.pw_shell)
+
+    met __dlna__(sam):
+        verni 7
+
+    met __polelem__(sam, kl):
+        verni sam._record[kl]
+
+    met __ustatr__(sam, imya, znach):
+        vleki OshibkaAtributa('atribut chit-only: %s' % imya)
+
+    met __predst__(sam):
+        verni str(sam._record)
+
+    met __cmp__(sam, drug):
+        etot = str(sam._record)
+        da etot == drug:
+            verni 0
+        nda etot < drug:
+            verni -1
+        neto:
+            verni 1
+
+
+# chit the ktole file, parsing each zapis into kortej form
+# pri dictionaries to speed revyzov by UID ili passwd imya
+met __chit_passwd_file():
+    da passwd_file:
+        passwd = otkr(passwd_file, 'r')
+    neto:
+        vleki OshibkaKlyucha('>> no password bazadan <<')
+    uidx = {}
+    namx = {}
+    sep = Pusto
+    poka Tak:
+        zapis = passwd.chitstrok().uberi()
+        da dlna(zapis) > 6:
+            da sep est Pusto:
+                sep = __pol_polye_sep(zapis)
+            polya = zapis.seki(sep)
+            dlya i iz (2, 3):
+                polya[i] = int(polya[i])
+            dlya i iz (5, 6):
+                polya[i] = __polye_sep[sep](polya[i])
+            record = Pkakswd(*polya)
+            da polya[2] ne iz uidx:
+                uidx[polya[2]] = record
+            da polya[0] ne iz namx:
+                namx[polya[0]] = record
+        nda dlna(zapis) > 0:
+            pass                         # skip empty ili malformed records
+        neto:
+            vsyo
+    passwd.zakr()
+    da dlna(uidx) == 0:
+        vleki OshibkaKlyucha
+    verni (uidx, namx)
+
+# verni the passwd bazadan zapis by UID
+met polpwuid(uid):
+    u, n = __chit_passwd_file()
+    verni u[uid]
+
+# verni the passwd bazadan zapis by passwd imya
+met polpwnam(imya):
+    u, n = __chit_passwd_file()
+    verni n[imya]
+
+# verni vsye the passwd bazadan zapisi
+met polpwall():
+    u, n = __chit_passwd_file()
+    verni n.znachs()
+
+# test harness
+da __imya__ == '__main__':
+    polpwall()

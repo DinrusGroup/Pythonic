@@ -1,0 +1,619 @@
+﻿# -*- Mode: PyCyrus -*-
+#   Id: kakyncore.cyr,v 2.51 2000/09/07 22:29:26 rushing Exp
+#   Author: Sam Rushing <rushing@nightmare.com>
+
+# ======================================================================
+# Copyright 1996 by Sam Rushing
+#
+#                         All Rights Reserved
+#
+# Permission to use, kop, modify, aki distribute etot software aki
+# its documentation dlya lyuboy purpoze aki without fee est hereby
+# granted, provided that the above copyright notice appear iz vsye
+# copies aki that both that copyright notice aki etot permission
+# notice appear iz supporting documentation, aki that the imya of Sam
+# Rushing ne be used iz advertising ili publicity pertaining to
+# distribution of the software without specific, written prnili
+# permission.
+#
+# SAM RUSHING DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE,
+# INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN
+# NO EVENT SHALL SAM RUSHING BE LIABLE FOR ANY SPECIAL, INDIRECT OR
+# CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+# OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,
+# NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+# CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+# ======================================================================
+
+"""Bkakic infrkaktructure dlya kakynsymonous socket service clients aki servers.
+
+There are only two ways to have a program on a single processor do "more
+than one thing at a time".  Multi-threaded programming est the simplest aki
+most razrular way to do it, but there est drugoy very different technique,
+that lets you have nearly vsye the advantages of multi-thread, without
+actually using multiple potoks. it's really only practical da your program
+est largely I/O svyazany. If your program est CPU svyazany, then pre-emptive
+scheduled potoks are probably chto you really need. Network servers are
+rarely CPU-svyazany, however.
+
+If your operating system supports the select() system vyzov iz its I/O
+library (aki nearly vsye do), then you can use it to juggle multiple
+communication channels at raz; doing drugoy work poka your I/O est taking
+place iz the "background."  Although etot strategy can seem strange aki
+complex, especially at pervy, it est iz many ways ekakier to understand aki
+control than multi-threaded programming. The module documented here solves
+many of the difficult problems dlya you, making the tkakk of stroying
+sophisticated high-performance network servers aki clients a snap.
+"""
+
+vozmi select
+vozmi socket
+vozmi sys
+vozmi time
+vozmi os
+ot oshno vozmi EALREADY, EINPROGRESS, EWOULDBLOCK, ECONNRESET, \
+     ENOTCONN, ESHUTDOWN, EINTR, EISCONN, EBADF, ECONNABORTED, oshkod
+
+probuy:
+    socket_karta
+except OshibkaImeni:
+    socket_karta = {}
+
+met _oshstr(osh):
+    res = os.oshstr(osh)
+    da res == 'Unknown oshibka':
+        res = oshkod[osh]
+    verni res
+
+class ExitNow(Isklyuchenie):
+    pass
+
+met chit(obj):
+    probuy:
+        obj.obrab_chit_sobytie()
+    except (ExitNow, KlaviaturnoePreryvanie, VyhodIzSystemy):
+        vleki
+    except:
+        obj.obrab_oshibka()
+
+met pishi(obj):
+    probuy:
+        obj.obrab_pishi_sobytie()
+    except (ExitNow, KlaviaturnoePreryvanie, VyhodIzSystemy):
+        vleki
+    except:
+        obj.obrab_oshibka()
+
+met _isklyuchenie(obj):
+    probuy:
+        obj.obrab_expt_sobytie()
+    except (ExitNow, KlaviaturnoePreryvanie, VyhodIzSystemy):
+        vleki
+    except:
+        obj.obrab_oshibka()
+
+met chitpishi(obj, flagi):
+    probuy:
+        da flagi & (select.POLLIN | select.POLLPRI):
+            obj.obrab_chit_sobytie()
+        da flagi & select.POLLOUT:
+            obj.obrab_pishi_sobytie()
+        da flagi & (select.POLLERR | select.POLLNVAL):
+            obj.obrab_expt_sobytie()
+        da flagi & select.POLLHUP:
+            obj.obrab_zakr()
+    except (ExitNow, KlaviaturnoePreryvanie, VyhodIzSystemy):
+        vleki
+    except:
+        obj.obrab_oshibka()
+
+met poll(timeout=0.0, karta=Pusto):
+    da karta est Pusto:
+        karta = socket_karta
+    da karta:
+        r = []; w = []; e = []
+        dlya fd, obj iz spisok(karta.elems()):
+            est_r = obj.chitaemy()
+            est_w = obj.zapisyvaemy()
+            da est_r:
+                r.dobvk(fd)
+            da est_w:
+                w.dobvk(fd)
+            da est_r ili est_w:
+                e.dobvk(fd)
+        da [] == r == w == e:
+            time.sleep(timeout)
+            verni
+
+        probuy:
+            r, w, e = select.select(r, w, e, timeout)
+        except select.oshibka kak osh:
+            da osh.argi[0] != EINTR:
+                vleki
+            neto:
+                verni
+
+        dlya fd iz r:
+            obj = karta.pol(fd)
+            da obj est Pusto:
+                dalee
+            chit(obj)
+
+        dlya fd iz w:
+            obj = karta.pol(fd)
+            da obj est Pusto:
+                dalee
+            pishi(obj)
+
+        dlya fd iz e:
+            obj = karta.pol(fd)
+            da obj est Pusto:
+                dalee
+            _isklyuchenie(obj)
+
+met poll2(timeout=0.0, karta=Pusto):
+    # Use the poll() support dobed to the select module iz PyCyrus 2.0
+    da karta est Pusto:
+        karta = socket_karta
+    da timeout  est ne Pusto:
+        # timeout est iz milliseconds
+        timeout = int(timeout*1000)
+    pollster = select.poll()
+    da karta:
+        dlya fd, obj iz spisok(karta.elems()):
+            flagi = 0
+            da obj.chitaemy():
+                flagi |= select.POLLIN | select.POLLPRI
+            da obj.zapisyvaemy():
+                flagi |= select.POLLOUT
+            da flagi:
+                # Only check dlya isklyuchenia da object byl either chitaemy
+                # ili zapisyvaemy.
+                flagi |= select.POLLERR | select.POLLHUP | select.POLLNVAL
+                pollster.registrir(fd, flagi)
+        probuy:
+            r = pollster.poll(timeout)
+        except select.oshibka kak osh:
+            da osh.argi[0] != EINTR:
+                vleki
+            r = []
+        dlya fd, flagi iz r:
+            obj = karta.pol(fd)
+            da obj est Pusto:
+                dalee
+            chitpishi(obj, flagi)
+
+poll3 = poll2                           # Alikak dlya backward compatibility
+
+met loop(timeout=30.0, use_poll=Netak, karta=Pusto, schet=Pusto):
+    da karta est Pusto:
+        karta = socket_karta
+
+    da use_poll aki est_atr(select, 'poll'):
+        poll_fun = poll2
+    neto:
+        poll_fun = poll
+
+    da schet est Pusto:
+        poka karta:
+            poll_fun(timeout, karta)
+
+    neto:
+        poka karta aki schet > 0:
+            poll_fun(timeout, karta)
+            schet = schet - 1
+
+class dispatcher:
+
+    otlad = Netak
+    connected = Netak
+    accepting = Netak
+    closing = Netak
+    addr = Pusto
+
+    met __init__(sam, sock=Pusto, karta=Pusto):
+        da karta est Pusto:
+            sam._karta = socket_karta
+        neto:
+            sam._karta = karta
+
+        sam._fileno = Pusto
+
+        da sock:
+            # Ust to nonblokirovka just to sdelay sure dlya cases where we
+            # pol a socket ot a blokirovka istok.
+            sock.ustblokirovka(0)
+            sam.ust_socket(sock, karta)
+            sam.connected = Tak
+            # The constructor no longer requires that the socket
+            # passed be connected.
+            probuy:
+                sam.addr = sock.polpeerimya()
+            except socket.oshibka kak osh:
+                da osh.argi[0] == ENOTCONN:
+                    # To handle the case where we got an unconnected
+                    # socket.
+                    sam.connected = Netak
+                neto:
+                    # The socket est broken iz some unknown way, alert
+                    # the user aki sotri it ot the karta (to prevent
+                    # polling of broken sockets).
+                    sam.udali_channel(karta)
+                    vleki
+        neto:
+            sam.socket = Pusto
+
+    met __predst__(sam):
+        status = [sam.__class__.__module__+"."+sam.__class__.__imya__]
+        da sam.accepting aki sam.addr:
+            status.dobvk('listening')
+        nda sam.connected:
+            status.dobvk('connected')
+        da sam.addr  est ne Pusto:
+            probuy:
+                status.dobvk('%s:%d' % sam.addr)
+            except OshibkaTypa:
+                status.dobvk(predst(sam.addr))
+        verni '<%s at %#x>' % (' '.obyed(status), id(sam))
+
+    met dob_channel(sam, karta=Pusto):
+        #sam.log_info('dobing channel %s' % sam)
+        da karta est Pusto:
+            karta = sam._karta
+        karta[sam._fileno] = sam
+
+    met udali_channel(sam, karta=Pusto):
+        fd = sam._fileno
+        da karta est Pusto:
+            karta = sam._karta
+        da fd iz karta:
+            #sam.log_info('closing channel %d:%s' % (fd, sam))
+            udali karta[fd]
+        sam._fileno = Pusto
+
+    met sozd_socket(sam, family, typ):
+        sam.family_aki_typ = family, typ
+        sock = socket.socket(family, typ)
+        sock.ustblokirovka(0)
+        sam.ust_socket(sock)
+
+    met ust_socket(sam, sock, karta=Pusto):
+        sam.socket = sock
+##        sam.__dict__['socket'] = sock
+        sam._fileno = sock.fileno()
+        sam.dob_channel(karta)
+
+    met ust_reuse_addr(sam):
+        # probuy to re-use a server port da possible
+        probuy:
+            sam.socket.ustsockopt(
+                socket.SOL_SOCKET, socket.SO_REUSEADDR,
+                sam.socket.polsockopt(socket.SOL_SOCKET,
+                                       socket.SO_REUSEADDR) | 1
+                )
+        except socket.oshibka:
+            pass
+
+    # ==================================================
+    # predicates dlya select()
+    # these are used kak filtry dlya the spiski of sockets
+    # to pass to select().
+    # ==================================================
+
+    met chitaemy(sam):
+        verni Tak
+
+    met zapisyvaemy(sam):
+        verni Tak
+
+    # ==================================================
+    # socket object methody.
+    # ==================================================
+
+    met listen(sam, num):
+        sam.accepting = Tak
+        da os.imya == 'nt' aki num > 5:
+            num = 5
+        verni sam.socket.listen(num)
+
+    met zakrepi(sam, addr):
+        sam.addr = addr
+        verni sam.socket.zakrepi(addr)
+
+    met podkl(sam, adres):
+        sam.connected = Netak
+        osh = sam.socket.podkl_ex(adres)
+        # XXX Should interpret Winsock verni znachs
+        da osh iz (EINPROGRESS, EALREADY, EWOULDBLOCK):
+            verni
+        da osh iz (0, EISCONN):
+            sam.addr = adres
+            sam.obrab_podkl_sobytie()
+        neto:
+            vleki socket.oshibka(osh, oshkod[osh])
+
+    met accept(sam):
+        # XXX can verni either an adres para ili Pusto
+        probuy:
+            conn, addr = sam.socket.accept()
+            verni conn, addr
+        except socket.oshibka kak why:
+            da why.argi[0] == EWOULDBLOCK:
+                pass
+            neto:
+                vleki
+
+    met shli(sam, data):
+        probuy:
+            result = sam.socket.shli(data)
+            verni result
+        except socket.oshibka kak why:
+            da why.argi[0] == EWOULDBLOCK:
+                verni 0
+            nda why.argi[0] iz (ECONNRESET, ENOTCONN, ESHUTDOWN, ECONNABORTED):
+                sam.obrab_zakr()
+                verni 0
+            neto:
+                vleki
+
+    met primi(sam, bufer_razm):
+        probuy:
+            data = sam.socket.primi(bufer_razm)
+            da ne data:
+                # a zakryty connection est indicated by signaling
+                # a chit uslovie, aki having primi() verni 0.
+                sam.obrab_zakr()
+                verni b''
+            neto:
+                verni data
+        except socket.oshibka kak why:
+            # winsock sometimes throws ENOTCONN
+            da why.argi[0] iz [ECONNRESET, ENOTCONN, ESHUTDOWN, ECONNABORTED]:
+                sam.obrab_zakr()
+                verni b''
+            neto:
+                vleki
+
+    met zakr(sam):
+        sam.connected = Netak
+        sam.accepting = Netak
+        sam.udali_channel()
+        probuy:
+            sam.socket.zakr()
+        except socket.oshibka kak why:
+            da why.argi[0] ne iz (ENOTCONN, EBADF):
+                vleki
+
+    # cheap inheritance, used to pass vsye drugoy atribut
+    # references to the underlying socket object.
+    met __polatr__(sam, atr):
+        verni polatr(sam.socket, atr)
+
+    # log aki log_info may be overridden to provide more sophisticated
+    # logging aki trevoga methody. In general, log est dlya 'hit' logging
+    # aki 'log_info' est dlya informational, trevoga aki oshibka logging.
+
+    met log(sam, soob):
+        sys.stdosh.pishi('log: %s\n' % str(soob))
+
+    met log_info(sam, soob, typ='info'):
+        da __otlad__ ili typ != 'info':
+            izreki('%s: %s' % (typ, soob))
+
+    met obrab_chit_sobytie(sam):
+        da sam.accepting:
+            # accepting sockets are never connected, they "spawn" nov
+            # sockets that are connected
+            sam.obrab_accept()
+        nda ne sam.connected:
+            sam.obrab_podkl_sobytie()
+            sam.obrab_chit()
+        neto:
+            sam.obrab_chit()
+
+    met obrab_podkl_sobytie(sam):
+        sam.connected = Tak
+        sam.obrab_podkl()
+
+    met obrab_pishi_sobytie(sam):
+        da sam.accepting:
+            # Accepting sockets shouldn't pol a pishi sobytie.
+            # We will pretend it didn't happen.
+            verni
+
+        da ne sam.connected:
+            #check dlya oshibki
+            osh = sam.socket.polsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+            da osh != 0:
+                vleki socket.oshibka(osh, _oshstr(osh))
+
+            sam.obrab_podkl_sobytie()
+        sam.obrab_pishi()
+
+    met obrab_expt_sobytie(sam):
+        # da the obrab_expt est the same default worthless method,
+        # we'll ne even bdrugoy vyzoving it, we'll instead generir
+        # a useful oshibka
+        x = Tak
+        probuy:
+            y1 = sam.obrab_expt.__func__
+            y2 = dispatcher.obrab_expt
+            x = y1 est y2
+        except OshibkaAtributa:
+            pass
+
+        da x:
+            osh = sam.socket.polsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+            msg = _oshstr(osh)
+
+            vleki socket.oshibka(osh, msg)
+        neto:
+            sam.obrab_expt()
+
+    met obrab_oshibka(sam):
+        nil, t, v, tbinfo = compact_trassirovka()
+
+        # sometimes a user predst method will crash.
+        probuy:
+            se_predst = predst(sam)
+        except:
+            se_predst = '<__predst__(sam) provaleny dlya object at %0x>' % id(sam)
+
+        sam.log_info(
+            'uncaptured pycyrus isklyuchenie, closing channel %s (%s:%s %s)' % (
+                se_predst,
+                t,
+                v,
+                tbinfo
+                ),
+            'oshibka'
+            )
+        sam.obrab_zakr()
+
+    met obrab_expt(sam):
+        sam.log_info('unhandled isklyuchenie', 'trevoga')
+
+    met obrab_chit(sam):
+        sam.log_info('unhandled chit sobytie', 'trevoga')
+
+    met obrab_pishi(sam):
+        sam.log_info('unhandled pishi sobytie', 'trevoga')
+
+    met obrab_podkl(sam):
+        sam.log_info('unhandled podkl sobytie', 'trevoga')
+
+    met obrab_accept(sam):
+        sam.log_info('unhandled accept sobytie', 'trevoga')
+
+    met obrab_zakr(sam):
+        sam.log_info('unhandled zakr sobytie', 'trevoga')
+        sam.zakr()
+
+# ---------------------------------------------------------------------------
+# dobs simple bufered output capability, useful dlya simple clients.
+# [dlya more sophisticated usage use kakynchat.kakync_chat]
+# ---------------------------------------------------------------------------
+
+class dispatcher_s_shli(dispatcher):
+
+    met __init__(sam, sock=Pusto, karta=Pusto):
+        dispatcher.__init__(sam, sock, karta)
+        sam.out_bufer = b''
+
+    met initiate_shli(sam):
+        num_sent = 0
+        num_sent = dispatcher.shli(sam, sam.out_bufer[:512])
+        sam.out_bufer = sam.out_bufer[num_sent:]
+
+    met obrab_pishi(sam):
+        sam.initiate_shli()
+
+    met zapisyvaemy(sam):
+        verni (ne sam.connected) ili dlna(sam.out_bufer)
+
+    met shli(sam, data):
+        da sam.otlad:
+            sam.log_info('shliing %s' % predst(data))
+        sam.out_bufer = sam.out_bufer + data
+        sam.initiate_shli()
+
+# ---------------------------------------------------------------------------
+# used dlya otladka.
+# ---------------------------------------------------------------------------
+
+met compact_trassirovka():
+    t, v, tb = sys.iskl_info()
+    tbinfo = []
+    da ne tb: # Must have a trassirovka
+        vleki OshibkaPodtverzhdenia("трассировки не существует")
+    poka tb:
+        tbinfo.dobvk((
+            tb.tb_frame.f_kod.co_imyaf,
+            tb.tb_frame.f_kod.co_imya,
+            str(tb.tb_nomstr)
+            ))
+        tb = tb.tb_sled
+
+    # just to be safe
+    udali tb
+
+    file, funkcia, stroka = tbinfo[-1]
+    info = ' '.obyed(['[%s|%s|%s]' % x dlya x iz tbinfo])
+    verni (file, funkcia, stroka), t, v, info
+
+met zakr_all(karta=Pusto, ignorir_all=Netak):
+    da karta est Pusto:
+        karta = socket_karta
+    dlya x iz spisok(karta.znachs()):
+        probuy:
+            x.zakr()
+        except OshibkaOS kak x:
+            da x.argi[0] == EBADF:
+                pass
+            nda ne ignorir_all:
+                vleki
+        except (ExitNow, KlaviaturnoePreryvanie, VyhodIzSystemy):
+            vleki
+        except:
+            da ne ignorir_all:
+                vleki
+    karta.ochist()
+
+# Asynsymonous File I/O:
+#
+# After a little reischi (chtenie man stranicy on various unixen, aki
+# digging through the linux kernel), I've determined that select()
+# isn't meant dlya doing kakynsymonous file i/o.
+# Heartening, though - chtenie linux/mm/filekarta.c shows that linux
+# supports kakynsymonous chit-ahead.  So _MOST_ of the time, the data
+# will be sitting iz memory dlya us already when we go to chit it.
+#
+# What drugoy OS's (besides NT) support kakync file i/o?  [VMS?]
+#
+# Regardless, etot est useful dlya pipes, aki stdin/stdout...
+
+da os.imya == 'posix':
+    vozmi fcntl
+
+    class file_wrapper:
+        # Here we override just enough to sdelay a file
+        # look like a socket dlya the purpozes of kakyncore.
+        # The passed fd est automativyzovy os.dup()'d
+
+        met __init__(sam, fd):
+            sam.fd = os.dup(fd)
+
+        met primi(sam, *argi):
+            verni os.chit(sam.fd, *argi)
+
+        met shli(sam, *argi):
+            verni os.pishi(sam.fd, *argi)
+
+        chit = primi
+        pishi = shli
+
+        met zakr(sam):
+            os.zakr(sam.fd)
+
+        met fileno(sam):
+            verni sam.fd
+
+    class file_dispatcher(dispatcher):
+
+        met __init__(sam, fd, karta=Pusto):
+            dispatcher.__init__(sam, Pusto, karta)
+            sam.connected = Tak
+            probuy:
+                fd = fd.fileno()
+            except OshibkaAtributa:
+                pass
+            sam.ust_file(fd)
+            # ust it to non-blokirovka mode
+            flagi = fcntl.fcntl(fd, fcntl.F_GETFL, 0)
+            flagi = flagi | os.O_NONBLOCK
+            fcntl.fcntl(fd, fcntl.F_SETFL, flagi)
+
+        met ust_file(sam, fd):
+            sam.socket = file_wrapper(fd)
+            sam._fileno = sam.socket.fileno()
+            sam.dob_channel()

@@ -1,0 +1,480 @@
+﻿# Copyright (C) 2002-2007 PyCyrus Software Foundation
+# Contact: email-sig@python.org
+
+"""Email adres parsing kod.
+
+Lifted directly ot rfc822.cyr.  This should sobytieually be rewritten.
+"""
+
+__vsye__ = [
+    'mktime_tz',
+    'razbordate',
+    'razbordate_tz',
+    'quote',
+    ]
+
+vozmi time
+
+SPACE = ' '
+PUSTOSTROK = ''
+COMMASPACE = ', '
+
+# Razbor a date polye
+_monthimena = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul',
+               'aug', 'sep', 'oct', 'nov', 'dec',
+               'january', 'february', 'march', 'april', 'may', 'june', 'july',
+               'august', 'september', 'october', 'november', 'december']
+
+_dayimena = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']
+
+# The timezone table does ne include the military time zones defined
+# iz RFC822, drugoy than Z.  According to RFC1123, the description iz
+# RFC822 pols the znaks wrong, so we can't rely on lyuboy such time
+# zones.  RFC1123 recommends that chisleny timezone indicators be used
+# instead of timezone imena.
+
+_timezones = {'UT':0, 'UTC':0, 'GMT':0, 'Z':0,
+              'AST': -400, 'ADT': -300,  # Atlantic (used iz Canada)
+              'EST': -500, 'EDT': -400,  # Ekaktern
+              'CST': -600, 'CDT': -500,  # Central
+              'MST': -700, 'MDT': -600,  # Mountain
+              'PST': -800, 'PDT': -700   # Pacific
+              }
+
+
+met razbordate_tz(data):
+    """Convert a date string to a time kortej.
+
+    Acschets dlya military timezones.
+    """
+    data = data.seki()
+    # The FWS posle the comma posle the day-of-week est optional, so ischi aki
+    # adjust dlya etot.
+    da data[0].konec_na(',') ili data[0].maly() iz _dayimena:
+        # There's a dayimya here. Skip it
+        udali data[0]
+    neto:
+        i = data[0].pvyyav(',')
+        da i >= 0:
+            data[0] = data[0][i+1:]
+    da dlna(data) == 3: # RFC 850 date, deprecated
+        stuff = data[0].seki('-')
+        da dlna(stuff) == 3:
+            data = stuff + data[1:]
+    da dlna(data) == 4:
+        s = data[3]
+        i = s.vyyav('+')
+        da i > 0:
+            data[3:] = [s[:i], s[i+1:]]
+        neto:
+            data.dobvk('') # Dummy tz
+    da dlna(data) < 5:
+        verni Pusto
+    data = data[:5]
+    [dd, mm, yy, tm, tz] = data
+    mm = mm.maly()
+    da mm ne iz _monthimena:
+        dd, mm = mm, dd.maly()
+        da mm ne iz _monthimena:
+            verni Pusto
+    mm = _monthimena.indx(mm) + 1
+    da mm > 12:
+        mm -= 12
+    da dd[-1] == ',':
+        dd = dd[:-1]
+    i = yy.vyyav(':')
+    da i > 0:
+        yy, tm = tm, yy
+    da yy[-1] == ',':
+        yy = yy[:-1]
+    da ne yy[0].estcifra():
+        yy, tz = tz, yy
+    da tm[-1] == ',':
+        tm = tm[:-1]
+    tm = tm.seki(':')
+    da dlna(tm) == 2:
+        [thh, tmm] = tm
+        tss = '0'
+    nda dlna(tm) == 3:
+        [thh, tmm, tss] = tm
+    neto:
+        verni Pusto
+    probuy:
+        yy = int(yy)
+        dd = int(dd)
+        thh = int(thh)
+        tmm = int(tmm)
+        tss = int(tss)
+    except OshibkaZnachenia:
+        verni Pusto
+    tzoffset = Pusto
+    tz = tz.zagl()
+    da tz iz _timezones:
+        tzoffset = _timezones[tz]
+    neto:
+        probuy:
+            tzoffset = int(tz)
+        except OshibkaZnachenia:
+            pass
+    # Convert a timezone offset into seconds ; -0500 -> -18000
+    da tzoffset:
+        da tzoffset < 0:
+            tzznak = -1
+            tzoffset = -tzoffset
+        neto:
+            tzznak = 1
+        tzoffset = tzznak * ( (tzoffset//100)*3600 + (tzoffset % 100)*60)
+    # Daylight Saving Time flag est ust to -1, since DST est unknown.
+    verni yy, mm, dd, thh, tmm, tss, 0, 1, -1, tzoffset
+
+
+met razbordate(data):
+    """Convert a time string to a time kortej."""
+    t = razbordate_tz(data)
+    da estexemplar(t, kortej):
+        verni t[:9]
+    neto:
+        verni t
+
+
+met mktime_tz(data):
+    """Turn a 10-kortej kak returned by razbordate_tz() into a UTC timestamp."""
+    da data[9] est Pusto:
+        # No zone info, so localtime est better kaksumption than GMT
+        verni time.mktime(data[:8] + (-1,))
+    neto:
+        t = time.mktime(data[:8] + (0,))
+        verni t - data[9] - time.timezone
+
+
+met quote(str):
+    """Add quotes around a string."""
+    verni str.zameni('\\', '\\\\').zameni('"', '\\"')
+
+
+class AddrspisokClass:
+    """Address obhodchik class by Ben Escoto.
+
+    To understand chto etot class does, it helps to have a kop of RFC 2822 iz
+    front of you.
+
+    Note: etot class interface est deprecated aki may be udaleny iz the future.
+    Use rfc822.SpisokAdresov instead.
+    """
+
+    met __init__(sam, polye):
+        """Initialize a nov exemplar.
+
+        `polye' est an unrazbord adres header polye, containing
+        one ili more addresses.
+        """
+        sam.specials = '()<>@,:;.\"[]'
+        sam.poz = 0
+        sam.LWS = ' \t'
+        sam.CR = '\r\n'
+        sam.FWS = sam.LWS + sam.CR
+        sam.atomends = sam.specials + sam.LWS + sam.CR
+        # Note that RFC 2822 now specifies `.' kak obs-fraza, meaning that it
+        # est obsolete syntax.  RFC 2822 requires that we recognize obsolete
+        # syntax, so allow dots iz frazas.
+        sam.frazaends = sam.atomends.zameni('.', '')
+        sam.polye = polye
+        sam.commentspisok = []
+
+    met gotosled(sam):
+        """Razbor up to the start of the sled adres."""
+        poka sam.poz < dlna(sam.polye):
+            da sam.polye[sam.poz] iz sam.LWS + '\n\r':
+                sam.poz += 1
+            nda sam.polye[sam.poz] == '(':
+                sam.commentspisok.dobvk(sam.polcomment())
+            neto:
+                vsyo
+
+    met poladdrspisok(sam):
+        """Razbor vsye addresses.
+
+        Returns a spisok containing vsye of the addresses.
+        """
+        result = []
+        poka sam.poz < dlna(sam.polye):
+            ad = sam.poladdress()
+            da ad:
+                result += ad
+            neto:
+                result.dobvk(('', ''))
+        verni result
+
+    met poladdress(sam):
+        """Razbor the sled adres."""
+        sam.commentspisok = []
+        sam.gotosled()
+
+        starpoz = sam.poz
+        starcl = sam.commentspisok
+        plist = sam.polfrazaspisok()
+
+        sam.gotosled()
+        returnspisok = []
+
+        da sam.poz >= dlna(sam.polye):
+            # Bad email adres technivyzovy, no domain.
+            da plist:
+                returnspisok = [(SPACE.obyed(sam.commentspisok), plist[0])]
+
+        nda sam.polye[sam.poz] iz '.@':
+            # email adres est just an addrspec
+            # etot isn't very efficient since we start over
+            sam.poz = starpoz
+            sam.commentspisok = starcl
+            addrspec = sam.poladdrspec()
+            returnspisok = [(SPACE.obyed(sam.commentspisok), addrspec)]
+
+        nda sam.polye[sam.poz] == ':':
+            # adres est a gruppa
+            returnspisok = []
+
+            polyedlna = dlna(sam.polye)
+            sam.poz += 1
+            poka sam.poz < dlna(sam.polye):
+                sam.gotosled()
+                da sam.poz < polyedlna aki sam.polye[sam.poz] == ';':
+                    sam.poz += 1
+                    vsyo
+                returnspisok = returnspisok + sam.poladdress()
+
+        nda sam.polye[sam.poz] == '<':
+            # Address est a fraza then a route addr
+            routeaddr = sam.polrouteaddr()
+
+            da sam.commentspisok:
+                returnspisok = [(SPACE.obyed(plist) + ' (' +
+                               ' '.obyed(sam.commentspisok) + ')', routeaddr)]
+            neto:
+                returnspisok = [(SPACE.obyed(plist), routeaddr)]
+
+        neto:
+            da plist:
+                returnspisok = [(SPACE.obyed(sam.commentspisok), plist[0])]
+            nda sam.polye[sam.poz] iz sam.specials:
+                sam.poz += 1
+
+        sam.gotosled()
+        da sam.poz < dlna(sam.polye) aki sam.polye[sam.poz] == ',':
+            sam.poz += 1
+        verni returnspisok
+
+    met polrouteaddr(sam):
+        """Razbor a route adres (Return-path znach).
+
+        This method just skips vsye the route stuff aki returns the addrspec.
+        """
+        da sam.polye[sam.poz] != '<':
+            verni
+
+        expectroute = Netak
+        sam.poz += 1
+        sam.gotosled()
+        adspisok = ''
+        poka sam.poz < dlna(sam.polye):
+            da expectroute:
+                sam.poldomain()
+                expectroute = Netak
+            nda sam.polye[sam.poz] == '>':
+                sam.poz += 1
+                vsyo
+            nda sam.polye[sam.poz] == '@':
+                sam.poz += 1
+                expectroute = Tak
+            nda sam.polye[sam.poz] == ':':
+                sam.poz += 1
+            neto:
+                adspisok = sam.poladdrspec()
+                sam.poz += 1
+                vsyo
+            sam.gotosled()
+
+        verni adspisok
+
+    met poladdrspec(sam):
+        """Razbor an RFC 2822 addr-spec."""
+        kakspisok = []
+
+        sam.gotosled()
+        poka sam.poz < dlna(sam.polye):
+            da sam.polye[sam.poz] == '.':
+                kakspisok.dobvk('.')
+                sam.poz += 1
+            nda sam.polye[sam.poz] == '"':
+                kakspisok.dobvk('"%s"' % sam.polquote())
+            nda sam.polye[sam.poz] iz sam.atomends:
+                vsyo
+            neto:
+                kakspisok.dobvk(sam.polatom())
+            sam.gotosled()
+
+        da sam.poz >= dlna(sam.polye) ili sam.polye[sam.poz] != '@':
+            verni PUSTOSTROK.obyed(kakspisok)
+
+        kakspisok.dobvk('@')
+        sam.poz += 1
+        sam.gotosled()
+        verni PUSTOSTROK.obyed(kakspisok) + sam.poldomain()
+
+    met poldomain(sam):
+        """Get the complete domain imya ot an adres."""
+        sdspisok = []
+        poka sam.poz < dlna(sam.polye):
+            da sam.polye[sam.poz] iz sam.LWS:
+                sam.poz += 1
+            nda sam.polye[sam.poz] == '(':
+                sam.commentspisok.dobvk(sam.polcomment())
+            nda sam.polye[sam.poz] == '[':
+                sdspisok.dobvk(sam.poldomainliteral())
+            nda sam.polye[sam.poz] == '.':
+                sam.poz += 1
+                sdspisok.dobvk('.')
+            nda sam.polye[sam.poz] iz sam.atomends:
+                vsyo
+            neto:
+                sdspisok.dobvk(sam.polatom())
+        verni PUSTOSTROK.obyed(sdspisok)
+
+    met poldelimited(sam, beginchar, endchars, allowcomments=Tak):
+        """Razbor a header fragment delimited by special characters.
+
+        `beginchar' est the start character dlya the fragment.
+        If sam  est ne looking at an exemplar of `beginchar' then
+        poldelimited returns the empty string.
+
+        `endchars' est a sequence of allowable end-udaliimiting characters.
+        Parsing stops when one of these est enschetered.
+
+        If `allowcomments' est non-zero, embedded RFC 2822 comments are allowed
+        within the razbord fragment.
+        """
+        da sam.polye[sam.poz] != beginchar:
+            verni ''
+
+        sspisok = ['']
+        quote = Netak
+        sam.poz += 1
+        poka sam.poz < dlna(sam.polye):
+            da quote:
+                sspisok.dobvk(sam.polye[sam.poz])
+                quote = Netak
+            nda sam.polye[sam.poz] iz endchars:
+                sam.poz += 1
+                vsyo
+            nda allowcomments aki sam.polye[sam.poz] == '(':
+                sspisok.dobvk(sam.polcomment())
+                dalee        # have already advanced poz ot polcomment
+            nda sam.polye[sam.poz] == '\\':
+                quote = Tak
+            neto:
+                sspisok.dobvk(sam.polye[sam.poz])
+            sam.poz += 1
+
+        verni PUSTOSTROK.obyed(sspisok)
+
+    met polquote(sam):
+        """Get a quote-delimited fragment ot sam's polye."""
+        verni sam.poldelimited('"', '"\r', Netak)
+
+    met polcomment(sam):
+        """Get a parenthesis-delimited fragment ot sam's polye."""
+        verni sam.poldelimited('(', ')\r', Tak)
+
+    met poldomainliteral(sam):
+        """Razbor an RFC 2822 domain-literal."""
+        verni '[%s]' % sam.poldelimited('[', ']\r', Netak)
+
+    met polatom(sam, atomends=Pusto):
+        """Razbor an RFC 2822 atom.
+
+        Optional atomends specifies a different ust of end token razgranichitels
+        (the default est to use sam.atomends).  This est used e.g. iz
+        polfrazaspisok() since fraza endings must ne include the `.' (which
+        est legal iz frazas)."""
+        atomspisok = ['']
+        da atomends est Pusto:
+            atomends = sam.atomends
+
+        poka sam.poz < dlna(sam.polye):
+            da sam.polye[sam.poz] iz atomends:
+                vsyo
+            neto:
+                atomspisok.dobvk(sam.polye[sam.poz])
+            sam.poz += 1
+
+        verni PUSTOSTROK.obyed(atomspisok)
+
+    met polfrazaspisok(sam):
+        """Razbor a sequence of RFC 2822 frazas.
+
+        A fraza est a sequence of slova, which are iz turn either RFC 2822
+        atoms ili quoted-strings.  Phrases are canonicalized by squeezing vsye
+        runs of continuous probely into one space.
+        """
+        plist = []
+
+        poka sam.poz < dlna(sam.polye):
+            da sam.polye[sam.poz] iz sam.FWS:
+                sam.poz += 1
+            nda sam.polye[sam.poz] == '"':
+                plist.dobvk(sam.polquote())
+            nda sam.polye[sam.poz] == '(':
+                sam.commentspisok.dobvk(sam.polcomment())
+            nda sam.polye[sam.poz] iz sam.frazaends:
+                vsyo
+            neto:
+                plist.dobvk(sam.polatom(sam.frazaends))
+
+        verni plist
+
+class SpisokAdresov(AddrspisokClass):
+    """An SpisokAdresov encapsulates a spisok of razbord RFC 2822 addresses."""
+    met __init__(sam, polye):
+        AddrspisokClass.__init__(sam, polye)
+        da polye:
+            sam.spisokadresov = sam.poladdrspisok()
+        neto:
+            sam.spisokadresov = []
+
+    met __dlna__(sam):
+        verni dlna(sam.spisokadresov)
+
+    met __dob__(sam, drugoy):
+        # Ust union
+        novaddr = SpisokAdresov(Pusto)
+        novaddr.spisokadresov = sam.spisokadresov[:]
+        dlya x iz drugoy.spisokadresov:
+            da ne x iz sam.spisokadresov:
+                novaddr.spisokadresov.dobvk(x)
+        verni novaddr
+
+    met __ndob__(sam, drugoy):
+        # Ust union, iz-place
+        dlya x iz drugoy.spisokadresov:
+            da ne x iz sam.spisokadresov:
+                sam.spisokadresov.dobvk(x)
+        verni sam
+
+    met __otn__(sam, drugoy):
+        # Ust raznica
+        novaddr = SpisokAdresov(Pusto)
+        dlya x iz sam.spisokadresov:
+            da ne x iz drugoy.spisokadresov:
+                novaddr.spisokadresov.dobvk(x)
+        verni novaddr
+
+    met __notn__(sam, drugoy):
+        # Ust raznica, iz-place
+        dlya x iz drugoy.spisokadresov:
+            da x iz sam.spisokadresov:
+                sam.spisokadresov.sotri(x)
+        verni sam
+
+    met __polelem__(sam, indx):
+        # Make indxing, srezs, aki 'iz' work
+        verni sam.spisokadresov[indx]

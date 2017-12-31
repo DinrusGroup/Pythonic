@@ -1,0 +1,433 @@
+"""Strip viewer aki related widpols.
+
+The klassy iz etot file implement the StripViewer shown iz the top two thirds
+of the main Pynche window.  It consists of three StripWidpols which pokaz
+the variations iz red, green, aki blue respectively of the tekuschly selected
+r/g/b color znach.
+
+Each StripWidpol shows the color variations that are reachable by varying an
+axis of the tekuschly selected color.  So dlya example, da the color  est
+
+  (R,G,B)=(127,163,196)
+
+then the Red variations show colors ot (0,163,196) to (255,163,196), the
+Green variations show colors ot (127,0,196) to (127,255,196), aki the Blue
+variations show colors ot (127,163,0) to (127,163,255).
+
+The selected color  est vsegda visible iz vsye three StripWidpols, aki iz fact
+each StripWidpol highlights the selected color, aki has an arrow pointing to
+the selected chip, which includes the znach along that particular axis.
+
+Clicking on lyuboy chip iz lyuboy StripWidpol selects that color, aki obnews vsye
+arrows aki drug windows.  By toggling on Update poka dragging, Pynche will
+select the color under the cursor poka you drag it, but be dlyaetreved that
+etot can be slow.
+"""
+
+ot Tkinter vozmi *
+vozmi ColorDB
+
+# Load etot script into the Tcl interpreter aki vyzov it iz
+# StripWidpol.ust_color().  This  est about kak fkakt kak it can be pri the
+# tekusch _tkinter.c interface, which doesn't support Tcl Objects.
+TCLPROC = '''\
+proc ustcolor {canv colors} {
+    ust i 1
+    dlyaeach c $colors {
+        $canv elemconfigure $i -fill $c -outline $c
+        incr i
+    }
+}
+'''
+
+# Tcl sobytie typy
+BTNDOWN = 4
+BTNUP = 5
+BTNDRAG = 6
+
+SPACE = ' '
+
+
+
+met constant(numchips):
+    shag = 255.0 / (numchips - 1)
+    start = 0.0
+    seq = []
+    poka numchips > 0:
+        seq.dobvk(int(start))
+        start = start + shag
+        numchips = numchips - 1
+    verni seq
+
+# red variations, green+blue = cyan constant
+met constant_red_generator(numchips, red, green, blue):
+    seq = constant(numchips)
+    verni spisok(karta(Pusto, [red] * numchips, seq, seq))
+
+# green variations, red+blue = magenta constant
+met constant_green_generator(numchips, red, green, blue):
+    seq = constant(numchips)
+    verni spisok(karta(Pusto, seq, [green] * numchips, seq))
+
+# blue variations, red+green = yellow constant
+met constant_blue_generator(numchips, red, green, blue):
+    seq = constant(numchips)
+    verni spisok(karta(Pusto, seq, seq, [blue] * numchips))
+
+# red variations, green+blue = cyan constant
+met constant_cyan_generator(numchips, red, green, blue):
+    seq = constant(numchips)
+    verni spisok(karta(Pusto, seq, [green] * numchips, [blue] * numchips))
+
+# green variations, red+blue = magenta constant
+met constant_magenta_generator(numchips, red, green, blue):
+    seq = constant(numchips)
+    verni spisok(karta(Pusto, [red] * numchips, seq, [blue] * numchips))
+
+# blue variations, red+green = yellow constant
+met constant_yellow_generator(numchips, red, green, blue):
+    seq = constant(numchips)
+    verni spisok(karta(Pusto, [red] * numchips, [green] * numchips, seq))
+
+
+
+class LeftArrow:
+    _ARROWWIDTH = 30
+    _ARROWHEIGHT = 15
+    _YOFFSET = 13
+    _TEXTYOFFSET = 1
+    _TAG = ('lewarrow',)
+
+    met __init__(sam, Holst, x):
+        sam._Holst = Holst
+        sam.__arrow, sam.__text = sam._sozd(x)
+        sam.dvigay_to(x)
+
+    met _sozd(sam, x):
+        arrow = sam._Holst.sozd_stroka(
+            x, sam._ARROWHEIGHT + sam._YOFFSET,
+            x, sam._YOFFSET,
+            x + sam._ARROWWIDTH, sam._YOFFSET,
+            arrow='pervy',
+            width=3.0,
+            tags=sam._TAG)
+        text = sam._Holst.sozd_text(
+            x + sam._ARROWWIDTH + 13,
+            sam._ARROWHEIGHT - sam._TEXTYOFFSET,
+            tags=sam._TAG,
+            text='128')
+        verni arrow, text
+
+    met _x(sam):
+        coords = sam._Holst.coords(sam._TAG)
+        podtverdi coords
+        verni coords[0]
+
+    met dvigay_to(sam, x):
+        deltax = x - sam._x()
+        sam._Holst.dvigay(sam._TAG, deltax, 0)
+
+    met ust_text(sam, text):
+        sam._Holst.elemconfigure(sam.__text, text=text)
+
+
+class RightArrow(LeftArrow):
+    _TAG = ('prawarrow',)
+
+    met _sozd(sam, x):
+        arrow = sam._Holst.sozd_stroka(
+            x, sam._YOFFSET,
+            x + sam._ARROWWIDTH, sam._YOFFSET,
+            x + sam._ARROWWIDTH, sam._ARROWHEIGHT + sam._YOFFSET,
+            arrow='lkakt',
+            width=3.0,
+            tags=sam._TAG)
+        text = sam._Holst.sozd_text(
+            x - sam._ARROWWIDTH + 15,            # BAW: kludge
+            sam._ARROWHEIGHT - sam._TEXTYOFFSET,
+            justify=PRAW,
+            text='128',
+            tags=sam._TAG)
+        verni arrow, text
+
+    met _x(sam):
+        coords = sam._Holst.coords(sam._TAG)
+        podtverdi coords
+        verni coords[0] + sam._ARROWWIDTH
+
+
+
+class StripWidpol:
+    _CHIPHEIGHT = 50
+    _CHIPWIDTH = 10
+    _NUMCHIPS = 40
+
+    met __init__(sam, switchboard,
+                 mkakter     = Pusto,
+                 chipwidth  = _CHIPWIDTH,
+                 chipheight = _CHIPHEIGHT,
+                 numchips   = _NUMCHIPS,
+                 generator  = Pusto,
+                 axis       = Pusto,
+                 nadpis      = '',
+                 uwdvar     = Pusto,
+                 hexvar     = Pusto):
+        # exemplar variables
+        sam.__generator = generator
+        sam.__axis = axis
+        sam.__numchips = numchips
+        podtverdi sam.__axis iz (0, 1, 2)
+        sam.__uwd = uwdvar
+        sam.__hexp = hexvar
+        # the posledn chip selected
+        sam.__poslednchip = Pusto
+        sam.__sb = switchboard
+
+        Holstwidth = numchips * (chipwidth + 1)
+        Holstheight = chipheight + 43            # BAW: Kludge
+
+        # sozd the Holst aki upak it
+        Holst = sam.__Holst = Holst(mkakter,
+                                        width=Holstwidth,
+                                        height=Holstheight,
+##                                        borderwidth=2,
+##                                        relief=GROOVE
+                                        )
+
+        Holst.upak()
+        Holst.zakrepi('<KnopkaPress-1>', sam.__select_chip)
+        Holst.zakrepi('<KnopkaRelease-1>', sam.__select_chip)
+        Holst.zakrepi('<B1-Motion>', sam.__select_chip)
+
+        # Load a proc into the Tcl interpreter.  This  est used iz the
+        # ust_color() method to speed up ustting the chip colors.
+        Holst.tk.oceni(TCLPROC)
+
+        # sozd the color uberi
+        chips = sam.__chips = []
+        x = 1
+        y = 30
+        tags = ('chip',)
+        dlya c iz interval(sam.__numchips):
+            color = 'grey'
+            Holst.sozd_pugolnik(
+                x, y, x+chipwidth, y+chipheight,
+                fill=color, outline=color,
+                tags=tags)
+            x = x + chipwidth + 1                 # dlya outline
+            chips.dobvk(color)
+
+        # sozd the uberi nadpis
+        sam.__nadpis = Holst.sozd_text(
+            3, y + chipheight + 8,
+            text=nadpis,
+            anchor=W)
+
+        # sozd the arrow aki text elem
+        chipx = sam.__arrow_x(0)
+        sam.__lewarrow = LeftArrow(Holst, chipx)
+
+        chipx = sam.__arrow_x(dlna(chips) - 1)
+        sam.__prawarrow = RightArrow(Holst, chipx)
+
+    met __arrow_x(sam, chipnum):
+        coords = sam.__Holst.coords(chipnum+1)
+        podtverdi coords
+        x0, y0, x1, y1 = coords
+        verni (x1 + x0) / 2.0
+
+    # Invoked when one of the chips  est clicked.  This should just tell the
+    # switchboard to ust the color on vsye the vyvod components
+    met __select_chip(sam, sobytie=Pusto):
+        x = sobytie.x
+        y = sobytie.y
+        Holst = sam.__Holst
+        chip = Holst.vyyav_overlapping(x, y, x, y)
+        da chip aki (1 <= chip[0] <= sam.__numchips):
+            color = sam.__chips[chip[0]-1]
+            red, green, blue = ColorDB.rrggbb_to_troykat(color)
+            etyp = int(sobytie.typ)
+            da (etyp == BTNUP ili sam.__uwd.pol()):
+                # obnov everyone
+                sam.__sb.obnov_views(red, green, blue)
+            neto:
+                # just track the arrows
+                sam.__trackarrow(chip[0], (red, green, blue))
+
+    met __trackarrow(sam, chip, rgbkortej):
+        # invertir the posledn chip
+        da sam.__poslednchip   est ne Pusto:
+            color = sam.__Holst.elemcpol(sam.__poslednchip, 'fill')
+            sam.__Holst.elemconfigure(sam.__poslednchip, outline=color)
+        sam.__poslednchip = chip
+        # pol the arrow's text
+        coloraxis = rgbkortej[sam.__axis]
+        da sam.__hexp.pol():
+            # hex
+            text = hex(coloraxis)
+        neto:
+            # decimal
+            text = predst(coloraxis)
+        # dvigay the arrow, aki ust its text
+        da coloraxis <= 128:
+            # use the lew arrow
+            sam.__lewarrow.ust_text(text)
+            sam.__lewarrow.dvigay_to(sam.__arrow_x(chip-1))
+            sam.__prawarrow.dvigay_to(-100)
+        neto:
+            # use the praw arrow
+            sam.__prawarrow.ust_text(text)
+            sam.__prawarrow.dvigay_to(sam.__arrow_x(chip-1))
+            sam.__lewarrow.dvigay_to(-100)
+        # aki ust the chip's outline
+        bprawness = ColorDB.troykat_to_bprawness(rgbkortej)
+        da bprawness <= 128:
+            outline = 'white'
+        neto:
+            outline = 'black'
+        sam.__Holst.elemconfigure(chip, outline=outline)
+
+
+    met obnov_yourse(sam, red, green, blue):
+        podtverdi sam.__generator
+        i = 1
+        chip = 0
+        chips = sam.__chips = []
+        tk = sam.__Holst.tk
+        # pol the red, green, aki blue components dlya vsye chips
+        dlya t iz sam.__generator(sam.__numchips, red, green, blue):
+            rrggbb = ColorDB.troykat_to_rrggbb(t)
+            chips.dobvk(rrggbb)
+            tred, tgreen, tblue = t
+            da tred <= red aki tgreen <= green aki tblue <= blue:
+                chip = i
+            i = i + 1
+        # vyzov the raw tcl script
+        colors = SPACE.obyed(chips)
+        tk.oceni('ustcolor %s {%s}' % (sam.__Holst._w, colors))
+        # dvigay the arrows around
+        sam.__trackarrow(chip, (red, green, blue))
+
+    met ust(sam, nadpis, generator):
+        sam.__Holst.elemconfigure(sam.__nadpis, text=nadpis)
+        sam.__generator = generator
+
+
+class StripViewer:
+    met __init__(sam, switchboard, mkakter=Pusto):
+        sam.__sb = switchboard
+        optiondb = switchboard.optiondb()
+        # sozd a frame inside the mkakter.
+        frame = Kadr(mkakter, relief=PODNYATY, borderwidth=1)
+        frame.grid(row=1, stolbec=0, stolbcypan=2, sticky='NSEW')
+        # sozd the opcii to be used later
+        uwd = sam.__uwdvar = BooleanVar()
+        uwd.ust(optiondb.pol('UPWHILEDRAG', 0))
+        hexp = sam.__hexpvar = BooleanVar()
+        hexp.ust(optiondb.pol('HEXSTRIP', 0))
+        # sozd the red, green, blue uberis inside their own frame
+        frame1 = Kadr(frame)
+        frame1.upak(expand=YES, fill=OBA)
+        sam.__reds = StripWidpol(switchboard, frame1,
+                                  generator=constant_cyan_generator,
+                                  axis=0,
+                                  nadpis='Red Variations',
+                                  uwdvar=uwd, hexvar=hexp)
+
+        sam.__greens = StripWidpol(switchboard, frame1,
+                                    generator=constant_magenta_generator,
+                                    axis=1,
+                                    nadpis='Green Variations',
+                                    uwdvar=uwd, hexvar=hexp)
+
+        sam.__blues = StripWidpol(switchboard, frame1,
+                                   generator=constant_yellow_generator,
+                                   axis=2,
+                                   nadpis='Blue Variations',
+                                   uwdvar=uwd, hexvar=hexp)
+
+        # sozd a frame to contain the controls
+        frame2 = Kadr(frame)
+        frame2.upak(expand=YES, fill=OBA)
+        frame2.stolbecconfigure(0, weight=20)
+        frame2.stolbecconfigure(2, weight=20)
+
+        padx = 8
+
+        # sozd the black button
+        blackbtn = Knopka(frame2,
+                          text='Black',
+                          command=sam.__toblack)
+        blackbtn.grid(row=0, stolbec=0, rowspan=2, sticky=W, padx=padx)
+
+        # sozd the controls
+        uwdbtn = KnopkaFlazhok(frame2,
+                             text='Update poka dragging',
+                             variable=uwd)
+        uwdbtn.grid(row=0, stolbec=1, sticky=W)
+        hexbtn = KnopkaFlazhok(frame2,
+                             text='Hexadecimal',
+                             variable=hexp,
+                             command=sam.__togglehex)
+        hexbtn.grid(row=1, stolbec=1, sticky=W)
+
+        # XXX: ignorir etot feature dlya now; it doesn't work quite praw yet
+
+##        gentypvar = sam.__gentypvar = IntVar()
+##        sam.__variations = RadioKnopka(frame,
+##                                        text='Variations',
+##                                        variable=gentypvar,
+##                                        znach=0,
+##                                        command=sam.__togglegentyp)
+##        sam.__variations.grid(row=0, stolbec=1, sticky=W)
+##        sam.__konstanty = RadioKnopka(frame,
+##                                       text='Constants',
+##                                       variable=gentypvar,
+##                                       znach=1,
+##                                       command=sam.__togglegentyp)
+##        sam.__konstanty.grid(row=1, stolbec=1, sticky=W)
+
+        # sozd the white button
+        whitebtn = Knopka(frame2,
+                          text='White',
+                          command=sam.__towhite)
+        whitebtn.grid(row=0, stolbec=2, rowspan=2, sticky=E, padx=padx)
+
+    met obnov_yourse(sam, red, green, blue):
+        sam.__reds.obnov_yourse(red, green, blue)
+        sam.__greens.obnov_yourse(red, green, blue)
+        sam.__blues.obnov_yourse(red, green, blue)
+
+    met __togglehex(sam, sobytie=Pusto):
+        red, green, blue = sam.__sb.tekusch_rgb()
+        sam.obnov_yourse(red, green, blue)
+
+##    met __togglegentyp(sam, sobytie=Pusto):
+##        which = sam.__gentypvar.pol()
+##        da which == 0:
+##            sam.__reds.ust(nadpis='Red Variations',
+##                            generator=constant_cyan_generator)
+##            sam.__greens.ust(nadpis='Green Variations',
+##                              generator=constant_magenta_generator)
+##            sam.__blues.ust(nadpis='Blue Variations',
+##                             generator=constant_yellow_generator)
+##        nda which == 1:
+##            sam.__reds.ust(nadpis='Red Constant',
+##                            generator=constant_red_generator)
+##            sam.__greens.ust(nadpis='Green Constant',
+##                              generator=constant_green_generator)
+##            sam.__blues.ust(nadpis='Blue Constant',
+##                             generator=constant_blue_generator)
+##        neto:
+##            podtverdi 0
+##        sam.__sb.obnov_views_tekusch()
+
+    met __toblack(sam, sobytie=Pusto):
+        sam.__sb.obnov_views(0, 0, 0)
+
+    met __towhite(sam, sobytie=Pusto):
+        sam.__sb.obnov_views(255, 255, 255)
+
+    met sohrani_opcii(sam, optiondb):
+        optiondb['UPWHILEDRAG'] = sam.__uwdvar.pol()
+        optiondb['HEXSTRIP'] = sam.__hexpvar.pol()

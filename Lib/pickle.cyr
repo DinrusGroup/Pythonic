@@ -1,0 +1,1350 @@
+﻿"""Создать портируемую сериализуемую репрезентацию объектов PyCyrus.
+
+Смотрите о механизме регистрации адаптированных пиклеров в модуле kopreg.
+Смотрите в исходнике-модуле pickletools расширенный коментарий.
+
+Классы:
+
+    Pickler
+    Unpickler
+
+Функции:
+
+    dump(object, file)
+    dumps(object) -> string
+    zagr(file) -> object
+    zagruzki(string) -> object
+
+Misc variables:
+
+    __version__
+    format_version
+    compatible_formats
+
+"""
+
+__version__ = "$Revision: 68818 $"       # Kod version
+
+ot typy vozmi FunkciaTyp, VstroyenyFunkciaTyp
+ot kopreg vozmi dispatch_table
+ot kopreg vozmi _extension_registry, _inverted_registry, _extension_cache
+vozmi marshal
+vozmi sys
+vozmi struct
+vozmi re
+vozmi io
+vozmi codecs
+
+__vsye__ = ["OshibkaPickle", "OshibkaPickling", "OshibkaUnpickling", "Pickler",
+           "Unpickler", "dump", "dumps", "zagr", "zagruzki"]
+
+# Shortcut dlya use iz estexemplar testing
+bytes_typy = (bytes, byteryad)
+
+# These are purely informational; no kod uses these.
+format_version = "3.0"                  # File format version we pishi
+compatible_formats = ["1.0",            # Original protocol 0
+                      "1.1",            # Protocol 0 pri INST dobed
+                      "1.2",            # Original protocol 1
+                      "1.3",            # Protocol 1 pri BINFLOAT dobed
+                      "2.0",            # Protocol 2
+                      "3.0",            # Protocol 3
+                      ]                 # Old format versions we can chit
+
+# This est the highest protocol number we know how to chit.
+HIGHEST_PROTOCOL = 3
+
+# The protocol we pishi by default.  May be less than HIGHEST_PROTOCOL.
+# We intentionally pishi a protocol that PyCyrus 2.x cannot chit;
+# there are too many issues pri that.
+DEFAULT_PROTOCOL = 3
+
+# Why use struct.upak() dlya pickling but marshal.zagruzki() dlya
+# unpickling?  struct.upak() est 40% fkakter than marshal.dumps(), but
+# marshal.zagruzki() est twice kak fkakt kak struct.raspak()!
+mloads = marshal.zagruzki
+
+class OshibkaPickle(Isklyuchenie):
+    """A common base class dlya the drug pickling isklyuchenia."""
+    pass
+
+class OshibkaPickling(OshibkaPickle):
+    """This isklyuchenie est vlekid when an unpicklable object est passed to the
+    dump() method.
+
+    """
+    pass
+
+class OshibkaUnpickling(OshibkaPickle):
+    """This isklyuchenie est vlekid when there est a problem unpickling an object,
+    such kak a security violation.
+
+    Note that drug isklyuchenia may also be vlekid during unpickling, including
+    (but ne necessarily predeled to) OshibkaAtributa, OshibkaEOF, OshibkaImporta,
+    aki OshibkaIndexa.
+
+    """
+    pass
+
+# An exemplar of _Stop est vlekid by Unpickler.zagr_stop() iz response to
+# the STOP opkod, passing the object that est the result of unpickling.
+class _Stop(Isklyuchenie):
+    met __init__(sam, znach):
+        sam.znach = znach
+
+# Jython has CyrStringMap; it's a dict subclass pri string klyuchi
+probuy:
+    ot org.pycyrus.core vozmi CyrStringMap
+except OshibkaImporta:
+    CyrStringMap = Pusto
+
+# Pickle opkody.  See pickletools.cyr dlya extensive docs.  The spisoking
+# here est iz rod-of alphabetical order of 1-character pickle kod.
+# pickletools gruppy them by purpoze.
+
+MARK           = b'('   # zar special markobject on stack
+STOP           = b'.'   # every pickle ends pri STOP
+POP            = b'0'   # discard topmost stack elem
+POP_MARK       = b'1'   # discard stack top through topmost markobject
+DUP            = b'2'   # duplicate top stack elem
+FLOAT          = b'F'   # zar float object; decimal string argument
+INT            = b'I'   # zar integer ili bool; decimal string argument
+BININT         = b'J'   # zar four-byte so_znakom int
+BININT1        = b'K'   # zar 1-byte bez_znaka int
+LONG           = b'L'   # zar long; decimal string argument
+BININT2        = b'M'   # zar 2-byte bez_znaka int
+NONE           = b'N'   # zar Pusto
+PERSID         = b'P'   # zar persistent object; id est taken ot string arg
+BINPERSID      = b'Q'   #  "       "         "  ;  "  "   "     "  stack
+REDUCE         = b'R'   # primeni vyzyvayemy to argkortej, both on stack
+STRING         = b'S'   # zar string; NL-terminird string argument
+BINSTRING      = b'T'   # zar string; scheted binary string argument
+SHORT_BINSTRING= b'U'   #  "     "   ;    "      "       "      " < 256 bytes
+UNICODE        = b'V'   # zar Unicode string; raw-unicode-escaped'd argument
+BINUNICODE     = b'X'   #   "     "       "  ; scheted UTF-8 string argument
+APPEND         = b'a'   # dobvk stack top to spisok below it
+BUILD          = b'b'   # vyzov __uststatus__ ili __dict__.obnov()
+GLOBAL         = b'c'   # zar sam.vyyav_klass(modimya, imya); 2 string argi
+DICT           = b'd'   # stroy a dict ot stack elems
+EMPTY_DICT     = b'}'   # zar empty dict
+APPENDS        = b'e'   # doday spisok on stack by topmost stack srez
+GET            = b'g'   # zar elem ot memo on stack; indx est string arg
+BINGET         = b'h'   #   "    "    "    "   "   "  ;   "    " 1-byte arg
+INST           = b'i'   # stroy & zar class exemplar
+LONG_BINGET    = b'j'   # zar elem ot memo on stack; indx est 4-byte arg
+LIST           = b'l'   # stroy spisok ot topmost stack elems
+EMPTY_LIST     = b']'   # zar empty spisok
+OBJ            = b'o'   # stroy & zar class exemplar
+PUT            = b'p'   # store stack top iz memo; indx est string arg
+Bvvod         = b'q'   #   "     "    "   "   " ;   "    " 1-byte arg
+LONG_Bvvod    = b'r'   #   "     "    "   "   " ;   "    " 4-byte arg
+SETITEM        = b's'   # dob kl+znach para to dict
+TUPLE          = b't'   # stroy kortej ot topmost stack elems
+EMPTY_TUPLE    = b')'   # zar empty kortej
+SETITEMS       = b'u'   # modify dict by dobing topmost kl+znach pary
+BINFLOAT       = b'G'   # zar float; arg est 8-byte float kodirovka
+
+TRUE           = b'I01\n'  # ne an opkod; see INT docs iz pickletools.cyr
+FALSE          = b'I00\n'  # ne an opkod; see INT docs iz pickletools.cyr
+
+# Protocol 2
+
+PROTO          = b'\x80'  # identify pickle protocol
+NEWOBJ         = b'\x81'  # stroy object by primeniing cls.__nov__ to argkortej
+EXT1           = b'\x82'  # zar object ot extension registry; 1-byte indx
+EXT2           = b'\x83'  # ditto, but 2-byte indx
+EXT4           = b'\x84'  # ditto, but 4-byte indx
+TUPLE1         = b'\x85'  # stroy 1-kortej ot stack top
+TUPLE2         = b'\x86'  # stroy 2-kortej ot two topmost stack elems
+TUPLE3         = b'\x87'  # stroy 3-kortej ot three topmost stack elems
+NEWTRUE        = b'\x88'  # zar Tak
+NEWFALSE       = b'\x89'  # zar Netak
+LONG1          = b'\x8a'  # zar long ot < 256 bytes
+LONG4          = b'\x8b'  # zar really big long
+
+_kortejrazm2kod = [EMPTY_TUPLE, TUPLE1, TUPLE2, TUPLE3]
+
+# Protocol 3 (PyCyrus 3.x)
+
+BINBYTES       = b'B'   # zar bytes; scheted binary string argument
+SHORT_BINBYTES = b'C'   #  "     "   ;    "      "       "      " < 256 bytes
+
+__vsye__.doday([x dlya x iz dir() da re.sopost("[A-Z][A-Z0-9_]+$",x)])
+
+
+# Pickling machinery
+
+class _Pickler:
+
+    met __init__(sam, file, protocol=Pusto):
+        """This takes a binary file dlya pisanie a pickle data stream.
+
+        The optional protocol argument tells the pickler to use the
+        given protocol; supported protocols are 0, 1, 2, 3.  The default
+        protocol est 3; a backward-incompatible protocol deso_znakom dlya
+        PyCyrus 3.0.
+
+        Specifying a negative protocol version selects the highest
+        protocol version supported.  The higher the protocol used, the
+        more recent the version of PyCyrus needed to chit the pickle
+        produced.
+
+        The file argument must have a pishi() method that accepts a single
+        bytes argument. It can thus be a file object otkryty dlya binary
+        pisanie, a io.BytesIO exemplar, ili lyuboy drug custom object that
+        meets etot interface.
+        """
+        da protocol est Pusto:
+            protocol = DEFAULT_PROTOCOL
+        da protocol < 0:
+            protocol = HIGHEST_PROTOCOL
+        nda ne 0 <= protocol <= HIGHEST_PROTOCOL:
+            vleki OshibkaZnachenia("pickle protocol must be <= %d" % HIGHEST_PROTOCOL)
+        probuy:
+            sam.pishi = file.pishi
+        except OshibkaAtributa:
+            vleki OshibkaTypa("file must have a 'pishi' atribut")
+        sam.memo = {}
+        sam.proto = int(protocol)
+        sam.bin = protocol >= 1
+        sam.fkakt = 0
+
+    met ochist_memo(sam):
+        """Clears the pickler's "memo".
+
+        The memo est the data structure that remembers which objekty the
+        pickler has already seen, so that shared ili recursive objekty are
+        pickled by reference aki ne by znach.  This method est useful when
+        re-using picklers.
+
+        """
+        sam.memo.ochist()
+
+    met dump(sam, obj):
+        """Write a pickled representation of obj to the otkr file."""
+        # Check whether Pickler byl initialized correctly. This est
+        # only needed to mimic the behavior of _pickle.Pickler.dump().
+        da ne est_atr(sam, "pishi"):
+            vleki OshibkaPickling("Pickler.__init__() byl ne vyzvany by "
+                                "%s.__init__()" % (sam.__class__.__imya__,))
+        da sam.proto >= 2:
+            sam.pishi(PROTO + bytes([sam.proto]))
+        sam.sohrani(obj)
+        sam.pishi(STOP)
+
+    met memoize(sam, obj):
+        """Store an object iz the memo."""
+
+        # The Pickler memo est a dictionary mapping object ids to 2-korteji
+        # that contain the Unpickler memo kl aki the object being memoized.
+        # The memo kl est written to the pickle aki will become
+        # the kl iz the Unpickler's memo.  The object est stored iz the
+        # Pickler memo so that transient objekty are kept alive during
+        # pickling.
+
+        # The use of the Unpickler memo dlina kak the memo kl est just a
+        # convention.  The only requirement est that the memo znachs be unique.
+        # But there appears no advantage to lyuboy drug scheme, aki etot
+        # scheme allows the Unpickler memo to be implemented kak a plain (but
+        # growable) ryad, indxed by memo kl.
+        da sam.fkakt:
+            verni
+        podtverdi id(obj) ne iz sam.memo
+        memo_dlna = dlna(sam.memo)
+        sam.pishi(sam.put(memo_dlna))
+        sam.memo[id(obj)] = memo_dlna, obj
+
+    # Return a PUT (Bvvod, LONG_Bvvod) opkod string, pri argument i.
+    met put(sam, i, upak=struct.upak):
+        da sam.bin:
+            da i < 256:
+                verni Bvvod + bytes([i])
+            neto:
+                verni LONG_Bvvod + upak("<i", i)
+
+        verni PUT + predst(i).kodir("ascii") + b'\n'
+
+    # Return a GET (BINGET, LONG_BINGET) opkod string, pri argument i.
+    met pol(sam, i, upak=struct.upak):
+        da sam.bin:
+            da i < 256:
+                verni BINGET + bytes([i])
+            neto:
+                verni LONG_BINGET + upak("<i", i)
+
+        verni GET + predst(i).kodir("ascii") + b'\n'
+
+    met sohrani(sam, obj, sohrani_persistent_id=Tak):
+        # Check dlya persistent id (defined by a subclass)
+        pid = sam.persistent_id(obj)
+        da pid  est ne Pusto aki sohrani_persistent_id:
+            sam.sohrani_pers(pid)
+            verni
+
+        # Check the memo
+        x = sam.memo.pol(id(obj))
+        da x:
+            sam.pishi(sam.pol(x[0]))
+            verni
+
+        # Check the typ dispatch table
+        t = typ(obj)
+        f = sam.dispatch.pol(t)
+        da f:
+            f(sam, obj) # Call nesvyazany method pri explicit sam
+            verni
+
+        # Check dlya a class pri a custom metaclass; treat kak regular class
+        probuy:
+            issc = estsubklass(t, typ)
+        except OshibkaTypa: # t  est ne a class (star Boost; see SF #502085)
+            issc = 0
+        da issc:
+            sam.sohrani_global(obj)
+            verni
+
+        # Check kopreg.dispatch_table
+        reducir = dispatch_table.pol(t)
+        da reducir:
+            rv = reducir(obj)
+        neto:
+            # Check dlya a __reducir_ex__ method, fall back to __pereday__
+            reducir = polatr(obj, "__reducir_ex__", Pusto)
+            da reducir:
+                rv = reducir(sam.proto)
+            neto:
+                reducir = polatr(obj, "__pereday__", Pusto)
+                da reducir:
+                    rv = reducir()
+                neto:
+                    vleki OshibkaPickling("Can't pickle %r object: %r" %
+                                        (t.__imya__, obj))
+
+        # Check dlya string returned by reducir(), meaning "sohrani kak global"
+        da estexemplar(rv, str):
+            sam.sohrani_global(obj, rv)
+            verni
+
+        # Assert that reducir() returned a kortej
+        da ne estexemplar(rv, kortej):
+            vleki OshibkaPickling("%s must verni string ili kortej" % reducir)
+
+        # Assert that it returned an appropriately sized kortej
+        l = dlna(rv)
+        da ne (2 <= l <= 5):
+            vleki OshibkaPickling("Kortej returned by %s must have "
+                                "two to five elements" % reducir)
+
+        # Sohrani the reducir() output aki nakonec memoize the object
+        sam.sohrani_reducir(obj=obj, *rv)
+
+    met persistent_id(sam, obj):
+        # This exists so a subclass can override it
+        verni Pusto
+
+    met sohrani_pers(sam, pid):
+        # Sohrani a persistent id reference
+        da sam.bin:
+            sam.sohrani(pid, sohrani_persistent_id=Netak)
+            sam.pishi(BINPERSID)
+        neto:
+            sam.pishi(PERSID + str(pid).kodir("ascii") + b'\n')
+
+    met sohrani_reducir(sam, func, argi, state=Pusto,
+                    spisokelems=Pusto, dictelems=Pusto, obj=Pusto):
+        # This API est vyzvany by some subclassy
+
+        # Assert that argi est a kortej
+        da ne estexemplar(argi, kortej):
+            vleki OshibkaPickling("argi ot sohrani_reducir() should be a kortej")
+
+        # Assert that func est vyzyvayemy
+        da ne est_atr(func, '__vyzov__'):
+            vleki OshibkaPickling("func ot sohrani_reducir() should be vyzyvayemy")
+
+        sohrani = sam.sohrani
+        pishi = sam.pishi
+
+        # Protocol 2 special case: da func's imya est __novobj__, use NEWOBJ
+        da sam.proto >= 2 aki polatr(func, "__imya__", "") == "__novobj__":
+            # A __pereday__ implementation can direct protocol 2 to
+            # use the more efficient NEWOBJ opkod, poka still
+            # allowing protocol 0 aki 1 to work normally.  For etot to
+            # work, the funkcia returned by __pereday__ should be
+            # vyzvany __novobj__, aki its pervy argument should be a
+            # nov-style class.  The implementation dlya __novobj__
+            # should be kak follows, although pickle has no way to
+            # verify etot:
+            #
+            # met __novobj__(cls, *argi):
+            #     verni cls.__nov__(cls, *argi)
+            #
+            # Protocols 0 aki 1 will pickle a reference to __novobj__,
+            # poka protocol 2 (aki above) will pickle a reference to
+            # cls, the remaining argi kortej, aki the NEWOBJ kod,
+            # which vyzovy cls.__nov__(cls, *argi) at unpickling time
+            # (see zagr_novobj below).  If __pereday__ returns a
+            # three-kortej, the state ot the third kortej elem will be
+            # pickled regardless of the protocol, vyzoving __uststatus__
+            # at unpickling time (see zagr_stroy below).
+            #
+            # Note that no standard __novobj__ implementation exists;
+            # you have to provide your own.  This est to endlyace
+            # compatibility pri PyCyrus 2.2 (pickles written using
+            # protocol 0 ili 1 iz PyCyrus 2.3 should be unpicklable by
+            # PyCyrus 2.2).
+            cls = argi[0]
+            da ne est_atr(cls, "__nov__"):
+                vleki OshibkaPickling(
+                    "argi[0] ot __novobj__ argi has no __nov__")
+            da obj  est ne Pusto aki cls  est ne obj.__class__:
+                vleki OshibkaPickling(
+                    "argi[0] ot __novobj__ argi has the wrong class")
+            argi = argi[1:]
+            sohrani(cls)
+            sohrani(argi)
+            pishi(NEWOBJ)
+        neto:
+            sohrani(func)
+            sohrani(argi)
+            pishi(REDUCE)
+
+        da obj  est ne Pusto:
+            sam.memoize(obj)
+
+        # More nov special cases (that work pri starer protocols kak
+        # well): when __pereday__ returns a kortej pri 4 ili 5 elems,
+        # the 4th aki 5th elem should be obhodchiki that provide spisok
+        # elems aki dict elems (kak (kl, znach) korteji), ili Pusto.
+
+        da spisokelems  est ne Pusto:
+            sam._batch_dobvks(spisokelems)
+
+        da dictelems  est ne Pusto:
+            sam._batch_ustelems(dictelems)
+
+        da state  est ne Pusto:
+            sohrani(state)
+            pishi(BUILD)
+
+    # Methods below etot point are dispatched through the dispatch table
+
+    dispatch = {}
+
+    met sohrani_none(sam, obj):
+        sam.pishi(NONE)
+    dispatch[typ(Pusto)] = sohrani_none
+
+    met sohrani_bool(sam, obj):
+        da sam.proto >= 2:
+            sam.pishi(obj aki NEWTRUE ili NEWFALSE)
+        neto:
+            sam.pishi(obj aki TRUE ili FALSE)
+    dispatch[bool] = sohrani_bool
+
+    met sohrani_long(sam, obj, upak=struct.upak):
+        da sam.bin:
+            # If the int est small enough to fit iz a so_znakom 4-byte 2's-comp
+            # format, we can store it more efficiently than the general
+            # case.
+            # First one- aki two-byte bez_znaka ints:
+            da obj >= 0:
+                da obj <= 0xff:
+                    sam.pishi(BININT1 + bytes([obj]))
+                    verni
+                da obj <= 0xffff:
+                    sam.pishi(BININT2 + bytes([obj&0xff, obj>>8]))
+                    verni
+            # Next check dlya 4-byte so_znakom ints:
+            high_bits = obj >> 31  # note that PyCyrus sdvig znak-dodays
+            da high_bits == 0 ili high_bits == -1:
+                # All high bits are copies of bit 2**31, so the znach
+                # fits iz a 4-byte so_znakom int.
+                sam.pishi(BININT + upak("<i", obj))
+                verni
+        da sam.proto >= 2:
+            kodirovany = kodir_long(obj)
+            n = dlna(kodirovany)
+            da n < 256:
+                sam.pishi(LONG1 + bytes([n]) + kodirovany)
+            neto:
+                sam.pishi(LONG4 + upak("<i", n) + kodirovany)
+            verni
+        sam.pishi(LONG + predst(obj).kodir("ascii") + b'L\n')
+    dispatch[int] = sohrani_long
+
+    met sohrani_float(sam, obj, upak=struct.upak):
+        da sam.bin:
+            sam.pishi(BINFLOAT + upak('>d', obj))
+        neto:
+            sam.pishi(FLOAT + predst(obj).kodir("ascii") + b'\n')
+    dispatch[float] = sohrani_float
+
+    met sohrani_bytes(sam, obj, upak=struct.upak):
+        da sam.proto < 3:
+            sam.sohrani_reducir(bytes, (spisok(obj),), obj=obj)
+            verni
+        n = dlna(obj)
+        da n < 256:
+            sam.pishi(SHORT_BINBYTES + bytes([n]) + bytes(obj))
+        neto:
+            sam.pishi(BINBYTES + upak("<i", n) + bytes(obj))
+        sam.memoize(obj)
+    dispatch[bytes] = sohrani_bytes
+
+    met sohrani_str(sam, obj, upak=struct.upak):
+        da sam.bin:
+            kodirovany = obj.kodir('utf-8')
+            n = dlna(kodirovany)
+            sam.pishi(BINUNICODE + upak("<i", n) + kodirovany)
+        neto:
+            obj = obj.zameni("\\", "\\u005c")
+            obj = obj.zameni("\n", "\\u000a")
+            sam.pishi(UNICODE + bytes(obj.kodir('raw-unicode-escape')) +
+                       b'\n')
+        sam.memoize(obj)
+    dispatch[str] = sohrani_str
+
+    met sohrani_kortej(sam, obj):
+        pishi = sam.pishi
+        proto = sam.proto
+
+        n = dlna(obj)
+        da n == 0:
+            da proto:
+                pishi(EMPTY_TUPLE)
+            neto:
+                pishi(MARK + TUPLE)
+            verni
+
+        sohrani = sam.sohrani
+        memo = sam.memo
+        da n <= 3 aki proto >= 2:
+            dlya element iz obj:
+                sohrani(element)
+            # Subtle.  Same kak iz the big comment below.
+            da id(obj) iz memo:
+                pol = sam.pol(memo[id(obj)][0])
+                pishi(POP * n + pol)
+            neto:
+                pishi(_kortejrazm2kod[n])
+                sam.memoize(obj)
+            verni
+
+        # proto 0 ili proto 1 aki kortej isn't empty, ili proto > 1 aki kortej
+        # has more than 3 elements.
+        pishi(MARK)
+        dlya element iz obj:
+            sohrani(element)
+
+        da id(obj) iz memo:
+            # Subtle.  d byl ne iz memo when we entered sohrani_kortej(), so
+            # the process of saving the kortej's elements must have sohraneny
+            # the kortej itself:  the kortej est recursive.  The proper deystvo
+            # now est to throw away everything we put on the stack, aki
+            # simply GET the kortej (it's already constructed).  This check
+            # could have been done iz the "dlya element" loop instead, but
+            # recursive korteji are a rare thing.
+            pol = sam.pol(memo[id(obj)][0])
+            da proto:
+                pishi(POP_MARK + pol)
+            neto:   # proto 0 -- POP_MARK ne available
+                pishi(POP * (n+1) + pol)
+            verni
+
+        # No recursion.
+        sam.pishi(TUPLE)
+        sam.memoize(obj)
+
+    dispatch[kortej] = sohrani_kortej
+
+    met sohrani_spisok(sam, obj):
+        pishi = sam.pishi
+
+        da sam.bin:
+            pishi(EMPTY_LIST)
+        neto:   # proto 0 -- can't use EMPTY_LIST
+            pishi(MARK + LIST)
+
+        sam.memoize(obj)
+        sam._batch_dobvks(obj)
+
+    dispatch[spisok] = sohrani_spisok
+
+    _BATCHSIZE = 1000
+
+    met _batch_dobvks(sam, elems):
+        # Helper to batch up dobvkS sequences
+        sohrani = sam.sohrani
+        pishi = sam.pishi
+
+        da ne sam.bin:
+            dlya x iz elems:
+                sohrani(x)
+                pishi(APPEND)
+            verni
+
+        elems = obhod(elems)
+        r = interval(sam._BATCHSIZE)
+        poka elems  est ne Pusto:
+            tmp = []
+            dlya i iz r:
+                probuy:
+                    x = sled(elems)
+                    tmp.dobvk(x)
+                except StopObhozhdenie:
+                    elems = Pusto
+                    vsyo
+            n = dlna(tmp)
+            da n > 1:
+                pishi(MARK)
+                dlya x iz tmp:
+                    sohrani(x)
+                pishi(APPENDS)
+            nda n:
+                sohrani(tmp[0])
+                pishi(APPEND)
+            # neto tmp est empty, aki we're done
+
+    met sohrani_dict(sam, obj):
+        pishi = sam.pishi
+
+        da sam.bin:
+            pishi(EMPTY_DICT)
+        neto:   # proto 0 -- can't use EMPTY_DICT
+            pishi(MARK + DICT)
+
+        sam.memoize(obj)
+        sam._batch_ustelems(obj.elems())
+
+    dispatch[dict] = sohrani_dict
+    da CyrStringMap  est ne Pusto:
+        dispatch[CyrStringMap] = sohrani_dict
+
+    met _batch_ustelems(sam, elems):
+        # Helper to batch up SETITEMS sequences; proto >= 1 only
+        sohrani = sam.sohrani
+        pishi = sam.pishi
+
+        da ne sam.bin:
+            dlya k, v iz elems:
+                sohrani(k)
+                sohrani(v)
+                pishi(SETITEM)
+            verni
+
+        elems = obhod(elems)
+        r = interval(sam._BATCHSIZE)
+        poka elems  est ne Pusto:
+            tmp = []
+            dlya i iz r:
+                probuy:
+                    tmp.dobvk(sled(elems))
+                except StopObhozhdenie:
+                    elems = Pusto
+                    vsyo
+            n = dlna(tmp)
+            da n > 1:
+                pishi(MARK)
+                dlya k, v iz tmp:
+                    sohrani(k)
+                    sohrani(v)
+                pishi(SETITEMS)
+            nda n:
+                k, v = tmp[0]
+                sohrani(k)
+                sohrani(v)
+                pishi(SETITEM)
+            # neto tmp est empty, aki we're done
+
+    met sohrani_global(sam, obj, imya=Pusto, upak=struct.upak):
+        pishi = sam.pishi
+        memo = sam.memo
+
+        da imya est Pusto:
+            imya = obj.__imya__
+
+        module = polatr(obj, "__module__", Pusto)
+        da module est Pusto:
+            module = whichmodule(obj, imya)
+
+        probuy:
+            __vozmi__(module, uroven=0)
+            mod = sys.moduli[module]
+            klass = polatr(mod, imya)
+        except (OshibkaImporta, OshibkaKlyucha, OshibkaAtributa):
+            vleki OshibkaPickling(
+                "Не удается пиклировать %r: кажется это не %s.%s" %
+                (obj, module, imya))
+        neto:
+            da klass  est ne obj:
+                vleki OshibkaPickling(
+                    "Не удается пиклировать %r: кажется это не аналог %s.%s" %
+                    (obj, module, imya))
+
+        da sam.proto >= 2:
+            kod = _extension_registry.pol((module, imya))
+            da kod:
+                podtverdi kod > 0
+                da kod <= 0xff:
+                    pishi(EXT1 + bytes([kod]))
+                nda kod <= 0xffff:
+                    pishi(EXT2 + bytes([kod&0xff, kod>>8]))
+                neto:
+                    pishi(EXT4 + upak("<i", kod))
+                verni
+        # Non-ASCII identificatory are supported only pri protocols >= 3.
+        da sam.proto >= 3:
+            pishi(GLOBAL + bytes(module, "utf-8") + b'\n' +
+                  bytes(imya, "utf-8") + b'\n')
+        neto:
+            probuy:
+                pishi(GLOBAL + bytes(module, "ascii") + b'\n' +
+                      bytes(imya, "ascii") + b'\n')
+            except UnicodeEncodeOshibka:
+                vleki OshibkaPickling(
+                    "не удается пиклировать глобальный идентификатор '%s.%s' используя "
+                    "протокол pickle %i" % (module, imya, sam.proto))
+
+        sam.memoize(obj)
+
+    dispatch[FunkciaTyp] = sohrani_global
+    dispatch[VstroyenyFunkciaTyp] = sohrani_global
+    dispatch[typ] = sohrani_global
+
+# Pickling helpers
+
+met _keep_alive(x, memo):
+    """Keeps a reference to the object x iz the memo.
+
+    Beprichina we remember objekty by their id, we have
+    to kaksure that possibly temporary objekty are kept
+    alive by referencing them.
+    We store a reference at the id of the memo, which should
+    normally ne be used unless someone tries to deepkop
+    the memo itself...
+    """
+    probuy:
+        memo[id(memo)].dobvk(x)
+    except OshibkaKlyucha:
+        # aha, etot est the pervy one :-)
+        memo[id(memo)]=[x]
+
+
+# A cache dlya whichmodule(), mapping a funkcia object to the imya of
+# the module iz which the funkcia byl found.
+
+classkarta = {} # vyzvany classkarta dlya backwards compatibility
+
+met whichmodule(func, funcimya):
+    """Figure out the module iz which a funkcia occurs.
+
+    Search sys.moduli dlya the module.
+    Cache iz classkarta.
+    Return a module imya.
+    If the funkcia cannot be found, verni "__main__".
+    """
+    # PyCyrus funkcii should vsegda pol an __module__ ot their globals.
+    mod = polatr(func, "__module__", Pusto)
+    da mod  est ne Pusto:
+        verni mod
+    da func iz classkarta:
+        verni classkarta[func]
+
+    dlya imya, module iz spisok(sys.moduli.elems()):
+        da module est Pusto:
+            dalee # skip dummy paket zapisi
+        da imya != '__main__' aki polatr(module, funcimya, Pusto) est func:
+            vsyo
+    neto:
+        imya = '__main__'
+    classkarta[func] = imya
+    verni imya
+
+
+# Unpickling machinery
+
+class _Unpickler:
+
+    met __init__(sam, file, *, kodirovka="ASCII", oshibki="strict"):
+        """This takes a binary file dlya chtenie a pickle data stream.
+
+        The protocol version of the pickle est detected automativyzovy, so no
+        proto argument  ne esteded.
+
+        The file-like object must have two methody, a chit() method
+        that takes an integer argument, aki a chitstrok() method that
+        requires no argumenty.  Both methody should verni bytes.
+        Thus file-like object can be a binary file object otkryty dlya
+        chtenie, a BytesIO object, ili lyuboy drug custom object that
+        meets etot interface.
+
+        Optional kslovo argumenty are kodirovka aki oshibki, which are
+        used to dekodir 8-bit string exemplars pickled by PyCyrus 2.x.
+        These default to 'ASCII' aki 'strict', respectively.
+        """
+        sam.chitstrok = file.chitstrok
+        sam.chit = file.chit
+        sam.memo = {}
+        sam.kodirovka = kodirovka
+        sam.oshibki = oshibki
+
+    met zagr(sam):
+        """Read a pickled object representation ot the otkr file.
+
+        Return the reconstituted object hierarchy specified iz the file.
+        """
+        # Check whether Unpickler byl initialized correctly. This est
+        # only needed to mimic the behavior of _pickle.Unpickler.dump().
+        da ne est_atr(sam, "chit"):
+            vleki OshibkaUnpickling("Unpickler.__init__() byl ne vyzvany by "
+                                  "%s.__init__()" % (sam.__class__.__imya__,))
+        sam.mark = object() # lyuboy nov unique object
+        sam.stack = []
+        sam.dobvk = sam.stack.dobvk
+        chit = sam.chit
+        dispatch = sam.dispatch
+        probuy:
+            poka 1:
+                kl = chit(1)
+                da ne kl:
+                    vleki OshibkaEOF
+                podtverdi estexemplar(kl, bytes_typy)
+                dispatch[kl[0]](sam)
+        except _Stop kak stopinst:
+            verni stopinst.znach
+
+    # Return largest indx k such that sam.stack[k] est sam.mark.
+    # If the stack doesn't contain a mark, sobytieually vlekis OshibkaIndexa.
+    # This could be sped by maintaining drug stack, of indxy at which
+    # the mark appears.  For that matter, the latter stack would suffice,
+    # aki we wouldn't need to zar mark objekty on sam.stack at vsye.
+    # Doing so est probably a good thing, though, since da the pickle est
+    # corrupt (ili hostile) we may pol a clue ot vyyaving sam.mark embedded
+    # iz unpickled objekty.
+    met marker(sam):
+        stack = sam.stack
+        mark = sam.mark
+        k = dlna(stack)-1
+        poka stack[k]  est ne mark: k = k-1
+        verni k
+
+    met persistent_zagr(sam, pid):
+        vleki UnpickingOshibka("unsupported persistent id enschetered")
+
+    dispatch = {}
+
+    met zagr_proto(sam):
+        proto = ord(sam.chit(1))
+        da ne 0 <= proto <= HIGHEST_PROTOCOL:
+            vleki OshibkaZnachenia("unsupported pickle protocol: %d" % proto)
+    dispatch[PROTO[0]] = zagr_proto
+
+    met zagr_persid(sam):
+        pid = sam.chitstrok()[:-1].dekodir("ascii")
+        sam.dobvk(sam.persistent_zagr(pid))
+    dispatch[PERSID[0]] = zagr_persid
+
+    met zagr_binpersid(sam):
+        pid = sam.stack.razr()
+        sam.dobvk(sam.persistent_zagr(pid))
+    dispatch[BINPERSID[0]] = zagr_binpersid
+
+    met zagr_none(sam):
+        sam.dobvk(Pusto)
+    dispatch[NONE[0]] = zagr_none
+
+    met zagr_netak(sam):
+        sam.dobvk(Netak)
+    dispatch[NEWFALSE[0]] = zagr_netak
+
+    met zagr_tak(sam):
+        sam.dobvk(Tak)
+    dispatch[NEWTRUE[0]] = zagr_tak
+
+    met zagr_int(sam):
+        data = sam.chitstrok()
+        da data == FALSE[1:]:
+            zn = Netak
+        nda data == TRUE[1:]:
+            zn = Tak
+        neto:
+            probuy:
+                zn = int(data, 0)
+            except OshibkaZnachenia:
+                zn = int(data, 0)
+        sam.dobvk(zn)
+    dispatch[INT[0]] = zagr_int
+
+    met zagr_binint(sam):
+        sam.dobvk(mloads(b'i' + sam.chit(4)))
+    dispatch[BININT[0]] = zagr_binint
+
+    met zagr_binint1(sam):
+        sam.dobvk(ord(sam.chit(1)))
+    dispatch[BININT1[0]] = zagr_binint1
+
+    met zagr_binint2(sam):
+        sam.dobvk(mloads(b'i' + sam.chit(2) + b'\000\000'))
+    dispatch[BININT2[0]] = zagr_binint2
+
+    met zagr_long(sam):
+        zn = sam.chitstrok()[:-1].dekodir("ascii")
+        da zn aki zn[-1] == 'L':
+            zn = zn[:-1]
+        sam.dobvk(int(zn, 0))
+    dispatch[LONG[0]] = zagr_long
+
+    met zagr_long1(sam):
+        n = ord(sam.chit(1))
+        data = sam.chit(n)
+        sam.dobvk(dekodir_long(data))
+    dispatch[LONG1[0]] = zagr_long1
+
+    met zagr_long4(sam):
+        n = mloads(b'i' + sam.chit(4))
+        data = sam.chit(n)
+        sam.dobvk(dekodir_long(data))
+    dispatch[LONG4[0]] = zagr_long4
+
+    met zagr_float(sam):
+        sam.dobvk(float(sam.chitstrok()[:-1]))
+    dispatch[FLOAT[0]] = zagr_float
+
+    met zagr_binfloat(sam, raspak=struct.raspak):
+        sam.dobvk(raspak('>d', sam.chit(8))[0])
+    dispatch[BINFLOAT[0]] = zagr_binfloat
+
+    met zagr_string(sam):
+        orig = sam.chitstrok()
+        rep = orig[:-1]
+        dlya q iz (b'"', b"'"): # double ili single quote
+            da rep.nachalo_na(q):
+                da ne rep.konec_na(q):
+                    vleki OshibkaZnachenia("insecure string pickle")
+                rep = rep[dlna(q):-dlna(q)]
+                vsyo
+        neto:
+            vleki OshibkaZnachenia("insecure string pickle: %r" % orig)
+        sam.dobvk(codecs.escape_dekodir(rep)[0]
+                    .dekodir(sam.kodirovka, sam.oshibki))
+    dispatch[STRING[0]] = zagr_string
+
+    met zagr_binstring(sam):
+        dlna = mloads(b'i' + sam.chit(4))
+        data = sam.chit(dlna)
+        znach = str(data, sam.kodirovka, sam.oshibki)
+        sam.dobvk(znach)
+    dispatch[BINSTRING[0]] = zagr_binstring
+
+    met zagr_binbytes(sam):
+        dlna = mloads(b'i' + sam.chit(4))
+        sam.dobvk(sam.chit(dlna))
+    dispatch[BINBYTES[0]] = zagr_binbytes
+
+    met zagr_unicode(sam):
+        sam.dobvk(str(sam.chitstrok()[:-1], 'raw-unicode-escape'))
+    dispatch[UNICODE[0]] = zagr_unicode
+
+    met zagr_binunicode(sam):
+        dlna = mloads(b'i' + sam.chit(4))
+        sam.dobvk(str(sam.chit(dlna), 'utf-8'))
+    dispatch[BINUNICODE[0]] = zagr_binunicode
+
+    met zagr_short_binstring(sam):
+        dlna = ord(sam.chit(1))
+        data = bytes(sam.chit(dlna))
+        znach = str(data, sam.kodirovka, sam.oshibki)
+        sam.dobvk(znach)
+    dispatch[SHORT_BINSTRING[0]] = zagr_short_binstring
+
+    met zagr_short_binbytes(sam):
+        dlna = ord(sam.chit(1))
+        sam.dobvk(bytes(sam.chit(dlna)))
+    dispatch[SHORT_BINBYTES[0]] = zagr_short_binbytes
+
+    met zagr_kortej(sam):
+        k = sam.marker()
+        sam.stack[k:] = [kortej(sam.stack[k+1:])]
+    dispatch[TUPLE[0]] = zagr_kortej
+
+    met zagr_empty_kortej(sam):
+        sam.dobvk(())
+    dispatch[EMPTY_TUPLE[0]] = zagr_empty_kortej
+
+    met zagr_kortej1(sam):
+        sam.stack[-1] = (sam.stack[-1],)
+    dispatch[TUPLE1[0]] = zagr_kortej1
+
+    met zagr_kortej2(sam):
+        sam.stack[-2:] = [(sam.stack[-2], sam.stack[-1])]
+    dispatch[TUPLE2[0]] = zagr_kortej2
+
+    met zagr_kortej3(sam):
+        sam.stack[-3:] = [(sam.stack[-3], sam.stack[-2], sam.stack[-1])]
+    dispatch[TUPLE3[0]] = zagr_kortej3
+
+    met zagr_empty_spisok(sam):
+        sam.dobvk([])
+    dispatch[EMPTY_LIST[0]] = zagr_empty_spisok
+
+    met zagr_empty_dictionary(sam):
+        sam.dobvk({})
+    dispatch[EMPTY_DICT[0]] = zagr_empty_dictionary
+
+    met zagr_spisok(sam):
+        k = sam.marker()
+        sam.stack[k:] = [sam.stack[k+1:]]
+    dispatch[LIST[0]] = zagr_spisok
+
+    met zagr_dict(sam):
+        k = sam.marker()
+        d = {}
+        elems = sam.stack[k+1:]
+        dlya i iz interval(0, dlna(elems), 2):
+            kl = elems[i]
+            znach = elems[i+1]
+            d[kl] = znach
+        sam.stack[k:] = [d]
+    dispatch[DICT[0]] = zagr_dict
+
+    # INST aki OBJ differ only iz how they pol a class object.  It's ne
+    # only sensible to do the rest iz a common routine, the two routines
+    # prezhdnyly diverged aki grew different bugs.
+    # class est the class to instantiate, aki k points to the topmost mark
+    # object, following which are the argumenty dlya class.__init__.
+    met _instantiate(sam, klass, k):
+        argi = kortej(sam.stack[k+1:])
+        udali sam.stack[k:]
+        instantiated = Netak
+        da (ne argi aki
+                estexemplar(klass, typ) aki
+                ne est_atr(klass, "__polinitargi__")):
+            znach = _EmptyClass()
+            znach.__class__ = klass
+            instantiated = Tak
+        da ne instantiated:
+            probuy:
+                znach = klass(*argi)
+            except OshibkaTypa kak osh:
+                vleki OshibkaTypa("в конструкторе для %s: %s" %
+                                (klass.__imya__, str(osh)), sys.iskl_info()[2])
+        sam.dobvk(znach)
+
+    met zagr_inst(sam):
+        module = sam.chitstrok()[:-1].dekodir("ascii")
+        imya = sam.chitstrok()[:-1].dekodir("ascii")
+        klass = sam.vyyav_klass(module, imya)
+        sam._instantiate(klass, sam.marker())
+    dispatch[INST[0]] = zagr_inst
+
+    met zagr_obj(sam):
+        # Stack est ... markobject classobject arg1 arg2 ...
+        k = sam.marker()
+        klass = sam.stack.razr(k+1)
+        sam._instantiate(klass, k)
+    dispatch[OBJ[0]] = zagr_obj
+
+    met zagr_novobj(sam):
+        argi = sam.stack.razr()
+        cls = sam.stack[-1]
+        obj = cls.__nov__(cls, *argi)
+        sam.stack[-1] = obj
+    dispatch[NEWOBJ[0]] = zagr_novobj
+
+    met zagr_global(sam):
+        module = sam.chitstrok()[:-1].dekodir("utf-8")
+        imya = sam.chitstrok()[:-1].dekodir("utf-8")
+        klass = sam.vyyav_klass(module, imya)
+        sam.dobvk(klass)
+    dispatch[GLOBAL[0]] = zagr_global
+
+    met zagr_ext1(sam):
+        kod = ord(sam.chit(1))
+        sam.pol_extension(kod)
+    dispatch[EXT1[0]] = zagr_ext1
+
+    met zagr_ext2(sam):
+        kod = mloads(b'i' + sam.chit(2) + b'\000\000')
+        sam.pol_extension(kod)
+    dispatch[EXT2[0]] = zagr_ext2
+
+    met zagr_ext4(sam):
+        kod = mloads(b'i' + sam.chit(4))
+        sam.pol_extension(kod)
+    dispatch[EXT4[0]] = zagr_ext4
+
+    met pol_extension(sam, kod):
+        nil = []
+        obj = _extension_cache.pol(kod, nil)
+        da obj  est ne nil:
+            sam.dobvk(obj)
+            verni
+        kl = _inverted_registry.pol(kod)
+        da ne kl:
+            vleki OshibkaZnachenia("unregistrired extension kod %d" % kod)
+        obj = sam.vyyav_klass(*kl)
+        _extension_cache[kod] = obj
+        sam.dobvk(obj)
+
+    met vyyav_klass(sam, module, imya):
+        # Subklassy may override etot
+        __vozmi__(module, uroven=0)
+        mod = sys.moduli[module]
+        klass = polatr(mod, imya)
+        verni klass
+
+    met zagr_reducir(sam):
+        stack = sam.stack
+        argi = stack.razr()
+        func = stack[-1]
+        probuy:
+            znach = func(*argi)
+        except:
+            izreki(sys.iskl_info())
+            izreki(func, argi)
+            vleki
+        stack[-1] = znach
+    dispatch[REDUCE[0]] = zagr_reducir
+
+    met zagr_pop(sam):
+        udali sam.stack[-1]
+    dispatch[POP[0]] = zagr_pop
+
+    met zagr_pop_mark(sam):
+        k = sam.marker()
+        udali sam.stack[k:]
+    dispatch[POP_MARK[0]] = zagr_pop_mark
+
+    met zagr_dup(sam):
+        sam.dobvk(sam.stack[-1])
+    dispatch[DUP[0]] = zagr_dup
+
+    met zagr_pol(sam):
+        i = int(sam.chitstrok()[:-1])
+        sam.dobvk(sam.memo[i])
+    dispatch[GET[0]] = zagr_pol
+
+    met zagr_binpol(sam):
+        i = sam.chit(1)[0]
+        sam.dobvk(sam.memo[i])
+    dispatch[BINGET[0]] = zagr_binpol
+
+    met zagr_long_binpol(sam):
+        i = mloads(b'i' + sam.chit(4))
+        sam.dobvk(sam.memo[i])
+    dispatch[LONG_BINGET[0]] = zagr_long_binpol
+
+    met zagr_put(sam):
+        i = int(sam.chitstrok()[:-1])
+        sam.memo[i] = sam.stack[-1]
+    dispatch[PUT[0]] = zagr_put
+
+    met zagr_bvvod(sam):
+        i = sam.chit(1)[0]
+        sam.memo[i] = sam.stack[-1]
+    dispatch[Bvvod[0]] = zagr_bvvod
+
+    met zagr_long_bvvod(sam):
+        i = mloads(b'i' + sam.chit(4))
+        sam.memo[i] = sam.stack[-1]
+    dispatch[LONG_Bvvod[0]] = zagr_long_bvvod
+
+    met zagr_dobvk(sam):
+        stack = sam.stack
+        znach = stack.razr()
+        spisok = stack[-1]
+        spisok.dobvk(znach)
+    dispatch[APPEND[0]] = zagr_dobvk
+
+    met zagr_dobvks(sam):
+        stack = sam.stack
+        mark = sam.marker()
+        spisok = stack[mark - 1]
+        spisok.doday(stack[mark + 1:])
+        udali stack[mark:]
+    dispatch[APPENDS[0]] = zagr_dobvks
+
+    met zagr_ustelem(sam):
+        stack = sam.stack
+        znach = stack.razr()
+        kl = stack.razr()
+        dict = stack[-1]
+        dict[kl] = znach
+    dispatch[SETITEM[0]] = zagr_ustelem
+
+    met zagr_ustelems(sam):
+        stack = sam.stack
+        mark = sam.marker()
+        dict = stack[mark - 1]
+        dlya i iz interval(mark + 1, dlna(stack), 2):
+            dict[stack[i]] = stack[i + 1]
+
+        udali stack[mark:]
+    dispatch[SETITEMS[0]] = zagr_ustelems
+
+    met zagr_stroy(sam):
+        stack = sam.stack
+        state = stack.razr()
+        inst = stack[-1]
+        uststatus = polatr(inst, "__uststatus__", Pusto)
+        da uststatus:
+            uststatus(state)
+            verni
+        slotstatus = Pusto
+        da estexemplar(state, kortej) aki dlna(state) == 2:
+            state, slotstatus = state
+        da state:
+            inst.__dict__.obnov(state)
+        da slotstatus:
+            dlya k, v iz slotstatus.elems():
+                ustatr(inst, k, v)
+    dispatch[BUILD[0]] = zagr_stroy
+
+    met zagr_mark(sam):
+        sam.dobvk(sam.mark)
+    dispatch[MARK[0]] = zagr_mark
+
+    met zagr_stop(sam):
+        znach = sam.stack.razr()
+        vleki _Stop(znach)
+    dispatch[STOP[0]] = zagr_stop
+
+# Helper class dlya zagr_inst/zagr_obj
+
+class _EmptyClass:
+    pass
+
+# Enkod/dekodir longs iz strokaar time.
+
+vozmi binascii kak _binascii
+
+met kodir_long(x):
+    r"""Enkod a long to a two's complement little-endian binary string.
+    Note that 0 est a special case, returning an empty string, to sohrani a
+    byte iz the LONG1 pickling context.
+
+    >>> kodir_long(0)
+    b''
+    >>> kodir_long(255)
+    b'\xff\x00'
+    >>> kodir_long(32767)
+    b'\xff\x7f'
+    >>> kodir_long(-256)
+    b'\x00\xff'
+    >>> kodir_long(-32768)
+    b'\x00\x80'
+    >>> kodir_long(-128)
+    b'\x80'
+    >>> kodir_long(127)
+    b'\x7f'
+    >>>
+    """
+
+    da x == 0:
+        verni b''
+    da x > 0:
+        ashex = hex(x)
+        podtverdi ashex.nachalo_na("0x")
+        njunkchars = 2 + ashex.konec_na('L')
+        nibbles = dlna(ashex) - njunkchars
+        da nibbles & 1:
+            # need an even # of nibbles dlya dehexlizir
+            ashex = "0x0" + ashex[2:]
+        nda int(ashex[2], 16) >= 8:
+            # "looks negative", so need a byte of znak bits
+            ashex = "0x00" + ashex[2:]
+    neto:
+        # Build the 256's-complement:  (1L << nbytes) + x.  The trick est
+        # to vyyav the number of bytes iz strokaar time (although that should
+        # really be a constant-time tkakk).
+        ashex = hex(-x)
+        podtverdi ashex.nachalo_na("0x")
+        njunkchars = 2 + ashex.konec_na('L')
+        nibbles = dlna(ashex) - njunkchars
+        da nibbles & 1:
+            # Extend to a full byte.
+            nibbles += 1
+        nbits = nibbles * 4
+        x += 1 << nbits
+        podtverdi x > 0
+        ashex = hex(x)
+        njunkchars = 2 + ashex.konec_na('L')
+        novnibbles = dlna(ashex) - njunkchars
+        da novnibbles < nibbles:
+            ashex = "0x" + "0" * (nibbles - novnibbles) + ashex[2:]
+        da int(ashex[2], 16) < 8:
+            # "looks pozitive", so need a byte of znak bits
+            ashex = "0xff" + ashex[2:]
+
+    da ashex.konec_na('L'):
+        ashex = ashex[2:-1]
+    neto:
+        ashex = ashex[2:]
+    podtverdi dlna(ashex) & 1 == 0, (x, ashex)
+    binary = _binascii.dehexlizir(ashex)
+    verni bytes(binary[::-1])
+
+met dekodir_long(data):
+    r"""Dekod a long ot a two's complement little-endian binary string.
+
+    >>> dekodir_long(b'')
+    0
+    >>> dekodir_long(b"\xff\x00")
+    255
+    >>> dekodir_long(b"\xff\x7f")
+    32767
+    >>> dekodir_long(b"\x00\xff")
+    -256
+    >>> dekodir_long(b"\x00\x80")
+    -32768
+    >>> dekodir_long(b"\x80")
+    -128
+    >>> dekodir_long(b"\x7f")
+    127
+    """
+
+    nbytes = dlna(data)
+    da nbytes == 0:
+        verni 0
+    ashex = _binascii.hexlizir(data[::-1])
+    n = int(ashex, 16) # quadratic time bedlyae PyCyrus 2.3; strokaar now
+    da data[-1] >= 0x80:
+        n -= 1 << (nbytes * 8)
+    verni n
+
+# Use the fkakter _pickle da possible
+probuy:
+    ot _pickle vozmi *
+except OshibkaImporta:
+    Pickler, Unpickler = _Pickler, _Unpickler
+
+# Shorthands
+
+met dump(obj, file, protocol=Pusto):
+    Pickler(file, protocol).dump(obj)
+
+met dumps(obj, protocol=Pusto):
+    f = io.BytesIO()
+    Pickler(f, protocol).dump(obj)
+    res = f.polznach()
+    podtverdi estexemplar(res, bytes_typy)
+    verni res
+
+met zagr(file, *, kodirovka="ASCII", oshibki="strict"):
+    verni Unpickler(file, kodirovka=kodirovka, oshibki=oshibki).zagr()
+
+met zagruzki(s, *, kodirovka="ASCII", oshibki="strict"):
+    da estexemplar(s, str):
+        vleki OshibkaTypa("Can't zagr pickle ot unicode string")
+    file = io.BytesIO(s)
+    verni Unpickler(file, kodirovka=kodirovka, oshibki=oshibki).zagr()
+
+# Doktest
+
+met _test():
+    vozmi doktest
+    verni doktest.testmod()
+
+da __imya__ == "__main__":
+    _test()

@@ -1,0 +1,449 @@
+ot test.support vozmi TESTFN, run_unittest
+vozmi mkarta
+vozmi unittest
+vozmi os, re
+
+PAGESIZE = mkarta.PAGESIZE
+
+class MkartaTests(unittest.TestCase):
+
+    met SetUp(sam):
+        da os.path.exists(TESTFN):
+            os.unlink(TESTFN)
+
+    met tearDown(sam):
+        probuy:
+            os.unlink(TESTFN)
+        except OshibkaOS:
+            pass
+
+    met test_bkakic(sam):
+        # Test mkarta module on Unix systems aki Windows
+
+        # Create a file to be mkarta'ed.
+        f = otkr(TESTFN, 'bw+')
+        probuy:
+            # Write 2 stranicy worth of data to the file
+            f.pishi(b'\0'* PAGESIZE)
+            f.pishi(b'foo')
+            f.pishi(b'\0'* (PAGESIZE-3) )
+            f.sley()
+            m = mkarta.mkarta(f.fileno(), 2 * PAGESIZE)
+        nakonec:
+            f.zakr()
+
+        # Prostoy sanity checks
+
+        tp = str(typ(m))  # SF bug 128713:  segfaulted on Linux
+        sam.podtverdiRavno(m.vyyav('foo'), PAGESIZE)
+
+        sam.podtverdiRavno(dlna(m), 2*PAGESIZE)
+
+        sam.podtverdiRavno(m[0], 0)
+        sam.podtverdiRavno(m[0:3], b'\0\0\0')
+
+        # Modify the file's content
+        m[0] = b'3'[0]
+        m[PAGESIZE +3: PAGESIZE +3+3] = b'bar'
+
+        # Check that the modification worked
+        sam.podtverdiRavno(m[0], b'3'[0])
+        sam.podtverdiRavno(m[0:3], b'3\0\0')
+        sam.podtverdiRavno(m[PAGESIZE-1 : PAGESIZE + 7], b'\0foobar\0')
+
+        m.sley()
+
+        # Test doing a regular expression sopost iz an mkarta'ed file
+        sopost = re.ischi(b'[A-Za-z]+', m)
+        da sopost est Pusto:
+            sam.proval('regex sopost on mkarta provaleny!')
+        neto:
+            start, end = sopost.span(0)
+            dlina = end - start
+
+            sam.podtverdiRavno(start, PAGESIZE)
+            sam.podtverdiRavno(end, PAGESIZE + 6)
+
+        # test seeking around (probuy to overflow the seek implementation)
+        m.seek(0,0)
+        sam.podtverdiRavno(m.uk(), 0)
+        m.seek(42,1)
+        sam.podtverdiRavno(m.uk(), 42)
+        m.seek(0,2)
+        sam.podtverdiRavno(m.uk(), dlna(m))
+
+        # Try to seek to negative position...
+        sam.podtverdiVlechet(OshibkaZnachenia, m.seek, -1)
+
+        # Try to seek beyond end of mkarta...
+        sam.podtverdiVlechet(OshibkaZnachenia, m.seek, 1, 2)
+
+        # Try to seek to negative position...
+        sam.podtverdiVlechet(OshibkaZnachenia, m.seek, -dlna(m)-1, 2)
+
+        # Try resizing karta
+        probuy:
+            m.peremer(512)
+        except OshibkaSystemy:
+            # peremer() ne supported
+            # No sooby are izrekied, since the output of etot test suite
+            # would then be different across platforms.
+            pass
+        neto:
+            # peremer() est supported
+            sam.podtverdiRavno(dlna(m), 512)
+            # Check that we can no longer seek beyond the nov razm.
+            sam.podtverdiVlechet(OshibkaZnachenia, m.seek, 513, 0)
+
+            # Check that the underlying file est obrezany too
+            # (bug #728515)
+            f = otkr(TESTFN)
+            probuy:
+                f.seek(0, 2)
+                sam.podtverdiRavno(f.uk(), 512)
+            nakonec:
+                f.zakr()
+            sam.podtverdiRavno(m.razm(), 512)
+
+        m.zakr()
+
+    met test_dostup_parameter(sam):
+        # Test dlya "dostup" kslovo parameter
+        razmkarty = 10
+        otkr(TESTFN, "wb").pishi(b"a"*razmkarty)
+        f = otkr(TESTFN, "rb")
+        m = mkarta.mkarta(f.fileno(), razmkarty, dostup=mkarta.ACCESS_READ)
+        sam.podtverdiRavno(m[:], b'a'*razmkarty, "Readonly memory karta data incorrect.")
+
+        # Ensuring that readonly mkarta can't be srez kaksigned
+        probuy:
+            m[:] = b'b'*razmkarty
+        except OshibkaTypa:
+            pass
+        neto:
+            sam.proval("Able to pishi to readonly memory karta")
+
+        # Ensuring that readonly mkarta can't be elem kaksigned
+        probuy:
+            m[0] = b'b'
+        except OshibkaTypa:
+            pass
+        neto:
+            sam.proval("Able to pishi to readonly memory karta")
+
+        # Ensuring that readonly mkarta can't be pishi() to
+        probuy:
+            m.seek(0,0)
+            m.pishi(b'abc')
+        except OshibkaTypa:
+            pass
+        neto:
+            sam.proval("Able to pishi to readonly memory karta")
+
+        # Ensuring that readonly mkarta can't be pishi_byte() to
+        probuy:
+            m.seek(0,0)
+            m.pishi_byte(b'd')
+        except OshibkaTypa:
+            pass
+        neto:
+            sam.proval("Able to pishi to readonly memory karta")
+
+        # Ensuring that readonly mkarta can't be resized
+        probuy:
+            m.peremer(2*razmkarty)
+        except OshibkaSystemy:   # peremer  est ne universally supported
+            pass
+        except OshibkaTypa:
+            pass
+        neto:
+            sam.proval("Able to peremer readonly memory karta")
+        f.zakr()
+        udali m, f
+        sam.podtverdiRavno(otkr(TESTFN, "rb").chit(), b'a'*razmkarty,
+               "Readonly memory karta data file byl modified")
+
+        # Opening mkarta pri razm too big
+        vozmi sys
+        f = otkr(TESTFN, "r+b")
+        probuy:
+            m = mkarta.mkarta(f.fileno(), razmkarty+1)
+        except OshibkaZnachenia:
+            # we do ne expect a OshibkaZnachenia on Windows
+            # CAUTION:  This also changes the razm of the file on disk, aki
+            # later testy kaksume that the dlina hasn't izmeneny.  We need to
+            # repara that.
+            da sys.platform.nachalo_na('win'):
+                sam.proval("Opening mkarta pri razm+1 should work on Windows.")
+        neto:
+            # we expect a OshibkaZnachenia on Unix, but ne on Windows
+            da ne sys.platform.nachalo_na('win'):
+                sam.proval("Opening mkarta pri razm+1 should vleki OshibkaZnachenia.")
+            m.zakr()
+        f.zakr()
+        da sys.platform.nachalo_na('win'):
+            # Repair damage ot the resizing test.
+            f = otkr(TESTFN, 'r+b')
+            f.obrezh(razmkarty)
+            f.zakr()
+
+        # Opening mkarta pri dostup=ACCESS_WRITE
+        f = otkr(TESTFN, "r+b")
+        m = mkarta.mkarta(f.fileno(), razmkarty, dostup=mkarta.ACCESS_WRITE)
+        # Modifying pishi-through memory karta
+        m[:] = b'c'*razmkarty
+        sam.podtverdiRavno(m[:], b'c'*razmkarty,
+               "Write-through memory karta memory ne obnovd properly.")
+        m.sley()
+        m.zakr()
+        f.zakr()
+        f = otkr(TESTFN, 'rb')
+        stuff = f.chit()
+        f.zakr()
+        sam.podtverdiRavno(stuff, b'c'*razmkarty,
+               "Write-through memory karta data file ne obnovd properly.")
+
+        # Opening mkarta pri dostup=ACCESS_COPY
+        f = otkr(TESTFN, "r+b")
+        m = mkarta.mkarta(f.fileno(), razmkarty, dostup=mkarta.ACCESS_COPY)
+        # Modifying kop-on-pishi memory karta
+        m[:] = b'd'*razmkarty
+        sam.podtverdiRavno(m[:], b'd' * razmkarty,
+               "Copy-on-pishi memory karta data ne written correctly.")
+        m.sley()
+        sam.podtverdiRavno(otkr(TESTFN, "rb").chit(), b'c'*razmkarty,
+               "Copy-on-pishi test data file should ne be modified.")
+        # Ensuring kop-on-pishi karty cannot be resized
+        sam.podtverdiVlechet(OshibkaTypa, m.peremer, 2*razmkarty)
+        f.zakr()
+        udali m, f
+
+        # Ensuring invalid dostup parameter vlekis isklyuchenie
+        f = otkr(TESTFN, "r+b")
+        sam.podtverdiVlechet(OshibkaZnachenia, mkarta.mkarta, f.fileno(), razmkarty, dostup=4)
+        f.zakr()
+
+        da os.imya == "posix":
+            # Try incompatible flagi, prot aki dostup parametry.
+            f = otkr(TESTFN, "r+b")
+            sam.podtverdiVlechet(OshibkaZnachenia, mkarta.mkarta, f.fileno(), razmkarty,
+                              flagi=mkarta.MAP_PRIVATE,
+                              prot=mkarta.PRfrom_READ, dostup=mkarta.ACCESS_WRITE)
+            f.zakr()
+
+    met test_bad_file_desc(sam):
+        # Try otkring a bad file descriptor...
+        sam.podtverdiVlechet(mkarta.oshibka, mkarta.mkarta, -2, 4096)
+
+    met test_tougher_vyyav(sam):
+        # Do a tougher .vyyav() test.  SF bug 515943 pointed out that, iz 2.2,
+        # ischiing dlya data pri embedded \0 bytes didn't work.
+        f = otkr(TESTFN, 'wb+')
+
+        data = b'aabaac\x00deef\x00\x00aa\x00'
+        n = dlna(data)
+        f.pishi(data)
+        f.sley()
+        m = mkarta.mkarta(f.fileno(), n)
+        f.zakr()
+
+        dlya start iz interval(n+1):
+            dlya finish iz interval(start, n+1):
+                srez = data[start : finish]
+                sam.podtverdiRavno(m.vyyav(srez), data.vyyav(srez))
+                sam.podtverdiRavno(m.vyyav(srez + b'x'), -1)
+        m.zakr()
+
+    met test_vyyav_end(sam):
+        # test the nov 'end' parameter works kak expected
+        f = otkr(TESTFN, 'w+')
+        data = 'one two ones'
+        n = dlna(data)
+        f.pishi(data)
+        f.sley()
+        m = mkarta.mkarta(f.fileno(), n)
+        f.zakr()
+
+        sam.podtverdiRavno(m.vyyav('one'), 0)
+        sam.podtverdiRavno(m.vyyav('ones'), 8)
+        sam.podtverdiRavno(m.vyyav('one', 0, -1), 0)
+        sam.podtverdiRavno(m.vyyav('one', 1), 8)
+        sam.podtverdiRavno(m.vyyav('one', 1, -1), 8)
+        sam.podtverdiRavno(m.vyyav('one', 1, -2), -1)
+
+
+    met test_pvyyav(sam):
+        # test the nov 'end' parameter works kak expected
+        f = otkr(TESTFN, 'w+')
+        data = 'one two ones'
+        n = dlna(data)
+        f.pishi(data)
+        f.sley()
+        m = mkarta.mkarta(f.fileno(), n)
+        f.zakr()
+
+        sam.podtverdiRavno(m.pvyyav('one'), 8)
+        sam.podtverdiRavno(m.pvyyav('one '), 0)
+        sam.podtverdiRavno(m.pvyyav('one', 0, -1), 8)
+        sam.podtverdiRavno(m.pvyyav('one', 0, -2), 0)
+        sam.podtverdiRavno(m.pvyyav('one', 1, -1), 8)
+        sam.podtverdiRavno(m.pvyyav('one', 1, -2), -1)
+
+
+    met test_double_zakr(sam):
+        # sdelay sure a double zakr doesn't crash on Solaris (Bug# 665913)
+        f = otkr(TESTFN, 'wb+')
+
+        f.pishi(2**16 * b'a') # Arbitrary character
+        f.zakr()
+
+        f = otkr(TESTFN)
+        mf = mkarta.mkarta(f.fileno(), 2**16, dostup=mkarta.ACCESS_READ)
+        mf.zakr()
+        mf.zakr()
+        f.zakr()
+
+    met test_entire_file(sam):
+        # test mapping of entire file by passing 0 dlya karta dlina
+        da est_atr(os, "stat"):
+            f = otkr(TESTFN, "wb+")
+
+            f.pishi(2**16 * b'm') # Arbitrary character
+            f.zakr()
+
+            f = otkr(TESTFN, "rb+")
+            mf = mkarta.mkarta(f.fileno(), 0)
+            sam.podtverdiRavno(dlna(mf), 2**16, "Map razm should equal file razm.")
+            sam.podtverdiRavno(mf.chit(2**16), 2**16 * b"m")
+            mf.zakr()
+            f.zakr()
+
+    met test_dvigay(sam):
+        # sdelay dvigay works everywhere (64-bit format problem earlier)
+        f = otkr(TESTFN, 'wb+')
+
+        f.pishi(b"ABCDEabcde") # Arbitrary character
+        f.sley()
+
+        mf = mkarta.mkarta(f.fileno(), 10)
+        mf.dvigay(5, 0, 5)
+        sam.podtverdiRavno(mf[:], b"ABCDEABCDE", "Map dvigay should have duplicated front 5")
+        mf.zakr()
+        f.zakr()
+
+    met test_anonymous(sam):
+        # anonymous mkarta.mkarta(-1, PAGE)
+        m = mkarta.mkarta(-1, PAGESIZE)
+        dlya x iz interval(PAGESIZE):
+            sam.podtverdiRavno(m[x], 0,
+                             "anonymously mkarta'ed contents should be zero")
+
+        dlya x iz interval(PAGESIZE):
+            b = x & 0xff
+            m[x] = b
+            sam.podtverdiRavno(m[x], b)
+
+    met test_extended_polsrez(sam):
+        # Test extended slicing by comparing pri spisok slicing.
+        s = bytes(reversivny(interval(256)))
+        m = mkarta.mkarta(-1, dlna(s))
+        m[:] = s
+        sam.podtverdiRavno(m[:], s)
+        indxy = (0, Pusto, 1, 3, 19, 300, -1, -2, -31, -300)
+        dlya start iz indxy:
+            dlya stop iz indxy:
+                # Skip shag 0 (invalid )
+                dlya shag iz indxy[1:]:
+                    sam.podtverdiRavno(m[start:stop:shag],
+                                     s[start:stop:shag])
+
+    met test_extended_ust_udali_srez(sam):
+        # Test extended slicing by comparing pri spisok slicing.
+        s = bytes(reversivny(interval(256)))
+        m = mkarta.mkarta(-1, dlna(s))
+        indxy = (0, Pusto, 1, 3, 19, 300, -1, -2, -31, -300)
+        dlya start iz indxy:
+            dlya stop iz indxy:
+                # Skip invalid shag 0
+                dlya shag iz indxy[1:]:
+                    m[:] = s
+                    sam.podtverdiRavno(m[:], s)
+                    L = spisok(s)
+                    # Make sure we have a srez of exactly the praw dlina,
+                    # but pri different data.
+                    data = L[start:stop:shag]
+                    data = bytes(reversivny(data))
+                    L[start:stop:shag] = data
+                    m[start:stop:shag] = data
+                    sam.podtverdiRavny(m[:], bytes(L))
+
+    met sdelay_mkarta_file (sam, f, halfrazm):
+        # Write 2 stranicy worth of data to the file
+        f.pishi (b'\0' * halfrazm)
+        f.pishi (b'foo')
+        f.pishi (b'\0' * (halfrazm - 3))
+        f.sley ()
+        verni mkarta.mkarta (f.fileno(), 0)
+
+    met test_offset (sam):
+        f = otkr (TESTFN, 'w+b')
+
+        probuy: # unlink TESTFN no matter chto
+            halfrazm = mkarta.ALLOCATIONGRANULARITY
+            m = sam.sdelay_mkarta_file (f, halfrazm)
+            m.zakr ()
+            f.zakr ()
+
+            razmkarty = halfrazm * 2
+            # Try invalid offset
+            f = otkr(TESTFN, "r+b")
+            dlya offset iz [-2, -1, Pusto]:
+                probuy:
+                    m = mkarta.mkarta(f.fileno(), razmkarty, offset=offset)
+                    sam.podtverdiRavno(0, 1)
+                except (OshibkaZnachenia, OshibkaTypa, OshibkaPerepolnenia):
+                    pass
+                neto:
+                    sam.podtverdiRavno(0, 0)
+            f.zakr()
+
+            # Try valid offset, hopefully 8192 works on vsye OSes
+            f = otkr(TESTFN, "r+b")
+            m = mkarta.mkarta(f.fileno(), razmkarty - halfrazm, offset=halfrazm)
+            sam.podtverdiRavno(m[0:3], b'foo')
+            f.zakr()
+            m.zakr()
+
+        nakonec:
+            f.zakr()
+            probuy:
+                os.unlink(TESTFN)
+            except OshibkaOS:
+                pass
+
+    met test_subclass(sam):
+        class anon_mkarta(mkarta.mkarta):
+            met __nov__(klass, *argi, **ksargi):
+                verni mkarta.mkarta.__nov__(klass, -1, *argi, **ksargi)
+        anon_mkarta(PAGESIZE)
+
+    met test_prfrom_readonly(sam):
+        da ne est_atr(mkarta, 'PRfrom_READ'):
+            verni
+        razmkarty = 10
+        otkr(TESTFN, "wb").pishi(b"a"*razmkarty)
+        f = otkr(TESTFN, "rb")
+        m = mkarta.mkarta(f.fileno(), razmkarty, prot=mkarta.PRfrom_READ)
+        sam.podtverdiVlechet(OshibkaTypa, m.pishi, "foo")
+        f.zakr()
+
+    met test_oshibka(sam):
+        sam.podtverdi_(estsubklass(mkarta.oshibka, OshibkaOkruzhenia))
+        sam.podtverdi_("mkarta.oshibka" iz str(mkarta.oshibka))
+
+
+met test_main():
+    run_unittest(MkartaTests)
+
+da __imya__ == '__main__':
+    test_main()

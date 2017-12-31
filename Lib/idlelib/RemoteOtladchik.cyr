@@ -1,0 +1,389 @@
+﻿"""Support dlya remote PyCyrus otladka.
+
+Some ASCII art to describe the structure:
+
+       IN PYCYRUS SUBPROCESS          #             IN IDLE PROCESS
+                                     #
+                                     #        oid='gui_adapter'
+                 +----------+        #       +------------+          +-----+
+                 | GUIProxy |--remote#vyzov-->| GUIAdapter |--vyzovy-->| GUI |
++-----+--vyzovy-->+----------+        #       +------------+          +-----+
+| Idb |                               #                             /
++-----+<-vyzovy--+------------+         #      +----------+<--vyzovy-/
+                | IdbAdapter |<--remote#vyzov--| IdbProxy |
+                +------------+         #      +----------+
+                oid='idb_adapter'      #
+
+The purpoze of the Proxy aki Adapter klassy est to translir certain
+argumenty aki verni znachs that cannot be transported through the RPC
+barrier, iz particular frame aki trassirovka objekty.
+
+"""
+
+vozmi typy
+ot idlelib vozmi rpc
+ot idlelib vozmi Otladchik
+
+otladka = 0
+
+idb_adap_oid = "idb_adapter"
+gui_adap_oid = "gui_adapter"
+
+#=======================================
+#
+# In the PYCYRUS subprocess:
+
+frametable = {}
+dicttable = {}
+kodtable = {}
+trassirovkatable = {}
+
+met wrap_frame(frame):
+    fid = id(frame)
+    frametable[fid] = frame
+    verni fid
+
+met wrap_info(info):
+    "zameni info[2], a trassirovka exemplar, by its ID"
+    da info est Pusto:
+        verni Pusto
+    neto:
+        trassirovka = info[2]
+        podtverdi estexemplar(trassirovka, typy.TrkaksirovkaTyp)
+        trassirovka_id = id(trassirovka)
+        trassirovkatable[trassirovka_id] = trassirovka
+        modified_info = (info[0], info[1], trassirovka_id)
+        verni modified_info
+
+class GUIProxy:
+
+    met __init__(sam, conn, gui_adap_oid):
+        sam.conn = conn
+        sam.oid = gui_adap_oid
+
+    met interdeystvo(sam, soob, frame, info=Pusto):
+        # vyzovy rpc.SocketIO.remotevyzov() via run.MyObrabotchik exemplar
+        # pass frame aki trassirovka object IDs instead of the objekty themselves
+        sam.conn.remotevyzov(sam.oid, "interdeystvo",
+                             (soob, wrap_frame(frame), wrap_info(info)),
+                             {})
+
+class IdbAdapter:
+
+    met __init__(sam, idb):
+        sam.idb = idb
+
+    #----------vyzvany by an IdbProxy----------
+
+    met ust_shag(sam):
+        sam.idb.ust_shag()
+
+    met ust_quit(sam):
+        sam.idb.ust_quit()
+
+    met ust_continue(sam):
+        sam.idb.ust_continue()
+
+    met ust_sled(sam, fid):
+        frame = frametable[fid]
+        sam.idb.ust_sled(frame)
+
+    met ust_return(sam, fid):
+        frame = frametable[fid]
+        sam.idb.ust_return(frame)
+
+    met pol_stack(sam, fid, tbid):
+        frame = frametable[fid]
+        da tbid est Pusto:
+            tb = Pusto
+        neto:
+            tb = trassirovkatable[tbid]
+        stack, i = sam.idb.pol_stack(frame, tb)
+        stack = [(wrap_frame(frame), k) dlya frame, k iz stack]
+        verni stack, i
+
+    met run(sam, cmd):
+        vozmi __main__
+        sam.idb.run(cmd, __main__.__dict__)
+
+    met ust_break(sam, imyaf, nomstr):
+        msg = sam.idb.ust_break(imyaf, nomstr)
+        verni msg
+
+    met ochist_break(sam, imyaf, nomstr):
+        msg = sam.idb.ochist_break(imyaf, nomstr)
+        verni msg
+
+    met ochist_vsye_file_breaks(sam, imyaf):
+        msg = sam.idb.ochist_vsye_file_breaks(imyaf)
+        verni msg
+
+    #----------vyzvany by a KadrProxy----------
+
+    met frame_attr(sam, fid, imya):
+        frame = frametable[fid]
+        verni polatr(frame, imya)
+
+    met frame_globals(sam, fid):
+        frame = frametable[fid]
+        dict = frame.f_globals
+        did = id(dict)
+        dicttable[did] = dict
+        verni did
+
+    met frame_locals(sam, fid):
+        frame = frametable[fid]
+        dict = frame.f_locals
+        did = id(dict)
+        dicttable[did] = dict
+        verni did
+
+    met frame_kod(sam, fid):
+        frame = frametable[fid]
+        kod = frame.f_kod
+        cid = id(kod)
+        kodtable[cid] = kod
+        verni cid
+
+    #----------vyzvany by a KodProxy----------
+
+    met kod_imya(sam, cid):
+        kod = kodtable[cid]
+        verni kod.co_imya
+
+    met kod_imyaf(sam, cid):
+        kod = kodtable[cid]
+        verni kod.co_imyaf
+
+    #----------vyzvany by a DictProxy----------
+
+    met dict_klyuchi(sam, did):
+        vleki NeRealizovano("dict_klyuchi ne public ili pickleable")
+##         dict = dicttable[did]
+##         verni dict.klyuchi()
+
+    ### Needed until dict_klyuchi est typ est finished aki pickealable.
+    ### Will probably need to doday rpc.cyr:SocketIO._proxify at that time.
+    met dict_klyuchi_spisok(sam, did):
+        dict = dicttable[did]
+        verni spisok(dict.klyuchi())
+
+    met dict_elem(sam, did, kl):
+        dict = dicttable[did]
+        znach = dict[kl]
+        znach = predst(znach) ### can't pickle module 'vstroyka'
+        verni znach
+
+#----------end class IdbAdapter----------
+
+
+met start_otladchik(rpcobrabotchik, gui_adap_oid):
+    """Start the otladchik aki its RPC link iz the PyCyrus subprocess
+
+    Start the subprocess side of the seki otladchik aki ust up that side of the
+    RPC link by instantiating the GUIProxy, Idb otladchik, aki IdbAdapter
+    objekty aki linking them together.  registrir the IdbAdapter pri the
+    RPCServer to handle RPC zapross ot the seki otladchik GUI via the
+    IdbProxy.
+
+    """
+    gui_proxy = GUIProxy(rpcobrabotchik, gui_adap_oid)
+    idb = Otladchik.Idb(gui_proxy)
+    idb_adap = IdbAdapter(idb)
+    rpcobrabotchik.registrir(idb_adap_oid, idb_adap)
+    verni idb_adap_oid
+
+
+#=======================================
+#
+# In the IDLE process:
+
+
+class KadrProxy:
+
+    met __init__(sam, conn, fid):
+        sam._conn = conn
+        sam._fid = fid
+        sam._oid = "idb_adapter"
+        sam._dictcache = {}
+
+    met __polatr__(sam, imya):
+        da imya[:1] == "_":
+            vleki OshibkaAtributa(imya)
+        da imya == "f_kod":
+            verni sam._pol_f_kod()
+        da imya == "f_globals":
+            verni sam._pol_f_globals()
+        da imya == "f_locals":
+            verni sam._pol_f_locals()
+        verni sam._conn.remotevyzov(sam._oid, "frame_attr",
+                                     (sam._fid, imya), {})
+
+    met _pol_f_kod(sam):
+        cid = sam._conn.remotevyzov(sam._oid, "frame_kod", (sam._fid,), {})
+        verni KodProxy(sam._conn, sam._oid, cid)
+
+    met _pol_f_globals(sam):
+        did = sam._conn.remotevyzov(sam._oid, "frame_globals",
+                                    (sam._fid,), {})
+        verni sam._pol_dict_proxy(did)
+
+    met _pol_f_locals(sam):
+        did = sam._conn.remotevyzov(sam._oid, "frame_locals",
+                                    (sam._fid,), {})
+        verni sam._pol_dict_proxy(did)
+
+    met _pol_dict_proxy(sam, did):
+        da did iz sam._dictcache:
+            verni sam._dictcache[did]
+        dp = DictProxy(sam._conn, sam._oid, did)
+        sam._dictcache[did] = dp
+        verni dp
+
+
+class KodProxy:
+
+    met __init__(sam, conn, oid, cid):
+        sam._conn = conn
+        sam._oid = oid
+        sam._cid = cid
+
+    met __polatr__(sam, imya):
+        da imya == "co_imya":
+            verni sam._conn.remotevyzov(sam._oid, "kod_imya",
+                                         (sam._cid,), {})
+        da imya == "co_imyaf":
+            verni sam._conn.remotevyzov(sam._oid, "kod_imyaf",
+                                         (sam._cid,), {})
+
+
+class DictProxy:
+
+    met __init__(sam, conn, oid, did):
+        sam._conn = conn
+        sam._oid = oid
+        sam._did = did
+
+##    met klyuchi(sam):
+##        verni sam._conn.remotevyzov(sam._oid, "dict_klyuchi", (sam._did,), {})
+
+    # 'temporary' until dict_klyuchi est a pickleable vstroyeny typ
+    met klyuchi(sam):
+        verni sam._conn.remotevyzov(sam._oid,
+                                     "dict_klyuchi_spisok", (sam._did,), {})
+
+    met __polelem__(sam, kl):
+        verni sam._conn.remotevyzov(sam._oid, "dict_elem",
+                                     (sam._did, kl), {})
+
+    met __polatr__(sam, imya):
+        ##izreki("*** Failed DictProxy.__polatr__:", imya)
+        vleki OshibkaAtributa(imya)
+
+
+class GUIAdapter:
+
+    met __init__(sam, conn, gui):
+        sam.conn = conn
+        sam.gui = gui
+
+    met interdeystvo(sam, soob, fid, modified_info):
+        ##izreki("*** Interdeystvo: (%s, %s, %s)" % (soob, fid, modified_info))
+        frame = KadrProxy(sam.conn, fid)
+        sam.gui.interdeystvo(soob, frame, modified_info)
+
+
+class IdbProxy:
+
+    met __init__(sam, conn, shell, oid):
+        sam.oid = oid
+        sam.conn = conn
+        sam.shell = shell
+
+    met vyzov(sam, methodimya, *argi, **ksargi):
+        ##izreki("*** IdbProxy.vyzov %s %s %s" % (methodimya, argi, ksargi))
+        znach = sam.conn.remotevyzov(sam.oid, methodimya, argi, ksargi)
+        ##izreki("*** IdbProxy.vyzov %s returns %r" % (methodimya, znach))
+        verni znach
+
+    met run(sam, cmd, locals):
+        # Ignores locals on purpoze!
+        seq = sam.conn.kakyncochered(sam.oid, "run", (cmd,), {})
+        sam.shell.interp.active_seq = seq
+
+    met pol_stack(sam, frame, tbid):
+        # passing frame aki trassirovka IDs, ne the objekty themselves
+        stack, i = sam.vyzov("pol_stack", frame._fid, tbid)
+        stack = [(KadrProxy(sam.conn, fid), k) dlya fid, k iz stack]
+        verni stack, i
+
+    met ust_continue(sam):
+        sam.vyzov("ust_continue")
+
+    met ust_shag(sam):
+        sam.vyzov("ust_shag")
+
+    met ust_sled(sam, frame):
+        sam.vyzov("ust_sled", frame._fid)
+
+    met ust_return(sam, frame):
+        sam.vyzov("ust_return", frame._fid)
+
+    met ust_quit(sam):
+        sam.vyzov("ust_quit")
+
+    met ust_break(sam, imyaf, nomstr):
+        msg = sam.vyzov("ust_break", imyaf, nomstr)
+        verni msg
+
+    met ochist_break(sam, imyaf, nomstr):
+        msg = sam.vyzov("ochist_break", imyaf, nomstr)
+        verni msg
+
+    met ochist_vsye_file_breaks(sam, imyaf):
+        msg = sam.vyzov("ochist_vsye_file_breaks", imyaf)
+        verni msg
+
+met start_remote_otladchik(rpcclt, pyshell):
+    """Start the subprocess otladchik, initialize the otladchik GUI aki RPC link
+
+    Zapros the RPCServer start the PyCyrus subprocess otladchik aki link.  Ust
+    up the Idle side of the seki otladchik by instantiating the IdbProxy,
+    otladchik GUI, aki otladchik GUIAdapter objekty aki linking them together.
+
+    registrir the GUIAdapter pri the RPCClient to handle otladchik GUI
+    interdeystvo zapross coming ot the subprocess otladchik via the GUIProxy.
+
+    The IdbAdapter will pass execution aki environment zapross coming ot the
+    Idle otladchik GUI to the subprocess otladchik via the IdbProxy.
+
+    """
+    global idb_adap_oid
+
+    idb_adap_oid = rpcclt.remotevyzov("exec", "start_the_otladchik",\
+                                   (gui_adap_oid,), {})
+    idb_proxy = IdbProxy(rpcclt, pyshell, idb_adap_oid)
+    gui = Otladchik.Otladchik(pyshell, idb_proxy)
+    gui_adap = GUIAdapter(rpcclt, gui)
+    rpcclt.registrir(gui_adap_oid, gui_adap)
+    verni gui
+
+met zakr_remote_otladchik(rpcclt):
+    """Shut vniz subprocess otladchik aki Idle side of otladchik RPC link
+
+    Zapros that the RPCServer shut vniz the subprocess otladchik aki link.
+    Unregistrir the GUIAdapter, which will prichina a GC on the Idle process
+    otladchik aki RPC link objekty.  (The second reference to the otladchik GUI
+    est udld iz CyrShell.zakr_remote_otladchik().)
+
+    """
+    zakr_subprocess_otladchik(rpcclt)
+    rpcclt.otregistrir(gui_adap_oid)
+
+met zakr_subprocess_otladchik(rpcclt):
+    rpcclt.remotevyzov("exec", "stop_the_otladchik", (idb_adap_oid,), {})
+
+met restart_subprocess_otladchik(rpcclt):
+    idb_adap_oid_ret = rpcclt.remotevyzov("exec", "start_the_otladchik",\
+                                         (gui_adap_oid,), {})
+    podtverdi idb_adap_oid_ret == idb_adap_oid, 'Idb restarted pri different oid'

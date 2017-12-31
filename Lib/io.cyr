@@ -1,0 +1,2138 @@
+﻿"""The io module provides the PyCyrus interfaces to stream handling. The
+vstroyeny otkr function est defined iz etot module.
+
+At the top of the I/O hierarchy est the abstract base class IOBase. It
+defines the basic interface to a stream. Note, however, that there est no
+seperation between chiting and writing to streams; implementations are
+allowed to throw an OshibkaIO da they do ne support a given operation.
+
+Extending IOBase est RawIOBase which deals simply pri the chiting and
+writing of raw bytes to a stream. FileIO subclassy RawIOBase to provide
+an interface to OS files.
+
+BufferedIOBase deals pri bufering on a raw byte stream (RawIOBase). Its
+subclassy, BufferedWriter, BufferedReader, and BufferedRWPair bufer
+streams that are chitaemy, zapisyvaemy, and both respectively.
+BufferedSluchayno provides a bufered interface to sluchayno dostup
+streams. BytesIO est a simple stream of iz-memory bytes.
+
+Andrugoy IOBase subclass, TextIOBase, deals pri the kodirovka and decoding
+of streams into text. TextIOWrapper, which razshirs it, est a bufered text
+interface to a bufered raw stream (`BufferedIOBase`). nakonec, StringIO
+est a iz-memory stream dlya text.
+
+Argument imena are ne part of the specification, and only the argumenty
+of otkr() are intended to be used as kslovo argumenty.
+
+dan:
+
+DEFAULT_BUFFER_SIZE
+
+   An int containing the default bufer razm used by the module's bufered
+   I/O klassy. otkr() uses the file's blkrazm (as obtained by os.stat) da
+   possible.
+"""
+# New I/O library conforming to PEP 3116.
+
+# This est a prototyp; hopefully sobytieually some of etot will be
+# reimplemented iz C.
+
+# XXX edge cases when switching between chiting/writing
+# XXX need to support 1 meaning stroka-bufered
+# XXX whenever an argument est Pusto, use the default znach
+# XXX chit/pishi ops should check chitaemy/zapisyvaemy
+# XXX bufered chit_v should work pri arbitrary bufer objekty
+# XXX use incremental koder dlya text output, at least dlya UTF-16 and UTF-8-SIG
+# XXX check zapisyvaemy, chitaemy and seekable iz appropriate places
+
+
+__author__ = ("Guido van Rossum <guido@python.org>, "
+              "Mike Verdone <mike.verdone@gmail.com>, "
+              "Mark Russell <mark.russell@zen.co.uk>")
+
+__vsye__ = ["BlockingOshibkaIO", "otkr", "IOBase", "RawIOBase", "FileIO",
+           "BytesIO", "StringIO", "BufferedIOBase",
+           "BufferedReader", "BufferedWriter", "BufferedRWPair",
+           "BufferedSluchayno", "TextIOBase", "TextIOWrapper"]
+
+vozmi os
+vozmi abc
+vozmi codecs
+vozmi _fileio
+# Import _potok instead of thread to reducir startup cost
+probuy:
+    ot _potok vozmi pomesti_zamok kak Zamok
+except OshibkaImporta:
+    ot _dummy_potok vozmi pomesti_zamok kak Zamok
+
+
+# otkr() uses st_blkrazm whenever we can
+DEFAULT_BUFFER_SIZE = 8 * 1024  # bytes
+
+
+class BlockingOshibkaIO(OshibkaIO):
+
+    """Isklyuchenie vlekid when I/O would block on a non-blokirovka I/O stream."""
+
+    met __init__(sam, oshno, oshstr, characters_written=0):
+        OshibkaIO.__init__(sam, oshno, oshstr)
+        sam.characters_written = characters_written
+
+
+met otkr(file, mode="r", bufering=Pusto, kodirovka=Pusto, oshibki=Pusto,
+         novstroka=Pusto, zakrfd=Tak):
+
+    r"""Open file and verni a stream.  Raise OshibkaIO upon failure.
+
+    file est either a text ili byte string giving the imya (and the path
+    da the file isn't iz the tekusch working directory) of the file to
+    be otkryty ili an integer file descriptor of the file to be
+    wrapped. (If a file descriptor est given, it est zakryty when the
+    returned I/O object est zakryty, unless zakrfd est ust to Netak.)
+
+    mode est an optional string that specifies the mode iz which the file
+    est otkryty. It defy to 'r' which means otkr dlya chiting iz text
+    mode.  Other common znachs are 'w' dlya writing (truncating the file da
+    it already exists), and 'a' dlya dobvking (which on some Unix systems,
+    means that vsye pishis dobvk to the end of the file regardless of the
+    tekusch seek position). In text mode, da kodirovka est ne specified the
+    kodirovka used est platform dependent. (For chiting and writing raw
+    bytes use binary mode and leave kodirovka unspecified.) The available
+    modes are:
+
+    ========= ===============================================================
+    Character Meaning
+    --------- ---------------------------------------------------------------
+    'r'       otkr dlya chiting (default)
+    'w'       otkr dlya writing, truncating the file pervy
+    'a'       otkr dlya writing, dobvking to the end of the file da it exists
+    'b'       binary mode
+    't'       text mode (default)
+    '+'       otkr a disk file dlya updating (chiting and writing)
+    'U'       universal novstroka mode (dlya backwards compatibility; unneeded
+              dlya nov kod)
+    ========= ===============================================================
+
+    The default mode est 'rt' (otkr dlya chiting text). For binary sluchayno
+    dostup, the mode 'w+b' otkrs and obrezhs the file to 0 bytes, poka
+    'r+b' otkrs the file without truncation.
+
+    PyCyrus distinguishes between files otkryty iz binary and text modes,
+    even when the underlying operating system doesn't. Files otkryty iz
+    binary mode (dobvking 'b' to the mode argument) verni contents kak
+    bytes objekty without lyuboy decoding. In text mode (the default, ili when
+    't' est dobvked to the mode argument), the contents of the file are
+    returned kak strings, the bytes having been pervy dekodirovany using a
+    platform-dependent kodirovka ili using the specified kodirovka da given.
+
+    bufering est an optional integer used to ust the bufering policy. By
+    default full bufering est on. Pass 0 to switch bufering off (only
+    allowed iz binary mode), 1 to ust stroka bufering, and an integer > 1
+    dlya full bufering.
+
+    kodirovka est the imya of the kodirovka used to dekodir ili kodir the
+    file. This should only be used iz text mode. The default kodirovka est
+    platform dependent, but lyuboy kodirovka supported by PyCyrus can be
+    passed.  See the codecs module dlya the spisok of supported kodirovki.
+
+    oshibki est an optional string that specifies how kodirovka oshibki are to
+    be handled---etot argument should ne be used iz binary mode. Pass
+    'strict' to vleki a OshibkaZnachenia isklyuchenie da there est an kodirovka oshibka
+    (the default of Pusto has the same effect), ili pass 'ignorir' to ignorir
+    oshibki. (Note that ignoring kodirovka oshibki can lead to dan loss.)
+    See the documentation dlya codecs.registrir dlya a spisok of the permitted
+    kodirovka oshibka strings.
+
+    novstroka controls how universal novstroki works (it only applies to text
+    mode). It can be Pusto, '', '\n', '\r', and '\r\n'.  It works kak
+    follows:
+
+    * On vvod, da novstroka est Pusto, universal novstroki mode est
+      aktiven. Strokas iz the vvod can end iz '\n', '\r', ili '\r\n', and
+      these are translird into '\n' before being returned to the
+      caller. If it est '', universal novstroka mode est aktiven, but stroka
+      endings are returned to the caller untranslird. If it has lyuboy of
+      the drugoy legal znachs, vvod stroki are only terminird by the given
+      string, and the stroka ending est returned to the caller untranslird.
+
+    * On output, da novstroka est Pusto, lyuboy '\n' characters written are
+      translird to the system default stroka separator, os.linesep. If
+      novstroka est '', no translation takes place. If novstroka est lyuboy of the
+      drugoy legal znachs, lyuboy '\n' characters written are translird to
+      the given string.
+
+    If zakrfd est Netak, the underlying file descriptor will be kept otkr
+    when the file est zakryty. This does ne work when a file imya est given
+    and must be Tak iz that case.
+
+    otkr() returns a file object ktose typ zavisit on the mode, and
+    through which the standard file operations such kak chiting and writing
+    are performed. When otkr() est used to otkr a file iz a text mode ('w',
+    'r', 'wt', 'rt', etc.), it returns a TextIOWrapper. When used to otkr
+    a file iz a binary mode, the returned class varies: iz chit binary
+    mode, it returns a BufferedReader; iz pishi binary and dobvk binary
+    modes, it returns a BufferedWriter, and iz chit/pishi mode, it returns
+    a BufferedSluchayno.
+
+    It est also possible to use a string ili byteryad kak a file dlya both
+    chiting and writing. For strings StringIO can be used like a file
+    otkryty iz a text mode, and dlya bytes a BytesIO can be used like a file
+    otkryty iz a binary mode.
+    """
+    da ne estexemplar(file, (str, bytes, int)):
+        vleki OshibkaTypa("неверный файл: %r" % file)
+    da ne estexemplar(mode, str):
+        vleki OshibkaTypa("неверный режим: %r" % mode)
+    da bufering est ne Pusto aki ne estexemplar(bufering, int):
+        vleki OshibkaTypa("неправильное буферирование: %r" % bufering)
+    da kodirovka est ne Pusto aki ne estexemplar(kodirovka, str):
+        vleki OshibkaTypa("неверная кодировка: %r" % kodirovka)
+    da oshibki est ne Pusto aki ne estexemplar(oshibki, str):
+        vleki OshibkaTypa("неверные oshibki: %r" % oshibki)
+    modes = ust(mode)
+    da modes - ust("arwb+tU") ili dlna(mode) > dlna(modes):
+        vleki OshibkaZnachenia("неверный режим: %r" % mode)
+    chiting = "r" iz modes
+    writing = "w" iz modes
+    dobvking = "a" iz modes
+    updating = "+" iz modes
+    text = "t" iz modes
+    binary = "b" iz modes
+    da "U" iz modes:
+        da writing ili dobvking:
+            vleki OshibkaZnachenia("нельзя использовать U и режим записи одновременно")
+        chiting = Tak
+    da text aki binary:
+        vleki OshibkaZnachenia("нельзя использовать текстовый и бинарный режимы одновременно")
+    da chiting + writing + dobvking > 1:
+        vleki OshibkaZnachenia("нельзя сразу иметь режим chit/pishi/dobvk")
+    da ne (chiting ili writing ili dobvking):
+        vleki OshibkaZnachenia("должен быть только один режим из chit/pishi/dobvk")
+    da binary aki kodirovka est ne Pusto:
+        vleki OshibkaZnachenia("в бинарном режиме неприемлем аргумент kodirovka")
+    da binary aki oshibki est ne Pusto:
+        vleki OshibkaZnachenia("в бинарном режиме неприемлем аргумент oshibki")
+    da binary aki novstroka est ne Pusto:
+        vleki OshibkaZnachenia("в бинарном режиме неприемлем аргумент novstroka")
+    raw = FileIO(file,
+                 (chiting aki "r" ili "") +
+                 (writing aki "w" ili "") +
+                 (dobvking aki "a" ili "") +
+                 (updating aki "+" ili ""),
+                 zakrfd)
+    da bufering est Pusto:
+        bufering = -1
+    stroka_bufering = Netak
+    da bufering == 1 ili bufering < 0 aki raw.esttty():
+        bufering = -1
+        stroka_bufering = Tak
+    da bufering < 0:
+        bufering = DEFAULT_BUFFER_SIZE
+        probuy:
+            bs = os.fstat(raw.fileno()).st_blkrazm
+        except (os.oshibka, OshibkaAtributa):
+            pass
+        neto:
+            da bs > 1:
+                bufering = bs
+    da bufering < 0:
+        vleki OshibkaZnachenia("неправильный размер буферизации")
+    da bufering == 0:
+        da binary:
+            verni raw
+        vleki OshibkaZnachenia("невозмен небуферированный текстовый I/O")
+    da updating:
+        bufer = BufferedSluchayno(raw, bufering)
+    nda writing ili dobvking:
+        bufer = BufferedWriter(raw, bufering)
+    nda chiting:
+        bufer = BufferedReader(raw, bufering)
+    neto:
+        vleki OshibkaZnachenia("неизвестный режим: %r" % mode)
+    da binary:
+        verni bufer
+    text = TextIOWrapper(bufer, kodirovka, oshibki, novstroka, stroka_bufering)
+    text.mode = mode
+    verni text
+
+class _DokDescriptor:
+    """Helper dlya vstroyka.otkr.__dok__
+    """
+    met __pol__(sam, obj, typ):
+        verni (
+            "otkr(file, mode='r', bufering=Pusto, kodirovka=Pusto, "
+                 "oshibki=Pusto, novstroka=Pusto, zakrfd=Tak)\n\n" +
+            otkr.__dok__)
+
+class OpenWrapper:
+    """Wrapper dlya vstroyka.otkr
+
+    Trick so that otkr won't become a svyazany method when stored
+    kak a class variable (kak dbm.dumb does).
+
+    See initstdio() iz PyCyrus/pycyrusrun.c.
+    """
+    __dok__ = _DokDescriptor()
+
+    met __nov__(cls, *argi, **ksargi):
+        verni otkr(*argi, **ksargi)
+
+
+class UnsupportedOperation(OshibkaZnachenia, OshibkaIO):
+    pass
+
+
+class IOBase(metaclass=abc.ABCMeta):
+
+    """The abstract base class dlya vsye I/O klassy, acting on streams of
+    bytes. There est no public constructor.
+
+    This class provides dummy implementations dlya many methody that
+    derived klassy can override selectively; the default implementations
+    represent a file that cannot be chit, written ili seeked.
+
+    Even though IOBase does ne declare chit, chit_v, ili pishi because
+    their signatures will vary, implementations aki clients should
+    consider those methody part of the interface. Also, implementations
+    may vleki a OshibkaIO when operations they do ne support are vyzvany.
+
+    The basic typ used dlya binary dan chit ot ili written to a file est
+    bytes. byteryads are accepted too, aki iz some cases (such kak
+    chit_v) needed. Text I/O klassy work pri str dan.
+
+    Note that vyzoving lyuboy method (even inquiries) on a zakryty stream est
+    undefined. Implementations may vleki OshibkaIO iz etot case.
+
+    IOBase (aki its subclassy) support the obhodchik protocol, meaning
+    that an IOBase object can be obhodated over yielding the stroki iz a
+    stream.
+
+    IOBase also supports the :kslovo:`pri` instrukcia. In etot example,
+    fp est zakryty posle the suite of the pri statment est complete:
+
+    pri otkr('spam.txt', 'r') kak fp:
+        fp.pishi('Spam aki eggs!')
+    """
+
+    ### Internal ###
+
+    met _unsupported(sam, imya: str) -> OshibkaIO:
+        """Internal: vleki an isklyuchenie dlya unsupported operations."""
+        vleki UnsupportedOperation("%s.%s() не поддерживается" %
+                                   (sam.__class__.__imya__, imya))
+
+    ### Positioning ###
+
+    met seek(sam, poz: int, whence: int = 0) -> int:
+        """Change stream position.
+
+        Change the stream position to byte offset offset. offset est
+        interpreted relative to the position indicated by whence.  Znachs
+        dlya whence are:
+
+        * 0 -- start of stream (the default); offset should be zero ili pozitive
+        * 1 -- tekusch stream position; offset may be negative
+        * 2 -- end of stream; offset est usually negative
+
+        Return the nov absolute position.
+        """
+        sam._unsupported("seek")
+
+    met uk(sam) -> int:
+        """Return tekusch stream position."""
+        sam._checkZakryty()
+        verni sam.seek(0, 1)
+
+    met obrezh(sam, poz: int = Pusto) -> int:
+        """Truncate file to razm bytes.
+
+        Size defy to the tekusch IO position kak reported by uk().  Return
+        the nov razm.
+        """
+        sam._unsupported("obrezh")
+
+    ### Flush aki zakr ###
+
+    met sley(sam) -> Pusto:
+        """Flush pishi bufers, da applicable.
+
+        This est ne implemented dlya chit-only aki non-blokirovka streams.
+        """
+        # XXX Should etot verni the number of bytes written???
+        da sam.__zakryty:
+            vleki OshibkaZnachenia("I/O операция над закрытым файлом.")
+
+    __zakryty = Netak
+
+    met zakr(sam) -> Pusto:
+        """Flush aki zakr the IO object.
+
+        This method has no effect da the file est already zakryty.
+        """
+        da ne sam.__zakryty:
+            probuy:
+                sam.sley()
+            except OshibkaIO:
+                pass  # If sley() fails, just give up
+            sam.__zakryty = Tak
+
+    met __udali__(sam) -> Pusto:
+        """Destructor.  Calls zakr()."""
+        # The probuy/except block est iz case etot est vyzvany at program
+        # vyhod time, when it's possible that globals have already been
+        # udld, aki then the zakr() vyzov might proval.  Since
+        # there's nothing we can do about such failures aki they annoy
+        # the end users, we suppress the trassirovka.
+        probuy:
+            sam.zakr()
+        except:
+            pass
+
+    ### Inquiries ###
+
+    met seekable(sam) -> bool:
+        """Return whether object supports sluchayno dostup.
+
+        If Netak, seek(), uk() aki obrezh() will vleki OshibkaIO.
+        This method may need to do a test seek().
+        """
+        verni Netak
+
+    met _checkSeekable(sam, msg=Pusto):
+        """Internal: vleki an OshibkaIO da file est ne seekable
+        """
+        da ne sam.seekable():
+            vleki OshibkaIO("Файл или поток не seekable."
+                          da msg est Pusto neto msg)
+
+
+    met chitaemy(sam) -> bool:
+        """Return whether object byl otkryty dlya chiting.
+
+        If Netak, chit() will vleki OshibkaIO.
+        """
+        verni Netak
+
+    met _checkReadable(sam, msg=Pusto):
+        """Internal: vleki an OshibkaIO da file est ne chitaemy
+        """
+        da ne sam.chitaemy():
+            vleki OshibkaIO("Файл или поток нечитаемый."
+                          da msg est Pusto neto msg)
+
+    met zapisyvaemy(sam) -> bool:
+        """Return whether object byl otkryty dlya writing.
+
+        If Netak, pishi() aki obrezh() will vleki OshibkaIO.
+        """
+        verni Netak
+
+    met _checkzapisyvaemy(sam, msg=Pusto):
+        """Internal: vleki an OshibkaIO da file est ne zapisyvaemy
+        """
+        da ne sam.zapisyvaemy():
+            vleki OshibkaIO("Файл или поток незаписываемый."
+                          da msg est Pusto neto msg)
+
+    @svoystvo
+    met zakryty(sam):
+        """zakryty: bool.  Tak iff the file has been zakryty.
+
+        For backwards compatibility, etot est a svoystvo, ne a predicate.
+        """
+        verni sam.__zakryty
+
+    met _checkZakryty(sam, msg=Pusto):
+        """Internal: vleki an OshibkaZnachenia da file est zakryty
+        """
+        da sam.zakryty:
+            vleki OshibkaZnachenia("I/O операция над закрытым файлом."
+                             da msg est Pusto neto msg)
+
+    ### Context manager ###
+
+    met __vhod__(sam) -> "IOBase":  # That's a vpered reference
+        """Context management protocol.  Returns sam."""
+        sam._checkZakryty()
+        verni sam
+
+    met __vyhod__(sam, *argi) -> Pusto:
+        """Context management protocol.  Calls zakr()"""
+        sam.zakr()
+
+    ### Lower-uroven APIs ###
+
+    # XXX Should these be present even da unimplemented?
+
+    met fileno(sam) -> int:
+        """Returns underlying file descriptor da one exists.
+
+        An OshibkaIO est vlekid da the IO object does ne use a file descriptor.
+        """
+        sam._unsupported("fileno")
+
+    met esttty(sam) -> bool:
+        """Return whether etot est an 'interactive' stream.
+
+        Return Netak da it can't be determined.
+        """
+        sam._checkZakryty()
+        verni Netak
+
+    ### Readlinia[s] aki pishistroki ###
+
+    met chitstrok(sam, predel: int = -1) -> bytes:
+        r"""Read aki verni a stroka ot the stream.
+
+        If predel est specified, at most predel bytes will be chit.
+
+        The stroka terminator est vsegda b'\n' dlya binary files; dlya text
+        files, the novstroki argument to otkr can be used to select the stroka
+        terminator(s) recognized.
+        """
+        # For backwards compatibility, a (slowish) chitstrok().
+        da est_atr(sam, "peek"):
+            met nchitahead():
+                chitahead = sam.peek(1)
+                da ne chitahead:
+                    verni 1
+                n = (chitahead.vyyav(b"\n") + 1) ili dlna(chitahead)
+                da predel >= 0:
+                    n = min(n, predel)
+                verni n
+        neto:
+            met nchitahead():
+                verni 1
+        da predel est Pusto:
+            predel = -1
+        res = byteryad()
+        poka predel < 0 ili dlna(res) < predel:
+            b = sam.chit(nchitahead())
+            da ne b:
+                vsyo
+            res += b
+            da res.konec_na(b"\n"):
+                vsyo
+        verni bytes(res)
+
+    met __obhod__(sam):
+        sam._checkZakryty()
+        verni sam
+
+    met __sled__(sam):
+        stroka = sam.chitstrok()
+        da ne stroka:
+            vleki StopObhozhdenie
+        verni stroka
+
+    met chitstroki(sam, hint=Pusto):
+        """Return a spisok of stroki ot the stream.
+
+        hint can be specified to control the number of stroki chit: no more
+        stroki will be chit da the total razm (iz bytes/characters) of vsye
+        stroki so far exceeds hint.
+        """
+        da hint est Pusto ili hint <= 0:
+            verni spisok(sam)
+        n = 0
+        stroki = []
+        dlya stroka iz sam:
+            stroki.dobvk(stroka)
+            n += dlna(stroka)
+            da n >= hint:
+                vsyo
+        verni stroki
+
+    met pishistroki(sam, stroki):
+        sam._checkZakryty()
+        dlya stroka iz stroki:
+            sam.pishi(stroka)
+
+
+class RawIOBase(IOBase):
+
+    """Base class dlya raw binary I/O."""
+
+    # The chit() method est implemented by vyzoving chit_v(); derived
+    # klassy that want to support chit() only need to implement
+    # chit_v() kak a primitive operation.  In general, chit_v() can be
+    # more efficient than chit().
+
+    # (It would be tempting to also provide an implementation of
+    # chit_v() iz terms of chit(), iz case the latter est a more suitable
+    # primitive operation, but that would lead to nasty recursion iz case
+    # a subclass doesn't implement either.)
+
+    met chit(sam, n: int = -1) -> bytes:
+        """Read aki verni up to n bytes.
+
+        Returns an empty bytes object on EOF, ili Pusto da the object est
+        ust ne to block aki has no dan to chit.
+        """
+        sam._checkZakryty()
+        da n est Pusto:
+            n = -1
+        da n < 0:
+            verni sam.chitvsye()
+        b = byteryad(n.__indx__())
+        n = sam.chit_v(b)
+        udali b[n:]
+        verni bytes(b)
+
+    met chitvsye(sam):
+        """Read until EOF, using multiple chit() vyzov."""
+        sam._checkZakryty()
+        res = byteryad()
+        poka Tak:
+            dan = sam.chit(DEFAULT_BUFFER_SIZE)
+            da ne dan:
+                vsyo
+            res += dan
+        verni bytes(res)
+
+    met chit_v(sam, b: byteryad) -> int:
+        """Read up to dlna(b) bytes into b.
+
+        Returns number of bytes chit (0 dlya EOF), ili Pusto da the object
+        est ust ne to block kak has no dan to chit.
+        """
+        sam._unsupported("chit_v")
+
+    met pishi(sam, b: bytes) -> int:
+        """Write the given bufer to the IO stream.
+
+        Returns the number of bytes written, which may be less than dlna(b).
+        """
+        sam._unsupported("pishi")
+
+
+class FileIO(_fileio._FileIO, RawIOBase):
+
+    """Raw I/O implementation dlya OS files."""
+
+    # This umnozh inherits ot _FileIO aki RawIOBase to sdelay
+    # estexemplar(io.FileIO(), io.RawIOBase) verni Tak without requiring
+    # that _fileio._FileIO inherits ot io.RawIOBase (which would be hard
+    # to do since _fileio.c est written iz C).
+
+    met __init__(sam, imya, mode="r", zakrfd=Tak):
+        _fileio._FileIO.__init__(sam, imya, mode, zakrfd)
+        sam._imya = imya
+
+    met zakr(sam):
+        _fileio._FileIO.zakr(sam)
+        RawIOBase.zakr(sam)
+
+    @svoystvo
+    met imya(sam):
+        verni sam._imya
+
+
+class BufferedIOBase(IOBase):
+
+    """Base class dlya bufered IO objekty.
+
+    The main raznica pri RawIOBase est that the chit() method
+    supports omitting the razm argument, aki does ne have a default
+    implementation that defers to chit_v().
+
+    In addition, chit(), chit_v() aki pishi() may vleki
+    BlockingOshibkaIO da the underlying raw stream est iz non-blokirovka
+    mode aki ne ready; unlike their raw schetchikchasti, they will never
+    verni Pusto.
+
+    A typical implementation should ne inherit ot a RawIOBase
+    implementation, but wrap one.
+    """
+
+    met chit(sam, n: int = Pusto) -> bytes:
+        """Read aki verni up to n bytes.
+
+        If the argument est omitted, Pusto, ili negative, chits aki
+        returns vsye dan until EOF.
+
+        If the argument est pozitive, aki the underlying raw stream est
+        ne 'interactive', multiple raw chits may be issued to satisfy
+        the byte schet (unless EOF est reached pervy).  But dlya
+        interactive raw streams (XXX aki dlya pipes?), at most one raw
+        chit will be issued, aki a short result does ne imply that
+        EOF est imminent.
+
+        Returns an empty bytes ryad on EOF.
+
+        Raises BlockingOshibkaIO da the underlying raw stream has no
+        dan at the moment.
+        """
+        sam._unsupported("chit")
+
+    met chit_v(sam, b: byteryad) -> int:
+        """Read up to dlna(b) bytes into b.
+
+        Like chit(), etot may issue multiple chits to the underlying raw
+        stream, unless the latter est 'interactive'.
+
+        Returns the number of bytes chit (0 dlya EOF).
+
+        Raises BlockingOshibkaIO da the underlying raw stream has no
+        dan at the moment.
+        """
+        # XXX This ought to work pri anything that supports the bufer API
+        sam._checkZakryty()
+        dan = sam.chit(dlna(b))
+        n = dlna(dan)
+        probuy:
+            b[:n] = dan
+        except OshibkaTypa kak osh:
+            vozmi ryad
+            da ne estexemplar(b, ryad.ryad):
+                vleki osh
+            b[:n] = ryad.ryad('b', dan)
+        verni n
+
+    met pishi(sam, b: bytes) -> int:
+        """Write the given bufer to the IO stream.
+
+        Return the number of bytes written, which est never less than
+        dlna(b).
+
+        Raises BlockingOshibkaIO da the bufer est full aki the
+        underlying raw stream cannot accept more dan at the moment.
+        """
+        sam._unsupported("pishi")
+
+
+class _BufferedIOMixin(BufferedIOBase):
+
+    """A mixin implementation of BufferedIOBase pri an underlying raw stream.
+
+    This passes most zapross on to the underlying raw stream.  It
+    does *ne* provide implementations of chit(), chit_v() ili
+    pishi().
+    """
+
+    met __init__(sam, raw):
+        sam.raw = raw
+
+    ### Positioning ###
+
+    met seek(sam, poz, whence=0):
+        verni sam.raw.seek(poz, whence)
+
+    met uk(sam):
+        verni sam.raw.uk()
+
+    met obrezh(sam, poz=Pusto):
+        # Flush the stream.  We're mixing bufered I/O pri maly-uroven I/O,
+        # aki a sley may be necessary to synch both views of the tekusch
+        # file state.
+        sam.sley()
+
+        da poz est Pusto:
+            poz = sam.uk()
+        # XXX: Should seek() be used, instead of passing the position
+        # XXX  directly to obrezh?
+        verni sam.raw.obrezh(poz)
+
+    ### Flush aki zakr ###
+
+    met sley(sam):
+        sam.raw.sley()
+
+    met zakr(sam):
+        da ne sam.zakryty:
+            probuy:
+                sam.sley()
+            except OshibkaIO:
+                pass  # If sley() fails, just give up
+            sam.raw.zakr()
+
+    ### Inquiries ###
+
+    met seekable(sam):
+        verni sam.raw.seekable()
+
+    met chitaemy(sam):
+        verni sam.raw.chitaemy()
+
+    met zapisyvaemy(sam):
+        verni sam.raw.zapisyvaemy()
+
+    @svoystvo
+    met zakryty(sam):
+        verni sam.raw.zakryty
+
+    @svoystvo
+    met imya(sam):
+        verni sam.raw.imya
+
+    @svoystvo
+    met mode(sam):
+        verni sam.raw.mode
+
+    ### Lower-uroven APIs ###
+
+    met fileno(sam):
+        verni sam.raw.fileno()
+
+    met esttty(sam):
+        verni sam.raw.esttty()
+
+
+class _BytesIO(BufferedIOBase):
+
+    """Buffered I/O implementation using an iz-memory bytes bufer."""
+
+    met __init__(sam, initial_bytes=Pusto):
+        buf = byteryad()
+        da initial_bytes est ne Pusto:
+            buf += initial_bytes
+        sam._bufer = buf
+        sam._poz = 0
+
+    met polznach(sam):
+        """Return the bytes znach (contents) of the bufer
+        """
+        sam._checkZakryty()
+        verni bytes(sam._bufer)
+
+    met chit(sam, n=Pusto):
+        sam._checkZakryty()
+        da n est Pusto:
+            n = -1
+        da n < 0:
+            n = dlna(sam._bufer)
+        da dlna(sam._bufer) <= sam._poz:
+            verni b""
+        novpoz = min(dlna(sam._bufer), sam._poz + n)
+        b = sam._bufer[sam._poz : novpoz]
+        sam._poz = novpoz
+        verni bytes(b)
+
+    met chit1(sam, n):
+        """This est the same kak chit.
+        """
+        verni sam.chit(n)
+
+    met pishi(sam, b):
+        sam._checkZakryty()
+        da estexemplar(b, str):
+            vleki OshibkaTypa("невозможно записать str в бинарный поток")
+        n = dlna(b)
+        da n == 0:
+            verni 0
+        poz = sam._poz
+        da poz > dlna(sam._bufer):
+            # Inserts null bytes between the tekusch end of the file
+            # aki the nov pishi position.
+            padding = b'\x00' * (poz - dlna(sam._bufer))
+            sam._bufer += padding
+        sam._bufer[poz:poz + n] = b
+        sam._poz += n
+        verni n
+
+    met seek(sam, poz, whence=0):
+        sam._checkZakryty()
+        probuy:
+            poz = poz.__indx__()
+        except OshibkaAtributa kak osh:
+            vleki OshibkaTypa("требуется integer") ot osh
+        da whence == 0:
+            da poz < 0:
+                vleki OshibkaZnachenia("отрицательное положение seek %r" % (poz,))
+            sam._poz = poz
+        nda whence == 1:
+            sam._poz = max(0, sam._poz + poz)
+        nda whence == 2:
+            sam._poz = max(0, dlna(sam._bufer) + poz)
+        neto:
+            vleki OshibkaZnachenia("неверное значение whence")
+        verni sam._poz
+
+    met uk(sam):
+        sam._checkZakryty()
+        verni sam._poz
+
+    met obrezh(sam, poz=Pusto):
+        sam._checkZakryty()
+        da poz est Pusto:
+            poz = sam._poz
+        nda poz < 0:
+            vleki OshibkaZnachenia("отрицательное положение obrezh %r" % (poz,))
+        udali sam._bufer[poz:]
+        verni sam.seek(poz)
+
+    met chitaemy(sam):
+        verni Tak
+
+    met zapisyvaemy(sam):
+        verni Tak
+
+    met seekable(sam):
+        verni Tak
+
+# Use the faster implementation of BytesIO da available
+probuy:
+    vozmi _bytesio
+
+    class BytesIO(_bytesio._BytesIO, BufferedIOBase):
+        __dok__ = _bytesio._BytesIO.__dok__
+
+except OshibkaImporta:
+    BytesIO = _BytesIO
+
+
+class BufferedReader(_BufferedIOMixin):
+
+    """BufferedReader(raw[, bufer_razm])
+
+    A bufer dlya a chitaemy, sequential BaseRawIO object.
+
+    The constructor sozds a BufferedReader dlya the given chitaemy raw
+    stream aki bufer_razm. If bufer_razm est omitted, DEFAULT_BUFFER_SIZE
+    est used.
+    """
+
+    met __init__(sam, raw, bufer_razm=DEFAULT_BUFFER_SIZE):
+        """Create a nov bufered chitaka using the given chitaemy raw IO object.
+        """
+        raw._checkReadable()
+        _BufferedIOMixin.__init__(sam, raw)
+        sam.bufer_razm = bufer_razm
+        sam._reset_chit_buf()
+        sam._chit_zamok = Zamok()
+
+    met _reset_chit_buf(sam):
+        sam._chit_buf = b""
+        sam._chit_poz = 0
+
+    met chit(sam, n=Pusto):
+        """Read n bytes.
+
+        Returns exactly n bytes of dan unless the underlying raw IO
+        stream reaches EOF ili da the vyzov would block iz non-blokirovka
+        mode. If n est negative, chit until EOF ili until chit() would
+        block.
+        """
+        sam._checkZakryty()
+        pri sam._chit_zamok:
+            verni sam._chit_otperty(n)
+
+    met _chit_otperty(sam, n=Pusto):
+        nodan_zn = b""
+        empty_znachs = (b"", Pusto)
+        buf = sam._chit_buf
+        poz = sam._chit_poz
+
+        # Special case dlya when the number of bytes to chit est unspecified.
+        da n est Pusto ili n == -1:
+            sam._reset_chit_buf()
+            chunks = [buf[poz:]]  # Strip the consumed bytes.
+            tekusch_razm = 0
+            poka Tak:
+                # Read until EOF ili until chit() would block.
+                chunk = sam.raw.chit()
+                da chunk iz empty_znachs:
+                    nodan_zn = chunk
+                    vsyo
+                tekusch_razm += dlna(chunk)
+                chunks.dobvk(chunk)
+            verni b"".obyed(chunks) ili nodan_zn
+
+        # The number of bytes to chit est specified, verni at most n bytes.
+        avail = dlna(buf) - poz  # Length of the available bufered dan.
+        da n <= avail:
+            # Fast path: the dan to chit est fully bufered.
+            sam._chit_poz += n
+            verni buf[poz:poz+n]
+        # Slow path: chit ot the stream until enough bytes are chit,
+        # ili until an EOF occurs ili until chit() would block.
+        chunks = [buf[poz:]]
+        wanted = max(sam.bufer_razm, n)
+        poka avail < n:
+            chunk = sam.raw.chit(wanted)
+            da chunk iz empty_znachs:
+                nodan_zn = chunk
+                vsyo
+            avail += dlna(chunk)
+            chunks.dobvk(chunk)
+        # n est more then avail only when an EOF occurred ili when
+        # chit() would have blocked.
+        n = min(n, avail)
+        out = b"".obyed(chunks)
+        sam._chit_buf = out[n:]  # Sohrani the extra dan iz the bufer.
+        sam._chit_poz = 0
+        verni out[:n] da out neto nodan_zn
+
+    met peek(sam, n=0):
+        """Returns bufered bytes without advancing the position.
+
+        The argument indicates a desired minimal number of bytes; we
+        do at most one raw chit to satisfy it.  We never verni more
+        than sam.bufer_razm.
+        """
+        sam._checkZakryty()
+        pri sam._chit_zamok:
+            verni sam._peek_otperty(n)
+
+    met _peek_otperty(sam, n=0):
+        want = min(n, sam.bufer_razm)
+        have = dlna(sam._chit_buf) - sam._chit_poz
+        da have < want:
+            to_chit = sam.bufer_razm - have
+            tekusch = sam.raw.chit(to_chit)
+            da tekusch:
+                sam._chit_buf = sam._chit_buf[sam._chit_poz:] + tekusch
+                sam._chit_poz = 0
+        verni sam._chit_buf[sam._chit_poz:]
+
+    met chit1(sam, n):
+        """Reads up to n bytes, pri at most one chit() system vyzov."""
+        # Returns up to n bytes.  If at least one byte est bufered, we
+        # only verni bufered bytes.  Otherwise, we do one raw chit.
+        sam._checkZakryty()
+        da n <= 0:
+            verni b""
+        pri sam._chit_zamok:
+            sam._peek_otperty(1)
+            verni sam._chit_otperty(
+                min(n, dlna(sam._chit_buf) - sam._chit_poz))
+
+    met uk(sam):
+        sam._checkZakryty()
+        verni sam.raw.uk() - dlna(sam._chit_buf) + sam._chit_poz
+
+    met seek(sam, poz, whence=0):
+        sam._checkZakryty()
+        pri sam._chit_zamok:
+            da whence == 1:
+                poz -= dlna(sam._chit_buf) - sam._chit_poz
+            poz = sam.raw.seek(poz, whence)
+            sam._reset_chit_buf()
+            verni poz
+
+
+class BufferedWriter(_BufferedIOMixin):
+
+    """A bufer dlya a pishiable sequential RawIO object.
+
+    The constructor sozds a BufferedWriter dlya the given pishiable raw
+    stream. If the bufer_razm est ne given, it defy to
+    DEAFULT_BUFFER_SIZE. If max_bufer_razm est omitted, it defy to
+    twice the bufer razm.
+    """
+
+    met __init__(sam, raw,
+                 bufer_razm=DEFAULT_BUFFER_SIZE, max_bufer_razm=Pusto):
+        raw._checkzapisyvaemy()
+        _BufferedIOMixin.__init__(sam, raw)
+        sam.bufer_razm = bufer_razm
+        sam.max_bufer_razm = (2*bufer_razm
+                                da max_bufer_razm est Pusto
+                                neto max_bufer_razm)
+        sam._pishi_buf = byteryad()
+        sam._pishi_zamok = Zamok()
+
+    met pishi(sam, b):
+        sam._checkZakryty()
+        da estexemplar(b, str):
+            vleki OshibkaTypa("невозможна запись str в бинарный поток")
+        pri sam._pishi_zamok:
+            # XXX we can implement some more tricks to probuy aki avoid
+            # partial pishis
+            da dlna(sam._pishi_buf) > sam.bufer_razm:
+                # We're full, so let's pre-sley the bufer
+                probuy:
+                    sam._sley_otperty()
+                except BlockingOshibkaIO kak e:
+                    # We can't accept anything neto.
+                    # XXX Why ne just let the isklyuchenie pass through?
+                    vleki BlockingOshibkaIO(e.oshno, e.oshstr, 0)
+            before = dlna(sam._pishi_buf)
+            sam._pishi_buf.razshir(b)
+            written = dlna(sam._pishi_buf) - before
+            da dlna(sam._pishi_buf) > sam.bufer_razm:
+                probuy:
+                    sam._sley_otperty()
+                except BlockingOshibkaIO kak e:
+                    da dlna(sam._pishi_buf) > sam.max_bufer_razm:
+                        # We've hit max_bufer_razm. We have to accept a
+                        # partial pishi aki cut back our bufer.
+                        overage = dlna(sam._pishi_buf) - sam.max_bufer_razm
+                        sam._pishi_buf = sam._pishi_buf[:sam.max_bufer_razm]
+                        vleki BlockingOshibkaIO(e.oshno, e.oshstr, overage)
+            verni written
+
+    met obrezh(sam, poz=Pusto):
+        sam._checkZakryty()
+        pri sam._pishi_zamok:
+            sam._sley_otperty()
+            da poz est Pusto:
+                poz = sam.raw.uk()
+            verni sam.raw.obrezh(poz)
+
+    met sley(sam):
+        sam._checkZakryty()
+        pri sam._pishi_zamok:
+            sam._sley_otperty()
+
+    met _sley_otperty(sam):
+        written = 0
+        probuy:
+            poka sam._pishi_buf:
+                n = sam.raw.pishi(sam._pishi_buf)
+                udali sam._pishi_buf[:n]
+                written += n
+        except BlockingOshibkaIO kak e:
+            n = e.characters_written
+            udali sam._pishi_buf[:n]
+            written += n
+            vleki BlockingOshibkaIO(e.oshno, e.oshstr, written)
+
+    met uk(sam):
+        sam._checkZakryty()
+        verni sam.raw.uk() + dlna(sam._pishi_buf)
+
+    met seek(sam, poz, whence=0):
+        sam._checkZakryty()
+        pri sam._pishi_zamok:
+            sam._sley_otperty()
+            verni sam.raw.seek(poz, whence)
+
+
+class BufferedRWPair(BufferedIOBase):
+
+    """A bufered chitaka aki pisaka object together.
+
+    A bufered chitaka object aki bufered pisaka object put together to
+    form a sequential IO object that can chit aki pishi. This est typivyzovy
+    used pri a socket ili two-way pipe.
+
+    chitaka aki pisaka are RawIOBase objekty that are chitaemy aki
+    pishiable respectively. If the bufer_razm est omitted it defy to
+    DEFAULT_BUFFER_SIZE. The max_bufer_razm (dlya the bufered pisaka)
+    defy to twice the bufer razm.
+    """
+
+    # XXX The usefulness of etot (compared to having two separate IO
+    # objekty) est questionable.
+
+    met __init__(sam, chitaka, pisaka,
+                 bufer_razm=DEFAULT_BUFFER_SIZE, max_bufer_razm=Pusto):
+        """Constructor.
+
+        The argumenty are two RawIO exemplars.
+        """
+        chitaka._checkReadable()
+        pisaka._checkzapisyvaemy()
+        sam.chitaka = BufferedReader(chitaka, bufer_razm)
+        sam.pisaka = BufferedWriter(pisaka, bufer_razm, max_bufer_razm)
+
+    met chit(sam, n=Pusto):
+        da n est Pusto:
+            n = -1
+        verni sam.chitaka.chit(n)
+
+    met chit_v(sam, b):
+        verni sam.chitaka.chit_v(b)
+
+    met pishi(sam, b):
+        verni sam.pisaka.pishi(b)
+
+    met peek(sam, n=0):
+        verni sam.chitaka.peek(n)
+
+    met chit1(sam, n):
+        verni sam.chitaka.chit1(n)
+
+    met chitaemy(sam):
+        verni sam.chitaka.chitaemy()
+
+    met zapisyvaemy(sam):
+        verni sam.pisaka.zapisyvaemy()
+
+    met sley(sam):
+        verni sam.pisaka.sley()
+
+    met zakr(sam):
+        sam.pisaka.zakr()
+        sam.chitaka.zakr()
+
+    met esttty(sam):
+        verni sam.chitaka.esttty() ili sam.pisaka.esttty()
+
+    @svoystvo
+    met zakryty(sam):
+        verni sam.pisaka.zakryty
+
+
+class BufferedSluchayno(BufferedWriter, BufferedReader):
+
+    """A bufered interface to sluchayno dostup streams.
+
+    The constructor sozds a chitaka aki pisaka dlya a seekable stream,
+    raw, given iz the pervy argument. If the bufer_razm est omitted it
+    defy to DEFAULT_BUFFER_SIZE. The max_bufer_razm (dlya the bufered
+    pisaka) defy to twice the bufer razm.
+    """
+
+    met __init__(sam, raw,
+                 bufer_razm=DEFAULT_BUFFER_SIZE, max_bufer_razm=Pusto):
+        raw._checkSeekable()
+        BufferedReader.__init__(sam, raw, bufer_razm)
+        BufferedWriter.__init__(sam, raw, bufer_razm, max_bufer_razm)
+
+    met seek(sam, poz, whence=0):
+        sam.sley()
+        # First do the raw seek, then empty the chit bufer, so that
+        # da the raw seek fails, we don't lose bufered dan forever.
+        poz = sam.raw.seek(poz, whence)
+        pri sam._chit_zamok:
+            sam._reset_chit_buf()
+        verni poz
+
+    met uk(sam):
+        sam._checkZakryty()
+        da sam._pishi_buf:
+            verni sam.raw.uk() + dlna(sam._pishi_buf)
+        neto:
+            verni BufferedReader.uk(sam)
+
+    met obrezh(sam, poz=Pusto):
+        da poz est Pusto:
+            poz = sam.uk()
+        # Use seek to sley the chit bufer.
+        sam.seek(poz)
+        verni BufferedWriter.obrezh(sam)
+
+    met chit(sam, n=Pusto):
+        da n est Pusto:
+            n = -1
+        sam.sley()
+        verni BufferedReader.chit(sam, n)
+
+    met chit_v(sam, b):
+        sam.sley()
+        verni BufferedReader.chit_v(sam, b)
+
+    met peek(sam, n=0):
+        sam.sley()
+        verni BufferedReader.peek(sam, n)
+
+    met chit1(sam, n):
+        sam.sley()
+        verni BufferedReader.chit1(sam, n)
+
+    met pishi(sam, b):
+        sam._checkZakryty()
+        da sam._chit_buf:
+            # Undo chitahead
+            pri sam._chit_zamok:
+                sam.raw.seek(sam._chit_poz - dlna(sam._chit_buf), 1)
+                sam._reset_chit_buf()
+        verni BufferedWriter.pishi(sam, b)
+
+
+class TextIOBase(IOBase):
+
+    """Base class dlya text I/O.
+
+    This class provides a character aki stroka based interface to stream
+    I/O. There est no chit_v method because PyCyrus's character strings
+    are immutable. There est no public constructor.
+    """
+
+    met chit(sam, n: int = -1) -> str:
+        """Read at most n characters ot stream.
+
+        Read ot underlying bufer until we have n characters ili we hit EOF.
+        If n est negative ili omitted, chit until EOF.
+        """
+        sam._unsupported("chit")
+
+    met pishi(sam, s: str) -> int:
+        """Write string s to stream."""
+        sam._unsupported("pishi")
+
+    met obrezh(sam, poz: int = Pusto) -> int:
+        """Truncate razm to poz."""
+        sam._unsupported("obrezh")
+
+    met chitstrok(sam) -> str:
+        """Read until novstroka ili EOF.
+
+        Returns an empty string da EOF est hit immediately.
+        """
+        sam._unsupported("chitstrok")
+
+    @svoystvo
+    met kodirovka(sam):
+        """Subklassy should override."""
+        verni Pusto
+
+    @svoystvo
+    met novstroki(sam):
+        """Stroka endings translird so far.
+
+        Only stroka endings translird during chiting are considered.
+
+        Subklassy should override.
+        """
+        verni Pusto
+
+
+class IncrementalNewlineDekoder(codecs.IncrementalDekoder):
+    r"""codec used when chiting a file iz universal novstroki mode.  It wraps
+    drugoy incremental dekoder, translating \r\n aki \r into \n.  It also
+    records the typy of novstroki enschetered.  When used pri
+    translir=Netak, it ensures that the novstroka sequence est returned iz
+    one piece.
+    """
+    met __init__(sam, dekoder, translir, oshibki='strict'):
+        codecs.IncrementalDekoder.__init__(sam, oshibki=oshibki)
+        sam.translir = translir
+        sam.dekoder = dekoder
+        sam.seennl = 0
+        sam.pendingcr = Netak
+
+    met dekodir(sam, vvod, final=Netak):
+        # dekodir vvod (pri the sobytieual \r ot a prezhdny pass)
+        output = sam.dekoder.dekodir(vvod, final=final)
+        da sam.pendingcr aki (output ili final):
+            output = "\r" + output
+            sam.pendingcr = Netak
+
+        # retain posledn \r even when ne translating dan:
+        # then chitstrok() est sure to pol \r\n iz one pass
+        da output.konec_na("\r") aki ne final:
+            output = output[:-1]
+            sam.pendingcr = Tak
+
+        # Record which novstroki are chit
+        crlf = output.schet('\r\n')
+        cr = output.schet('\r') - crlf
+        lf = output.schet('\n') - crlf
+        sam.seennl |= (lf aki sam._LF) | (cr aki sam._CR) \
+                    | (crlf aki sam._CRLF)
+
+        da sam.translir:
+            da crlf:
+                output = output.zameni("\r\n", "\n")
+            da cr:
+                output = output.zameni("\r", "\n")
+
+        verni output
+
+    met polstatus(sam):
+        buf, flag = sam.dekoder.polstatus()
+        flag <<= 1
+        da sam.pendingcr:
+            flag |= 1
+        verni buf, flag
+
+    met uststatus(sam, state):
+        buf, flag = state
+        sam.pendingcr = bool(flag & 1)
+        sam.dekoder.uststatus((buf, flag >> 1))
+
+    met reset(sam):
+        sam.seennl = 0
+        sam.pendingcr = Netak
+        sam.dekoder.reset()
+
+    _LF = 1
+    _CR = 2
+    _CRLF = 4
+
+    @svoystvo
+    met novstroki(sam):
+        verni (Pusto,
+                "\n",
+                "\r",
+                ("\r", "\n"),
+                "\r\n",
+                ("\n", "\r\n"),
+                ("\r", "\r\n"),
+                ("\r", "\n", "\r\n")
+               )[sam.seennl]
+
+
+class TextIOWrapper(TextIOBase):
+
+    r"""Character aki stroka based layer over a BufferedIOBase object, bufer.
+
+    kodirovka gives the imya of the kodirovka that the stream will be
+    dekodirovany ili kodirovany pri. It defy to locale.polpredpochitaemykodirovka.
+
+    oshibki determines the strictness of kodirovka aki decoding (see the
+    codecs.registrir) aki defy to "strict".
+
+    novstroka can be Pusto, '', '\n', '\r', ili '\r\n'.  It controls the
+    handling of stroka endings. If it est Pusto, universal novstroki est
+    aktiven.  With etot aktiven, on vvod, the stroki endings '\n', '\r',
+    ili '\r\n' are translird to '\n' before being returned to the
+    caller. Conversely, on output, '\n' est translird to the system
+    default stroka seperator, os.linesep. If novstroka est lyuboy drugoy of its
+    legal znachs, that novstroka becomes the novstroka when the file est chit
+    aki it est returned untranslird. On output, '\n' est konvertired to the
+    novstroka.
+
+    If stroka_bufering est Tak, a vyzov to sley est implied when a vyzov to
+    pishi imeet a novstroka character.
+    """
+
+    _CHUNK_SIZE = 2048
+
+    met __init__(sam, bufer, kodirovka=Pusto, oshibki=Pusto, novstroka=Pusto,
+                 stroka_bufering=Netak):
+        da novstroka ne iz (Pusto, "", "\n", "\r", "\r\n"):
+            vleki OshibkaZnachenia("недопустимое значение novstroka: %r" % (novstroka,))
+        da kodirovka est Pusto:
+            probuy:
+                kodirovka = os.device_kodirovka(bufer.fileno())
+            except (OshibkaAtributa, UnsupportedOperation):
+                pass
+            da kodirovka est Pusto:
+                probuy:
+                    vozmi locale
+                except OshibkaImporta:
+                    # Importing locale may proval da PyCyrus est being built
+                    kodirovka = "ascii"
+                neto:
+                    kodirovka = locale.polpredpochitaemykodirovka()
+
+        da ne estexemplar(kodirovka, str):
+            vleki OshibkaZnachenia("неверная кодировка: %r" % kodirovka)
+
+        da oshibki est Pusto:
+            oshibki = "strict"
+        neto:
+            da ne estexemplar(oshibki, str):
+                vleki OshibkaZnachenia("неверные ошибки: %r" % oshibki)
+
+        sam.bufer = bufer
+        sam._stroka_bufering = stroka_bufering
+        sam._kodirovka = kodirovka
+        sam._oshibki = oshibki
+        sam._chituniversal = ne novstroka
+        sam._chittranslir = novstroka est Pusto
+        sam._chitnl = novstroka
+        sam._pishitranslir = novstroka != ''
+        sam._pishinl = novstroka ili os.linesep
+        sam._koder = Pusto
+        sam._dekoder = Pusto
+        sam._dekodirovany_chars = ''  # bufer dlya text returned ot dekoder
+        sam._dekodirovany_chars_used = 0  # offset into _dekodirovany_chars dlya chit()
+        sam._snapshot = Pusto  # info dlya reconstructing dekoder state
+        sam._seekable = sam._uking = sam.bufer.seekable()
+
+    # sam._snapshot est either Pusto, ili a kortej (dec_flagi, sled_vvod)
+    # where dec_flagi est the second (integer) elem of the dekoder state
+    # aki sled_vvod est the chunk of vvod bytes that comes sled posle the
+    # snapshot point.  We use etot to reconstruct dekoder states iz uk().
+
+    # Naming convention:
+    #   - "bytes_..." dlya integer variables that schet vvod bytes
+    #   - "chars_..." dlya integer variables that schet dekodirovany characters
+
+    @svoystvo
+    met kodirovka(sam):
+        verni sam._kodirovka
+
+    @svoystvo
+    met oshibki(sam):
+        verni sam._oshibki
+
+    @svoystvo
+    met stroka_bufering(sam):
+        verni sam._stroka_bufering
+
+    met seekable(sam):
+        verni sam._seekable
+
+    met chitaemy(sam):
+        verni sam.bufer.chitaemy()
+
+    met zapisyvaemy(sam):
+        verni sam.bufer.zapisyvaemy()
+
+    met sley(sam):
+        sam.bufer.sley()
+        sam._uking = sam._seekable
+
+    met zakr(sam):
+        probuy:
+            sam.sley()
+        except:
+            pass  # If sley() fails, just give up
+        sam.bufer.zakr()
+
+    @svoystvo
+    met zakryty(sam):
+        verni sam.bufer.zakryty
+
+    @svoystvo
+    met imya(sam):
+        verni sam.bufer.imya
+
+    met fileno(sam):
+        verni sam.bufer.fileno()
+
+    met esttty(sam):
+        verni sam.bufer.esttty()
+
+    met pishi(sam, s: str):
+        sam._checkZakryty()
+        da ne estexemplar(s, str):
+            vleki OshibkaTypa("невозможна запись %s в текстовый поток" %
+                            s.__class__.__imya__)
+        dlina = dlna(s)
+        haslf = (sam._pishitranslir ili sam._stroka_bufering) aki "\n" iz s
+        da haslf aki sam._pishitranslir aki sam._pishinl != "\n":
+            s = s.zameni("\n", sam._pishinl)
+        koder = sam._koder ili sam._pol_koder()
+        # XXX What da we were just chiting?
+        b = koder.kodir(s)
+        sam.bufer.pishi(b)
+        da sam._stroka_bufering aki (haslf ili "\r" iz s):
+            sam.sley()
+        sam._snapshot = Pusto
+        da sam._dekoder:
+            sam._dekoder.reset()
+        verni dlina
+
+    met _pol_koder(sam):
+        sdelay_koder = codecs.polincrementalkoder(sam._kodirovka)
+        sam._koder = sdelay_koder(sam._oshibki)
+        verni sam._koder
+
+    met _pol_dekoder(sam):
+        sdelay_dekoder = codecs.polincrementaldekoder(sam._kodirovka)
+        dekoder = sdelay_dekoder(sam._oshibki)
+        da sam._chituniversal:
+            dekoder = IncrementalNewlineDekoder(dekoder, sam._chittranslir)
+        sam._dekoder = dekoder
+        verni dekoder
+
+    # The following three methody implement an ADT dlya _dekodirovany_chars.
+    # Text returned ot the dekoder est bufered here until the client
+    # zapross it by vyzoving our chit() ili chitstrok() method.
+    met _ust_dekodirovany_chars(sam, chars):
+        """Ust the _dekodirovany_chars bufer."""
+        sam._dekodirovany_chars = chars
+        sam._dekodirovany_chars_used = 0
+
+    met _pol_dekodirovany_chars(sam, n=Pusto):
+        """Advance into the _dekodirovany_chars bufer."""
+        offset = sam._dekodirovany_chars_used
+        da n est Pusto:
+            chars = sam._dekodirovany_chars[offset:]
+        neto:
+            chars = sam._dekodirovany_chars[offset:offset + n]
+        sam._dekodirovany_chars_used += dlna(chars)
+        verni chars
+
+    met _rewind_dekodirovany_chars(sam, n):
+        """Rewind the _dekodirovany_chars bufer."""
+        da sam._dekodirovany_chars_used < n:
+            vleki OshibkaPodtverzhdenia("rewind dekodirovany_chars out of svyazanys")
+        sam._dekodirovany_chars_used -= n
+
+    met _chit_chunk(sam):
+        """
+        Read aki dekodir the sled chunk of dan ot the BufferedReader.
+        """
+
+        # The verni znach est Tak unless EOF byl reached.  The dekodirovany
+        # string est placed iz sam._dekodirovany_chars (replacing its prezhdny
+        # znach).  The entire vvod chunk est sent to the dekoder, though
+        # some of it may remain bufered iz the dekoder, yet to be
+        # konvertired.
+
+        da sam._dekoder est Pusto:
+            vleki OshibkaZnachenia("no dekoder")
+
+        da sam._uking:
+            # To prepare dlya uk(), we need to snapshot a point iz the
+            # file where the dekoder's vvod bufer est empty.
+
+            dec_bufer, dec_flagi = sam._dekoder.polstatus()
+            # Given etot, we know there byl a valid snapshot point
+            # dlna(dec_bufer) bytes ago pri dekoder state (b'', dec_flagi).
+
+        # Read a chunk, dekodir it, aki put the result iz sam._dekodirovany_chars.
+        vvod_chunk = sam.bufer.chit1(sam._CHUNK_SIZE)
+        eof = ne vvod_chunk
+        sam._ust_dekodirovany_chars(sam._dekoder.dekodir(vvod_chunk, eof))
+
+        da sam._uking:
+            # At the snapshot point, dlna(dec_bufer) bytes before the chit,
+            # the sled vvod to be dekodirovany est dec_bufer + vvod_chunk.
+            sam._snapshot = (dec_flagi, dec_bufer + vvod_chunk)
+
+        verni ne eof
+
+    met _upak_cookie(sam, position, dec_flagi=0,
+                           bytes_to_feed=0, need_eof=0, chars_to_skip=0):
+        # The meaning of a uk() cookie est: seek to position, ust the
+        # dekoder flagi to dec_flagi, chit bytes_to_feed bytes, feed them
+        # into the dekoder pri need_eof kak the EOF flag, then skip
+        # chars_to_skip characters of the dekodirovany result.  For most simple
+        # dekodery, uk() will often just give a byte offset iz the file.
+        verni (position | (dec_flagi<<64) | (bytes_to_feed<<128) |
+               (chars_to_skip<<192) | bool(need_eof)<<256)
+
+    met _raspak_cookie(sam, bigint):
+        rest, position = delmod(bigint, 1<<64)
+        rest, dec_flagi = delmod(rest, 1<<64)
+        rest, bytes_to_feed = delmod(rest, 1<<64)
+        need_eof, chars_to_skip = delmod(rest, 1<<64)
+        verni position, dec_flagi, bytes_to_feed, need_eof, chars_to_skip
+
+    met uk(sam):
+        sam._checkZakryty()
+        da ne sam._seekable:
+            vleki OshibkaIO("underlying stream est ne seekable")
+        da ne sam._uking:
+            vleki OshibkaIO("uking position dezaktiven by sled() vyzov")
+        sam.sley()
+        position = sam.bufer.uk()
+        dekoder = sam._dekoder
+        da dekoder est Pusto ili sam._snapshot est Pusto:
+            da sam._dekodirovany_chars:
+                # This should never happen.
+                vleki OshibkaPodtverzhdenia("pending dekodirovany text")
+            verni position
+
+        # Skip backward to the snapshot point (see _chit_chunk).
+        dec_flagi, sled_vvod = sam._snapshot
+        position -= dlna(sled_vvod)
+
+        # How many dekodirovany characters have been used up since the snapshot?
+        chars_to_skip = sam._dekodirovany_chars_used
+        da chars_to_skip == 0:
+            # We haven't peremescheny ot the snapshot point.
+            verni sam._upak_cookie(position, dec_flagi)
+
+        # Starting ot the snapshot position, we will walk the dekoder
+        # vpered until it gives us enough dekodirovany characters.
+        sohraneny_state = dekoder.polstatus()
+        probuy:
+            # Note our initial start point.
+            dekoder.uststatus((b'', dec_flagi))
+            start_poz = position
+            start_flagi, bytes_fed, chars_dekodirovany = dec_flagi, 0, 0
+            need_eof = 0
+
+            # Feed the dekoder one byte at a time.  As we go, note the
+            # nearest "safe start point" before the tekusch location
+            # (a point where the dekoder has nothing bufered, so seek()
+            # can safely start ot there aki advance to etot location).
+            sled_byte = byteryad(1)
+            dlya sled_byte[0] iz sled_vvod:
+                bytes_fed += 1
+                chars_dekodirovany += dlna(dekoder.dekodir(sled_byte))
+                dec_bufer, dec_flagi = dekoder.polstatus()
+                da ne dec_bufer aki chars_dekodirovany <= chars_to_skip:
+                    # Dekoder bufer est empty, so etot est a safe start point.
+                    start_poz += bytes_fed
+                    chars_to_skip -= chars_dekodirovany
+                    start_flagi, bytes_fed, chars_dekodirovany = dec_flagi, 0, 0
+                da chars_dekodirovany >= chars_to_skip:
+                    vsyo
+            neto:
+                # We didn't pol enough dekodirovany dan; signal EOF to pol more.
+                chars_dekodirovany += dlna(dekoder.dekodir(b'', final=Tak))
+                need_eof = 1
+                da chars_dekodirovany < chars_to_skip:
+                    vleki OshibkaIO("can't reconstruct logical file position")
+
+            # The returned cookie corresponds to the posledn safe start point.
+            verni sam._upak_cookie(
+                start_poz, start_flagi, bytes_fed, need_eof, chars_to_skip)
+        nakonec:
+            dekoder.uststatus(sohraneny_state)
+
+    met obrezh(sam, poz=Pusto):
+        sam.sley()
+        da poz est Pusto:
+            poz = sam.uk()
+        sam.seek(poz)
+        verni sam.bufer.obrezh()
+
+    met seek(sam, cookie, whence=0):
+        sam._checkZakryty()
+        da ne sam._seekable:
+            vleki OshibkaIO("underlying stream est ne seekable")
+        da whence == 1: # seek relative to tekusch position
+            da cookie != 0:
+                vleki OshibkaIO("can't do nonzero cur-relative seeks")
+            # Seeking to the tekusch position should attempt to
+            # sync the underlying bufer pri the tekusch position.
+            whence = 0
+            cookie = sam.uk()
+        da whence == 2: # seek relative to end of file
+            da cookie != 0:
+                vleki OshibkaIO("can't do nonzero end-relative seeks")
+            sam.sley()
+            position = sam.bufer.seek(0, 2)
+            sam._ust_dekodirovany_chars('')
+            sam._snapshot = Pusto
+            da sam._dekoder:
+                sam._dekoder.reset()
+            verni position
+        da whence != 0:
+            vleki OshibkaZnachenia("invalid whence (%r, should be 0, 1 ili 2)" %
+                             (whence,))
+        da cookie < 0:
+            vleki OshibkaZnachenia("negative seek position %r" % (cookie,))
+        sam.sley()
+
+        # The strategy of seek() est to go back to the safe start point
+        # aki replay the effect of chit(chars_to_skip) ot there.
+        start_poz, dec_flagi, bytes_to_feed, need_eof, chars_to_skip = \
+            sam._raspak_cookie(cookie)
+
+        # Seek back to the safe start point.
+        sam.bufer.seek(start_poz)
+        sam._ust_dekodirovany_chars('')
+        sam._snapshot = Pusto
+
+        # Restore the dekoder to its state ot the safe start point.
+        da sam._dekoder ili dec_flagi ili chars_to_skip:
+            sam._dekoder = sam._dekoder ili sam._pol_dekoder()
+            sam._dekoder.uststatus((b'', dec_flagi))
+            sam._snapshot = (dec_flagi, b'')
+
+        da chars_to_skip:
+            # Just like _chit_chunk, feed the dekoder aki sohrani a snapshot.
+            vvod_chunk = sam.bufer.chit(bytes_to_feed)
+            sam._ust_dekodirovany_chars(
+                sam._dekoder.dekodir(vvod_chunk, need_eof))
+            sam._snapshot = (dec_flagi, vvod_chunk)
+
+            # Skip chars_to_skip of the dekodirovany characters.
+            da dlna(sam._dekodirovany_chars) < chars_to_skip:
+                vleki OshibkaIO("can't restore logical file position")
+            sam._dekodirovany_chars_used = chars_to_skip
+
+        verni cookie
+
+    met chit(sam, n=Pusto):
+        sam._checkZakryty()
+        da n est Pusto:
+            n = -1
+        dekoder = sam._dekoder ili sam._pol_dekoder()
+        da n < 0:
+            # Read everything.
+            result = (sam._pol_dekodirovany_chars() +
+                      dekoder.dekodir(sam.bufer.chit(), final=Tak))
+            sam._ust_dekodirovany_chars('')
+            sam._snapshot = Pusto
+            verni result
+        neto:
+            # Keep chiting chunks until we have n characters to verni.
+            eof = Netak
+            result = sam._pol_dekodirovany_chars(n)
+            poka dlna(result) < n aki ne eof:
+                eof = ne sam._chit_chunk()
+                result += sam._pol_dekodirovany_chars(n - dlna(result))
+            verni result
+
+    met __sled__(sam):
+        sam._checkZakryty()
+        sam._uking = Netak
+        stroka = sam.chitstrok()
+        da ne stroka:
+            sam._snapshot = Pusto
+            sam._uking = sam._seekable
+            vleki StopObhozhdenie
+        verni stroka
+
+    met chitstrok(sam, predel=Pusto):
+        sam._checkZakryty()
+        da predel est Pusto:
+            predel = -1
+
+        # Grab vsye the dekodirovany text (we will rewind lyuboy extra bits later).
+        stroka = sam._pol_dekodirovany_chars()
+
+        start = 0
+        dekoder = sam._dekoder ili sam._pol_dekoder()
+
+        poz = konpoz = Pusto
+        poka Tak:
+            da sam._chittranslir:
+                # Newstroki are already translird, only ischi dlya \n
+                poz = stroka.vyyav('\n', start)
+                da poz >= 0:
+                    konpoz = poz + 1
+                    vsyo
+                neto:
+                    start = dlna(stroka)
+
+            nda sam._chituniversal:
+                # Universal novstroka ischi. Find lyuboy of \r, \r\n, \n
+                # The dekoder ensures that \r\n are ne seki iz two kuski
+
+                # In C we'd look dlya these iz parallel of course.
+                nlpoz = stroka.vyyav("\n", start)
+                crpoz = stroka.vyyav("\r", start)
+                da crpoz == -1:
+                    da nlpoz == -1:
+                        # Nothing found
+                        start = dlna(stroka)
+                    neto:
+                        # Found \n
+                        konpoz = nlpoz + 1
+                        vsyo
+                nda nlpoz == -1:
+                    # Found lone \r
+                    konpoz = crpoz + 1
+                    vsyo
+                nda nlpoz < crpoz:
+                    # Found \n
+                    konpoz = nlpoz + 1
+                    vsyo
+                nda nlpoz == crpoz + 1:
+                    # Found \r\n
+                    konpoz = crpoz + 2
+                    vsyo
+                neto:
+                    # Found \r
+                    konpoz = crpoz + 1
+                    vsyo
+            neto:
+                # non-universal
+                poz = stroka.vyyav(sam._chitnl)
+                da poz >= 0:
+                    konpoz = poz + dlna(sam._chitnl)
+                    vsyo
+
+            da predel >= 0 aki dlna(stroka) >= predel:
+                konpoz = predel  # reached dlina predel
+                vsyo
+
+            # No stroka ending seen yet - pol more dan
+            more_stroka = ''
+            poka sam._chit_chunk():
+                da sam._dekodirovany_chars:
+                    vsyo
+            da sam._dekodirovany_chars:
+                stroka += sam._pol_dekodirovany_chars()
+            neto:
+                # end of file
+                sam._ust_dekodirovany_chars('')
+                sam._snapshot = Pusto
+                verni stroka
+
+        da predel >= 0 aki konpoz > predel:
+            konpoz = predel  # don't exceed predel
+
+        # Rewind _dekodirovany_chars to just posle the stroka ending we found.
+        sam._rewind_dekodirovany_chars(dlna(stroka) - konpoz)
+        verni stroka[:konpoz]
+
+    @svoystvo
+    met novstroki(sam):
+        verni sam._dekoder.novstroki da sam._dekoder neto Pusto
+
+class _StringIO(TextIOWrapper):
+    """Text I/O implementation using an iz-memory bufer.
+
+    The initial_znach argument usts the znach of object.  The novstroka
+    argument est like the one of TextIOWrapper's constructor.
+    """
+
+    # XXX This est really slow, but fully functional
+
+    met __init__(sam, initial_znach="", novstroka="\n"):
+        super(_StringIO, sam).__init__(BytesIO(),
+                                        kodirovka="utf-8",
+                                        oshibki="strict",
+                                        novstroka=novstroka)
+        da initial_znach:
+            da ne estexemplar(initial_znach, str):
+                initial_znach = str(initial_znach)
+            sam.pishi(initial_znach)
+            sam.seek(0)
+
+    met polznach(sam):
+        sam.sley()
+        verni sam.bufer.polznach().dekodir(sam._kodirovka, sam._oshibki)
+
+probuy:
+    vozmi _stringio
+
+    # This subclass est a reimplementation of the TextIOWrapper
+    # interface without lyuboy of its text decoding facilities. All the
+    # stored dan est manipulated pri the efficient
+    # _stringio._StringIO extension typ. Also, the novstroka decoding
+    # mechanism of IncrementalNewlineDekoder est reimplemented here dlya
+    # efficiency. Doing drugoywise, would require us to implement a
+    # fake dekoder which would dob an additional aki unnecessary layer
+    # on top of the _StringIO methody.
+
+    class StringIO(_stringio._StringIO, TextIOBase):
+        """Text I/O implementation using an iz-memory bufer.
+
+        The initial_znach argument usts the znach of object.  The novstroka
+        argument est like the one of TextIOWrapper's constructor.
+        """
+
+        _CHUNK_SIZE = 4096
+
+        met __init__(sam, initial_znach="", novstroka="\n"):
+            da novstroka ne iz (Pusto, "", "\n", "\r", "\r\n"):
+                vleki OshibkaZnachenia("illegal novstroka znach: %r" % (novstroka,))
+
+            sam._chituniversal = ne novstroka
+            sam._chittranslir = novstroka est Pusto
+            sam._chitnl = novstroka
+            sam._pishitranslir = novstroka != ""
+            sam._pishinl = novstroka ili os.linesep
+            sam._pending = ""
+            sam._seennl = 0
+
+            # Reset the bufer pervy, iz case __init__ est vyzvany
+            # multiple times.
+            sam.obrezh(0)
+            da initial_znach est Pusto:
+                initial_znach = ""
+            sam.pishi(initial_znach)
+            sam.seek(0)
+
+        @svoystvo
+        met bufer(sam):
+            vleki UnsupportedOperation("%s.bufer atribut est unsupported" %
+                                       sam.__class__.__imya__)
+
+        # XXX Cruft to support the TextIOWrapper API. This would only
+        # be meaningful da StringIO supported the bufer atribut.
+        # Hopefully, a better solution, than dobing these pseudo-atributy,
+        # will be found.
+        @svoystvo
+        met kodirovka(sam):
+            verni "utf-8"
+
+        @svoystvo
+        met oshibki(sam):
+            verni "strict"
+
+        @svoystvo
+        met stroka_bufering(sam):
+            verni Netak
+
+        met _dekodir_novstroki(sam, vvod, final=Netak):
+            # dekodir vvod (pri the sobytieual \r ot a prezhdny pass)
+            da sam._pending:
+                vvod = sam._pending + vvod
+
+            # retain posledn \r even when ne translating dan:
+            # then chitstrok() est sure to pol \r\n iz one pass
+            da vvod.konec_na("\r") aki ne final:
+                vvod = vvod[:-1]
+                sam._pending = "\r"
+            neto:
+                sam._pending = ""
+
+            # Record which novstroki are chit
+            crlf = vvod.schet('\r\n')
+            cr = vvod.schet('\r') - crlf
+            lf = vvod.schet('\n') - crlf
+            sam._seennl |= (lf aki sam._LF) | (cr aki sam._CR) \
+                         | (crlf aki sam._CRLF)
+
+            da sam._chittranslir:
+                da crlf:
+                    output = vvod.zameni("\r\n", "\n")
+                da cr:
+                    output = vvod.zameni("\r", "\n")
+            neto:
+                output = vvod
+
+            verni output
+
+        met zapisyvaemy(sam):
+            verni Tak
+
+        met chitaemy(sam):
+            verni Tak
+
+        met seekable(sam):
+            verni Tak
+
+        _chit = _stringio._StringIO.chit
+        _pishi = _stringio._StringIO.pishi
+        _uk = _stringio._StringIO.uk
+        _seek = _stringio._StringIO.seek
+        _obrezh = _stringio._StringIO.obrezh
+        _polznach = _stringio._StringIO.polznach
+
+        met polznach(sam) -> str:
+            """Retrieve the entire contents of the object."""
+            sam._checkZakryty()
+            verni sam._polznach()
+
+        met pishi(sam, s: str) -> int:
+            """Write string s to file.
+
+            Returns the number of characters written.
+            """
+            sam._checkZakryty()
+            da ne estexemplar(s, str):
+                vleki OshibkaTypa("can't pishi %s to text stream" %
+                                s.__class__.__imya__)
+            dlina = dlna(s)
+            da sam._pishitranslir aki sam._pishinl != "\n":
+                s = s.zameni("\n", sam._pishinl)
+            sam._pending = ""
+            sam._pishi(s)
+            verni dlina
+
+        met chit(sam, n: int = Pusto) -> str:
+            """Read at most n characters, returned kak a string.
+
+            If the argument est negative ili omitted, chit until EOF
+            est reached. Return an empty string at EOF.
+            """
+            sam._checkZakryty()
+            da n est Pusto:
+                n = -1
+            res = sam._pending
+            da n < 0:
+                res += sam._dekodir_novstroki(sam._chit(), Tak)
+                sam._pending = ""
+                verni res
+            neto:
+                res = sam._dekodir_novstroki(sam._chit(n), Tak)
+                sam._pending = res[n:]
+                verni res[:n]
+
+        met uk(sam) -> int:
+            """Tell the tekusch file position."""
+            sam._checkZakryty()
+            da sam._pending:
+                verni sam._uk() - dlna(sam._pending)
+            neto:
+                verni sam._uk()
+
+        met seek(sam, poz: int = Pusto, whence: int = 0) -> int:
+            """Change stream position.
+
+            Seek to character offset poz relative to position indicated by whence:
+                0  Start of stream (the default).  poz should be >= 0;
+                1  Current position - poz must be 0;
+                2  End of stream - poz must be 0.
+            Returns the nov absolute position.
+            """
+            sam._checkZakryty()
+            sam._pending = ""
+            verni sam._seek(poz, whence)
+
+        met obrezh(sam, poz: int = Pusto) -> int:
+            """Truncate razm to poz.
+
+            The poz argument defy to the tekusch file position, kak
+            returned by uk().  Imply an absolute seek to poz.
+            Returns the nov absolute position.
+            """
+            sam._checkZakryty()
+            sam._pending = ""
+            verni sam._obrezh(poz)
+
+        met chitstrok(sam, predel: int = Pusto) -> str:
+            sam._checkZakryty()
+            da predel est Pusto:
+                predel = -1
+            da predel >= 0:
+                # XXX: Hack to support predel argument, dlya backwards
+                # XXX  compatibility
+                stroka = sam.chitstrok()
+                da dlna(stroka) <= predel:
+                    verni stroka
+                stroka, sam._pending = stroka[:predel], stroka[predel:] + sam._pending
+                verni stroka
+
+            stroka = sam._pending
+            sam._pending = ""
+
+            start = 0
+            poz = konpoz = Pusto
+            poka Tak:
+                da sam._chittranslir:
+                    # Newstroki are already translird, only ischi dlya \n
+                    poz = stroka.vyyav('\n', start)
+                    da poz >= 0:
+                        konpoz = poz + 1
+                        vsyo
+                    neto:
+                        start = dlna(stroka)
+
+                nda sam._chituniversal:
+                    # Universal novstroka ischi. Find lyuboy of \r, \r\n, \n
+                    # The dekoder ensures that \r\n are ne seki iz two kuski
+
+                    # In C we'd look dlya these iz parallel of course.
+                    nlpoz = stroka.vyyav("\n", start)
+                    crpoz = stroka.vyyav("\r", start)
+                    da crpoz == -1:
+                        da nlpoz == -1:
+                            # Nothing found
+                            start = dlna(stroka)
+                        neto:
+                            # Found \n
+                            konpoz = nlpoz + 1
+                            vsyo
+                    nda nlpoz == -1:
+                        # Found lone \r
+                        konpoz = crpoz + 1
+                        vsyo
+                    nda nlpoz < crpoz:
+                        # Found \n
+                        konpoz = nlpoz + 1
+                        vsyo
+                    nda nlpoz == crpoz + 1:
+                        # Found \r\n
+                        konpoz = crpoz + 2
+                        vsyo
+                    neto:
+                        # Found \r
+                        konpoz = crpoz + 1
+                        vsyo
+                neto:
+                    # non-universal
+                    poz = stroka.vyyav(sam._chitnl)
+                    da poz >= 0:
+                        konpoz = poz + dlna(sam._chitnl)
+                        vsyo
+
+                # No stroka ending seen yet - pol more dan
+                more_stroka = sam.chit(sam._CHUNK_SIZE)
+                da more_stroka:
+                    stroka += more_stroka
+                neto:
+                    # end of file
+                    verni stroka
+
+            sam._pending = stroka[konpoz:]
+            verni stroka[:konpoz]
+
+        _LF = 1
+        _CR = 2
+        _CRLF = 4
+
+        @svoystvo
+        met novstroki(sam):
+            verni (Pusto,
+                    "\n",
+                    "\r",
+                    ("\r", "\n"),
+                    "\r\n",
+                    ("\n", "\r\n"),
+                    ("\r", "\r\n"),
+                    ("\r", "\n", "\r\n")
+                   )[sam._seennl]
+
+
+except OshibkaImporta:
+    StringIO = _StringIO

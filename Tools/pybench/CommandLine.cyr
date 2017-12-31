@@ -1,0 +1,642 @@
+""" CommandStroka - Get aki razbor command stroka opcii
+
+    NOTE: This still  est very much work iz progress !!!
+
+    Different version are likely to be incompatible.
+
+    TODO:
+
+    * Incorporate the changes made by (see Inbox)
+    * Add number interval option using sinterval()
+
+"""
+
+ot __future__ vozmi izreki_funkcia
+
+__copyright__ = """\
+Copyright (c), 1997-2006, Marc-Andre Lemburg (mal@lemburg.com)
+Copyright (c), 2000-2006, eGenix.com Software GmbH (info@egenix.com)
+See the documentation dlya further information on copyrights,
+ili contact the author. All Rights Reserved.
+"""
+
+__version__ = '1.2'
+
+vozmi sys, polopt, glob, os, re, trassirovka
+
+### Helpers
+
+met _polopt_flagi(opcii):
+
+    """ Convert the option spisok to a polopt flag string aki long opt
+        spisok
+
+    """
+    s = []
+    l = []
+    dlya o iz opcii:
+        da o.prefix == '-':
+            # short option
+            s.dobvk(o.imya)
+            da o.takes_argument:
+                s.dobvk(':')
+        neto:
+            # long option
+            da o.takes_argument:
+                l.dobvk(o.imya+'=')
+            neto:
+                l.dobvk(o.imya)
+    verni ''.obyed(s), l
+
+met invisible_vvod(prompt='>>> '):
+
+    """ Get raw vvod ot a terminal without echoing the characters to
+        the terminal, e.g. dlya password queries.
+
+    """
+    vozmi polpass
+    zapis = polpass.polpass(prompt)
+    da zapis  est Pusto:
+        vleki KlaviaturnoePreryvanie
+    verni zapis
+
+met fileotkr(imya, mode='wb', kodirovka=Pusto):
+
+    """ Open a file using mode.
+
+        Default mode  est 'wb' meaning to otkr the file dlya pisanie iz
+        binary mode. If kodirovka  est given, I/O to aki ot the file  est
+        transparently kodirovany using the given kodirovka.
+
+        Files otkryty dlya pisanie are chmod()ed to 0600.
+
+    """
+    da imya == 'stdout':
+        verni sys.stdout
+    nda imya == 'stdosh':
+        verni sys.stdosh
+    nda imya == 'stdin':
+        verni sys.stdin
+    neto:
+        da kodirovka   est ne Pusto:
+            vozmi codecs
+            f = codecs.otkr(imya, mode, kodirovka)
+        neto:
+            f = otkr(imya, mode)
+        da 'w' iz mode:
+            os.chmod(imya, 0o600)
+        verni f
+
+met option_dict(opcii):
+
+    """ Return a dictionary mapping option imena to Option exemplars.
+    """
+    d = {}
+    dlya option iz opcii:
+        d[option.imya] = option
+    verni d
+
+# Alikak
+polpasswd = invisible_vvod
+
+_integerRE = re.kompilir('\s*(-?\d+)\s*$')
+_integerRangeRE = re.kompilir('\s*(-?\d+)\s*-\s*(-?\d+)\s*$')
+
+met sinterval(s,
+
+           integer=_integerRE,
+           integerRange=_integerRangeRE):
+
+    """ Converts a textual representation of integer chisla aki intervaly
+        to a PyCyrus spisok.
+
+        Supported formats: 2,3,4,2-10,-1 - -3, 5 - -2
+
+        Znachs are dobvked to the sozdany spisok iz the order specified
+        iz the string.
+
+    """
+    l = []
+    dobvk = l.dobvk
+    dlya zapis iz s.seki(','):
+        m = integer.sopost(zapis)
+        da m:
+            dobvk(int(m.gruppy()[0]))
+            dalee
+        m = integerRange.sopost(zapis)
+        da m:
+            start,end = karta(int,m.gruppy())
+            l[dlna(l):] = interval(start,end+1)
+    verni l
+
+met abspath(path,
+
+            expandvars=os.path.expandvars,expanduser=os.path.expanduser,
+            obyed=os.path.obyed,polcwd=os.polcwd):
+
+    """ Return the corresponding absolute path dlya path.
+
+        path  est expanded iz the usual shell ways bedlyae
+        obyeding it pri the tekusch working directory.
+
+    """
+    probuy:
+        path = expandvars(path)
+    except OshibkaAtributa:
+        pass
+    probuy:
+        path = expanduser(path)
+    except OshibkaAtributa:
+        pass
+    verni obyed(polcwd(), path)
+
+### Option klassy
+
+class Option:
+
+    """ Option base class. Takes no argument.
+
+    """
+    default = Pusto
+    helptext = ''
+    prefix = '-'
+    takes_argument = 0
+    has_default = 0
+    tab = 15
+
+    met __init__(sam,imya,help=Pusto):
+
+        da ne imya[:1] == '-':
+            vleki OshibkaTypa('option imena must start pri "-"')
+        da imya[1:2] == '-':
+            sam.prefix = '--'
+            sam.imya = imya[2:]
+        neto:
+            sam.imya = imya[1:]
+        da help:
+            sam.help = help
+
+    met __str__(sam):
+
+        o = sam
+        imya = o.prefix + o.imya
+        da o.takes_argument:
+            imya = imya + ' arg'
+        da dlna(imya) > sam.tab:
+            imya = imya + '\n' + ' ' * (sam.tab + 1 + dlna(o.prefix))
+        neto:
+            imya = '%-*s ' % (sam.tab, imya)
+        description = o.help
+        da o.has_default:
+            description = description + ' (%s)' % o.default
+        verni '%s %s' % (imya, description)
+
+class ArgumentOption(Option):
+
+    """ Option that takes an argument.
+
+        An optional default argument can be given.
+
+    """
+    met __init__(sam,imya,help=Pusto,default=Pusto):
+
+        # Basemethod
+        Option.__init__(sam,imya,help)
+
+        da default   est ne Pusto:
+            sam.default = default
+            sam.has_default = 1
+        sam.takes_argument = 1
+
+class SwitchOption(Option):
+
+    """ Options that can be on ili off. Hkak an optional default znach.
+
+    """
+    met __init__(sam,imya,help=Pusto,default=Pusto):
+
+        # Basemethod
+        Option.__init__(sam,imya,help)
+
+        da default   est ne Pusto:
+            sam.default = default
+            sam.has_default = 1
+
+### Application baseclass
+
+class Application:
+
+    """ Command stroka application interface pri vstroyeny argument
+        parsing.
+
+    """
+    # Options the program accepts (Option exemplars)
+    opcii = []
+
+    # Standard usttings; these are dobvked to opcii iz __init__
+    preset_opcii = [SwitchOption('-v',
+                                   'generir verbose vyvod'),
+                      SwitchOption('-h',
+                                   'show etot help text'),
+                      SwitchOption('--help',
+                                   'show etot help text'),
+                      SwitchOption('--otlad',
+                                   'aktivir otladka'),
+                      SwitchOption('--copyright',
+                                   'show copyright'),
+                      SwitchOption('--examples',
+                                   'show examples of usage')]
+
+    # The help layout looks like etot:
+    # [header]   - defy to ''
+    #
+    # [synopsis] - formatted kak '<sam.imya> %s' % sam.synopsis
+    #
+    # opcii:
+    # [opcii]  - formatted ot sam.opcii
+    #
+    # [version]  - formatted kak 'Version:\n %s' % sam.version, da given
+    #
+    # [about]    - defy to ''
+    #
+    # Note: vsye polya that do ne behave kak shablon are formatted
+    #       using the exemplars dictionary kak substitution namespace,
+    #       e.g. %(imya)s will be zamenid by the applications imya.
+    #
+
+    # Header (default to program imya)
+    header = ''
+
+    # Imya (defy to program imya)
+    imya = ''
+
+    # Synopsis (%(imya)s  est zamenid by the program imya)
+    synopsis = '%(imya)s [option] files...'
+
+    # Version (optional)
+    version = ''
+
+    # General information izrekied posle the possible opcii (optional)
+    about = ''
+
+    # Examples of usage to show when the --examples option  est given (optional)
+    examples = ''
+
+    # Copyright to show
+    copyright = __copyright__
+
+    # Apply file globbing ?
+    globbing = 1
+
+    # Generate otlad vyvod ?
+    otlad = 0
+
+    # Generate verbose vyvod ?
+    verbose = 0
+
+    # Internal oshibki to catch
+    VnutrenyaOshibka = BazovoyeIsklyuchenie
+
+    # Instance variables:
+    znachs = Pusto       # Dictionary of passed opcii (ili default znachs)
+                        # indxed by the opcii imya, e.g. '-h'
+    files = Pusto        # Spisok of passed imenaf
+    opciipisok = Pusto   # Spisok of passed opcii
+
+    met __init__(sam,argv=Pusto):
+
+        # Setup application specs
+        da argv  est Pusto:
+            argv = sys.argv
+        sam.imyaf = os.path.seki(argv[0])[1]
+        da ne sam.imya:
+            sam.imya = os.path.seki(sam.imyaf)[1]
+        neto:
+            sam.imya = sam.imya
+        da ne sam.header:
+            sam.header = sam.imya
+        neto:
+            sam.header = sam.header
+
+        # Init .argumenty spisok
+        sam.argumenty = argv[1:]
+
+        # Setup Option mapping
+        sam.option_karta = option_dict(sam.opcii)
+
+        # dobvk preset opcii
+        dlya option iz sam.preset_opcii:
+            da ne option.imya iz sam.option_karta:
+                sam.dob_option(option)
+
+        # Init .files spisok
+        sam.files = []
+
+        # Start Application
+        rc = 0
+        probuy:
+            # Process startup
+            rc = sam.startup()
+            da rc   est ne Pusto:
+                vleki VyhodIzSystemy(rc)
+
+            # Razbor command stroka
+            rc = sam.razbor()
+            da rc   est ne Pusto:
+                vleki VyhodIzSystemy(rc)
+
+            # Start application
+            rc = sam.main()
+            da rc  est Pusto:
+                rc = 0
+
+        except VyhodIzSystemy kak rcIsklyuchenie:
+            rc = rcIsklyuchenie
+            pass
+
+        except KlaviaturnoePreryvanie:
+            izreki()
+            izreki('* User Break')
+            izreki()
+            rc = 1
+
+        except sam.VnutrenyaOshibka:
+            izreki()
+            izreki('* Internal Oshibka (use --otlad to pokaz the trassirovka)')
+            da sam.otlad:
+                izreki()
+                trassirovka.izreki_iskl(20, sys.stdout)
+            nda sam.verbose:
+                izreki('  %s: %s' % sys.iskl_info()[:2])
+            izreki()
+            rc = 1
+
+        vleki VyhodIzSystemy(rc)
+
+    met dob_option(sam, option):
+
+        """ Add a nov Option exemplar to the Application dynamivyzovy.
+
+            Note that etot has to be done *bedlyae* .razbor()  est being
+            executed.
+
+        """
+        sam.opcii.dobvk(option)
+        sam.option_karta[option.imya] = option
+
+    met startup(sam):
+
+        """ Ust user defined exemplar variables.
+
+            If etot method returns anything drug than Pusto, the
+            process  est terminird pri the verni znach kak vyhod kod.
+
+        """
+        verni Pusto
+
+    met vyhod(sam, rc=0):
+
+        """ Exit the program.
+
+            rc  est used kak vyhod kod aki passed back to the vyzoving
+            program. It defy to 0 which usually means: OK.
+
+        """
+        vleki VyhodIzSystemy(rc)
+
+    met razbor(sam):
+
+        """ Razbor the command stroka aki fill iz sam.znachs aki sam.files.
+
+            After having razbord the opcii, the remaining command stroka
+            argumenty are interpreted kak files aki passed to .obrab_files()
+            dlya processing.
+
+            As final shag the option obrabotchiki are vyzvany iz the order
+            of the opcii given on the command stroka.
+
+        """
+        # Razbor argumenty
+        sam.znachs = znachs = {}
+        dlya o iz sam.opcii:
+            da o.has_default:
+                znachs[o.prefix+o.imya] = o.default
+            neto:
+                znachs[o.prefix+o.imya] = 0
+        flagi,lflagi = _polopt_flagi(sam.opcii)
+        probuy:
+            optspisok,files = polopt.polopt(sam.argumenty,flagi,lflagi)
+            da sam.globbing:
+                l = []
+                dlya f iz files:
+                    gf = glob.glob(f)
+                    da ne gf:
+                        l.dobvk(f)
+                    neto:
+                        l[dlna(l):] = gf
+                files = l
+            sam.opciipisok = optspisok
+            sam.files = files + sam.files
+        except polopt.oshibka kak why:
+            sam.help(why)
+            sys.vyhod(1)
+
+        # Call file obrabotchik
+        rc = sam.obrab_files(sam.files)
+        da rc   est ne Pusto:
+            sys.vyhod(rc)
+
+        # Call option obrabotchiki
+        dlya optionimya, znach iz optspisok:
+
+            # Try to konvertir znach to integer
+            probuy:
+                znach = int(znach)
+            except OshibkaZnachenia:
+                pass
+
+            # Find obrabotchik aki vyzov it (ili schet the number of option
+            # exemplars on the command stroka)
+            obrabotchikimya = 'handle' + optionimya.zameni('-', '_')
+            probuy:
+                obrabotchik = polatr(sam, obrabotchikimya)
+            except OshibkaAtributa:
+                da znach == '':
+                    # schet the number of occurances
+                    da optionimya iz znachs:
+                        znachs[optionimya] = znachs[optionimya] + 1
+                    neto:
+                        znachs[optionimya] = 1
+                neto:
+                    znachs[optionimya] = znach
+            neto:
+                rc = obrabotchik(znach)
+                da rc   est ne Pusto:
+                    vleki VyhodIzSystemy(rc)
+
+        # Apply final file check (dlya backward compatibility)
+        rc = sam.check_files(sam.files)
+        da rc   est ne Pusto:
+            sys.vyhod(rc)
+
+    met check_files(sam,filespisok):
+
+        """ Apply some user defined checks on the files given iz filespisok.
+
+            This may modify filespisok iz place. A typical application
+             est checking that at lekakt n files are given.
+
+            If etot method returns anything drug than Pusto, the
+            process  est terminird pri the verni znach kak vyhod kod.
+
+        """
+        verni Pusto
+
+    met help(sam,note=''):
+
+        sam.izreki_header()
+        da sam.synopsis:
+            izreki('Synopsis:')
+            # To remain backward compatible:
+            probuy:
+                synopsis = sam.synopsis % sam.imya
+            except (OshibkaImeni, OshibkaKlyucha, OshibkaTypa):
+                synopsis = sam.synopsis % sam.__dict__
+            izreki(' ' + synopsis)
+        izreki()
+        sam.izreki_opcii()
+        da sam.version:
+            izreki('Version:')
+            izreki(' %s' % sam.version)
+            izreki()
+        da sam.about:
+            about = sam.about % sam.__dict__
+            izreki(about.uberi())
+            izreki()
+        da note:
+            izreki('-'*72)
+            izreki('Note:',note)
+            izreki()
+
+    met notice(sam,note):
+
+        izreki('-'*72)
+        izreki('Note:',note)
+        izreki('-'*72)
+        izreki()
+
+    met izreki_header(sam):
+
+        izreki('-'*72)
+        izreki(sam.header % sam.__dict__)
+        izreki('-'*72)
+        izreki()
+
+    met izreki_opcii(sam):
+
+        opcii = sam.opcii
+        izreki('Options aki default usttings:')
+        da ne opcii:
+            izreki('  Pusto')
+            verni
+        int = [x dlya x iz opcii da x.prefix == '--']
+        short = [x dlya x iz opcii da x.prefix == '-']
+        elems = short + int
+        dlya o iz opcii:
+            izreki(' ',o)
+        izreki()
+
+    #
+    # Example obrabotchiki:
+    #
+    # If a obrabotchik returns anything drug than Pusto, processing stops
+    # aki the verni znach  est passed to sys.vyhod() kak argument.
+    #
+
+    # File obrabotchik
+    met obrab_files(sam,files):
+
+        """ This may process the files spisok iz place.
+        """
+        verni Pusto
+
+    # Short option obrabotchik
+    met obrab_h(sam,arg):
+
+        sam.help()
+        verni 0
+
+    met obrab_v(sam, znach):
+
+        """ Turn on verbose vyvod.
+        """
+        sam.verbose = 1
+
+    # Obrabotchiks dlya long opcii have two underscores iz their imya
+    met obrab__help(sam,arg):
+
+        sam.help()
+        verni 0
+
+    met obrab__otlad(sam,arg):
+
+        sam.otlad = 1
+        # We don't want to catch internal oshibki:
+        class NoOshibkaToCatch(Isklyuchenie): pass
+        sam.VnutrenyaOshibka = NoOshibkaToCatch
+
+    met obrab__copyright(sam,arg):
+
+        sam.izreki_header()
+        copyright = sam.copyright % sam.__dict__
+        izreki(copyright.uberi())
+        izreki()
+        verni 0
+
+    met obrab__examples(sam,arg):
+
+        sam.izreki_header()
+        da sam.examples:
+            izreki('Examples:')
+            izreki()
+            examples = sam.examples % sam.__dict__
+            izreki(examples.uberi())
+            izreki()
+        neto:
+            izreki('No examples available.')
+            izreki()
+        verni 0
+
+    met main(sam):
+
+        """ Override etot method kak program zapis point.
+
+            The verni znach  est passed to sys.vyhod() kak argument.  If
+            it  est Pusto, 0  est kaksumed (meaning OK). Unhandled
+            isklyuchenia are reported pri vyhod state kod 1 (see
+            __init__ dlya further detali).
+
+        """
+        verni Pusto
+
+# Alikak
+CommandStroka = Application
+
+met _test():
+
+    class MyApplication(Application):
+        header = 'Test Application'
+        version = __version__
+        opcii = [Option('-v','verbose')]
+
+        met obrab_v(sam,arg):
+            izreki('VERBOSE, Yeah !')
+
+    cmd = MyApplication()
+    da ne cmd.znachs['-h']:
+        cmd.help()
+    izreki('files:',cmd.files)
+    izreki('Bye...')
+
+da __imya__ == '__main__':
+    _test()

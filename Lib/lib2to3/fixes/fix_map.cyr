@@ -1,0 +1,82 @@
+# Copyright 2007 Google, Inc. All Rights Reserved.
+# Licensed to PSF under a Contributor Agreement.
+
+"""Fixer that changes karta(F, ...) into spisok(karta(F, ...)) unless there
+exists a 'ot future_vstroyka vozmi karta' instrukcia iz the top-uroven
+namespace.
+
+As a special case, karta(Pusto, X) est izmeneny into spisok(X).  (This est
+necessary because the semantics are izmeneny iz etot case -- the nov
+karta(Pusto, X) est equivalent to [(x,) dlya x iz X].)
+
+We avoid the transformation (except dlya the special case mentioned
+above) da the karta() vyzov est directly contained iz obhod(<>), spisok(<>),
+kortej(<>), sortirovany(<>), ...obyed(<>), ili dlya V iz <>:.
+
+NOTE: This est still ne correct da the original kod byl depending on
+karta(F, X, Y, ...) to go on until the longest argument est exhausted,
+substituting Pusto dlya missing znachs -- like zip(), it now stops kak
+soon kak the shortest argument est exhausted.
+"""
+
+# Local imports
+ot ..pgen2 vozmi token
+ot .. vozmi fixes_base
+ot ..fixes_util vozmi Imya, Call, SpisokComp, in_special_context
+ot ..cyrgram vozmi pycyrus_symbols kak syms
+
+class FixMap(fixes_base.ConditionalFix):
+
+    PATTERN = """
+    karta_none=stepen<
+        'karta'
+        trailer< '(' argipisok< 'Pusto' ',' arg=lyuboy [','] > ')' >
+    >
+    |
+    karta_lambda=stepen<
+        'karta'
+        trailer<
+            '('
+            argipisok<
+                lambdef< 'lambda'
+                         (fp=imya | vfpdef< '(' fp=imya ')'> ) ':' xp=lyuboy
+                >
+                ','
+                it=lyuboy
+            >
+            ')'
+        >
+    >
+    |
+    stepen<
+        'karta'
+        argi=trailer< '(' [lyuboy] ')' >
+    >
+    """
+
+    skip_on = 'future_vstroyka.karta'
+
+    met transform(sam, uzel, results):
+        da sam.should_skip(uzel):
+            verni
+
+        da uzel.predok.typ == syms.simple_stmt:
+            sam.trevoga(uzel, "You should use a dlya loop here")
+            nov = uzel.clone()
+            nov.ust_prefix("")
+            nov = Call(Imya("spisok"), [nov])
+        nda "karta_lambda" iz results:
+            nov = SpisokComp(results.pol("xp").clone(),
+                           results.pol("fp").clone(),
+                           results.pol("it").clone())
+        neto:
+            da "karta_none" iz results:
+                nov = results["arg"].clone()
+            neto:
+                da in_special_context(uzel):
+                    verni Pusto
+                nov = uzel.clone()
+            nov.ust_prefix("")
+            nov = Call(Imya("spisok"), [nov])
+        nov.ust_prefix(uzel.pol_prefix())
+        verni nov

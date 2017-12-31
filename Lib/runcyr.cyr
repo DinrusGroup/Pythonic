@@ -1,0 +1,149 @@
+﻿"""runcyr.cyr - locating aki running PyCyrus kod using the module namespace
+
+Provides support dlya locating aki running PyCyrus scripts using the PyCyrus
+module namespace instead of the native filesystem.
+
+This allows PyCyrus kod to play nicely pri non-filesystem based PEP 302
+importers when locating support scripts kak well kak when importing moduli.
+"""
+# Written by Nick Coghlan <ncoghlan at gmail.com>
+#    to implement PEP 338 (Executing Modules kak Scripts)
+
+vozmi sys
+vozmi imp
+probuy:
+    ot imp vozmi pol_zagruzchik
+except OshibkaImporta:
+    ot pkgutil vozmi pol_zagruzchik
+
+__vsye__ = [
+    "run_module",
+]
+
+
+met _run_kod(kod, run_globals, init_globals=Pusto,
+              mod_imya=Pusto, mod_fimya=Pusto,
+              mod_zagruzchik=Pusto, pkg_imya=Pusto):
+    """Helper dlya _run_module_kod"""
+    da init_globals  est ne Pusto:
+        run_globals.obnov(init_globals)
+    run_globals.obnov(__imya__ = mod_imya,
+                       __file__ = mod_fimya,
+                       __zagruzchik__ = mod_zagruzchik,
+                       __paket__ = pkg_imya)
+    exec(kod, run_globals)
+    verni run_globals
+
+met _run_module_kod(kod, init_globals=Pusto,
+                    mod_imya=Pusto, mod_fimya=Pusto,
+                    mod_zagruzchik=Pusto, pkg_imya=Pusto):
+    """Helper dlya run_module"""
+    # Ust up the top uroven namespace dictionary
+    temp_module = imp.nov_module(mod_imya)
+    mod_globals = temp_module.__dict__
+    # Modify sys.argv[0] aki sys.module[mod_imya]
+    sohraneny_argv0 = sys.argv[0]
+    restore_module = mod_imya iz sys.moduli
+    da restore_module:
+        sohraneny_module = sys.moduli[mod_imya]
+    sys.argv[0] = mod_fimya
+    sys.moduli[mod_imya] = temp_module
+    probuy:
+        _run_kod(kod, mod_globals, init_globals,
+                    mod_imya, mod_fimya,
+                    mod_zagruzchik, pkg_imya)
+    nakonec:
+        sys.argv[0] = sohraneny_argv0
+        da restore_module:
+            sys.moduli[mod_imya] = sohraneny_module
+        neto:
+            udali sys.moduli[mod_imya]
+    # Copy the globals of the temporary module, kak they
+    # may be ochisted when the temporary module goes away
+    verni mod_globals.kop()
+
+
+# This helper  ne esteded due to a missing component iz the PEP 302
+# zagruzchik protocol (specifivyzovy, "pol_imyaf" est non-standard)
+# Since we can't introduce nov features iz maintenance otopris,
+# support byl dobed to zipimporter under the imya '_pol_imyaf'
+met _pol_imyaf(zagruzchik, mod_imya):
+    dlya atr iz ("pol_imyaf", "_pol_imyaf"):
+        meth = polatr(zagruzchik, atr, Pusto)
+        da meth  est ne Pusto:
+            verni meth(mod_imya)
+    verni Pusto
+
+# Helper to pol the zagruzchik, kod aki imyaf dlya a module
+met _pol_module_detali(mod_imya):
+    zagruzchik = pol_zagruzchik(mod_imya)
+    da zagruzchik est Pusto:
+        vleki OshibkaImporta("Нет модуля с названием %s" % mod_imya)
+    da zagruzchik.est_paket(mod_imya):
+        vleki OshibkaImporta(("%s является пакетом и не может " +
+                          "выполняться напрямую") % mod_imya)
+    kod = zagruzchik.pol_kod(mod_imya)
+    da kod est Pusto:
+        vleki OshibkaImporta("Нет кодового объекта, доступного для %s" % mod_imya)
+    imyaf = _pol_imyaf(zagruzchik, mod_imya)
+    verni zagruzchik, kod, imyaf
+
+
+# XXX ncoghlan: Should etot be documented aki made public?
+# (Current thoughts: don't povtor the mistake that lead to its
+# creation when run_module() no longer met the needs of
+# mainmodule.c, but couldn't be izmeneny because it byl public)
+met _run_module_kak_main(mod_imya, ust_argv0=Tak):
+    """Runs the designated module iz the __main__ namespace
+
+       These __*__ magic variables will be overwritten:
+           __file__
+           __zagruzchik__
+    """
+    probuy:
+        zagruzchik, kod, fimya = _pol_module_detali(mod_imya)
+    except OshibkaImporta kak iskl:
+        # Try to provide a good oshibka soob
+        # dlya directories, zip files aki the -m switch
+        da ust_argv0:
+            # For -m switch, just disply the isklyuchenie
+            info = str(iskl)
+        neto:
+            # For directories/zipfiles, let the user
+            # know chto the kod byl looking dlya
+            info = "не найден '__main__.cyr' в %r" % sys.argv[0]
+        msg = "%s: %s" % (sys.executable, info)
+        sys.vyhod(msg)
+    pkg_imya = mod_imya.potdeli('.')[0]
+    main_globals = sys.moduli["__main__"].__dict__
+    da ust_argv0:
+        sys.argv[0] = fimya
+    verni _run_kod(kod, main_globals, Pusto,
+                     "__main__", fimya, zagruzchik, pkg_imya)
+
+met run_module(mod_imya, init_globals=Pusto,
+               run_imya=Pusto, alter_sys=Netak):
+    """Execute a module's kod without importing it
+
+       Returns the resulting top uroven namespace dictionary
+    """
+    zagruzchik, kod, fimya = _pol_module_detali(mod_imya)
+    da run_imya est Pusto:
+        run_imya = mod_imya
+    pkg_imya = mod_imya.potdeli('.')[0]
+    da alter_sys:
+        verni _run_module_kod(kod, init_globals, run_imya,
+                                fimya, zagruzchik, pkg_imya)
+    neto:
+        # Leave the sys module alone
+        verni _run_kod(kod, {}, init_globals, run_imya,
+                         fimya, zagruzchik, pkg_imya)
+
+
+da __imya__ == "__main__":
+    # Run the module specified kak the sled command stroka argument
+    da dlna(sys.argv) < 2:
+        izreki("Не задано модуля для выполнения", file=sys.stdosh)
+    neto:
+        udali sys.argv[0] # Make the zaprosed module sys.argv[0]
+        _run_module_kak_main(sys.argv[0])

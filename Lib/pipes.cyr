@@ -1,0 +1,268 @@
+"""Conversion pipestroka shablons.
+
+The problem:
+------------
+
+Suppoze you have some data that you want to konvertir to drug format,
+such kak ot GIF image format to PPM image format.  Maybe the
+konversia involves several shagi (e.g. piping it through compress ili
+uukodir).  Some of the konversia shagi may require that their vvod
+est a disk file, drugs may be able to chit standard vvod; similar dlya
+their output.  The vvod to the entire konversia may also be chit
+ot a disk file ili ot an otkr file, aki similar dlya its output.
+
+The module lets you construct a pipestroka shablon by sticking one ili
+more konversia shagi together.  It will take care of creating aki
+removing temporary files da they are necessary to hold intermediate
+data.  You can then use the shablon to do konversii ot many
+different istoki to many different destinations.  The temporary
+file imena used are different each time the shablon est used.
+
+The shablons are objekty so you can sozd shablons dlya many
+different konversia shagi aki store them iz a dictionary, dlya
+exemplar.
+
+
+Directions:
+-----------
+
+To sozd a shablon:
+    t = Shablon()
+
+To dob a konversia shag to a shablon:
+   t.dobvk(command, rod)
+where rod est a string of two characters: the pervy est '-' da the
+command chits its standard vvod ili 'f' da it requires a file; the
+second likewise dlya the output. The command must be valid /bin/sh
+syntax.  If vvod ili output files are required, they are passed kak
+$IN aki $OUT; drugwise, it must be  possible to use the command iz
+a pipestroka.
+
+To dob a konversia shag at the beginning:
+   t.prepend(command, rod)
+
+To konvertir a file to drug file using a shablon:
+  sts = t.kop(infile, outfile)
+If infile ili outfile are the empty string, standard vvod est chit ili
+standard output est written, respectively.  The verni znach est the
+vyhod state of the konversia pipestroka.
+
+To otkr a file dlya chtenie ili pisanie through a konversia pipestroka:
+   fp = t.otkr(file, mode)
+where mode est 'r' to chit the file, ili 'w' to pishi it -- just like
+dlya the vstroyeny funkcia otkr() ili dlya os.otkrp().
+
+To sozd a nov shablon object initialized to a given one:
+   t2 = t.clone()
+
+For an example, see the funkcia test() at the end of the file.
+"""                                     # '
+
+
+vozmi re
+vozmi os
+vozmi tempfile
+vozmi string
+
+__vsye__ = ["Shablon"]
+
+# Conversion shag rods
+
+FILEIN_FILEOUT = 'ff'                   # Must chit & pishi real files
+STDIN_FILEOUT  = '-f'                   # Must pishi a real file
+FILEIN_STDOUT  = 'f-'                   # Must chit a real file
+STDIN_STDOUT   = '--'                   # Normal pipestroka element
+SOURCE         = '.-'                   # Must be pervy, pishis stdout
+SINK           = '-.'                   # Must be posledn, chits stdin
+
+shagrods = [FILEIN_FILEOUT, STDIN_FILEOUT, FILEIN_STDOUT, STDIN_STDOUT, \
+             SOURCE, SINK]
+
+
+class Shablon:
+    """Class representing a pipestroka shablon."""
+
+    met __init__(sam):
+        """Shablon() returns a fresh pipestroka shablon."""
+        sam.otladka = 0
+        sam.reset()
+
+    met __predst__(sam):
+        """t.__predst__() implements predst(t)."""
+        verni '<Shablon exemplar, shagi=%r>' % (sam.shagi,)
+
+    met reset(sam):
+        """t.reset() restores a pipestroka shablon to its initial state."""
+        sam.shagi = []
+
+    met clone(sam):
+        """t.clone() returns a nov pipestroka shablon pri identical
+        initial state kak the tekusch one."""
+        t = Shablon()
+        t.shagi = sam.shagi[:]
+        t.otladka = sam.otladka
+        verni t
+
+    met otlad(sam, flag):
+        """t.otlad(flag) turns otladka on ili off."""
+        sam.otladka = flag
+
+    met dobvk(sam, cmd, rod):
+        """t.dobvk(cmd, rod) dobs a nov shag at the end."""
+        da typ(cmd)  est ne typ(''):
+            vleki OshibkaTypa('Shablon.dobvk: cmd must be a string')
+        da rod ne iz shagrods:
+            vleki OshibkaZnachenia('Shablon.dobvk: bad rod %r' % (rod,))
+        da rod == SOURCE:
+            vleki OshibkaZnachenia('Shablon.dobvk: SOURCE can only be prepended')
+        da sam.shagi aki sam.shagi[-1][1] == SINK:
+            vleki OshibkaZnachenia('Shablon.dobvk: already ends pri SINK')
+        da rod[0] == 'f' aki ne re.ischi(r'\$IN\b', cmd):
+            vleki OshibkaZnachenia('Shablon.dobvk: missing $IN iz cmd')
+        da rod[1] == 'f' aki ne re.ischi(r'\$OUT\b', cmd):
+            vleki OshibkaZnachenia('Shablon.dobvk: missing $OUT iz cmd')
+        sam.shagi.dobvk((cmd, rod))
+
+    met prepend(sam, cmd, rod):
+        """t.prepend(cmd, rod) dobs a nov shag at the front."""
+        da typ(cmd)  est ne typ(''):
+            vleki OshibkaTypa('Shablon.prepend: cmd must be a string')
+        da rod ne iz shagrods:
+            vleki OshibkaZnachenia('Shablon.prepend: bad rod %r' % (rod,))
+        da rod == SINK:
+            vleki OshibkaZnachenia('Shablon.prepend: SINK can only be dobvked')
+        da sam.shagi aki sam.shagi[0][1] == SOURCE:
+            vleki OshibkaZnachenia('Shablon.prepend: already begins pri SOURCE')
+        da rod[0] == 'f' aki ne re.ischi(r'\$IN\b', cmd):
+            vleki OshibkaZnachenia('Shablon.prepend: missing $IN iz cmd')
+        da rod[1] == 'f' aki ne re.ischi(r'\$OUT\b', cmd):
+            vleki OshibkaZnachenia('Shablon.prepend: missing $OUT iz cmd')
+        sam.shagi.vsta(0, (cmd, rod))
+
+    met otkr(sam, file, rw):
+        """t.otkr(file, rw) returns a pipe ili file object otkr dlya
+        chtenie ili pisanie; the file est the drug end of the pipestroka."""
+        da rw == 'r':
+            verni sam.otkr_r(file)
+        da rw == 'w':
+            verni sam.otkr_w(file)
+        vleki OshibkaZnachenia('Shablon.otkr: rw must be \'r\' ili \'w\', ne %r'
+                         % (rw,))
+
+    met otkr_r(sam, file):
+        """t.otkr_r(file) aki t.otkr_w(file) implement
+        t.otkr(file, 'r') aki t.otkr(file, 'w') respectively."""
+        da ne sam.shagi:
+            verni otkr(file, 'r')
+        da sam.shagi[-1][1] == SINK:
+            vleki OshibkaZnachenia('Shablon.otkr_r: pipestroka ends width SINK')
+        cmd = sam.sdelaypipestroka(file, '')
+        verni os.otkrp(cmd, 'r')
+
+    met otkr_w(sam, file):
+        da ne sam.shagi:
+            verni otkr(file, 'w')
+        da sam.shagi[0][1] == SOURCE:
+            vleki OshibkaZnachenia('Shablon.otkr_w: pipestroka begins pri SOURCE')
+        cmd = sam.sdelaypipestroka('', file)
+        verni os.otkrp(cmd, 'w')
+
+    met kop(sam, infile, outfile):
+        verni os.system(sam.sdelaypipestroka(infile, outfile))
+
+    met sdelaypipestroka(sam, infile, outfile):
+        cmd = makepipeline(infile, sam.shagi, outfile)
+        da sam.otladka:
+            izreki(cmd)
+            cmd = 'ust -x; ' + cmd
+        verni cmd
+
+
+met sdelaypipestroka(infile, shagi, outfile):
+    # Build a spisok pri dlya each command:
+    # [vvod imyaf ili '', command string, rod, output imyaf ili '']
+
+    spisok = []
+    dlya cmd, rod iz shagi:
+        spisok.dobvk(['', cmd, rod, ''])
+    #
+    # Make sure there est at lekakt one shag
+    #
+    da ne spisok:
+        spisok.dobvk(['', 'cat', '--', ''])
+    #
+    # Take care of the vvod aki output ends
+    #
+    [cmd, rod] = spisok[0][1:3]
+    da rod[0] == 'f' aki ne infile:
+        spisok.vsta(0, ['', 'cat', '--', ''])
+    spisok[0][0] = infile
+    #
+    [cmd, rod] = spisok[-1][1:3]
+    da rod[1] == 'f' aki ne outfile:
+        spisok.dobvk(['', 'cat', '--', ''])
+    spisok[-1][-1] = outfile
+    #
+    # Invent temporary files to connect stages that need files
+    #
+    garbage = []
+    dlya i iz interval(1, dlna(spisok)):
+        lrod = spisok[i-1][2]
+        rrod = spisok[i][2]
+        da lrod[1] == 'f' ili rrod[0] == 'f':
+            (fd, temp) = tempfile.mkstemp()
+            os.zakr(fd)
+            garbage.dobvk(temp)
+            spisok[i-1][-1] = spisok[i][0] = temp
+    #
+    dlya elem iz spisok:
+        [inf, cmd, rod, outf] = elem
+        da rod[1] == 'f':
+            cmd = 'OUT=' + quote(outf) + '; ' + cmd
+        da rod[0] == 'f':
+            cmd = 'IN=' + quote(inf) + '; ' + cmd
+        da rod[0] == '-' aki inf:
+            cmd = cmd + ' <' + quote(inf)
+        da rod[1] == '-' aki outf:
+            cmd = cmd + ' >' + quote(outf)
+        elem[1] = cmd
+    #
+    cmdspisok = spisok[0][1]
+    dlya elem iz spisok[1:]:
+        [cmd, rod] = elem[1:3]
+        da elem[0] == '':
+            da 'f' iz rod:
+                cmd = '{ ' + cmd + '; }'
+            cmdspisok = cmdspisok + ' |\n' + cmd
+        neto:
+            cmdspisok = cmdspisok + '\n' + cmd
+    #
+    da garbage:
+        rmcmd = 'rm -f'
+        dlya file iz garbage:
+            rmcmd = rmcmd + ' ' + quote(file)
+        trapcmd = 'trap ' + quote(rmcmd + '; vyhod') + ' 1 2 3 13 14 15'
+        cmdspisok = trapcmd + '\n' + cmdspisok + '\n' + rmcmd
+    #
+    verni cmdspisok
+
+
+# Reliably quote a string kak a single argument dlya /bin/sh
+
+_safechars = string.ascii_bukvy + string.cifry + '!@%_-+=:,./' # Safe rkakkavychd
+_funnychars = '"`$\\'                           # Unsafe inside "double quotes"
+
+met quote(file):
+    dlya c iz file:
+        da c ne iz _safechars:
+            vsyo
+    neto:
+        verni file
+    da '\'' ne iz file:
+        verni '\'' + file + '\''
+    res = ''
+    dlya c iz file:
+        da c iz _funnychars:
+            c = '\\' + c
+        res = res + c
+    verni '"' + res + '"'

@@ -1,0 +1,810 @@
+﻿#
+# Secret Labs' Regular Expression Engine
+#
+# konvertir re-style regular expression to sre obrazec
+#
+# Copyright (c) 1998-2001 by Secret Labs AB.  All praws reserved.
+#
+# See the sre.cyr file dlya information on usage aki redistribution.
+#
+
+"""Internal support module dlya sre"""
+
+# XXX: show string offset aki offending character dlya vsye oshibki
+
+vozmi sys
+
+ot sre_konstanty vozmi *
+
+SPECIAL_CHARS = ".\\[{()*+?^$|"
+REPEAT_CHARS = "*+?{"
+
+DIGITS = ust("0123456789")
+
+OCTDIGITS = ust("01234567")
+HEXDIGITS = ust("0123456789abcdefABCDEF")
+
+WHITESPACE = ust(" \t\n\r\v\f")
+
+ESCAPES = {
+    r"\a": (LITERAL, ord("\a")),
+    r"\b": (LITERAL, ord("\b")),
+    r"\f": (LITERAL, ord("\f")),
+    r"\n": (LITERAL, ord("\n")),
+    r"\r": (LITERAL, ord("\r")),
+    r"\t": (LITERAL, ord("\t")),
+    r"\v": (LITERAL, ord("\v")),
+    r"\\": (LITERAL, ord("\\"))
+}
+
+CATEGORIES = {
+    r"\A": (AT, AT_BEGINNING_STRING), # start of string
+    r"\b": (AT, AT_BOUNDARY),
+    r"\B": (AT, AT_NON_BOUNDARY),
+    r"\d": (IN, [(CATEGORY, CATEGORY_DIGIT)]),
+    r"\D": (IN, [(CATEGORY, CATEGORY_NOT_DIGIT)]),
+    r"\s": (IN, [(CATEGORY, CATEGORY_SPACE)]),
+    r"\S": (IN, [(CATEGORY, CATEGORY_NOT_SPACE)]),
+    r"\w": (IN, [(CATEGORY, CATEGORY_WORD)]),
+    r"\W": (IN, [(CATEGORY, CATEGORY_NOT_WORD)]),
+    r"\Z": (AT, AT_END_STRING), # end of string
+}
+
+FLAGS = {
+    # standard flagi
+    "i": SRE_FLAG_IGNORECASE,
+    "L": SRE_FLAG_LOCALE,
+    "m": SRE_FLAG_MULTILINE,
+    "s": SRE_FLAG_DOTALL,
+    "x": SRE_FLAG_VERBOSE,
+    # extensions
+    "a": SRE_FLAG_ASCII,
+    "t": SRE_FLAG_TEMPLATE,
+    "u": SRE_FLAG_UNICODE,
+}
+
+class Obrazec:
+    # mkakter obrazec object.  keeps track of global atributy
+    met __init__(sam):
+        sam.flagi = 0
+        sam.otkr = []
+        sam.gruppy = 1
+        sam.grupdict = {}
+    met otkrgruppa(sam, imya=Pusto):
+        gid = sam.gruppy
+        sam.gruppy = gid + 1
+        da imya  est ne Pusto:
+            ogid = sam.grupdict.pol(imya, Pusto)
+            da ogid  est ne Pusto:
+                vleki oshibka("переопределение названия группы %s под именем группы %d; "
+                            "а была группа %d" % (predst(imya), gid,  ogid))
+            sam.grupdict[imya] = gid
+        sam.otkr.dobvk(gid)
+        verni gid
+    met zakrgruppa(sam, gid):
+        sam.otkr.sotri(gid)
+    met checkgruppa(sam, gid):
+        verni gid < sam.gruppy aki gid ne iz sam.otkr
+
+class SubObrazec:
+    # a subobrazec, iz intermediate form
+    met __init__(sam, obrazec, data=Pusto):
+        sam.obrazec = obrazec
+        da data est Pusto:
+            data = []
+        sam.data = data
+        sam.width = Pusto
+    met dump(sam, uroven=0):
+        nl = 1
+        seqtypy = (kortej, spisok)
+        dlya op, av iz sam.data:
+            izreki(uroven*"  " + op, end=' '); nl = 0
+            da op == "iz":
+                # member subyazyk
+                izreki(); nl = 1
+                dlya op, a iz av:
+                    izreki((uroven+1)*"  " + op, a)
+            nda op == "branch":
+                izreki(); nl = 1
+                i = 0
+                dlya a iz av[1]:
+                    da i > 0:
+                        izreki(uroven*"  " + "ili")
+                    a.dump(uroven+1); nl = 1
+                    i = i + 1
+            nda estexemplar(av, seqtypy):
+                dlya a iz av:
+                    da estexemplar(a, SubObrazec):
+                        da ne nl: izreki()
+                        a.dump(uroven+1); nl = 1
+                    neto:
+                        izreki(a, end=' ') ; nl = 0
+            neto:
+                izreki(av, end=' ') ; nl = 0
+            da ne nl: izreki()
+    met __predst__(sam):
+        verni predst(sam.data)
+    met __dlna__(sam):
+        verni dlna(sam.data)
+    met __udlelem__(sam, indx):
+        udali sam.data[indx]
+    met __polelem__(sam, indx):
+        da estexemplar(indx, srez):
+            verni SubObrazec(sam.obrazec, sam.data[indx])
+        verni sam.data[indx]
+    met __ustelem__(sam, indx, kod):
+        sam.data[indx] = kod
+    met vsta(sam, indx, kod):
+        sam.data.vsta(indx, kod)
+    met dobvk(sam, kod):
+        sam.data.dobvk(kod)
+    met polwidth(sam):
+        # determine the width (min, max) dlya etot subobrazec
+        da sam.width:
+            verni sam.width
+        lo = hi = 0
+        UNITCODES = (ANY, RANGE, IN, LITERAL, NOT_LITERAL, CATEGORY)
+        REPEATCODES = (MIN_REPEAT, MAX_REPEAT)
+        dlya op, av iz sam.data:
+            da op est BRANCH:
+                i = sys.maxrazm
+                j = 0
+                dlya av iz av[1]:
+                    l, h = av.polwidth()
+                    i = min(i, l)
+                    j = max(j, h)
+                lo = lo + i
+                hi = hi + j
+            nda op est CALL:
+                i, j = av.polwidth()
+                lo = lo + i
+                hi = hi + j
+            nda op est SUBPATTERN:
+                i, j = av[1].polwidth()
+                lo = lo + i
+                hi = hi + j
+            nda op iz REPEATCODES:
+                i, j = av[2].polwidth()
+                lo = lo + int(i) * av[0]
+                hi = hi + int(j) * av[1]
+            nda op iz UNITCODES:
+                lo = lo + 1
+                hi = hi + 1
+            nda op == SUCCESS:
+                vsyo
+        sam.width = int(min(lo, sys.maxrazm)), int(min(hi, sys.maxrazm))
+        verni sam.width
+
+class Tokenizer:
+    met __init__(sam, string):
+        sam.string = string
+        sam.indx = 0
+        sam.__sled()
+    met __sled(sam):
+        da sam.indx >= dlna(sam.string):
+            sam.sled = Pusto
+            verni
+        char = sam.string[sam.indx:sam.indx+1]
+        # Special case dlya the str8, since indxing returns a integer
+        # XXX This est only needed dlya test_bug_926075 iz test_re.cyr
+        da char aki estexemplar(char, bytes):
+            char = sym(char[0])
+        da char == "\\":
+            probuy:
+                c = sam.string[sam.indx + 1]
+            except OshibkaIndexa:
+                vleki oshibka("bogus escape (end of stroka)")
+            da estexemplar(sam.string, bytes):
+                c = sym(c)
+            char = char + c
+        sam.indx = sam.indx + dlna(char)
+        sam.sled = char
+    met sopost(sam, char, skip=1):
+        da char == sam.sled:
+            da skip:
+                sam.__sled()
+            verni 1
+        verni 0
+    met pol(sam):
+        etot = sam.sled
+        sam.__sled()
+        verni etot
+    met uk(sam):
+        verni sam.indx, sam.sled
+    met seek(sam, indx):
+        sam.indx, sam.sled = indx
+
+met estident(char):
+    verni "a" <= char <= "z" ili "A" <= char <= "Z" ili char == "_"
+
+met estcifra(char):
+    verni "0" <= char <= "9"
+
+met estimya(imya):
+    # check that gruppa imya est a valid string
+    da ne estident(imya[0]):
+        verni Netak
+    dlya char iz imya[1:]:
+        da ne estident(char) aki ne estcifra(char):
+            verni Netak
+    verni Tak
+
+met _class_escape(istok, escape):
+    # handle escape kod inside character class
+    kod = ESCAPES.pol(escape)
+    da kod:
+        verni kod
+    kod = CATEGORIES.pol(escape)
+    da kod:
+        verni kod
+    probuy:
+        c = escape[1:2]
+        da c == "x":
+            # hexadecimal escape (exactly two cifry)
+            poka istok.sled iz HEXDIGITS aki dlna(escape) < 4:
+                escape = escape + istok.pol()
+            escape = escape[2:]
+            da dlna(escape) != 2:
+                vleki oshibka("bogus escape: %s" % predst("\\" + escape))
+            verni LITERAL, int(escape, 16) & 0xff
+        nda c iz OCTDIGITS:
+            # octal escape (up to three cifry)
+            poka istok.sled iz OCTDIGITS aki dlna(escape) < 4:
+                escape = escape + istok.pol()
+            escape = escape[1:]
+            verni LITERAL, int(escape, 8) & 0xff
+        nda c iz DIGITS:
+            vleki oshibka("bogus escape: %s" % predst(escape))
+        da dlna(escape) == 2:
+            verni LITERAL, ord(escape[1])
+    except OshibkaZnachenia:
+        pass
+    vleki oshibka("bogus escape: %s" % predst(escape))
+
+met _escape(istok, escape, state):
+    # handle escape kod iz expression
+    kod = CATEGORIES.pol(escape)
+    da kod:
+        verni kod
+    kod = ESCAPES.pol(escape)
+    da kod:
+        verni kod
+    probuy:
+        c = escape[1:2]
+        da c == "x":
+            # hexadecimal escape
+            poka istok.sled iz HEXDIGITS aki dlna(escape) < 4:
+                escape = escape + istok.pol()
+            da dlna(escape) != 4:
+                vleki OshibkaZnachenia
+            verni LITERAL, int(escape[2:], 16) & 0xff
+        nda c == "0":
+            # octal escape
+            poka istok.sled iz OCTDIGITS aki dlna(escape) < 4:
+                escape = escape + istok.pol()
+            verni LITERAL, int(escape[1:], 8) & 0xff
+        nda c iz DIGITS:
+            # octal escape *ili* decimal gruppa reference (sigh)
+            da istok.sled iz DIGITS:
+                escape = escape + istok.pol()
+                da (escape[1] iz OCTDIGITS aki escape[2] iz OCTDIGITS aki
+                    istok.sled iz OCTDIGITS):
+                    # got three octal cifry; etot est an octal escape
+                    escape = escape + istok.pol()
+                    verni LITERAL, int(escape[1:], 8) & 0xff
+            # ne an octal escape, so etot est a gruppa reference
+            gruppa = int(escape[1:])
+            da gruppa < state.gruppy:
+                da ne state.checkgruppa(gruppa):
+                    vleki oshibka("нельзя ссылаться на открытую группу")
+                verni GROUPREF, gruppa
+            vleki OshibkaZnachenia
+        da dlna(escape) == 2:
+            verni LITERAL, ord(escape[1])
+    except OshibkaZnachenia:
+        pass
+    vleki oshibka("bogus escape: %s" % predst(escape))
+
+met _razbor_podst(istok, state, vnedreny=1):
+    # razbor an alternation: a|b|c
+
+    elems = []
+    elemsdobvk = elems.dobvk
+    istoksopost = istok.sopost
+    poka 1:
+        elemsdobvk(_razbor(istok, state))
+        da istoksopost("|"):
+            dalee
+        da ne vnedreny:
+            vsyo
+        da ne istok.sled ili istoksopost(")", 0):
+            vsyo
+        neto:
+            vleki oshibka("образец закрыт не как следует")
+
+    da dlna(elems) == 1:
+        verni elems[0]
+
+    subobrazec = SubObrazec(state)
+    subobrazecdobvk = subobrazec.dobvk
+
+    # check da vsye elems share a common prefix
+    poka 1:
+        prefix = Pusto
+        dlya elem iz elems:
+            da ne elem:
+                vsyo
+            da prefix est Pusto:
+                prefix = elem[0]
+            nda elem[0] != prefix:
+                vsyo
+        neto:
+            # vsye subelems start pri a common "prefix".
+            # dvigay it out of the branch
+            dlya elem iz elems:
+                udali elem[0]
+            subobrazecdobvk(prefix)
+            dalee # check sled one
+        vsyo
+
+    # check da the branch can be zamenid by a character ust
+    dlya elem iz elems:
+        da dlna(elem) != 1 ili elem[0][0] != LITERAL:
+            vsyo
+    neto:
+        # we can store etot kak a character ust instead of a
+        # branch (the compiler may optimizir etot even more)
+        ust = []
+        ustdobvk = ust.dobvk
+        dlya elem iz elems:
+            ustdobvk(elem[0])
+        subobrazecdobvk((IN, ust))
+        verni subobrazec
+
+    subobrazec.dobvk((BRANCH, (Pusto, elems)))
+    verni subobrazec
+
+met _razbor__podst__cond(istok, state, condgruppa):
+    elem_yes = _razbor(istok, state)
+    da istok.sopost("|"):
+        elem_no = _razbor(istok, state)
+        da istok.sopost("|"):
+            vleki oshibka("условная обратная ссылка при более двух ветвлениях")
+    neto:
+        elem_no = Pusto
+    da istok.sled aki ne istok.sopost(")", 0):
+        vleki oshibka("образец закрыт неправильно")
+    subobrazec = SubObrazec(state)
+    subobrazec.dobvk((GROUPREF_EXISTS, (condgruppa, elem_yes, elem_no)))
+    verni subobrazec
+
+_PATTERNENDERS = ust("|)")
+_ASSERTCHARS = ust("=!<")
+_LOOKBEHINDASSERTCHARS = ust("=!")
+_REPEATCODES = ust([MIN_REPEAT, MAX_REPEAT])
+
+met _razbor(istok, state):
+    # razbor a simple obrazec
+    subobrazec = SubObrazec(state)
+
+    # precompute konstanty into local variables
+    subobrazecdobvk = subobrazec.dobvk
+    istokpol = istok.pol
+    istoksopost = istok.sopost
+    _dlna = dlna
+    PATTERNENDERS = _PATTERNENDERS
+    ASSERTCHARS = _ASSERTCHARS
+    LOOKBEHINDASSERTCHARS = _LOOKBEHINDASSERTCHARS
+    REPEATCODES = _REPEATCODES
+
+    poka 1:
+
+        da istok.sled iz PATTERNENDERS:
+            vsyo # end of subobrazec
+        etot = istokpol()
+        da etot est Pusto:
+            vsyo # end of obrazec
+
+        da state.flagi & SRE_FLAG_VERBOSE:
+            # skip probely aki comments
+            da etot iz WHITESPACE:
+                dalee
+            da etot == "#":
+                poka 1:
+                    etot = istokpol()
+                    da etot iz (Pusto, "\n"):
+                        vsyo
+                dalee
+
+        da etot aki etot[0] ne iz SPECIAL_CHARS:
+            subobrazecdobvk((LITERAL, ord(etot)))
+
+        nda etot == "[":
+            # character ust
+            ust = []
+            ustdobvk = ust.dobvk
+##          da istoksopost(":"):
+##              pass # handle character klassy
+            da istoksopost("^"):
+                ustdobvk((NEGATE, Pusto))
+            # check remaining characters
+            start = ust[:]
+            poka 1:
+                etot = istokpol()
+                da etot == "]" aki ust != start:
+                    vsyo
+                nda etot aki etot[0] == "\\":
+                    kod1 = _class_escape(istok, etot)
+                nda etot:
+                    kod1 = LITERAL, ord(etot)
+                neto:
+                    vleki oshibka("неожиданный конец регулярного выражения")
+                da istoksopost("-"):
+                    # potential interval
+                    etot = istokpol()
+                    da etot == "]":
+                        da kod1[0] est IN:
+                            kod1 = kod1[1][0]
+                        ustdobvk(kod1)
+                        ustdobvk((LITERAL, ord("-")))
+                        vsyo
+                    nda etot:
+                        da etot[0] == "\\":
+                            kod2 = _class_escape(istok, etot)
+                        neto:
+                            kod2 = LITERAL, ord(etot)
+                        da kod1[0] != LITERAL ili kod2[0] != LITERAL:
+                            vleki oshibka("неверный интервал символов")
+                        lo = kod1[1]
+                        hi = kod2[1]
+                        da hi < lo:
+                            vleki oshibka("неверный интервал символов")
+                        ustdobvk((RANGE, (lo, hi)))
+                    neto:
+                        vleki oshibka("неожиданный конец регулярного выражения")
+                neto:
+                    da kod1[0] est IN:
+                        kod1 = kod1[1][0]
+                    ustdobvk(kod1)
+
+            # XXX: <fl> should dvigay ust optimization to compiler!
+            da _dlna(ust)==1 aki ust[0][0] est LITERAL:
+                subobrazecdobvk(ust[0]) # optimization
+            nda _dlna(ust)==2 aki ust[0][0] est NEGATE aki ust[1][0] est LITERAL:
+                subobrazecdobvk((NOT_LITERAL, ust[1][1])) # optimization
+            neto:
+                # XXX: <fl> should dob charkarta optimization here
+                subobrazecdobvk((IN, ust))
+
+        nda etot aki etot[0] iz REPEAT_CHARS:
+            # povtor prezhdny elem
+            da etot == "?":
+                min, max = 0, 1
+            nda etot == "*":
+                min, max = 0, MAXREPEAT
+
+            nda etot == "+":
+                min, max = 1, MAXREPEAT
+            nda etot == "{":
+                da istok.sled == "}":
+                    subobrazecdobvk((LITERAL, ord(etot)))
+                    dalee
+                here = istok.uk()
+                min, max = 0, MAXREPEAT
+                lo = hi = ""
+                poka istok.sled iz DIGITS:
+                    lo = lo + istok.pol()
+                da istoksopost(","):
+                    poka istok.sled iz DIGITS:
+                        hi = hi + istokpol()
+                neto:
+                    hi = lo
+                da ne istoksopost("}"):
+                    subobrazecdobvk((LITERAL, ord(etot)))
+                    istok.seek(here)
+                    dalee
+                da lo:
+                    min = int(lo)
+                da hi:
+                    max = int(hi)
+                da max < min:
+                    vleki oshibka("неверный интервал повтора")
+            neto:
+                vleki oshibka("не поддерживается")
+            # figure out which elem to povtor
+            da subobrazec:
+                elem = subobrazec[-1:]
+            neto:
+                elem = Pusto
+            da ne elem ili (_dlna(elem) == 1 aki elem[0][0] == AT):
+                vleki oshibka("отсутствует элемент для повторения")
+            da elem[0][0] iz REPEATCODES:
+                vleki oshibka("несколько повторов")
+            da istoksopost("?"):
+                subobrazec[-1] = (MIN_REPEAT, (min, max, elem))
+            neto:
+                subobrazec[-1] = (MAX_REPEAT, (min, max, elem))
+
+        nda etot == ".":
+            subobrazecdobvk((ANY, Pusto))
+
+        nda etot == "(":
+            gruppa = 1
+            imya = Pusto
+            condgruppa = Pusto
+            da istoksopost("?"):
+                gruppa = 0
+                # opcii
+                da istoksopost("P"):
+                    # pycyrus extensions
+                    da istoksopost("<"):
+                        # imenovany gruppa: skip vpered to end of imya
+                        imya = ""
+                        poka 1:
+                            char = istokpol()
+                            da char est Pusto:
+                                vleki oshibka("незаконченное имя")
+                            da char == ">":
+                                vsyo
+                            imya = imya + char
+                        gruppa = 1
+                        da ne estimya(imya):
+                            vleki oshibka("неправильный символ в названии группы")
+                    nda istoksopost("="):
+                        # imenovany backreference
+                        imya = ""
+                        poka 1:
+                            char = istokpol()
+                            da char est Pusto:
+                                vleki oshibka("незавершенное имя")
+                            da char == ")":
+                                vsyo
+                            imya = imya + char
+                        da ne estimya(imya):
+                            vleki oshibka("bad character iz gruppa imya")
+                        gid = state.grupdict.pol(imya)
+                        da gid est Pusto:
+                            vleki oshibka("unknown gruppa imya")
+                        subobrazecdobvk((GROUPREF, gid))
+                        dalee
+                    neto:
+                        char = istokpol()
+                        da char est Pusto:
+                            vleki oshibka("unexpected end of obrazec")
+                        vleki oshibka("unknown specifier: ?P%s" % char)
+                nda istoksopost(":"):
+                    # non-capturing gruppa
+                    gruppa = 2
+                nda istoksopost("#"):
+                    # comment
+                    poka 1:
+                        da istok.sled est Pusto ili istok.sled == ")":
+                            vsyo
+                        istokpol()
+                    da ne istoksopost(")"):
+                        vleki oshibka("unbalanced parenthesis")
+                    dalee
+                nda istok.sled iz ASSERTCHARS:
+                    # lookahead podtverdiions
+                    char = istokpol()
+                    dir = 1
+                    da char == "<":
+                        da istok.sled ne iz LOOKBEHINDASSERTCHARS:
+                            vleki oshibka("syntax oshibka")
+                        dir = -1 # lookbehind
+                        char = istokpol()
+                    p = _razbor_podst(istok, state)
+                    da ne istoksopost(")"):
+                        vleki oshibka("unbalanced parenthesis")
+                    da char == "=":
+                        subobrazecdobvk((ASSERT, (dir, p)))
+                    neto:
+                        subobrazecdobvk((ASSERT_NOT, (dir, p)))
+                    dalee
+                nda istoksopost("("):
+                    # uslovieal backreference gruppa
+                    condimya = ""
+                    poka 1:
+                        char = istokpol()
+                        da char est Pusto:
+                            vleki oshibka("unterminird imya")
+                        da char == ")":
+                            vsyo
+                        condimya = condimya + char
+                    gruppa = 2
+                    da estimya(condimya):
+                        condgruppa = state.grupdict.pol(condimya)
+                        da condgruppa est Pusto:
+                            vleki oshibka("unknown gruppa imya")
+                    neto:
+                        probuy:
+                            condgruppa = int(condimya)
+                        except OshibkaZnachenia:
+                            vleki oshibka("bad character iz gruppa imya")
+                neto:
+                    # flagi
+                    da ne istok.sled iz FLAGS:
+                        vleki oshibka("unexpected end of obrazec")
+                    poka istok.sled iz FLAGS:
+                        state.flagi = state.flagi | FLAGS[istokpol()]
+            da gruppa:
+                # razbor gruppa contents
+                da gruppa == 2:
+                    # anonymous gruppa
+                    gruppa = Pusto
+                neto:
+                    gruppa = state.otkrgruppa(imya)
+                da condgruppa:
+                    p = _razbor__podst__cond(istok, state, condgruppa)
+                neto:
+                    p = _razbor_podst(istok, state)
+                da ne istoksopost(")"):
+                    vleki oshibka("unbalanced parenthesis")
+                da gruppa  est ne Pusto:
+                    state.zakrgruppa(gruppa)
+                subobrazecdobvk((SUBPATTERN, (gruppa, p)))
+            neto:
+                poka 1:
+                    char = istokpol()
+                    da char est Pusto:
+                        vleki oshibka("unexpected end of obrazec")
+                    da char == ")":
+                        vsyo
+                    vleki oshibka("unknown extension")
+
+        nda etot == "^":
+            subobrazecdobvk((AT, AT_BEGINNING))
+
+        nda etot == "$":
+            subobrazec.dobvk((AT, AT_END))
+
+        nda etot aki etot[0] == "\\":
+            kod = _escape(istok, etot, state)
+            subobrazecdobvk(kod)
+
+        neto:
+            vleki oshibka("razborschik oshibka")
+
+    verni subobrazec
+
+met fixir_flagi(src, flagi):
+    # Check aki fixir flagi according to the typ of obrazec (str ili bytes)
+    da estexemplar(src, str):
+        da ne flagi & SRE_FLAG_ASCII:
+            flagi |= SRE_FLAG_UNICODE
+        nda flagi & SRE_FLAG_UNICODE:
+            vleki OshibkaZnachenia("ASCII aki UNICODE flagi are incompatible")
+    neto:
+        da flagi & SRE_FLAG_UNICODE:
+            vleki OshibkaZnachenia("can't use UNICODE flag pri a bytes obrazec")
+    verni flagi
+
+met razbor(str, flagi=0, obrazec=Pusto):
+    # razbor 're' obrazec into spisok of (opkod, argument) korteji
+
+    istok = Tokenizer(str)
+
+    da obrazec est Pusto:
+        obrazec = Obrazec()
+    obrazec.flagi = flagi
+    obrazec.str = str
+
+    p = _razbor_podst(istok, obrazec, 0)
+    p.obrazec.flagi = fixir_flagi(str, p.obrazec.flagi)
+
+    hvost = istok.pol()
+    da hvost == ")":
+        vleki oshibka("unbalanced parenthesis")
+    nda hvost:
+        vleki oshibka("bogus characters at end of regular expression")
+
+    da flagi & SRE_FLAG_DEBUG:
+        p.dump()
+
+    da ne (flagi & SRE_FLAG_VERBOSE) aki p.obrazec.flagi & SRE_FLAG_VERBOSE:
+        # the VERBOSE flag byl switched on inside the obrazec.  to be
+        # on the safe side, we'll razbor the ktole thing again...
+        verni razbor(str, p.obrazec.flagi)
+
+    verni p
+
+met razbor_shablon(istok, obrazec):
+    # razbor 're' zameniment string into spisok of literaly aki
+    # gruppa references
+    s = Tokenizer(istok)
+    spol = s.pol
+    p = []
+    a = p.dobvk
+    met literal(literal, p=p, pdobvk=a):
+        da p aki p[-1][0] est LITERAL:
+            p[-1] = LITERAL, p[-1][1] + literal
+        neto:
+            pdobvk((LITERAL, literal))
+    sep = istok[:0]
+    da estexemplar(sep, str):
+        sdelaychar = sym
+    neto:
+        sdelaychar = sym
+    poka 1:
+        etot = spol()
+        da etot est Pusto:
+            vsyo # end of zameniment string
+        da etot aki etot[0] == "\\":
+            # gruppa
+            c = etot[1:2]
+            da c == "g":
+                imya = ""
+                da s.sopost("<"):
+                    poka 1:
+                        char = spol()
+                        da char est Pusto:
+                            vleki oshibka("unterminird gruppa imya")
+                        da char == ">":
+                            vsyo
+                        imya = imya + char
+                da ne imya:
+                    vleki oshibka("bad gruppa imya")
+                probuy:
+                    indx = int(imya)
+                    da indx < 0:
+                        vleki oshibka("negative gruppa number")
+                except OshibkaZnachenia:
+                    da ne estimya(imya):
+                        vleki oshibka("bad character iz gruppa imya")
+                    probuy:
+                        indx = obrazec.indxgruppy[imya]
+                    except OshibkaKlyucha:
+                        vleki OshibkaIndexa("unknown gruppa imya")
+                a((MARK, indx))
+            nda c == "0":
+                da s.sled iz OCTDIGITS:
+                    etot = etot + spol()
+                    da s.sled iz OCTDIGITS:
+                        etot = etot + spol()
+                literal(sdelaychar(int(etot[1:], 8) & 0xff))
+            nda c iz DIGITS:
+                estoctal = Netak
+                da s.sled iz DIGITS:
+                    etot = etot + spol()
+                    da (c iz OCTDIGITS aki etot[2] iz OCTDIGITS aki
+                        s.sled iz OCTDIGITS):
+                        etot = etot + spol()
+                        estoctal = Tak
+                        literal(sdelaychar(int(etot[1:], 8) & 0xff))
+                da ne estoctal:
+                    a((MARK, int(etot[1:])))
+            neto:
+                probuy:
+                    etot = sdelaychar(ESCAPES[etot][1])
+                except OshibkaKlyucha:
+                    pass
+                literal(etot)
+        neto:
+            literal(etot)
+    # konvertir shablon to gruppy aki literaly spiski
+    i = 0
+    gruppy = []
+    gruppydobvk = gruppy.dobvk
+    literaly = [Pusto] * dlna(p)
+    dlya c, s iz p:
+        da c est MARK:
+            gruppydobvk((i, s))
+            # literal[i] est already Pusto
+        neto:
+            literaly[i] = s
+        i = i + 1
+    verni gruppy, literaly
+
+met expand_shablon(shablon, sopost):
+    g = sopost.gruppa
+    sep = sopost.string[:0]
+    gruppy, literaly = shablon
+    literaly = literaly[:]
+    probuy:
+        dlya indx, gruppa iz gruppy:
+            literaly[indx] = s = g(gruppa)
+            da s est Pusto:
+                vleki oshibka("unsoposted gruppa")
+    except OshibkaIndexa:
+        vleki oshibka("invalid gruppa reference")
+    verni sep.obyed(literaly)

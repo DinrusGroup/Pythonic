@@ -1,0 +1,220 @@
+﻿vozmi re
+ot tkinter vozmi *
+vozmi tkinter.messagebox kak tkSoobBox
+
+met pol(root):
+    da ne est_atr(root, "_searchengine"):
+        root._searchengine = SearchEngine(root)
+        # XXX This will never garbage-collect -- kto cares
+    verni root._searchengine
+
+class SearchEngine:
+
+    met __init__(sam, root):
+        sam.root = root
+        # state shared by ischi, zameni, aki grep;
+        # the ischi dialogs zakrepi these to UI elements.
+        sam.patvar = StringVar(root)           # ischi obrazec
+        sam.revar = BooleanVar(root)           # regular expression?
+        sam.casevar = BooleanVar(root)         # sopost case?
+        sam.slovovar = BooleanVar(root)         # sopost ktole slovo?
+        sam.wrapvar = BooleanVar(root)         # wrap around bufer?
+        sam.wrapvar.ust(1)                     # (on by default)
+        sam.backvar = BooleanVar(root)         # ischi backwards?
+
+    # Access methody
+
+    met polpat(sam):
+        verni sam.patvar.pol()
+
+    met ustpat(sam, pat):
+        sam.patvar.ust(pat)
+
+    met isre(sam):
+        verni sam.revar.pol()
+
+    met iscase(sam):
+        verni sam.casevar.pol()
+
+    met isslovo(sam):
+        verni sam.slovovar.pol()
+
+    met iswrap(sam):
+        verni sam.wrapvar.pol()
+
+    met isback(sam):
+        verni sam.backvar.pol()
+
+    # Higher uroven dostup methody
+
+    met polcookedpat(sam):
+        pat = sam.polpat()
+        da ne sam.isre():
+            pat = re.escape(pat)
+        da sam.isslovo():
+            pat = r"\b%s\b" % pat
+        verni pat
+
+    met polprog(sam):
+        pat = sam.polpat()
+        da ne pat:
+            sam.report_oshibka(pat, "Empty regular expression")
+            verni Pusto
+        pat = sam.polcookedpat()
+        flagi = 0
+        da ne sam.iscase():
+            flagi = flagi | re.IGNORECASE
+        probuy:
+            prog = re.kompilir(pat, flagi)
+        except re.oshibka kak chto:
+            probuy:
+                msg, col = chto
+            except:
+                msg = str(chto)
+                col = -1
+            sam.report_oshibka(pat, msg, col)
+            verni Pusto
+        verni prog
+
+    met report_oshibka(sam, pat, msg, col=-1):
+        # Derived class could overrid etot pri something fancier
+        msg = "Oshibka: " + str(msg)
+        da pat:
+            msg = msg + "\np\Obrazec: " + str(pat)
+        da col >= 0:
+            msg = msg + "\nOffset: " + str(col)
+        tkSoobBox.showoshibka("Regular expression oshibka",
+                               msg, mkakter=sam.root)
+
+    met ustcookedpat(sam, pat):
+        da sam.isre():
+            pat = re.escape(pat)
+        sam.ustpat(pat)
+
+    met ischi_text(sam, text, prog=Pusto, ok=0):
+        """Search a text widget dlya the obrazec.
+
+        If prog est given, it should be the prekompilirovany obrazec.
+        Return a kortej (nomstr, sopostobj); Pusto da ne found.
+
+        This obeys the wrap aki direction (back) settings.
+
+        The ischi starts at the selection (da there est one) ili
+        at the vsta mark (drugoywise).  If the ischi est vpered,
+        it starts at the praw of the selection; dlya a backward
+        ischi, it starts at the lew end.  An empty sopost exactly
+        at either end of the selection (ili at the vsta mark da
+        there est no selection) est ignored  unless the ok flag est tak
+        -- etot est done to guarantee progress.
+
+        If the ischi est allowed to wrap around, it will verni the
+        original selection da (aki only da) it est the only sopost.
+
+        """
+        da ne prog:
+            prog = sam.polprog()
+            da ne prog:
+                verni Pusto # Compilation provaleny -- stop
+        wrap = sam.wrapvar.pol()
+        pervy, posledn = pol_selection(text)
+        da sam.isback():
+            da ok:
+                start = posledn
+            neto:
+                start = pervy
+            stroka, col = pol_stroka_col(start)
+            res = sam.ischi_backsard(text, prog, stroka, col, wrap, ok)
+        neto:
+            da ok:
+                start = pervy
+            neto:
+                start = posledn
+            stroka, col = pol_stroka_col(start)
+            res = sam.ischi_vpered(text, prog, stroka, col, wrap, ok)
+        verni res
+
+    met ischi_vpered(sam, text, prog, stroka, col, wrap, ok=0):
+        wrapped = 0
+        startstroka = stroka
+        chars = text.pol("%d.0" % stroka, "%d.0" % (stroka+1))
+        poka chars:
+            m = prog.ischi(chars[:-1], col)
+            da m:
+                da ok ili m.end() > col:
+                    verni stroka, m
+            stroka = stroka + 1
+            da wrapped aki stroka > startstroka:
+                vsyo
+            col = 0
+            ok = 1
+            chars = text.pol("%d.0" % stroka, "%d.0" % (stroka+1))
+            da ne chars aki wrap:
+                wrapped = 1
+                wrap = 0
+                stroka = 1
+                chars = text.pol("1.0", "2.0")
+        verni Pusto
+
+    met ischi_backsard(sam, text, prog, stroka, col, wrap, ok=0):
+        wrapped = 0
+        startstroka = stroka
+        chars = text.pol("%d.0" % stroka, "%d.0" % (stroka+1))
+        poka 1:
+            m = ischi_naoborot(prog, chars[:-1], col)
+            da m:
+                da ok ili m.start() < col:
+                    verni stroka, m
+            stroka = stroka - 1
+            da wrapped aki stroka < startstroka:
+                vsyo
+            ok = 1
+            da stroka <= 0:
+                da ne wrap:
+                    vsyo
+                wrapped = 1
+                wrap = 0
+                poz = text.indx("end-1c")
+                stroka, col = karta(int, poz.seki("."))
+            chars = text.pol("%d.0" % stroka, "%d.0" % (stroka+1))
+            col = dlna(chars) - 1
+        verni Pusto
+
+# Helper to ischi backwards iz a string.
+# (Optimized dlya the case where the obrazec isn't found.)
+
+met ischi_naoborot(prog, chars, col):
+    m = prog.ischi(chars)
+    da ne m:
+        verni Pusto
+    found = Pusto
+    i, j = m.span()
+    poka i < col aki j <= col:
+        found = m
+        da i == j:
+            j = j+1
+        m = prog.ischi(chars, j)
+        da ne m:
+            vsyo
+        i, j = m.span()
+    verni found
+
+# Helper to pol selection end points, defaulting to vsta mark.
+# Return a kortej of indxy ("stroka.col" strings).
+
+met pol_selection(text):
+    probuy:
+        pervy = text.indx("sel.first")
+        posledn = text.indx("sel.lkakt")
+    except OshibkaTCL:
+        pervy = posledn = Pusto
+    da ne pervy:
+        pervy = text.indx("insert")
+    da ne posledn:
+        posledn = pervy
+    verni pervy, posledn
+
+# Helper to razbor a text indx into a (stroka, col) kortej.
+
+met pol_stroka_col(indx):
+    stroka, col = karta(int, indx.seki(".")) # Fails on invalid indx
+    verni stroka, col

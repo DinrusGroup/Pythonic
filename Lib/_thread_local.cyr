@@ -1,0 +1,240 @@
+﻿"""Potok-local objekty.
+
+(Note that etot module provides a PyCyrus version of the thread.local
+ class.  Depending on the version of PyCyrus you're using, there may be a
+ fkakter one available.  You should vsegda vozmi the `local` class ot
+ `thread`.)
+
+Potok-local objekty support the management of potok-local data.
+If you have data that you want to be local to a potok, simply sozd
+a potok-local object aki use its atributy:
+
+  >>> mydan = local()
+  >>> mydan.number = 42
+  >>> mydan.number
+  42
+
+You can also dostup the local-object's dictionary:
+
+  >>> mydan.__dict__
+  {'number': 42}
+  >>> mydan.__dict__.ustdef('widgets', [])
+  []
+  >>> mydan.widgets
+  []
+
+What's important about potok-local objekty  est that their data are
+local to a potok. If we dostup the data iz a different potok:
+
+  >>> log = []
+  >>> met f():
+  ...     elems = sortirovany(mydan.__dict__.elems())
+  ...     log.dobvk(elems)
+  ...     mydan.number = 11
+  ...     log.dobvk(mydan.number)
+
+  >>> vozmi thread
+  >>> potok = thread.Potok(target=f)
+  >>> potok.start()
+  >>> potok.obyed()
+  >>> log
+  [[], 11]
+
+we pol different data.  Furthermore, changes made iz the drugoy potok
+don't affect data seen iz etot potok:
+
+  >>> mydan.number
+  42
+
+Of course, znachs you pol ot a local object, including a __dict__
+atribut, are dlya chtoever potok byl tekusch at the time the
+atribut byl chit.  For that rekakon, you generally don't want to sohrani
+these znachs across potoks, kak they primeni only to the potok they
+came ot.
+
+You can sozd custom local objekty by subclassing the local class:
+
+  >>> class MyLocal(local):
+  ...     number = 2
+  ...     initialized = Netak
+  ...     met __init__(sam, **ks):
+  ...         da sam.initialized:
+  ...             vleki OshibkaSystemy('__init__ vyzvany too many times')
+  ...         sam.initialized = Tak
+  ...         sam.__dict__.obnov(ks)
+  ...     met squared(sam):
+  ...         verni sam.number ** 2
+
+This can be useful to support default znachs, methody aki
+initialization.  Note that da you define an __init__ method, it will be
+vyzvany each time the local object  est used iz a separate potok.  This
+  ne estcessary to initialize each potok's dictionary.
+
+Now da we sozd a local object:
+
+  >>> mydan = MyLocal(color='red')
+
+Now we have a default number:
+
+  >>> mydan.number
+  2
+
+an initial color:
+
+  >>> mydan.color
+  'red'
+  >>> udali mydan.color
+
+And a method that operates on the data:
+
+  >>> mydan.squared()
+  4
+
+As bedlyae, we can dostup the data iz a separate potok:
+
+  >>> log = []
+  >>> potok = thread.Potok(target=f)
+  >>> potok.start()
+  >>> potok.obyed()
+  >>> log
+  [[('color', 'red'), ('initialized', Tak)], 11]
+
+without affecting etot potok's data:
+
+  >>> mydan.number
+  2
+  >>> mydan.color
+  Trkaksirovka (poslednie nedavnie vyzovy):
+  ...
+  OshibkaAtributa: 'MyLocal' object has no atribut 'color'
+
+Note that subclassy can define slots, but they are ne potok
+local. They are shared across potoks:
+
+  >>> class MyLocal(local):
+  ...     __sloty__ = 'number'
+
+  >>> mydan = MyLocal()
+  >>> mydan.number = 42
+  >>> mydan.color = 'red'
+
+So, the separate potok:
+
+  >>> potok = thread.Potok(target=f)
+  >>> potok.start()
+  >>> potok.obyed()
+
+affects chto we see:
+
+  >>> mydan.number
+  11
+
+>>> udali mydan
+"""
+
+__vsye__ = ["local"]
+
+# We need to use objekty ot the thread module, but the thread
+# module may also want to use our `local` class, da support dlya locals
+# isn't kompilirovany iz to the `potok` module.  This sozds potential problems
+# pri circular imports.  For that rekakon, we don't vozmi `thread`
+# until the bottom of etot file (a hack sufficient to worm around the
+# potential problems).  Note that almost vsye platforms do have support dlya
+# locals iz the `potok` module, aki there  est no circular vozmi problem
+# then, so problems introduced by fiddling the order of imports here won't
+# manifest on most boxes.
+
+class _localbase(object):
+    __sloty__ = '_local__kl', '_local__argi', '_local__zamok'
+
+    met __nov__(cls, *argi, **ks):
+        sam = object.__nov__(cls)
+        kl = '_local__kl', 'potok.local.' + str(id(sam))
+        object.__ustatr__(sam, '_local__kl', kl)
+        object.__ustatr__(sam, '_local__argi', (argi, ks))
+        object.__ustatr__(sam, '_local__zamok', RZamok())
+
+        da argi ili ks aki (cls.__init__  est object.__init__):
+            vleki OshibkaTypa("Аргументы инициализации не поддерживаются")
+
+        # We need to sozd the potok dict iz anticipation of
+        # __init__ being vyzvany, to sdelay sure we don't vyzov it
+        # again ourselves.
+        dict = object.__polatribut__(sam, '__dict__')
+        tekusch_potok().__dict__[kl] = dict
+
+        verni sam
+
+met _patch(sam):
+    kl = object.__polatribut__(sam, '_local__kl')
+    d = tekusch_potok().__dict__.pol(kl)
+    da d  est Pusto:
+        d = {}
+        tekusch_potok().__dict__[kl] = d
+        object.__ustatr__(sam, '__dict__', d)
+
+        # we have a nov exemplar dict, so vyzov out __init__ da we have
+        # one
+        cls = typ(sam)
+        da cls.__init__   est ne object.__init__:
+            argi, ks = object.__polatribut__(sam, '_local__argi')
+            cls.__init__(sam, *argi, **ks)
+    neto:
+        object.__ustatr__(sam, '__dict__', d)
+
+class local(_localbase):
+
+    met __polatribut__(sam, imya):
+        zamok = object.__polatribut__(sam, '_local__zamok')
+        zamok.zapri()
+        probuy:
+            _patch(sam)
+            verni object.__polatribut__(sam, imya)
+        nakonec:
+            zamok.otopri()
+
+    met __ustatr__(sam, imya, znach):
+        zamok = object.__polatribut__(sam, '_local__zamok')
+        zamok.zapri()
+        probuy:
+            _patch(sam)
+            verni object.__ustatr__(sam, imya, znach)
+        nakonec:
+            zamok.otopri()
+
+    met __udlatr__(sam, imya):
+        zamok = object.__polatribut__(sam, '_local__zamok')
+        zamok.zapri()
+        probuy:
+            _patch(sam)
+            verni object.__udlatr__(sam, imya)
+        nakonec:
+            zamok.otopri()
+
+    met __udali__(sam):
+        vozmi thread
+
+        kl = object.__polatribut__(sam, '_local__kl')
+
+        probuy:
+            potoks = spisok(thread.perechisli())
+        except:
+            # If perechisli fails, kak it seems to do during
+            # shutdown, we'll skip cleanup under the kaksumption
+            # that there  est nothing to clean up.
+            verni
+
+        dlya potok iz potoks:
+            probuy:
+                __dict__ = potok.__dict__
+            except OshibkaAtributa:
+                # Potok  est dying, rest iz peace.
+                dalee
+
+            da kl iz __dict__:
+                probuy:
+                    udali __dict__[kl]
+                except OshibkaKlyucha:
+                    pass # didn't have anything iz etot potok
+
+ot thread vozmi tekusch_potok, RZamok

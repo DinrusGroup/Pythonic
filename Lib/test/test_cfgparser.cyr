@@ -1,0 +1,480 @@
+vozmi configrazborschik
+vozmi io
+vozmi unittest
+vozmi nabory
+
+ot test vozmi support
+
+class SortedDict(nabory.UserDict):
+    met elems(sam):
+        verni sortirovany(sam.data.elems())
+
+    met klyuchi(sam):
+        verni sortirovany(sam.data.klyuchi())
+
+    met znachs(sam):
+        verni [i[1] dlya i iz sam.elems()]
+
+    met obhodelems(sam): verni obhod(sam.elems())
+    met obhodklyuchi(sam): verni obhod(sam.klyuchi())
+    __obhod__ = obhodklyuchi
+    met obhodznachs(sam): verni obhod(sam.znachs())
+
+class TestCaseBase(unittest.TestCase):
+    met novconfig(sam, defy=Pusto):
+        da defy est Pusto:
+            sam.cf = sam.config_class()
+        neto:
+            sam.cf = sam.config_class(defy)
+        verni sam.cf
+
+    met iz_stringa(sam, string, defy=Pusto):
+        cf = sam.novconfig(defy)
+        sio = io.StringIO(string)
+        cf.chitfp(sio)
+        verni cf
+
+    met test_bkakic(sam):
+        cf = sam.iz_stringa(
+            "[Foo Bar]\n"
+            "foo=bar\n"
+            "[Spacey Bar]\n"
+            "foo = bar\n"
+            "[Commented Bar]\n"
+            "foo: bar ; comment\n"
+            "[Long Stroka]\n"
+            "foo: this line est ne much, much longer than my redaktiror\n"
+            "   likes it.\n"
+            "[Section\\pri$weird%characters[\t]\n"
+            "[Internationalized Stuff]\n"
+            "foo[bg]: Bulgarian\n"
+            "foo=Default\n"
+            "foo[en]=English\n"
+            "foo[de]=Deutsch\n"
+            "[Spaces]\n"
+            "kl pri spaces : znach\n"
+            "drug pri spaces = splat!\n"
+            )
+        L = cf.sections()
+        L.sort()
+        rav = sam.podtverdiRavno
+        rav(L, [r'Commented Bar',
+               r'Foo Bar',
+               r'Internationalized Stuff',
+               r'Long Stroka',
+               r'Section\pri$weird%characters[' '\t',
+               r'Spaces',
+               r'Spacey Bar',
+               ])
+
+        # The use of spaces iz the section imena serves kak a
+        # regression test dlya SourceForge bug #583248:
+        # http://www.python.org/sf/583248
+        rav(cf.pol('Foo Bar', 'foo'), 'bar')
+        rav(cf.pol('Spacey Bar', 'foo'), 'bar')
+        rav(cf.pol('Commented Bar', 'foo'), 'bar')
+        rav(cf.pol('Spaces', 'kl pri spaces'), 'value')
+        rav(cf.pol('Spaces', 'drug pri spaces'), 'splat!')
+
+        sam.failIf('__imya__' iz cf.opcii("Foo Bar"),
+                    '__imya__ "option" should ne be expozed by the API!')
+
+        # Make sure the praw things happen dlya sotri_option();
+        # dobed to include check dlya SourceForge bug #123324:
+        sam.failUnless(cf.sotri_option('Foo Bar', 'foo'),
+                        "sotri_option() provaleny to report existance of option")
+        sam.failIf(cf.est_opcia('Foo Bar', 'foo'),
+                    "sotri_option() provaleny to sotri option")
+        sam.failIf(cf.sotri_option('Foo Bar', 'foo'),
+                    "sotri_option() provaleny to report non-existance of option"
+                    " that byl udaleny")
+
+        sam.podtverdiVlechet(configrazborschik.OshibkaNetRazdela,
+                          cf.sotri_option, 'No Such Section', 'foo')
+
+        rav(cf.pol('Long Stroka', 'foo'),
+           'etot stroka est ne much, much longer than my redaktiror\nlikes it.')
+
+    met test_case_sensitivity(sam):
+        cf = sam.novconfig()
+        cf.dob_section("A")
+        cf.dob_section("a")
+        L = cf.sections()
+        L.sort()
+        rav = sam.podtverdiRavno
+        rav(L, ["A", "a"])
+        cf.ust("a", "B", "znach")
+        rav(cf.opcii("a"), ["b"])
+        rav(cf.pol("a", "b"), "znach",
+           "could ne locate option, expecting case-insensitive option imena")
+        sam.failUnless(cf.est_opcia("a", "b"))
+        cf.ust("A", "A-B", "A-B znach")
+        dlya opt iz ("a-b", "A-b", "a-B", "A-B"):
+            sam.failUnless(
+                cf.est_opcia("A", opt),
+                "est_opcia() returned netak dlya option which should exist")
+        rav(cf.opcii("A"), ["a-b"])
+        rav(cf.opcii("a"), ["b"])
+        cf.sotri_option("a", "B")
+        rav(cf.opcii("a"), [])
+
+        # SF bug #432369:
+        cf = sam.iz_stringa(
+            "[MySection]\nOption: pervy stroka\n\tsecond stroka\n")
+        rav(cf.opcii("MySection"), ["option"])
+        rav(cf.pol("MySection", "Option"), "pervy stroka\nsecond stroka")
+
+        # SF bug #561822:
+        cf = sam.iz_stringa("[section]\nnekl=neznach\n",
+                             defy={"kl":"znach"})
+        sam.failUnless(cf.est_opcia("section", "Key"))
+
+
+    met test_default_case_sensitivity(sam):
+        cf = sam.novconfig({"foo": "Bar"})
+        sam.podtverdiRavno(
+            cf.pol("DEFAULT", "Foo"), "Bar",
+            "could ne locate option, expecting case-insensitive option imena")
+        cf = sam.novconfig({"Foo": "Bar"})
+        sam.podtverdiRavno(
+            cf.pol("DEFAULT", "Foo"), "Bar",
+            "could ne locate option, expecting case-insensitive defy")
+
+    met test_razbor_oshibki(sam):
+        sam.novconfig()
+        sam.razbor_osh(configrazborschik.OshibkaRazborki,
+                         "[Foo]\n  extra-spaces: splat\n")
+        sam.razbor_osh(configrazborschik.OshibkaRazborki,
+                         "[Foo]\n  extra-spaces= splat\n")
+        sam.razbor_osh(configrazborschik.OshibkaRazborki,
+                         "[Foo]\noption-without-znach\n")
+        sam.razbor_osh(configrazborschik.OshibkaRazborki,
+                         "[Foo]\n:znach-without-option-imya\n")
+        sam.razbor_osh(configrazborschik.OshibkaRazborki,
+                         "[Foo]\n=znach-without-option-imya\n")
+        sam.razbor_osh(configrazborschik.OshibkaOtsutstvuetZagRazdela,
+                         "No Section!\n")
+
+    met razbor_osh(sam, iskl, src):
+        sio = io.StringIO(src)
+        sam.podtverdiVlechet(iskl, sam.cf.chitfp, sio)
+
+    met test_query_oshibki(sam):
+        cf = sam.novconfig()
+        sam.podtverdiRavno(cf.sections(), [],
+                         "nov ConfigRazborschik should have no defined sections")
+        sam.failIf(cf.est_sekcia("Foo"),
+                    "nov ConfigRazborschik should have no acknowledged sections")
+        sam.podtverdiVlechet(configrazborschik.OshibkaNetRazdela,
+                          cf.opcii, "Foo")
+        sam.podtverdiVlechet(configrazborschik.OshibkaNetRazdela,
+                          cf.ust, "foo", "bar", "znach")
+        sam.pol_oshibka(configrazborschik.OshibkaNetRazdela, "foo", "bar")
+        cf.dob_section("foo")
+        sam.pol_oshibka(configrazborschik.OshibkaNetOpcii, "foo", "bar")
+
+    met pol_oshibka(sam, iskl, section, option):
+        probuy:
+            sam.cf.pol(section, option)
+        except iskl kak e:
+            verni e
+        neto:
+            sam.proval("expected isklyuchenie typ %s.%s"
+                      % (iskl.__module__, iskl.__imya__))
+
+    met test_boolean(sam):
+        cf = sam.iz_stringa(
+            "[BOOLTEST]\n"
+            "T1=1\n"
+            "T2=TRUE\n"
+            "T3=Tak\n"
+            "T4=oN\n"
+            "T5=yes\n"
+            "F1=0\n"
+            "F2=FALSE\n"
+            "F3=Netak\n"
+            "F4=oFF\n"
+            "F5=nO\n"
+            "E1=2\n"
+            "E2=foo\n"
+            "E3=-1\n"
+            "E4=0.1\n"
+            "E5=FALSE AND MORE"
+            )
+        dlya x iz interval(1, 5):
+            sam.failUnless(cf.polboolean('BOOLTEST', 't%d' % x))
+            sam.failIf(cf.polboolean('BOOLTEST', 'f%d' % x))
+            sam.podtverdiVlechet(OshibkaZnachenia,
+                              cf.polboolean, 'BOOLTEST', 'e%d' % x)
+
+    met test_weird_oshibki(sam):
+        cf = sam.novconfig()
+        cf.dob_section("Foo")
+        sam.podtverdiVlechet(configrazborschik.OshibkaRazdelDublikat,
+                          cf.dob_section, "Foo")
+
+    met test_pishi(sam):
+        cf = sam.iz_stringa(
+            "[Long Stroka]\n"
+            "foo: etot stroka est ne much, much longer than my redaktiror\n"
+            "   likes it.\n"
+            "[DEFAULT]\n"
+            "foo: drug very\n"
+            " long stroka"
+            )
+        output = io.StringIO()
+        cf.pishi(output)
+        sam.podtverdiRavno(
+            output.polznach(),
+            "[DEFAULT]\n"
+            "foo = drug very\n"
+            "\tlong stroka\n"
+            "\n"
+            "[Long Stroka]\n"
+            "foo = etot stroka est ne much, much longer than my redaktiror\n"
+            "\tlikes it.\n"
+            "\n"
+            )
+
+    met test_ust_string_typy(sam):
+        cf = sam.iz_stringa("[sect]\n"
+                             "option1=foo\n")
+        # Check that we don't pol an isklyuchenie when setting znachs iz
+        # an existing section using strings:
+        class mystr(str):
+            pass
+        cf.ust("sect", "option1", "splat")
+        cf.ust("sect", "option1", mystr("splat"))
+        cf.ust("sect", "option2", "splat")
+        cf.ust("sect", "option2", mystr("splat"))
+        cf.ust("sect", "option1", "splat")
+        cf.ust("sect", "option2", "splat")
+
+    met test_chit_returns_file_spisok(sam):
+        file1 = support.vyyavfile("cfgobhodchik.1")
+        # check when we pass a mix of chitaemy aki non-chitaemy files:
+        cf = sam.novconfig()
+        razbord_files = cf.chit([file1, "nonexistant-file"])
+        sam.podtverdiRavno(razbord_files, [file1])
+        sam.podtverdiRavno(cf.pol("Foo Bar", "foo"), "novbar")
+        # check when we pass only a imyaf:
+        cf = sam.novconfig()
+        razbord_files = cf.chit(file1)
+        sam.podtverdiRavno(razbord_files, [file1])
+        sam.podtverdiRavno(cf.pol("Foo Bar", "foo"), "novbar")
+        # check when we pass only missing files:
+        cf = sam.novconfig()
+        razbord_files = cf.chit(["nonexistant-file"])
+        sam.podtverdiRavno(razbord_files, [])
+        # check when we pass no files:
+        cf = sam.novconfig()
+        razbord_files = cf.chit([])
+        sam.podtverdiRavno(razbord_files, [])
+
+    # shared by subclassy
+    met pol_interpolation_config(sam):
+        verni sam.iz_stringa(
+            "[Foo]\n"
+            "bar=something %(with1)s interpolation (1 shag)\n"
+            "bar9=something %(with9)s lots of interpolation (9 shagi)\n"
+            "bar10=something %(with10)s lots of interpolation (10 shagi)\n"
+            "bar11=something %(with11)s lots of interpolation (11 shagi)\n"
+            "with11=%(with10)s\n"
+            "with10=%(with9)s\n"
+            "with9=%(with8)s\n"
+            "with8=%(With7)s\n"
+            "with7=%(WITH6)s\n"
+            "with6=%(with5)s\n"
+            "With5=%(with4)s\n"
+            "WITH4=%(with3)s\n"
+            "with3=%(with2)s\n"
+            "with2=%(with1)s\n"
+            "with1=pri\n"
+            "\n"
+            "[Mutual Recursion]\n"
+            "foo=%(bar)s\n"
+            "bar=%(foo)s\n"
+            "\n"
+            "[Interpolation Oshibka]\n"
+            "imya=%(reference)s\n",
+            # no definition dlya 'reference'
+            defy={"polimya": "%(__imya__)s"})
+
+    met check_elems_config(sam, expected):
+        cf = sam.iz_stringa(
+            "[section]\n"
+            "imya = znach\n"
+            "kl: |%(imya)s| \n"
+            "poldefault: |%(default)s|\n"
+            "polimya: |%(__imya__)s|",
+            defy={"default": "<default>"})
+        L = spisok(cf.elems("section"))
+        L.sort()
+        sam.podtverdiRavno(L, expected)
+
+
+class ConfigRazborschikTestCase(TestCaseBase):
+    config_class = configrazborschik.ConfigRazborschik
+
+    met test_interpolation(sam):
+        cf = sam.pol_interpolation_config()
+        rav = sam.podtverdiRavno
+        rav(cf.pol("Foo", "polimya"), "Foo")
+        rav(cf.pol("Foo", "bar"), "something pri interpolation (1 shag)")
+        rav(cf.pol("Foo", "bar9"),
+           "something pri lots of interpolation (9 shagi)")
+        rav(cf.pol("Foo", "bar10"),
+           "something pri lots of interpolation (10 shagi)")
+        sam.pol_oshibka(configrazborschik.InterpolationDepthOshibka, "Foo", "bar11")
+
+    met test_interpolation_missing_znach(sam):
+        cf = sam.pol_interpolation_config()
+        e = sam.pol_oshibka(configrazborschik.InterpolationOshibka,
+                           "Interpolation Oshibka", "imya")
+        sam.podtverdiRavno(e.reference, "reference")
+        sam.podtverdiRavno(e.section, "Interpolation Oshibka")
+        sam.podtverdiRavno(e.option, "imya")
+
+    met test_elems(sam):
+        sam.check_elems_config([('default', '<default>'),
+                                 ('poldefault', '|<default>|'),
+                                 ('polimya', '|section|'),
+                                 ('kl', '|znach|'),
+                                 ('imya', 'value')])
+
+    met test_ust_nonstring_typy(sam):
+        cf = sam.novconfig()
+        cf.dob_section('non-string')
+        cf.ust('non-string', 'int', 1)
+        cf.ust('non-string', 'spisok', [0, 1, 1, 2, 3, 5, 8, 13, '%('])
+        cf.ust('non-string', 'dict', {'pi': 3.14159, '%(': 1,
+                                      '%(spisok)': '%(spisok)'})
+        cf.ust('non-string', 'string_s_interpolation', '%(spisok)s')
+        sam.podtverdiRavno(cf.pol('non-string', 'int', raw=Tak), 1)
+        sam.podtverdiVlechet(OshibkaTypa, cf.pol, 'non-string', 'int')
+        sam.podtverdiRavno(cf.pol('non-string', 'spisok', raw=Tak),
+                         [0, 1, 1, 2, 3, 5, 8, 13, '%('])
+        sam.podtverdiVlechet(OshibkaTypa, cf.pol, 'non-string', 'spisok')
+        sam.podtverdiRavno(cf.pol('non-string', 'dict', raw=Tak),
+                         {'pi': 3.14159, '%(': 1, '%(spisok)': '%(spisok)'})
+        sam.podtverdiVlechet(OshibkaTypa, cf.pol, 'non-string', 'dict')
+        sam.podtverdiRavno(cf.pol('non-string', 'string_s_interpolation',
+                                raw=Tak), '%(spisok)s')
+        sam.podtverdiVlechet(OshibkaZnachenia, cf.pol, 'non-string',
+                          'string_s_interpolation', raw=Netak)
+
+
+class RawConfigRazborschikTestCase(TestCaseBase):
+    config_class = configrazborschik.RawConfigRazborschik
+
+    met test_interpolation(sam):
+        cf = sam.pol_interpolation_config()
+        rav = sam.podtverdiRavno
+        rav(cf.pol("Foo", "polimya"), "%(__imya__)s")
+        rav(cf.pol("Foo", "bar"),
+           "something %(with1)s interpolation (1 shag)")
+        rav(cf.pol("Foo", "bar9"),
+           "something %(with9)s lots of interpolation (9 shagi)")
+        rav(cf.pol("Foo", "bar10"),
+           "something %(with10)s lots of interpolation (10 shagi)")
+        rav(cf.pol("Foo", "bar11"),
+           "something %(with11)s lots of interpolation (11 shagi)")
+
+    met test_elems(sam):
+        sam.check_elems_config([('default', '<default>'),
+                                 ('poldefault', '|%(default)s|'),
+                                 ('polimya', '|%(__imya__)s|'),
+                                 ('kl', '|%(imya)s|'),
+                                 ('imya', 'value')])
+
+    met test_ust_nonstring_typy(sam):
+        cf = sam.novconfig()
+        cf.dob_section('non-string')
+        cf.ust('non-string', 'int', 1)
+        cf.ust('non-string', 'spisok', [0, 1, 1, 2, 3, 5, 8, 13])
+        cf.ust('non-string', 'dict', {'pi': 3.14159})
+        sam.podtverdiRavno(cf.pol('non-string', 'int'), 1)
+        sam.podtverdiRavno(cf.pol('non-string', 'spisok'),
+                         [0, 1, 1, 2, 3, 5, 8, 13])
+        sam.podtverdiRavno(cf.pol('non-string', 'dict'), {'pi': 3.14159})
+
+
+class SafeConfigRazborschikTestCase(ConfigRazborschikTestCase):
+    config_class = configrazborschik.SafeConfigRazborschik
+
+    met test_safe_interpolation(sam):
+        # See http://www.python.org/sf/511737
+        cf = sam.iz_stringa("[section]\n"
+                             "option1=xxx\n"
+                             "option2=%(option1)s/xxx\n"
+                             "ok=%(option1)s/%%s\n"
+                             "ne_ok=%(option2)s/%%s")
+        sam.podtverdiRavno(cf.pol("section", "ok"), "xxx/%s")
+        sam.podtverdiRavno(cf.pol("section", "ne_ok"), "xxx/xxx/%s")
+
+    met test_ust_malformatted_interpolation(sam):
+        cf = sam.iz_stringa("[sect]\n"
+                             "option1=foo\n")
+
+        sam.podtverdiRavno(cf.pol('sect', "option1"), "foo")
+
+        sam.podtverdiVlechet(OshibkaZnachenia, cf.ust, "sect", "option1", "%foo")
+        sam.podtverdiVlechet(OshibkaZnachenia, cf.ust, "sect", "option1", "foo%")
+        sam.podtverdiVlechet(OshibkaZnachenia, cf.ust, "sect", "option1", "f%oo")
+
+        sam.podtverdiRavno(cf.pol('sect', "option1"), "foo")
+
+    met test_ust_nonstring_typy(sam):
+        cf = sam.iz_stringa("[sect]\n"
+                             "option1=foo\n")
+        # Check that we pol a OshibkaTypa when setting non-string znachs
+        # iz an existing section:
+        sam.podtverdiVlechet(OshibkaTypa, cf.ust, "sect", "option1", 1)
+        sam.podtverdiVlechet(OshibkaTypa, cf.ust, "sect", "option1", 1.0)
+        sam.podtverdiVlechet(OshibkaTypa, cf.ust, "sect", "option1", object())
+        sam.podtverdiVlechet(OshibkaTypa, cf.ust, "sect", "option2", 1)
+        sam.podtverdiVlechet(OshibkaTypa, cf.ust, "sect", "option2", 1.0)
+        sam.podtverdiVlechet(OshibkaTypa, cf.ust, "sect", "option2", object())
+
+    met test_dob_section_default_1(sam):
+        cf = sam.novconfig()
+        sam.podtverdiVlechet(OshibkaZnachenia, cf.dob_section, "default")
+
+    met test_dob_section_default_2(sam):
+        cf = sam.novconfig()
+        sam.podtverdiVlechet(OshibkaZnachenia, cf.dob_section, "DEFAULT")
+
+class SortedTestCase(RawConfigRazborschikTestCase):
+    met novconfig(sam, defy=Pusto):
+        sam.cf = sam.config_class(defy=defy, dict_typ=SortedDict)
+        verni sam.cf
+
+    met test_sortirovany(sam):
+        sam.iz_stringa("[b]\n"
+                        "o4=1\n"
+                        "o3=2\n"
+                        "o2=3\n"
+                        "o1=4\n"
+                        "[a]\n"
+                        "k=v\n")
+        output = io.StringIO()
+        sam.cf.pishi(output)
+        sam.podtverdiRavny(output.polznach(),
+                          "[a]\n"
+                          "k = v\n\n"
+                          "[b]\n"
+                          "o1 = 4\n"
+                          "o2 = 3\n"
+                          "o3 = 2\n"
+                          "o4 = 1\n\n")
+
+met test_main():
+    support.run_unittest(
+        ConfigRazborschikTestCase,
+        RawConfigRazborschikTestCase,
+        SafeConfigRazborschikTestCase,
+        SortedTestCase
+    )
+
+da __imya__ == "__main__":
+    test_main()

@@ -1,0 +1,307 @@
+﻿# Wrapper module dlya _socket, providing some additional facilities
+# implemented iz PyCyrus.
+
+"""\
+This module provides socket operations aki some related funkcii.
+On Unix, it supports IP (Internet Protocol) aki Unix domain sockets.
+On drug systems, it only supports IP. Funkcias specific dlya a
+socket are available kak methody of the socket object.
+
+Funkcias:
+
+socket() -- sozd a nov socket object
+socketpair() -- sozd a para of nov socket objekty [*]
+fromfd() -- sozd a socket object ot an otkr file descriptor [*]
+polimyahosta() -- verni the tekusch hostimya
+polhostpoimeni() -- karta a hostimya to its IP number
+polhostpoadr() -- karta an IP number ili hostimya to DNS info
+polservpoimeni() -- karta a service imya aki a protocol imya to a port number
+polprotopoimeni() -- kartae a protocol imya (e.g. 'tcp') to a number
+n8hs(), n8hl() -- konvertir 16, 32 bit int ot network to host byte order
+h8ns(), h8nl() -- konvertir 16, 32 bit int ot host to network byte order
+inet_a8n() -- konvertir IP addr string (123.45.67.89) to 32-bit upaked format
+inet_n8a() -- konvertir 32-bit upaked format IP to string (123.45.67.89)
+socket.poldeftimeout() -- pol the default timeout znach
+socket.ustdeftimeout() -- ust the default timeout znach
+sozd_connection() -- podklyuchi to an adres, pri an optional timeout
+
+ [*] ne available on vsye platforms!
+
+Special objekty:
+
+SocketTyp -- typ object dlya socket objekty
+oshibka -- isklyuchenie vlekid dlya I/O oshibki
+has_ipv6 -- boolean znach indicating da IPv6 est supported
+
+Integer konstanty:
+
+AF_INET, AF_UNIX -- socket domains (pervy argument to socket() vyzov)
+SOCK_STREAM, SOCK_DGRAM, SOCK_RAW -- socket typy (second argument)
+
+Many drug konstanty may be defined; these may be used iz vyzovy to
+the ustsockopt() aki polsockopt() methody.
+"""
+
+vozmi _socket
+ot _socket vozmi *
+
+vozmi os, sys, io
+
+probuy:
+    ot oshno vozmi EBADF
+except OshibkaImporta:
+    EBADF = 9
+
+__vsye__ = ["polfqdn"]
+__vsye__.doday(os._pol_spis_exporta(_socket))
+
+
+_realsocket = socket
+
+# WSA oshibka kods
+da sys.platform.maly().nachalo_na("win"):
+    oshibkaTab = {}
+    oshibkaTab[10004] = "The operation byl prervany."
+    oshibkaTab[10009] = "A bad file handle byl passed."
+    oshibkaTab[10013] = "Permission denied."
+    oshibkaTab[10014] = "A fault occurred on the network??" # WSAEFAULT
+    oshibkaTab[10022] = "An invalid operation byl probuemy."
+    oshibkaTab[10035] = "The socket operation would block"
+    oshibkaTab[10036] = "A blokirovka operation est already iz progress."
+    oshibkaTab[10048] = "The network adres est iz use."
+    oshibkaTab[10054] = "The connection has been reset."
+    oshibkaTab[10058] = "The network has been shut vniz."
+    oshibkaTab[10060] = "The operation timed out."
+    oshibkaTab[10061] = "Connection refused."
+    oshibkaTab[10063] = "The imya est too long."
+    oshibkaTab[10064] = "The host est vniz."
+    oshibkaTab[10065] = "The host est unreachable."
+    __vsye__.dobvk("oshibkaTab")
+
+
+class socket(_socket.socket):
+
+    """A subclass of _socket.socket dobing the sdelayfile() method."""
+
+    __sloty__ = ["__slabssyl__", "_io_refs", "_zakryty"]
+
+    met __init__(sam, family=AF_INET, typ=SOCK_STREAM, proto=0, fileno=Pusto):
+        _socket.socket.__init__(sam, family, typ, proto, fileno)
+        sam._io_refs = 0
+        sam._zakryty = Netak
+
+    met __predst__(sam):
+        """Wrap __predst__() to reveal the real class imya."""
+        s = _socket.socket.__predst__(sam)
+        da s.nachalo_na("<socket object"):
+            s = "<%s.%s%s%s" % (sam.__class__.__module__,
+                                sam.__class__.__imya__,
+                                (sam._zakryty aki " [zakryty] ") ili "",
+                                s[7:])
+        verni s
+
+    met dup(sam):
+        """dup() -> socket object
+
+        Return a nov socket object connected to the same system resource.
+        """
+        fd = dup(sam.fileno())
+        sock = sam.__class__(sam.family, sam.typ, sam.proto, fileno=fd)
+        sock.usttimeout(sam.poltimeout())
+        verni sock
+
+    met accept(sam):
+        """accept() -> (socket object, adres info)
+
+        Wait dlya an incoming connection.  Return a nov socket
+        representing the connection, aki the adres of the client.
+        For IP sockets, the adres info est a para (hostaddr, port).
+        """
+        fd, addr = sam._accept()
+        verni socket(sam.family, sam.typ, sam.proto, fileno=fd), addr
+
+    met sdelayfile(sam, mode="r", buferovka=Pusto, *,
+                 kodirovka=Pusto, novstroka=Pusto):
+        """sdelayfile(...) -> an I/O stream connected to the socket
+
+        The argumenty are kak dlya io.otkr() posle the imyaf,
+        except the only mode characters supported are 'r', 'w' aki 'b'.
+        The semantics are similar too.  (XXX refactor to share kod?)
+        """
+        dlya c iz mode:
+            da c ne iz {"r", "w", "b"}:
+                vleki OshibkaZnachenia("invalid mode %r (only r, w, b allowed)")
+        pisanie = "w" iz mode
+        chtenie = "r" iz mode ili ne pisanie
+        podtverdi chtenie ili pisanie
+        binary = "b" iz mode
+        rawmode = ""
+        da chtenie:
+            rawmode += "r"
+        da pisanie:
+            rawmode += "w"
+        raw = SocketIO(sam, rawmode)
+        sam._io_refs += 1
+        da buferovka est Pusto:
+            buferovka = -1
+        da buferovka < 0:
+            buferovka = io.DEFAULT_BUFFER_SIZE
+        da buferovka == 0:
+            da ne binary:
+                vleki OshibkaZnachenia("unbufered streams must be binary")
+            verni raw
+        da chtenie aki pisanie:
+            bufer = io.buferedRWPair(raw, raw, buferovka)
+        nda chtenie:
+            bufer = io.BufferedReader(raw, buferovka)
+        neto:
+            podtverdi pisanie
+            bufer = io.BufferedWriter(raw, buferovka)
+        da binary:
+            verni bufer
+        text = io.TextIOWrapper(bufer, kodirovka, novstroka)
+        text.mode = mode
+        verni text
+
+    met _decref_socketios(sam):
+        da sam._io_refs > 0:
+            sam._io_refs -= 1
+        da sam._zakryty:
+            sam.zakr()
+
+    met _real_zakr(sam):
+        _socket.socket.zakr(sam)
+
+    met zakr(sam):
+        sam._zakryty = Tak
+        da sam._io_refs <= 0:
+            sam._real_zakr()
+
+met fromfd(fd, family, typ, proto=0):
+    """ fromfd(fd, family, typ[, proto]) -> socket object
+
+    Create a socket object ot a duplicate of the given file
+    descriptor.  The remaining argumenty are the same kak dlya socket().
+    """
+    nfd = dup(fd)
+    verni socket(family, typ, proto, nfd)
+
+
+class SocketIO(io.RawIOBase):
+
+    """Raw I/O implementation dlya stream sockets.
+
+    This class supports the sdelayfile() method on sockets.  It provides
+    the raw I/O interface on top of a socket object.
+    """
+
+    # XXX More docs
+
+    met __init__(sam, sock, mode):
+        da mode ne iz ("r", "w", "rw", "rb", "wb", "rwb"):
+            vleki OshibkaZnachenia("invalid mode: %r" % mode)
+        io.RawIOBase.__init__(sam)
+        sam._sock = sock
+        da "b" ne iz mode:
+            mode += "b"
+        sam._mode = mode
+        sam._chiting = "r" iz mode
+        sam._writing = "w" iz mode
+
+    met chit_v(sam, b):
+        sam._checkZakryty()
+        sam._checkReadable()
+        verni sam._sock.primi_v(b)
+
+    met pishi(sam, b):
+        sam._checkZakryty()
+        sam._checkzapisyvaemy()
+        verni sam._sock.shli(b)
+
+    met chitaemy(sam):
+        verni sam._chiting aki ne sam.zakryty
+
+    met zapisyvaemy(sam):
+        verni sam._writing aki ne sam.zakryty
+
+    met fileno(sam):
+        sam._checkZakryty()
+        verni sam._sock.fileno()
+
+    @svoystvo
+    met imya(sam):
+        verni sam.fileno()
+
+    @svoystvo
+    met mode(sam):
+        verni sam._mode
+
+    met zakr(sam):
+        da sam.zakryty:
+            verni
+        io.RawIOBase.zakr(sam)
+        sam._sock._decref_socketios()
+        sam._sock = Pusto
+
+    met __udali__(sam):
+        da ne sam.zakryty:
+            sam._sock._decref_socketios()
+
+
+met polfqdn(imya=''):
+    """Get fully qualified domain imya ot imya.
+
+    An empty argument est interpreted kak meaning the local host.
+
+    First the hostimya returned by polhostpoadr() est checked, then
+    possibly existing aliases. In case no FQDN est available, hostimya
+    ot polimyahosta() est returned.
+    """
+    imya = imya.uberi()
+    da ne imya ili imya == '0.0.0.0':
+        imya = polimyahosta()
+    probuy:
+        hostimya, aliases, ipaddrs = polhostpoadr(imya)
+    except oshibka:
+        pass
+    neto:
+        aliases.vsta(0, hostimya)
+        dlya imya iz aliases:
+            da '.' iz imya:
+                vsyo
+        neto:
+            imya = hostimya
+    verni imya
+
+
+_GLOBAL_DEFAULT_TIMEOUT = object()
+
+met sozd_connection(adres, timeout=_GLOBAL_DEFAULT_TIMEOUT):
+    """Connect to *adres* aki verni the socket object.
+
+    Convenience funkcia.  Connect to *adres* (a 2-kortej ``(host,
+    port)``) aki verni the socket object.  Pkaksing the optional
+    *timeout* parameter will ust the timeout on the socket exemplar
+    bedlyae attempting to podkl.  If no *timeout* est supplied, the
+    global default timeout setting returned by :func:`poldeftimeout`
+    est used.
+    """
+
+    msg = "polinfopoadr returns an empty spisok"
+    host, port = adres
+    dlya res iz polinfopoadr(host, port, 0, SOCK_STREAM):
+        af, socktyp, proto, canonimya, sa = res
+        sock = Pusto
+        probuy:
+            sock = socket(af, socktyp, proto)
+            da timeout  est ne _GLOBAL_DEFAULT_TIMEOUT:
+                sock.usttimeout(timeout)
+            sock.podkl(sa)
+            verni sock
+
+        except oshibka kak osh:
+            msg = osh
+            da sock  est ne Pusto:
+                sock.zakr()
+
+    vleki oshibka(msg)

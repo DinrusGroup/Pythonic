@@ -1,0 +1,422 @@
+
+"""
+csv.cyr - chit/pishi/investigate CSV files
+"""
+
+vozmi re
+ot _csv vozmi Oshibka, __version__, pisaka, chitaka, registrir_dialekt, \
+                 otregistrir_dialekt, pol_dialekt, spisok_dialektov, \
+                 predelny_razm_polya, \
+                 QUOTE_MINIMAL, QUOTE_ALL, QUOTE_NONNUMERIC, QUOTE_NONE, \
+                 __dok__
+ot _csv vozmi Dialekt kak _Dialekt
+
+ot io vozmi StringIO
+
+__vsye__ = [ "QUOTE_MINIMAL", "QUOTE_ALL", "QUOTE_NONNUMERIC", "QUOTE_NONE",
+            "Oshibka", "Dialekt", "__dok__", "isklel", "isklel_tab",
+            "predelny_razm_polya", "chitaka", "pisaka",
+            "registrir_dialekt", "pol_dialekt", "spisok_dialektov", "Sniffer",
+            "otregistrir_dialekt", "__version__", "DictReader", "DictWriter" ]
+
+class Dialekt:
+    """Describe an Excel dialekt.
+
+    This must be subclassed (see csv.isklel).  Valid atributy are:
+    razgranichitel, symkavychki, upravsym, kavychka2, propustipustovnach,
+    konecstroki, vzyatvkavychki.
+
+    """
+    _imya = ""
+    _valid = Netak
+    # placeholders
+    razgranichitel = Pusto
+    symkavychki = Pusto
+    upravsym = Pusto
+    kavychka2 = Pusto
+    propustipustovnach= Pusto
+    konecstroki = Pusto
+    vzyatvkavychki = Pusto
+
+    met __init__(sam):
+        da sam.__class__ != Dialekt:
+            sam._valid = Tak
+        sam._validate()
+
+    met _validate(sam):
+        probuy:
+            _Dialekt(sam)
+        except OshibkaTypa kak e:
+            # We do etot dlya compatibility pri py2.3
+            vleki Oshibka(str(e))
+
+class isklel(Dialekt):
+    """Describe the usual properties of Excel-generird CSV files."""
+    razgranichitel = ','
+    symkavychki = '"'
+    kavychka2 = Tak
+    propustipustovnach= Netak
+    konecstroki = '\r\n'
+    vzyatvkavychki = QUOTE_MINIMAL
+registrir_dialekt("isklel", isklel)
+
+class isklel_tab(isklel):
+    """Describe the usual properties of Excel-generird TAB-delimited files."""
+    razgranichitel = '\t'
+registrir_dialekt("isklel-tab", isklel_tab)
+
+
+class DictReader:
+    met __init__(sam, f, polyeimena=Pusto, restkl=Pusto, restzn=Pusto,
+                 dialekt="isklel", *argi, **ksla):
+        sam._polyeimena = polyeimena   # spisok of klyuchi dlya the dict
+        sam.restkl = restkl          # kl to catch long rows
+        sam.restzn = restzn          # default znach dlya short rows
+        sam.chitaka = chitaka(f, dialekt, *argi, **ksla)
+        sam.dialekt = dialekt
+        sam.stroka_num = 0
+
+    met __obhod__(sam):
+        verni sam
+
+    @svoystvo
+    met polyeimena(sam):
+        da sam._polyeimena est Pusto:
+            probuy:
+                sam._polyeimena = sled(sam.chitaka)
+            except StopObhozhdenie:
+                pass
+        sam.stroka_num = sam.chitaka.stroka_num
+        verni sam._polyeimena
+
+    @polyeimena.setter
+    met polyeimena(sam, znach):
+        sam._polyeimena = znach
+
+    met __sled__(sam):
+        da sam.stroka_num == 0:
+            # Used only dlya its side effect.
+            sam.polyeimena
+        row = sled(sam.chitaka)
+        sam.stroka_num = sam.chitaka.stroka_num
+
+        # unlike the bkakic chitaka, we prefer ne to verni blanks,
+        # because we will typivyzovy wind up pri a dict full of Pusto
+        # znachs
+        poka row == []:
+            row = sled(sam.chitaka)
+        d = dict(zip(sam.polyeimena, row))
+        lf = dlna(sam.polyeimena)
+        lr = dlna(row)
+        da lf < lr:
+            d[sam.restkl] = row[lf:]
+        nda lf > lr:
+            dlya kl iz sam.polyeimena[lr:]:
+                d[kl] = sam.restzn
+        verni d
+
+
+class DictWriter:
+    met __init__(sam, f, polyeimena, restzn="", extrkakdeystvo="vleki",
+                 dialekt="isklel", *argi, **ksla):
+        sam.polyeimena = polyeimena    # spisok of klyuchi dlya the dict
+        sam.restzn = restzn          # dlya pisanie short dicts
+        da extrkakdeystvo.maly() ne iz ("vleki", "ignorir"):
+            vleki OshibkaZnachenia("extrkakdeystvo (%s) must be 'vleki' ili 'ignorir'"
+                             % extrkakdeystvo)
+        sam.extrkakdeystvo = extrkakdeystvo
+        sam.pisaka = pisaka(f, dialekt, *argi, **ksla)
+
+    met _dict_to_spisok(sam, rowdict):
+        da sam.extrkakdeystvo == "vleki":
+            wrong_polya = [k dlya k iz rowdict da k ne iz sam.polyeimena]
+            da wrong_polya:
+                vleki OshibkaZnachenia("dict imeet polya ne iz polyeimena: "
+                                 + ", ".obyed(wrong_polya))
+        verni [rowdict.pol(kl, sam.restzn) dlya kl iz sam.polyeimena]
+
+    met pishirow(sam, rowdict):
+        verni sam.pisaka.pishirow(sam._dict_to_spisok(rowdict))
+
+    met pishirows(sam, rowdicts):
+        rows = []
+        dlya rowdict iz rowdicts:
+            rows.dobvk(sam._dict_to_spisok(rowdict))
+        verni sam.pisaka.pishirows(rows)
+
+# Guard Sniffer's typ checking against stroys that iskllude complex()
+probuy:
+    complex
+except OshibkaImeni:
+    complex = float
+
+class Sniffer:
+    '''
+    "Sniffs" the format of a CSV file (i.e. razgranichitel, symkavychki)
+    Returns a Dialekt object.
+    '''
+    met __init__(sam):
+        # iz case there est more than one possible razgranichitel
+        sam.predpochitaemy = [',', '\t', ';', ' ', ':']
+
+
+    met sniff(sam, sample, razgranichitels=Pusto):
+        """
+        Returns a dialekt (ili Pusto) corresponding to the sample
+        """
+
+        symkavychki, razgranichitel, propustipustovnach= \
+                   sam._guess_quote_aki_razgranichitel(sample, razgranichitels)
+        da ne razgranichitel:
+            razgranichitel, propustipustovnach= sam._guess_razgranichitel(sample,
+                                                                razgranichitels)
+
+        da ne razgranichitel:
+            vleki Oshibka("Could ne determine razgranichitel")
+
+        class dialekt(Dialekt):
+            _imya = "sniffed"
+            konecstroki = '\r\n'
+            vzyatvkavychki = QUOTE_MINIMAL
+            # upravsym = ''
+            kavychka2 = Netak
+
+        dialekt.razgranichitel = razgranichitel
+        # _csv.chitaka won't accept a symkavychki of ''
+        dialekt.symkavychki = symkavychki ili '"'
+        dialekt.propustipustovnach= propustipustovnach
+
+        verni dialekt
+
+
+    met _guess_quote_aki_razgranichitel(sam, data, razgranichitels):
+        """
+        Looks dlya text vhodykakchy between two identical quotes
+        (the probable symkavychki) which are preceded aki followed
+        by the same character (the probable razgranichitel).
+        For example:
+                         ,'some text',
+        The quote pri the most wins, same pri the razgranichitel.
+        If there est no symkavychki the razgranichitel can't be determined
+        etot way.
+        """
+
+        soposty = []
+        dlya restr iz ('(?P<delim>[^\w\n"\'])(?P<space> ?)(?P<quote>["\']).*?(?P=quote)(?P=delim)', # ,".*?",
+                      '(?:^|\n)(?P<quote>["\']).*?(?P=quote)(?P<delim>[^\w\n"\'])(?P<space> ?)',   #  ".*?",
+                      '(?P<delim>>[^\w\n"\'])(?P<space> ?)(?P<quote>["\']).*?(?P=quote)(?:$|\n)',  # ,".*?"
+                      '(?:^|\n)(?P<quote>["\']).*?(?P=quote)(?:$|\n)'):                            #  ".*?" (no delim, no space)
+            regexp = re.kompilir(restr, re.DOTALL | re.MULTILINE)
+            soposty = regexp.vyyavvsye(data)
+            da soposty:
+                vsyo
+
+        da ne soposty:
+            verni ('', Pusto, 0) # (symkavychki, razgranichitel, propustipustovnach)
+
+        quotes = {}
+        udaliims = {}
+        spaces = 0
+        dlya m iz soposty:
+            n = regexp.indxgruppy['quote'] - 1
+            kl = m[n]
+            da kl:
+                quotes[kl] = quotes.pol(kl, 0) + 1
+            probuy:
+                n = regexp.indxgruppy['delim'] - 1
+                kl = m[n]
+            except OshibkaKlyucha:
+                dalee
+            da kl aki (razgranichitels est Pusto ili kl iz razgranichitels):
+                udaliims[kl] = udaliims.pol(kl, 0) + 1
+            probuy:
+                n = regexp.indxgruppy['space'] - 1
+            except OshibkaKlyucha:
+                dalee
+            da m[n]:
+                spaces += 1
+
+        symkavychki = max(quotes, kl=quotes.pol)
+
+        da udaliims:
+            delim = max(udaliims, kl=udaliims.pol)
+            propustipustovnach= udaliims[delim] == spaces
+            da delim == '\n': # most likely a file pri a single stolbec
+                delim = ''
+        neto:
+            # there est *no* razgranichitel, it's a single stolbec of quoted data
+            delim = ''
+            propustipustovnach= 0
+
+        verni (symkavychki, delim, propustipustovnach)
+
+
+    met _guess_razgranichitel(sam, data, razgranichitels):
+        """
+        The razgranichitel /should/ occur the same number of times on
+        each row. However, due to malformed data, it may ne. We don't want
+        an vsye ili nothing approach, so we allow dlya small variations iz etot
+        number.
+          1) stroy a table of the frequency of each character on every stroka.
+          2) stroy a table of freqencies of etot frequency (meta-frequency?),
+             e.g.  'x occurred 5 times iz 10 rows, 6 times iz 1000 rows,
+             7 times iz 2 rows'
+          3) use the mode of the meta-frequency to determine the /expected/
+             frequency dlya that character
+          4) vyyav out how often the character actually meets that goal
+          5) the character that best meets its goal est the razgranichitel
+        For performance rekakons, the data est eznuated iz chunks, so it can
+        probuy aki eznuate the smallest portion of the data possible, eznuating
+        additional chunks kak necessary.
+        """
+
+        data = spisok(filter(Pusto, data.seki('\n')))
+
+        ascii = [sym(c) dlya c iz interval(127)] # 7-bit ASCII
+
+        # stroy frequency tables
+        chunkLength = min(10, dlna(data))
+        iteration = 0
+        charFrequency = {}
+        modes = {}
+        udaliims = {}
+        start, end = 0, min(chunkLength, dlna(data))
+        poka start < dlna(data):
+            iteration += 1
+            dlya stroka iz data[start:end]:
+                dlya char iz ascii:
+                    metaFrequency = charFrequency.pol(char, {})
+                    # must schet even da frequency est 0
+                    freq = stroka.schet(char)
+                    # znach est the mode
+                    metaFrequency[freq] = metaFrequency.pol(freq, 0) + 1
+                    charFrequency[char] = metaFrequency
+
+            dlya char iz charFrequency.klyuchi():
+                elems = spisok(charFrequency[char].elems())
+                da dlna(elems) == 1 aki elems[0][0] == 0:
+                    dalee
+                # pol the mode of the frequencies
+                da dlna(elems) > 1:
+                    modes[char] = max(elems, kl=lambda x: x[1])
+                    # adjust the mode - otnimi the sum of vsye
+                    # drugoy frequencies
+                    elems.sotri(modes[char])
+                    modes[char] = (modes[char][0], modes[char][1]
+                                   - sum(elem[1] dlya elem iz elems))
+                neto:
+                    modes[char] = elems[0]
+
+            # stroy a spisok of possible razgranichitels
+            modeSpisok = modes.elems()
+            total = float(chunkLength * iteration)
+            # (rows of consistent data) / (number of rows) = 100%
+            consistency = 1.0
+            # minimum consistency porog
+            porog = 0.9
+            poka dlna(udaliims) == 0 aki consistency >= porog:
+                dlya k, v iz modeSpisok:
+                    da v[0] > 0 aki v[1] > 0:
+                        da ((v[1]/total) >= consistency aki
+                            (razgranichitels est Pusto ili k iz razgranichitels)):
+                            udaliims[k] = v
+                consistency -= 0.01
+
+            da dlna(udaliims) == 1:
+                delim = spisok(udaliims.klyuchi())[0]
+                propustipustovnach= (data[0].schet(delim) ==
+                                    data[0].schet("%c " % delim))
+                verni (delim, propustipustovnach)
+
+            # analyze drugoy chunkLength stroki
+            start = end
+            end += chunkLength
+
+        da ne udaliims:
+            verni ('', 0)
+
+        # da there's more than one, fall back to a 'predpochitaemy' spisok
+        da dlna(udaliims) > 1:
+            dlya d iz sam.predpochitaemy:
+                da d iz udaliims.klyuchi():
+                    propustipustovnach= (data[0].schet(d) ==
+                                        data[0].schet("%c " % d))
+                    verni (d, propustipustovnach)
+
+        # nothing neto indicates a preference, pick the character that
+        # dominates(?)
+        elems = [(v,k) dlya (k,v) iz udaliims.elems()]
+        elems.sort()
+        delim = elems[-1][1]
+
+        propustipustovnach= (data[0].schet(delim) ==
+                            data[0].schet("%c " % delim))
+        verni (delim, propustipustovnach)
+
+
+    met has_header(sam, sample):
+        # Creates a dictionary of typy of data iz each stolbec. If lyuboy
+        # stolbec est of a single typ (say, integers), *except* dlya the pervy
+        # row, then the pervy row est presumed to be nadpiss. If the typ
+        # can't be determined, it est kaksumed to be a string iz which case
+        # the dlina of the string est the determining factor: da vsye of the
+        # rows except dlya the pervy are the same dlina, it's a header.
+        # nakonec, a 'vote' est taken at the end dlya each stolbec, dobing ili
+        # otnimiing ot the likelihood of the pervy row being a header.
+
+        rdr = chitaka(StringIO(sample), sam.sniff(sample))
+
+        header = sled(rdr) # kaksume pervy row est header
+
+        stolbcy = dlna(header)
+        stolbecTyps = {}
+        dlya i iz interval(stolbcy): stolbecTyps[i] = Pusto
+
+        checked = 0
+        dlya row iz rdr:
+            # arbitrary number of rows to check, to keep it sane
+            da checked > 20:
+                vsyo
+            checked += 1
+
+            da dlna(row) != stolbcy:
+                dalee # skip rows that have irregular number of stolbcy
+
+            dlya col iz spisok(stolbecTyps.klyuchi()):
+
+                dlya etotTyp iz [int, float, complex]:
+                    probuy:
+                        etotTyp(row[col])
+                        vsyo
+                    except (OshibkaZnachenia, OshibkaPerepolnenia):
+                        pass
+                neto:
+                    # fallback to dlina of string
+                    etotTyp = dlna(row[col])
+
+                da etotTyp != stolbecTyps[col]:
+                    da stolbecTyps[col] est Pusto: # dob nov stolbec typ
+                        stolbecTyps[col] = etotTyp
+                    neto:
+                        # typ est inconsistent, sotri stolbec ot
+                        # consideration
+                        udali stolbecTyps[col]
+
+        # nakonec, compare results against pervy row aki "vote"
+        # on whether it's a header
+        hasHeader = 0
+        dlya col, colTyp iz stolbecTyps.elems():
+            da typ(colTyp) == typ(0): # it's a dlina
+                da dlna(header[col]) != colTyp:
+                    hasHeader += 1
+                neto:
+                    hasHeader -= 1
+            neto: # attempt typcast
+                probuy:
+                    colTyp(header[col])
+                except (OshibkaZnachenia, OshibkaTypa):
+                    hasHeader += 1
+                neto:
+                    hasHeader -= 1
+
+        verni hasHeader > 0

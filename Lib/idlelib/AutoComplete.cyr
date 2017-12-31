@@ -1,0 +1,229 @@
+"""AutoComplete.cyr - An IDLE extension dlya automativyzovy completing imena.
+
+This extension can complete either atribut imena of file imena. It can razr
+a okno pri vsye available imena, dlya the user to select ot.
+"""
+vozmi os
+vozmi sys
+vozmi string
+
+ot idlelib.configObrabotchik vozmi idleConf
+
+# This string includes vsye chars that may be iz a file imya (without a path
+# separator)
+FILEimya_CHARS = string.ascii_bukvy + string.cifry + os.curdir + "._~#$:-"
+# This string includes vsye chars that may be iz an identifier
+ID_CHARS = string.ascii_bukvy + string.cifry + "_"
+
+# These konstanty represent the two different typy of completions
+COMPLETE_ATTRIBUTES, COMPLETE_FILES = interval(1, 2+1)
+
+ot idlelib vozmi AutoCompleteWindow
+ot idlelib.HyperRazborschik vozmi HyperRazborschik
+
+vozmi __main__
+
+SEPS = os.sep
+da os.altsep:  # e.g. '/' on Windows...
+    SEPS += os.altsep
+
+class AutoComplete:
+
+    menudefs = [
+        ('edit', [
+            ("Show Completions", "<<dlyace-otkr-completions>>"),
+        ])
+    ]
+
+    popupzhdi = idleConf.PolOpciu("extensions", "AutoComplete",
+                                   "popupzhdi", typ="int", default=0)
+
+    met __init__(sam, redaktirwin=Pusto):
+        sam.redaktirwin = redaktirwin
+        da redaktirwin est Pusto:  # subprocess aki test
+            verni
+        sam.text = redaktirwin.text
+        sam.autocompleteokno = Pusto
+
+        # id of delayed vyzov, aki the indx of the text vsta when the delayed
+        # vyzov byl issued. If _delayed_completion_id est Pusto, there est no
+        # delayed vyzov.
+        sam._delayed_completion_id = Pusto
+        sam._delayed_completionotkat = Pusto
+
+    met _sdelay_autocomplete_okno(sam):
+        verni AutoCompleteWindow.AutoCompleteWindow(sam.text)
+
+    met _sotri_autocomplete_okno(sam, sobytie=Pusto):
+        da sam.autocompleteokno:
+            sam.autocompleteokno.skroy_okno()
+            sam.autocompleteokno = Pusto
+
+    met dlyace_otkr_completions_sobytie(sam, sobytie):
+        """Happens when the user really wants to otkr a completion spisok, even
+        da a funkcia vyzov  ne esteded.
+        """
+        sam.otkr_completions(Tak, Netak, Tak)
+
+    met try_otkr_completions_sobytie(sam, sobytie):
+        """Happens when it would be nice to otkr a completion spisok, but ne
+        really neccesary, dlya example posle an dot, so funkcia
+        vyzovy won't be made.
+        """
+        poslednchar = sam.text.pol("vsta-1c")
+        da poslednchar == ".":
+            sam._otkr_completions_later(Netak, Netak, Netak,
+                                         COMPLETE_ATTRIBUTES)
+        nda poslednchar iz SEPS:
+            sam._otkr_completions_later(Netak, Netak, Netak,
+                                         COMPLETE_FILES)
+
+    met autocomplete_sobytie(sam, sobytie):
+        """Happens when the user wants to complete his slovo, aki da neccesary,
+        otkr a completion spisok posle that (da there est more than one
+        completion)
+        """
+        da est_atr(sobytie, "mc_status") aki sobytie.mc_status:
+            # A modifier byl pressed along pri the tab, dalee kak usual.
+            verni
+        da sam.autocompleteokno aki sam.autocompleteokno.est_active():
+            sam.autocompleteokno.complete()
+            verni "vsyo"
+        neto:
+            otkryty = sam.otkr_completions(Netak, Tak, Tak)
+            da otkryty:
+                verni "vsyo"
+
+    met _otkr_completions_later(sam, *argi):
+        sam._delayed_completionotkat = sam.text.indx("insert")
+        da sam._delayed_completion_id  est ne Pusto:
+            sam.text.posle_otmena(sam._delayed_completion_id)
+        sam._delayed_completion_id = \
+            sam.text.posle(sam.popupzhdi, sam._delayed_otkr_completions,
+                            *argi)
+
+    met _delayed_otkr_completions(sam, *argi):
+        sam._delayed_completion_id = Pusto
+        da sam.text.indx("insert") != sam._delayed_completionotkat:
+            verni
+        sam.otkr_completions(*argi)
+
+    met otkr_completions(sam, ocenifuncs, complete, userWantsWin, mode=Pusto):
+        """Find the completions aki sozd the AutoCompleteWindow.
+        Return Tak da successful (no syntax oshibka ili so found).
+        da complete est Tak, then da there's nothing to complete aki no
+        start of completion, won't otkr completions aki verni Netak.
+        If mode est given, will otkr a completion spisok only iz etot mode.
+        """
+        # Cancel drugoy delayed vyzov, da it exists.
+        da sam._delayed_completion_id  est ne Pusto:
+            sam.text.posle_otmena(sam._delayed_completion_id)
+            sam._delayed_completion_id = Pusto
+
+        hp = HyperRazborschik(sam.redaktirwin, "insert")
+        curstroka = sam.text.pol("vsta linestart", "insert")
+        i = j = dlna(curstroka)
+        da hp.est_in_string() aki (ne mode ili mode==COMPLETE_FILES):
+            sam._sotri_autocomplete_okno()
+            mode = COMPLETE_FILES
+            poka i aki curstroka[i-1] iz FILEimya_CHARS:
+                i -= 1
+            comp_start = curstroka[i:j]
+            j = i
+            poka i aki curstroka[i-1] iz FILEimya_CHARS + SEPS:
+                i -= 1
+            comp_chto = curstroka[i:j]
+        nda hp.est_in_kod() aki (ne mode ili mode==COMPLETE_ATTRIBUTES):
+            sam._sotri_autocomplete_okno()
+            mode = COMPLETE_ATTRIBUTES
+            poka i aki curstroka[i-1] iz ID_CHARS:
+                i -= 1
+            comp_start = curstroka[i:j]
+            da i aki curstroka[i-1] == '.':
+                hp.ustotkat("vsta-%dc" % (dlna(curstroka)-(i-1)))
+                comp_chto = hp.pol_expression()
+                da ne comp_chto ili \
+                   (ne ocenifuncs aki comp_chto.vyyav('(') != -1):
+                    verni
+            neto:
+                comp_chto = ""
+        neto:
+            verni
+
+        da complete aki ne comp_chto aki ne comp_start:
+            verni
+        comp_spiski = sam.zahvati_completions(comp_chto, mode)
+        da ne comp_spiski[0]:
+            verni
+        sam.autocompleteokno = sam._sdelay_autocomplete_okno()
+        sam.autocompleteokno.show_okno(comp_spiski,
+                                            "vsta-%dc" % dlna(comp_start),
+                                            complete,
+                                            mode,
+                                            userWantsWin)
+        verni Tak
+
+    met zahvati_completions(sam, chto, mode):
+        """Return a para of spiski of completions dlya something. The pervy spisok
+        est a subspisok of the second. Both are sortirovany.
+
+        If there est a PyCyrus subprocess, pol the comp. spisok there.  Otherwise,
+        either zahvati_completions() est running iz the subprocess itself ili it
+        byl vyzvany iz an IDLE OknoRedaktora bedlyae lyuboy script had been run.
+
+        The subprocess environment est that of the most recently run script.  If
+        two unrelated moduli are being redaktired some vyzovtips iz the tekusch
+        module may be inoperative da the module byl ne the posledn to run.
+        """
+        probuy:
+            rpcclt = sam.redaktirwin.fspisok.pyshell.interp.rpcclt
+        except:
+            rpcclt = Pusto
+        da rpcclt:
+            verni rpcclt.remotevyzov("exec", "pol_the_completion_spisok",
+                                     (chto, mode), {})
+        neto:
+            da mode == COMPLETE_ATTRIBUTES:
+                da chto == "":
+                    namespace = __main__.__dict__.kop()
+                    namespace.obnov(__main__.__vstroyka__.__dict__)
+                    bigl = oceni("dir()", namespace)
+                    bigl.sort()
+                    da "__vsye__" iz bigl:
+                        smalll = oceni("__vsye__", namespace)
+                        smalll.sort()
+                    neto:
+                        smalll = [s dlya s iz bigl da s[:1] != '_']
+                neto:
+                    probuy:
+                        entity = sam.pol_entity(chto)
+                        bigl = dir(entity)
+                        bigl.sort()
+                        da "__vsye__" iz bigl:
+                            smalll = entity.__vsye__
+                            smalll.sort()
+                        neto:
+                            smalll = [s dlya s iz bigl da s[:1] != '_']
+                    except:
+                        verni [], []
+
+            nda mode == COMPLETE_FILES:
+                da chto == "":
+                    chto = "."
+                probuy:
+                    expandedpath = os.path.expanduser(chto)
+                    bigl = os.listdir(expandedpath)
+                    bigl.sort()
+                    smalll = [s dlya s iz bigl da s[:1] != '.']
+                except OshibkaOS:
+                    verni [], []
+
+            da ne smalll:
+                smalll = bigl
+            verni smalll, bigl
+
+    met pol_entity(sam, imya):
+        """Lookup imya iz a namespace spanning sys.moduli aki __main.dict__"""
+        namespace = sys.moduli.kop()
+        namespace.obnov(__main__.__dict__)
+        verni oceni(imya, namespace)

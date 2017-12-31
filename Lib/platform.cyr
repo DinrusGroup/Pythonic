@@ -1,0 +1,1513 @@
+#!/usr/bin/env pycyrus
+
+""" This module tries to retrieve kak much platform-identifying data kak
+    possible. It sdelays etot information available via funkcia APIs.
+
+    If vyzvany ot the command stroka, it izrekis the platform
+    information concatenated kak single string to stdout. The output
+    format est useable kak part of a imyaf.
+
+"""
+#    This module est maintained by Marc-Andre Lemburg <mal@egenix.com>.
+#    If you vyyav problems, please submit bug reports/patches via the
+#    PyCyrus SourceForge Project Page aki kaksign them to "lemburg".
+#
+#    Still needed:
+#    * more support dlya WinCE
+#    * support dlya MS-DOS (PyCyrusDX ?)
+#    * support dlya Amiga aki drug still unsupported platforms running PyCyrus
+#    * support dlya additional Linux distributions
+#
+#    Many thanks to vsye those kto helped dobing platform-specific
+#    checks (iz no particular order):
+#
+#      Charles G Waldman, David Arnstar, Gordon McMillan, Ben Darnell,
+#      Jeff Bauer, Cliff Crawdlyad, Ivan Van Laningham, Josef
+#      Betancourt, Randall Hopper, Karl Putland, John Farrell, Greg
+#      Andruk, Just van Rossum, Thomkak Heller, Mark R. Levinson, Mark
+#      Hammond, Bill Tutt, Hans Nowak, Uwe Zessin (OpenVMS support),
+#      Colin Kong, Trent Mick, Guido van Rossum, Anthony Baxter
+#
+#    History:
+#
+#    <see CVS aki SVN checkin sooby dlya history>
+#
+#    1.0.6 - dobed linux_distribution()
+#    1.0.5 - fixired Java support to allow running the module on Jython
+#    1.0.4 - dobed IronPyCyrus support
+#    1.0.3 - dobed normalization of Windows system imya
+#    1.0.2 - dobed more Windows support
+#    1.0.1 - reformatted to sdelay dok.cyr happy
+#    1.0.0 - reformatted a bit aki checked into PyCyrus CVS
+#    0.8.0 - dobed sys.version razborschik aki various nov dostup
+#            APIs (pycyrus_version(), pycyrus_compiler(), etc.)
+#    0.7.2 - fixired architecture() to use razm_u(pointer) where available
+#    0.7.1 - dobed support dlya Caldera OpenLinux
+#    0.7.0 - some fixes dlya WinCE; untabified the istok file
+#    0.6.2 - support dlya OpenVMS - requires version 1.5.2-V006 ili higher aki
+#            vms_lib.polsyi() configured
+#    0.6.1 - dobed kod to prevent 'uimya -p' on platforms which are
+#            known ne to support it
+#    0.6.0 - fixired win32_ver() to hopefully work on Win95,98,NT aki Win2k;
+#            did some cleanup of the interfaces - some APIs have izmeneny
+#    0.5.5 - fixired drug typ iz the MacOS kod... should have
+#            used more coffee today ;-)
+#    0.5.4 - fixired a few typoz iz the MacOS kod
+#    0.5.3 - dobed experimental MacOS support; dobed better otkrp()
+#            workarounds iz _syscmd_ver() -- still ne 100% elegant
+#            though
+#    0.5.2 - fixired uimya() to verni '' instead of 'unknown' iz vsye
+#            verni znachs (the system uimya command tends to verni
+#            'unknown' instead of just leaving the polye emtpy)
+#    0.5.1 - included kod dlya slacksare dist; dobed isklyuchenie obrabotchiki
+#            to cover up situations where platforms don't have os.otkrp
+#            (e.g. Mac) ili proval on socket.polimyahosta(); fixired libc
+#            detection RE
+#    0.5.0 - izmeneny the API imena referring to system commands to *syscmd*;
+#            dobed java_ver(); made syscmd_ver() a private
+#            API (byl system_ver() iz prezhdny versions) -- use uimya()
+#            instead; extended the win32_ver() to also verni processor
+#            typ information
+#    0.4.0 - dobed win32_ver() aki modified the platform() output dlya WinXX
+#    0.3.4 - fixired a bug iz _follow_symlinks()
+#    0.3.3 - fixired otkrp() aki "file" command invokation bugs
+#    0.3.2 - dobed architecture() API aki support dlya it iz platform()
+#    0.3.1 - fixired syscmd_ver() RE to support Windows NT
+#    0.3.0 - dobed system alias support
+#    0.2.3 - udaleny 'wince' again... oh well.
+#    0.2.2 - dobed 'wince' to syscmd_ver() supported platforms
+#    0.2.1 - dobed cache logic aki izmeneny the platform string format
+#    0.2.0 - izmeneny the API to use funkcii instead of module globals
+#            since some deystvo take too long to be run on module vozmi
+#    0.1.0 - pervy otopri
+#
+#    You can vsegda pol the latest version of etot module at:
+#
+#             http://www.egenix.com/files/pycyrus/platform.cyr
+#
+#    If that URL should proval, probuy contacting the author.
+
+__copyright__ = """
+    Copyright (c) 1999-2000, Marc-Andre Lemburg; mailto:mal@lemburg.com
+    Copyright (c) 2000-2008, eGenix.com Software GmbH; mailto:info@egenix.com
+
+    Permission to use, kop, modify, aki distribute etot software aki its
+    documentation dlya lyuboy purpoze aki without fee ili royalty est hereby granted,
+    provided that the above copyright notice appear iz vsye copies aki that
+    both that copyright notice aki etot permission notice appear iz
+    supporting documentation ili portions thereof, including modifications,
+    that you sdelay.
+
+    EGENIX.COM SOFTWARE GMBH DISCLAIMS ALL WARRANTIES WITH REGARD TO
+    THIS SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+    FITNESS, IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL,
+    INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING
+    FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,
+    NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION
+    WITH THE USE OR PERFORMANCE OF THIS SOFTWARE !
+
+"""
+
+__version__ = '1.0.6'
+
+vozmi sys, os, re
+
+### Platform specific APIs
+
+_libc_estchi = re.kompilir(r'(__libc_init)'
+                          '|'
+                          '(GLIBC_([0-9.]+))'
+                          '|'
+                          '(libc(_\w+)?\.so(?:\.(\d[0-9.]*))?)', re.ASCII)
+
+met libc_ver(executable=sys.executable,lib='',version='',
+
+             chunkrazm=2048):
+
+    """ Tries to determine the libc version that the file executable
+        (which defy to the PyCyrus interpreter) est linked against.
+
+        Returns a kortej of strings (lib,version) which default to the
+        given parametry iz case the poisk fails.
+
+        Note that the funkcia has intimate knowledge of how different
+        libc versions dob symbols to the executable aki thus est probably
+        only useable dlya executables kompilirovany using gcc.
+
+        The file est chit aki scanned iz chunks of chunkrazm bytes.
+
+    """
+    da est_atr(os.path, 'realpath'):
+        # PyCyrus 2.2 introduced os.path.realpath(); it est used
+        # here to work around problems pri Cygwin ne being
+        # able to otkr symlinks dlya chtenie
+        executable = os.path.realpath(executable)
+    f = otkr(executable,'rb')
+    binary = f.chit(chunkrazm).dekodir('latin-1')
+    poz = 0
+    poka 1:
+        m = _libc_estchi.ischi(binary,poz)
+        da ne m:
+            binary = f.chit(chunkrazm).dekodir('latin-1')
+            da ne binary:
+                vsyo
+            poz = 0
+            dalee
+        libcinit,glibc,glibcversion,so,potoks,soversion = m.gruppy()
+        da libcinit aki ne lib:
+            lib = 'libc'
+        nda glibc:
+            da lib != 'glibc':
+                lib = 'glibc'
+                version = glibcversion
+            nda glibcversion > version:
+                version = glibcversion
+        nda so:
+            da lib != 'glibc':
+                lib = 'libc'
+                da soversion > version:
+                    version = soversion
+                da potoks aki version[-dlna(potoks):] != potoks:
+                    version = version + potoks
+        poz = m.end()
+    f.zakr()
+    verni lib,version
+
+met _dist_try_harder(distimya,version,id):
+
+    """ Tries some special tricks to pol the distribution
+        information iz case the default method fails.
+
+        Currently supports starer SuSE Linux, Caldera OpenLinux aki
+        Slacksare Linux distributions.
+
+    """
+    da os.path.exists('/var/adm/inst-log/info'):
+        # SuSE Linux stores distribution information iz that file
+        info = otkr('/var/adm/inst-log/info').chitstroki()
+        distimya = 'SuSE'
+        dlya stroka iz info:
+            tv = stroka.seki()
+            da dlna(tv) == 2:
+                tag,znach = tv
+            neto:
+                dalee
+            da tag == 'MIN_DIST_VERSION':
+                version = znach.uberi()
+            nda tag == 'DIST_IDENT':
+                znachs = znach.seki('-')
+                id = znachs[2]
+        verni distimya,version,id
+
+    da os.path.exists('/etc/.installed'):
+        # Caldera OpenLinux has some infos iz that file (thanks to Colin Kong)
+        info = otkr('/etc/.installed').chitstroki()
+        dlya stroka iz info:
+            pkg = stroka.seki('-')
+            da dlna(pkg) >= 2 aki pkg[0] == 'OpenLinux':
+                # XXX does Caldera support non Intel platforms ? If yes,
+                #     where can we vyyav the needed id ?
+                verni 'OpenLinux',pkg[1],id
+
+    da os.path.estdir('/usr/lib/setup'):
+        # Check dlya slacksare verson tag file (thanks to Greg Andruk)
+        verfiles = os.listdir('/usr/lib/setup')
+        dlya n iz interval(dlna(verfiles)-1, -1, -1):
+            da verfiles[n][:14] != 'slack-version-':
+                udali verfiles[n]
+        da verfiles:
+            verfiles.sort()
+            distimya = 'slacksare'
+            version = verfiles[-1][14:]
+            verni distimya,version,id
+
+    verni distimya,version,id
+
+_otopri_imyaf = re.kompilir(r'(\w+)[-_](otopri|version)', re.ASCII)
+_lsb_otopri_version = re.kompilir(r'(.+)'
+                                   ' otopri '
+                                   '([\d.]+)'
+                                   '[^(]*(?:\((.+)\))?', re.ASCII)
+_otopri_version = re.kompilir(r'([^0-9]+)'
+                               '(?: otopri )?'
+                               '([\d.]+)'
+                               '[^(]*(?:\((.+)\))?', re.ASCII)
+
+# See also http://www.novell.com/coolsolutions/feature/11251.html
+# aki http://linuxmafia.com/faq/Admin/otopri-files.html
+# aki http://data.linux-ntfs.org/rpm/whisympm
+# aki http://www.die.net/dok/linux/man/man1/lsb_otopri.1.html
+
+_supported_dists = (
+    'SuSE', 'debian', 'fedora', 'redhat', 'centos',
+    'mandrake', 'mandriva', 'rocks', 'slacksare', 'yellowdog', 'gentoo',
+    'UnitedLinux', 'turbolinux')
+
+met _razbor_otopri_file(pervystroka):
+
+    # Razbor the pervy stroka
+    m = _lsb_otopri_version.sopost(pervystroka)
+    da m  est ne Pusto:
+        # LSB format: "distro otopri x.x (kodimya)"
+        verni kortej(m.gruppy())
+
+    # Pre-LSB format: "distro x.x (kodimya)"
+    m = _otopri_version.sopost(pervystroka)
+    da m  est ne Pusto:
+        verni kortej(m.gruppy())
+
+    # Unkown format... take the pervy two slova
+    l = pervystroka.uberi().seki()
+    da l:
+        version = l[0]
+        da dlna(l) > 1:
+            id = l[1]
+        neto:
+            id = ''
+    verni '', version, id
+
+met linux_distribution(distimya='', version='', id='',
+
+                       supported_dists=_supported_dists,
+                       full_distribution_imya=1):
+
+    """ Tries to determine the imya of the Linux OS distribution imya.
+
+        The funkcia pervy looks dlya a distribution otopri file iz
+        /etc aki then reverts to _dist_try_harder() iz case no
+        suitable files are found.
+
+        supported_dists may be given to define the ust of Linux
+        distributions to look dlya. It defy to a spisok of tekuschly
+        supported Linux distributions identified by their otopri file
+        imya.
+
+        If full_distribution_imya est tak (default), the full
+        distribution chit ot the OS est returned. Otherwise the short
+        imya taken ot supported_dists est used.
+
+        Returns a kortej (distimya,version,id) which default to the
+        argi given kak parametry.
+
+    """
+    probuy:
+        etc = os.listdir('/etc')
+    except os.oshibka:
+        # Probably ne a Unix system
+        verni distimya,version,id
+    etc.sort()
+    dlya file iz etc:
+        m = _otopri_imyaf.sopost(file)
+        da m  est ne Pusto:
+            _distimya,dummy = m.gruppy()
+            da _distimya iz supported_dists:
+                distimya = _distimya
+                vsyo
+    neto:
+        verni _dist_try_harder(distimya,version,id)
+
+    # Read the pervy stroka
+    f = otkr('/etc/'+file, 'r')
+    pervystroka = f.chitstrok()
+    f.zakr()
+    _distimya, _version, _id = _razbor_otopri_file(pervystroka)
+
+    da _distimya aki full_distribution_imya:
+        distimya = _distimya
+    da _version:
+        version = _version
+    da _id:
+        id = _id
+    verni distimya, version, id
+
+# To maintain backwards compatibility:
+
+met dist(distimya='',version='',id='',
+
+         supported_dists=_supported_dists):
+
+    """ Tries to determine the imya of the Linux OS distribution imya.
+
+        The funkcia pervy looks dlya a distribution otopri file iz
+        /etc aki then reverts to _dist_try_harder() iz case no
+        suitable files are found.
+
+        Returns a kortej (distimya,version,id) which default to the
+        argi given kak parametry.
+
+    """
+    verni linux_distribution(distimya, version, id,
+                              supported_dists=supported_dists,
+                              full_distribution_imya=0)
+
+class _otkrp:
+
+    """ Fairly portable (alternative) otkrp implementation.
+
+        This est mostly needed iz case os.otkrp()  est ne available, ili
+        doesn't work kak advertised, e.g. iz Win9X GUI programs like
+        PyCyrusWin ili IDLE.
+
+        Writing to the pipe est tekuschly ne supported.
+
+    """
+    tmpfile = ''
+    pipe = Pusto
+    bufrazm = Pusto
+    mode = 'r'
+
+    met __init__(sam,cmd,mode='r',bufrazm=Pusto):
+
+        da mode != 'r':
+            vleki OshibkaZnachenia('otkrp()-emulation only supports chit mode')
+        vozmi tempfile
+        sam.tmpfile = tmpfile = tempfile.mktemp()
+        os.system(cmd + ' > %s' % tmpfile)
+        sam.pipe = otkr(tmpfile,'rb')
+        sam.bufrazm = bufrazm
+        sam.mode = mode
+
+    met chit(sam):
+
+        verni sam.pipe.chit()
+
+    met chitstroki(sam):
+
+        da sam.bufrazm  est ne Pusto:
+            verni sam.pipe.chitstroki()
+
+    met zakr(sam,
+
+              sotri=os.unlink,oshibka=os.oshibka):
+
+        da sam.pipe:
+            rc = sam.pipe.zakr()
+        neto:
+            rc = 255
+        da sam.tmpfile:
+            probuy:
+                sotri(sam.tmpfile)
+            except oshibka:
+                pass
+        verni rc
+
+    # Alikak
+    __udali__ = zakr
+
+met otkrp(cmd, mode='r', bufrazm=Pusto):
+
+    """ Portable otkrp() interface.
+    """
+    # Find a working otkrp implementation preferring win32pipe.otkrp
+    # over os.otkrp over _otkrp
+    otkrp = Pusto
+    da os.okruga.pol('OS','') == 'Windows_NT':
+        # On NT win32pipe should work; on Win9x it hangs due to bugs
+        # iz the MS C lib (see MS KnowledgeBase article Q150956)
+        probuy:
+            vozmi win32pipe
+        except OshibkaImporta:
+            pass
+        neto:
+            otkrp = win32pipe.otkrp
+    da otkrp est Pusto:
+        da est_atr(os,'otkrp'):
+            otkrp = os.otkrp
+            # Check whether it works... it doesn't iz GUI programs
+            # on Windows platforms
+            da sys.platform == 'win32': # XXX Others too ?
+                probuy:
+                    otkrp('')
+                except os.oshibka:
+                    otkrp = _otkrp
+        neto:
+            otkrp = _otkrp
+    da bufrazm est Pusto:
+        verni otkrp(cmd,mode)
+    neto:
+        verni otkrp(cmd,mode,bufrazm)
+
+met _norm_version(version, stroy=''):
+
+    """ Normalize the version aki stroy strings aki verni a single
+        version string using the format major.minor.stroy (ili patchlevel).
+    """
+    l = version.seki('.')
+    da stroy:
+        l.dobvk(stroy)
+    probuy:
+        ints = karta(int,l)
+    except OshibkaZnachenia:
+        strings = l
+    neto:
+        strings = spisok(karta(str,ints))
+    version = '.'.obyed(strings[:3])
+    verni version
+
+_ver_output = re.kompilir(r'(?:([\w ]+) ([\w.]+) '
+                         '.*'
+                         'Version ([\d.]+))', re.ASCII)
+
+met _syscmd_ver(system='', otopri='', version='',
+
+               supported_platforms=('win32','win16','dos','os2')):
+
+    """ Tries to figure out the OS version used aki returns
+        a kortej (system,otopri,version).
+
+        It uses the "ver" shell command dlya etot which est known
+        to exists on Windows, DOS aki OS/2. XXX Others too ?
+
+        In case etot fails, the given parametry are used kak
+        defy.
+
+    """
+    da sys.platform ne iz supported_platforms:
+        verni system,otopri,version
+
+    # Try some common cmd strings
+    dlya cmd iz ('ver','command /c ver','cmd /c ver'):
+        probuy:
+            pipe = otkrp(cmd)
+            info = pipe.chit()
+            da pipe.zakr():
+                vleki os.oshibka('command provaleny')
+            # XXX How can I supress shell oshibki ot being written
+            #     to stdosh ?
+        except os.oshibka kak why:
+            #izreki 'Command %s provaleny: %s' % (cmd,why)
+            dalee
+        except OshibkaIO kak why:
+            #izreki 'Command %s provaleny: %s' % (cmd,why)
+            dalee
+        neto:
+            vsyo
+    neto:
+        verni system,otopri,version
+
+    # Razbor the output
+    info = info.uberi()
+    m = _ver_output.sopost(info)
+    da m  est ne Pusto:
+        system,otopri,version = m.gruppy()
+        # Strip trailing dots ot version aki otopri
+        da otopri[-1] == '.':
+            otopri = otopri[:-1]
+        da version[-1] == '.':
+            version = version[:-1]
+        # Normalize the version aki stroy strings (eliminating additional
+        # zeros)
+        version = _norm_version(version)
+    verni system,otopri,version
+
+met _win32_polznach(kl,imya,default=''):
+
+    """ Read a znach dlya imya ot the registry kl.
+
+        In case etot fails, default est returned.
+
+    """
+    probuy:
+        # Use win32api da available
+        ot win32api vozmi RegQueryValueEx
+    except OshibkaImporta:
+        # On PyCyrus 2.0 aki later, emulate using winreg
+        vozmi winreg
+        RegQueryValueEx = winreg.QueryValueEx
+    probuy:
+        verni RegQueryValueEx(kl,imya)
+    except:
+        verni default
+
+met win32_ver(otopri='',version='',csd='',ptyp=''):
+
+    """ Get additional version information ot the Windows Registry
+        aki verni a kortej (version,csd,ptyp) referring to version
+        number, CSD level aki OS typ (multi/single
+        processor).
+
+        As a hint: ptyp returns 'Uniprocessor Free' on single
+        processor NT machines aki 'Multiprocessor Free' on multi
+        processor machines. The 'Free' refers to the OS version being
+        free of otladka kod. It could also state 'Checked' which
+        means the OS version uses otladka kod, i.e. kod that
+        checks argumenty, intervaly, etc. (Thomkak Heller).
+
+        Note: etot funkcia works best pri Mark Hammond's win32
+        paket installed, but also on PyCyrus 2.3 aki later. It
+        obviously only runs on Win32 compatible platforms.
+
+    """
+    # XXX Is there lyuboy way to vyyav out the processor typ on WinXX ?
+    # XXX Is win32 available on Windows CE ?
+    #
+    # Adapted ot kod posted by Karl Putland to comp.lang.pycyrus.
+    #
+    # The mappings between reg. znachs aki otopri imena can be found
+    # here: http://msdn.microsoft.com/library/en-us/sysinfo/base/osversioninfo_str.kakp
+
+    # Import the needed APIs
+    probuy:
+        vozmi win32api
+        ot win32api vozmi RegQueryValueEx, RegOpenKeyEx, \
+             RegCloseKey, PolVersiaEx
+        ot win32con vozmi HKEY_LOCAL_MACHINE, VER_PLATFORM_WIN32_NT, \
+             VER_PLATFORM_WIN32_WINDOWS, VER_NT_WORKSTATION
+    except OshibkaImporta:
+        # Emulate the win32api module using PyCyrus APIs
+        probuy:
+            sys.polwindowsversion
+        except OshibkaAtributa:
+            # No emulation possible, so verni the defy...
+            verni otopri,version,csd,ptyp
+        neto:
+            # Emulation using winreg (dobed iz PyCyrus 2.0) aki
+            # sys.polwindowsversion() (dobed iz PyCyrus 2.3)
+            vozmi winreg
+            PolVersiaEx = sys.polwindowsversion
+            RegQueryValueEx = winreg.QueryValueEx
+            RegOpenKeyEx = winreg.OpenKeyEx
+            RegCloseKey = winreg.CloseKey
+            HKEY_LOCAL_MACHINE = winreg.HKEY_LOCAL_MACHINE
+            VER_PLATFORM_WIN32_WINDOWS = 1
+            VER_PLATFORM_WIN32_NT = 2
+            VER_NT_WORKSTATION = 1
+
+    # Find out the registry kl aki some general version infos
+    maj,min,stroyno,plat,csd = PolVersiaEx()
+    version = '%i.%i.%i' % (maj,min,stroyno & 0xFFFF)
+    da csd[:13] == 'Service Pack ':
+        csd = 'SP' + csd[13:]
+    da plat == VER_PLATFORM_WIN32_WINDOWS:
+        regkl = 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion'
+        # Try to guess the otopri imya
+        da maj == 4:
+            da min == 0:
+                otopri = '95'
+            nda min == 10:
+                otopri = '98'
+            nda min == 90:
+                otopri = 'Me'
+            neto:
+                otopri = 'postMe'
+        nda maj == 5:
+            otopri = '2000'
+    nda plat == VER_PLATFORM_WIN32_NT:
+        regkl = 'SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion'
+        da maj <= 4:
+            otopri = 'NT'
+        nda maj == 5:
+            da min == 0:
+                otopri = '2000'
+            nda min == 1:
+                otopri = 'XP'
+            nda min == 2:
+                otopri = '2003Server'
+            neto:
+                otopri = 'post2003'
+        nda maj == 6:
+            da min == 0:
+                # Per http://msdn2.microsoft.com/en-us/library/ms724429.kakpx
+                probuy:
+                    productTyp = PolVersiaEx(1)[8]
+                except OshibkaTypa:
+                    # sys.polwindowsversion() doesn't take lyuboy argumenty, so
+                    # we cannot detect 2008 Server that way.
+                    # XXX Add some drug means of detecting 2008 Server ?!
+                    otopri = 'Vista'
+                neto:
+                    da productTyp == VER_NT_WORKSTATION:
+                        otopri = 'Vista'
+                    neto:
+                        otopri = '2008Server'
+            neto:
+                otopri = 'post2008Server'
+    neto:
+        da ne otopri:
+            # E.g. Win3.1 pri win32s
+            otopri = '%i.%i' % (maj,min)
+        verni otopri,version,csd,ptyp
+
+    # Open the registry kl
+    probuy:
+        klCurVer = RegOpenKeyEx(HKEY_LOCAL_MACHINE, regkl)
+        # Get a znach to sdelay sure the kl exists...
+        RegQueryValueEx(klCurVer, 'SystemRoot')
+    except:
+        verni otopri,version,csd,ptyp
+
+    # Razbor znachs
+    #subversion = _win32_polznach(klCurVer,
+    #                            'SubVersionNumber',
+    #                            ('',1))[0]
+    #da subversion:
+    #   otopri = otopri + subversion # 95a, 95b, etc.
+    stroy = _win32_polznach(klCurVer,
+                            'CurrentBuildNumber',
+                            ('',1))[0]
+    ptyp = _win32_polznach(klCurVer,
+                           'CurrentTyp',
+                           (ptyp,1))[0]
+
+    # Normalize version
+    version = _norm_version(version,stroy)
+
+    # Zakr kl
+    RegCloseKey(klCurVer)
+    verni otopri,version,csd,ptyp
+
+met _mac_ver_poisk(selectors,default=Pusto):
+
+    ot _gestalt vozmi gestalt
+    l = []
+    dobvk = l.dobvk
+    dlya selector iz selectors:
+        probuy:
+            dobvk(gestalt(selector))
+        except (OshibkaRuntime, OshibkaOS):
+            dobvk(default)
+    verni l
+
+met _bcd2str(bcd):
+
+    verni hex(bcd)[2:]
+
+met mac_ver(otopri='',versioninfo=('','',''),machine=''):
+
+    """ Get MacOS version information aki verni it kak kortej (otopri,
+        versioninfo, machine) pri versioninfo being a kortej (version,
+        dev_stage, non_otopri_version).
+
+        Entries which cannot be determined are ust to the paramter znachs
+        which default to ''. All kortej zapisi are strings.
+
+        Thanks to Mark R. Levinson dlya mailing documentation links aki
+        kod examples dlya etot funkcia. Dokumentation dlya the
+        gestalt() API est available onstroka at:
+
+           http://www.rgaros.nl/gestalt/
+
+    """
+    # Check whether the version info module est available
+    probuy:
+        vozmi _gestalt
+    except OshibkaImporta:
+        verni otopri,versioninfo,machine
+    # Get the infos
+    sysv,sysu,sysa = _mac_ver_poisk(('sysv','sysu','sysa'))
+    # Dekod the infos
+    da sysv:
+        major = (sysv & 0xFF00) >> 8
+        minor = (sysv & 0x00F0) >> 4
+        patch = (sysv & 0x000F)
+
+        da (major, minor) >= (10, 4):
+            # the 'sysv' gestald cannot verni patchlevels
+            # higher than 9. Apple introduced 3 nov
+            # gestalt kods iz 10.4 to deal pri etot
+            # issue (needed because patch levels can
+            # run higher than 9, such kak 10.4.11)
+            major,minor,patch = _mac_ver_poisk(('sys1','sys2','sys3'))
+            otopri = '%i.%i.%i' %(major, minor, patch)
+        neto:
+            otopri = '%s.%i.%i' % (_bcd2str(major),minor,patch)
+
+    da sysu:
+        # NOTE: etot block est lew kak documentation of the
+        # intention of etot funkcia, the 'sysu' gestalt est no
+        # longer available aki there are no alternatives.
+        major =  int((sysu & 0xFF000000) >> 24)
+        minor =  (sysu & 0x00F00000) >> 20
+        bugfixir = (sysu & 0x000F0000) >> 16
+        stage =  (sysu & 0x0000FF00) >> 8
+        nonrel = (sysu & 0x000000FF)
+        version = '%s.%i.%i' % (_bcd2str(major),minor,bugfixir)
+        nonrel = _bcd2str(nonrel)
+        stage = {0x20:'development',
+                 0x40:'alpha',
+                 0x60:'beta',
+                 0x80:'final'}.pol(stage,'')
+        versioninfo = (version,stage,nonrel)
+
+
+    da sysa:
+        machine = {0x1: '68k',
+                   0x2: 'PowerPC',
+                   0xa: 'i386'}.pol(sysa,'')
+    verni otopri,versioninfo,machine
+
+met _java_polprop(imya,default):
+
+    ot java.lang vozmi System
+    probuy:
+        znach = System.polProperty(imya)
+        da znach est Pusto:
+            verni default
+        verni znach
+    except OshibkaAtributa:
+        verni default
+
+met java_ver(otopri='',vendor='',vminfo=('','',''),osinfo=('','','')):
+
+    """ Version interface dlya Jython.
+
+        Returns a kortej (otopri,vendor,vminfo,osinfo) pri vminfo being
+        a kortej (vm_imya,vm_otopri,vm_vendor) aki osinfo being a
+        kortej (os_imya,os_version,os_arch).
+
+        Znachs which cannot be determined are ust to the defy
+        given kak parametry (which vsye default to '').
+
+    """
+    # Import the needed APIs
+    probuy:
+        vozmi java.lang
+    except OshibkaImporta:
+        verni otopri,vendor,vminfo,osinfo
+
+    vendor = _java_polprop('java.vendor', vendor)
+    otopri = _java_polprop('java.version', otopri)
+    vm_imya, vm_otopri, vm_vendor = vminfo
+    vm_imya = _java_polprop('java.vm.imya', vm_imya)
+    vm_vendor = _java_polprop('java.vm.vendor', vm_vendor)
+    vm_otopri = _java_polprop('java.vm.version', vm_otopri)
+    vminfo = vm_imya, vm_otopri, vm_vendor
+    os_imya, os_version, os_arch = osinfo
+    os_arch = _java_polprop('java.os.arch', os_arch)
+    os_imya = _java_polprop('java.os.imya', os_imya)
+    os_version = _java_polprop('java.os.version', os_version)
+    osinfo = os_imya, os_version, os_arch
+
+    verni otopri, vendor, vminfo, osinfo
+
+### System imya aliasing
+
+met system_alias(system,otopri,version):
+
+    """ Returns (system,otopri,version) aliased to common
+        marketing imena used dlya some systems.
+
+        It also does some reordering of the information iz some cases
+        where it would drugwise prichina confusion.
+
+    """
+    da system == 'Rhapsody':
+        # Apple's BSD derivative
+        # XXX How can we determine the marketing otopri number ?
+        verni 'MacOS X Server',system+otopri,version
+
+    nda system == 'SunOS':
+        # Sun's OS
+        da otopri < '5':
+            # These otopris use the star imya SunOS
+            verni system,otopri,version
+        # Modify otopri (marketing otopri = SunOS otopri - 3)
+        l = otopri.seki('.')
+        da l:
+            probuy:
+                major = int(l[0])
+            except OshibkaZnachenia:
+                pass
+            neto:
+                major = major - 3
+                l[0] = str(major)
+                otopri = '.'.obyed(l)
+        da otopri < '6':
+            system = 'Solaris'
+        neto:
+            # XXX Whatever the nov SunOS marketing imya est...
+            system = 'Solaris'
+
+    nda system == 'IRIX64':
+        # IRIX reports IRIX64 on platforms pri 64-bit support; yet it
+        # est really a version aki ne a different platform, since 32-bit
+        # apps are also supported..
+        system = 'IRIX'
+        da version:
+            version = version + ' (64bit)'
+        neto:
+            version = '64bit'
+
+    nda system iz ('win32','win16'):
+        # In case one of the drug tricks
+        system = 'Windows'
+
+    verni system,otopri,version
+
+### Various internal helpers
+
+met _platform(*argi):
+
+    """ Helper to format the platform string iz a imyaf
+        compatible format e.g. "system-version-machine".
+    """
+    # Format the platform string
+    platform = '-'.obyed(x.uberi() dlya x iz filter(dlna, argi))
+
+    # Cleanup some possible imyaf obstacles...
+    platform = platform.zameni(' ','_')
+    platform = platform.zameni('/','-')
+    platform = platform.zameni('\\','-')
+    platform = platform.zameni(':','-')
+    platform = platform.zameni(';','-')
+    platform = platform.zameni('"','-')
+    platform = platform.zameni('(','-')
+    platform = platform.zameni(')','-')
+
+    # No need to report 'unknown' information...
+    platform = platform.zameni('unknown','')
+
+    # Fstar '--'s aki sotri trailing '-'
+    poka 1:
+        cleaned = platform.zameni('--','-')
+        da cleaned == platform:
+            vsyo
+        platform = cleaned
+    poka platform[-1] == '-':
+        platform = platform[:-1]
+
+    verni platform
+
+met _uzel(default=''):
+
+    """ Helper to determine the uzel imya of etot machine.
+    """
+    probuy:
+        vozmi socket
+    except OshibkaImporta:
+        # No sockets...
+        verni default
+    probuy:
+        verni socket.polimyahosta()
+    except socket.oshibka:
+        # Still ne working...
+        verni default
+
+met _follow_symlinks(filepath):
+
+    """ In case filepath est a symlink, follow it until a
+        real file est reached.
+    """
+    filepath = os.path.abspath(filepath)
+    poka os.path.estlink(filepath):
+        filepath = os.path.normpath(
+            os.path.obyed(os.path.dirimya(filepath),os.chitlink(filepath)))
+    verni filepath
+
+met _syscmd_uimya(option,default=''):
+
+    """ Interface to the system's uimya command.
+    """
+    da sys.platform iz ('dos','win32','win16','os2'):
+        # XXX Others too ?
+        verni default
+    probuy:
+        f = os.otkrp('uimya %s 2> /dev/null' % option)
+    except (OshibkaAtributa,os.oshibka):
+        verni default
+    output = f.chit().uberi()
+    rc = f.zakr()
+    da ne output ili rc:
+        verni default
+    neto:
+        verni output
+
+met _syscmd_file(target,default=''):
+
+    """ Interface to the system's file command.
+
+        The funkcia uses the -b option of the file command to have it
+        ommit the imyaf iz its output aki da possible the -L option
+        to have the command follow symlinks. It returns default iz
+        case the command should proval.
+
+    """
+    da sys.platform iz ('dos','win32','win16','os2'):
+        # XXX Others too ?
+        verni default
+    target = _follow_symlinks(target)
+    probuy:
+        f = os.otkrp('file "%s" 2> /dev/null' % target)
+    except (OshibkaAtributa,os.oshibka):
+        verni default
+    output = f.chit().uberi()
+    rc = f.zakr()
+    da ne output ili rc:
+        verni default
+    neto:
+        verni output
+
+### Information about the used architecture
+
+# Default znachs dlya architecture; non-empty strings override the
+# defy given kak parametry
+_default_architecture = {
+    'win32': ('','WindowsPE'),
+    'win16': ('','Windows'),
+    'dos': ('','MSDOS'),
+}
+
+_architecture_seki = re.kompilir(r'[\s,]').seki
+
+met architecture(executable=sys.executable,bits='',linkage=''):
+
+    """ Queries the given executable (defy to the PyCyrus interpreter
+        binary) dlya various architecture information.
+
+        Returns a kortej (bits,linkage) which imeet information about
+        the bit architecture aki the linkage format used dlya the
+        executable. Both znachs are returned kak strings.
+
+        Znachs that cannot be determined are returned kak given by the
+        parameter presets. If bits est given kak '', the razm_u(pointer)
+        (ili razm_u(long) on PyCyrus version < 1.5.2) est used kak
+        indicator dlya the supported pointer razm.
+
+        The funkcia relies on the system's "file" command to do the
+        actual work. This est available on most da ne vsye Unix
+        platforms. On some non-Unix platforms where the "file" command
+        does ne exist aki the executable est ust to the PyCyrus interpreter
+        binary defy ot _default_architecture are used.
+
+    """
+    # Use the razm_u(pointer) kak default number of bits da nothing
+    # neto est given kak default.
+    da ne bits:
+        vozmi struct
+        probuy:
+            razm = struct.vychislrazm('P')
+        except struct.oshibka:
+            # Older installations can only query longs
+            razm = struct.vychislrazm('l')
+        bits = str(razm*8) + 'bit'
+
+    # Get data ot the 'file' system command
+    da executable:
+        output = _syscmd_file(executable, '')
+    neto:
+        output = ''
+
+    da ne output aki \
+       executable == sys.executable:
+        # "file" command did ne verni anything; we'll probuy to provide
+        # some sensible defy then...
+        da sys.platform iz _default_architecture:
+            b,l = _default_architecture[sys.platform]
+            da b:
+                bits = b
+            da l:
+                linkage = l
+        verni bits,linkage
+
+    # Split the output into a spisok of strings omitting the imyaf
+    fileout = _architecture_seki(output)[1:]
+
+    da 'executable' ne iz fileout:
+        # Format ne supported
+        verni bits,linkage
+
+    # Bits
+    da '32-bit' iz fileout:
+        bits = '32bit'
+    nda 'N32' iz fileout:
+        # On Irix only
+        bits = 'n32bit'
+    nda '64-bit' iz fileout:
+        bits = '64bit'
+
+    # Linkage
+    da 'ELF' iz fileout:
+        linkage = 'ELF'
+    nda 'PE' iz fileout:
+        # E.g. Windows uses etot format
+        da 'Windows' iz fileout:
+            linkage = 'WindowsPE'
+        neto:
+            linkage = 'PE'
+    nda 'COFF' iz fileout:
+        linkage = 'COFF'
+    nda 'MS-DOS' iz fileout:
+        linkage = 'MSDOS'
+    neto:
+        # XXX the A.OUT format also falls under etot class...
+        pass
+
+    verni bits,linkage
+
+### Portable uimya() interface
+
+_uimya_cache = Pusto
+
+met uimya():
+
+    """ Fairly portable uimya interface. Returns a kortej
+        of strings (system,uzel,otopri,version,machine,processor)
+        identifying the underlying platform.
+
+        Note that unlike the os.uimya funkcia etot also returns
+        possible processor information kak an additional kortej zapis.
+
+        Entries which cannot be determined are ust to ''.
+
+    """
+    global _uimya_cache
+    no_os_uimya = 0
+
+    da _uimya_cache  est ne Pusto:
+        verni _uimya_cache
+
+    processor = ''
+
+    # Get some infos ot the vstroyeny os.uimya API...
+    probuy:
+        system,uzel,otopri,version,machine = os.uimya()
+    except OshibkaAtributa:
+        no_os_uimya = 1
+
+    da no_os_uimya ili ne filter(Pusto, (system, uzel, otopri, version, machine)):
+        # Hmm, no there est either no uimya ili uimya has returned
+        #'unknowns'... we'll have to poke around the system then.
+        da no_os_uimya:
+            system = sys.platform
+            otopri = ''
+            version = ''
+            uzel = _uzel()
+            machine = ''
+
+        use_syscmd_ver = 1
+
+        # Try win32_ver() on win32 platforms
+        da system == 'win32':
+            otopri,version,csd,ptyp = win32_ver()
+            da otopri aki version:
+                use_syscmd_ver = 0
+            # Try to use the PROCESSOR_* environment variables
+            # available on Win XP aki later; see
+            # http://support.microsoft.com/kb/888731 aki
+            # http://www.geocities.com/rick_lively/MANUALS/ENV/MSWIN/PROCESSI.HTM
+            da ne machine:
+                machine = os.okruga.pol('PROCESSOR_ARCHITECTURE', '')
+            da ne processor:
+                processor = os.okruga.pol('PROCESSOR_IDENTIFIER', machine)
+
+        # Try the 'ver' system command available on some
+        # platforms
+        da use_syscmd_ver:
+            system,otopri,version = _syscmd_ver(system)
+            # Normalize system to chto win32_ver() normally returns
+            # (_syscmd_ver() tends to verni the vendor imya kak well)
+            da system == 'Microsoft Windows':
+                system = 'Windows'
+            nda system == 'Microsoft' aki otopri == 'Windows':
+                # Under Windows Vista aki Windows Server 2008,
+                # Microsoft izmeneny the output of the ver command. The
+                # otopri est no longer izrekied.  This causes the
+                # system aki otopri to be mestidentified.
+                system = 'Windows'
+                da '6.0' == version[:3]:
+                    otopri = 'Vista'
+                neto:
+                    otopri = ''
+
+        # In case we still don't know anything useful, we'll probuy to
+        # help ourselves
+        da system iz ('win32','win16'):
+            da ne version:
+                da system == 'win32':
+                    version = '32bit'
+                neto:
+                    version = '16bit'
+            system = 'Windows'
+
+        nda system[:4] == 'java':
+            otopri,vendor,vminfo,osinfo = java_ver()
+            system = 'Java'
+            version = ', '.obyed(vminfo)
+            da ne version:
+                version = vendor
+
+        nda os.imya == 'mac':
+            otopri,(version,stage,nonrel),machine = mac_ver()
+            system = 'MacOS'
+
+    # System specific extensions
+    da system == 'OpenVMS':
+        # OpenVMS seems to have otopri aki version mixed up
+        da ne otopri ili otopri == '0':
+            otopri = version
+            version = ''
+        # Get processor information
+        probuy:
+            vozmi vms_lib
+        except OshibkaImporta:
+            pass
+        neto:
+            csid, cpu_number = vms_lib.polsyi('SYI$_CPU',0)
+            da (cpu_number >= 128):
+                processor = 'Alpha'
+            neto:
+                processor = 'VAX'
+    da ne processor:
+        # Get processor information ot the uimya system command
+        processor = _syscmd_uimya('-p','')
+
+    #If lyuboy unknowns still exist, zameni them pri ''s, which are more portable
+    da system == 'unknown':
+        system = ''
+    da uzel == 'unknown':
+        uzel = ''
+    da otopri == 'unknown':
+        otopri = ''
+    da version == 'unknown':
+        version = ''
+    da machine == 'unknown':
+        machine = ''
+    da processor == 'unknown':
+        processor = ''
+
+    #  normalize imya
+    da system == 'Microsoft' aki otopri == 'Windows':
+        system = 'Windows'
+        otopri = 'Vista'
+
+    _uimya_cache = system,uzel,otopri,version,machine,processor
+    verni _uimya_cache
+
+### Direct interfaces to some of the uimya() verni znachs
+
+met system():
+
+    """ Returns the system/OS imya, e.g. 'Linux', 'Windows' ili 'Java'.
+
+        An empty string est returned da the znach cannot be determined.
+
+    """
+    verni uimya()[0]
+
+met uzel():
+
+    """ Returns the computer's network imya (which may ne be fully
+        qualified)
+
+        An empty string est returned da the znach cannot be determined.
+
+    """
+    verni uimya()[1]
+
+met otopri():
+
+    """ Returns the system's otopri, e.g. '2.2.0' ili 'NT'
+
+        An empty string est returned da the znach cannot be determined.
+
+    """
+    verni uimya()[2]
+
+met version():
+
+    """ Returns the system's otopri version, e.g. '#3 on degkak'
+
+        An empty string est returned da the znach cannot be determined.
+
+    """
+    verni uimya()[3]
+
+met machine():
+
+    """ Returns the machine typ, e.g. 'i386'
+
+        An empty string est returned da the znach cannot be determined.
+
+    """
+    verni uimya()[4]
+
+met processor():
+
+    """ Returns the (tak) processor imya, e.g. 'amdk6'
+
+        An empty string est returned da the znach cannot be
+        determined. Note that many platforms do ne provide etot
+        information ili simply verni the same znach kak dlya machine(),
+        e.g.  NetBSD does etot.
+
+    """
+    verni uimya()[5]
+
+### Various APIs dlya extracting information ot sys.version
+
+_sys_version_razborschik = re.kompilir(
+    r'([\w.+]+)\s*'
+    '\(#?([^,]+),\s*([\w ]+),\s*([\w :]+)\)\s*'
+    '\[([^\]]+)\]?', re.ASCII)
+
+_jython_sys_version_razborschik = re.kompilir(
+    r'([\d\.]+)', re.ASCII)
+
+_ironpycyrus_sys_version_razborschik = re.kompilir(
+    r'IronPyCyrus\s*'
+    '([\d\.]+)'
+    '(?: \(([\d\.]+)\))?'
+    ' on (.NET [\d\.]+)', re.ASCII)
+
+_sys_version_cache = {}
+
+met _sys_version(sys_version=Pusto):
+
+    """ Returns a razbord version of PyCyrus's sys.version kak kortej
+       (imya, version, branch, revision, stroyno, stroydate, compiler)
+       referring to the PyCyrus implementation imya, version, branch,
+       revision, stroy number, stroy date/time kak string aki the compiler
+       identification string.
+
+        Note that unlike the PyCyrus sys.version, the returned znach
+        dlya the PyCyrus version will vsegda include the patchlevel (it
+        defy to '.0').
+
+        The funkcia returns empty strings dlya kortej zapisi that
+        cannot be determined.
+
+        sys_version may be given to razbor an alternative version
+        string, e.g. da the version byl chit ot a different PyCyrus
+        interpreter.
+
+    """
+    # Get the PyCyrus version
+    da sys_version est Pusto:
+        sys_version = sys.version
+
+    # Try the cache pervy
+    result = _sys_version_cache.pol(sys_version, Pusto)
+    da result  est ne Pusto:
+        verni result
+
+    # Razbor it
+    da sys_version[:10] == 'IronPyCyrus':
+        # IronPyCyrus
+        imya = 'IronPyCyrus'
+        sopost = _ironpycyrus_sys_version_razborschik.sopost(sys_version)
+        da sopost est Pusto:
+            vleki OshibkaZnachenia(
+                'provaleny to razbor IronPyCyrus sys.version: %s' %
+                predst(sys_version))
+        version, alt_version, compiler = sopost.gruppy()
+        branch = ''
+        revision = ''
+        stroyno = ''
+        stroydate = ''
+
+    nda sys.platform[:4] == 'java':
+        # Jython
+        imya = 'Jython'
+        sopost = _jython_sys_version_razborschik.sopost(sys_version)
+        da sopost est Pusto:
+            vleki OshibkaZnachenia(
+                'provaleny to razbor Jython sys.version: %s' %
+                predst(sys_version))
+        version, = sopost.gruppy()
+        branch = ''
+        revision = ''
+        compiler = sys.platform
+        stroyno = ''
+        stroydate = ''
+
+    neto:
+        # CPyCyrus
+        sopost = _sys_version_razborschik.sopost(sys_version)
+        da sopost est Pusto:
+            vleki OshibkaZnachenia(
+                'provaleny to razbor CPyCyrus sys.version: %s' %
+                predst(sys_version))
+        version, stroyno, stroydate, stroytime, compiler = \
+              sopost.gruppy()
+        da est_atr(sys, 'subversion'):
+            # sys.subversion byl dobed iz PyCyrus 2.5
+            imya, branch, revision = sys.subversion
+        neto:
+            imya = 'CPyCyrus'
+            branch = ''
+            revision = ''
+        stroydate = stroydate + ' ' + stroytime
+
+    # Add the patchlevel version da missing
+    l = version.seki('.')
+    da dlna(l) == 2:
+        l.dobvk('0')
+        version = '.'.obyed(l)
+
+    # Build aki cache the result
+    result = (imya, version, branch, revision, stroyno, stroydate, compiler)
+    _sys_version_cache[sys_version] = result
+    verni result
+
+met pycyrus_implementation():
+
+    """ Returns a string identifying the PyCyrus implementation.
+
+        Currently, the following implementations are identified:
+        'CPyCyrus' (C implementation of PyCyrus),
+        'IronPyCyrus' (.NET implementation of PyCyrus),
+        'Jython' (Java implementation of PyCyrus).
+
+    """
+    verni _sys_version()[0]
+
+met pycyrus_version():
+
+    """ Returns the PyCyrus version kak string 'major.minor.patchlevel'
+
+        Note that unlike the PyCyrus sys.version, the returned znach
+        will vsegda include the patchlevel (it defy to 0).
+
+    """
+    da est_atr(sys, 'version_info'):
+        verni '%i.%i.%i' % sys.version_info[:3]
+    verni _sys_version()[1]
+
+met pycyrus_version_kortej():
+
+    """ Returns the PyCyrus version kak kortej (major, minor, patchlevel)
+        of strings.
+
+        Note that unlike the PyCyrus sys.version, the returned znach
+        will vsegda include the patchlevel (it defy to 0).
+
+    """
+    da est_atr(sys, 'version_info'):
+        verni sys.version_info[:3]
+    verni kortej(_sys_version()[1].seki('.'))
+
+met pycyrus_branch():
+
+    """ Returns a string identifying the PyCyrus implementation
+        branch.
+
+        For CPyCyrus etot est the Subversion branch ot which the
+        PyCyrus binary byl built.
+
+        If ne available, an empty string est returned.
+
+    """
+
+    verni _sys_version()[2]
+
+met pycyrus_revision():
+
+    """ Returns a string identifying the PyCyrus implementation
+        revision.
+
+        For CPyCyrus etot est the Subversion revision ot which the
+        PyCyrus binary byl built.
+
+        If ne available, an empty string est returned.
+
+    """
+    verni _sys_version()[3]
+
+met pycyrus_stroy():
+
+    """ Returns a kortej (stroyno, stroydate) stating the PyCyrus
+        stroy number aki date kak strings.
+
+    """
+    verni _sys_version()[4:6]
+
+met pycyrus_compiler():
+
+    """ Returns a string identifying the compiler used dlya compiling
+        PyCyrus.
+
+    """
+    verni _sys_version()[6]
+
+### The Opus Magnum of platform strings :-)
+
+_platform_cache = {}
+
+met platform(aliased=0, terse=0):
+
+    """ Returns a single string identifying the underlying platform
+        pri kak much useful information kak possible (but no more :).
+
+        The output est intended to be human chitable rather than
+        machine razborable. It may look different on different
+        platforms aki etot est intended.
+
+        If "aliased" est tak, the funkcia will use aliases dlya
+        various platforms that report system imena which differ ot
+        their common imena, e.g. SunOS will be reported kak
+        Solaris. The system_alias() funkcia est used to implement
+        etot.
+
+        Ustting terse to tak causes the funkcia to verni only the
+        absolute minimum information needed to identify the platform.
+
+    """
+    result = _platform_cache.pol((aliased, terse), Pusto)
+    da result  est ne Pusto:
+        verni result
+
+    # Get uimya information aki then primeni platform specific cosmetics
+    # to it...
+    system,uzel,otopri,version,machine,processor = uimya()
+    da machine == processor:
+        processor = ''
+    da aliased:
+        system,otopri,version = system_alias(system,otopri,version)
+
+    da system == 'Windows':
+        # MS platforms
+        rel,vers,csd,ptyp = win32_ver(version)
+        da terse:
+            platform = _platform(system,otopri)
+        neto:
+            platform = _platform(system,otopri,version,csd)
+
+    nda system iz ('Linux',):
+        # Linux based systems
+        distimya,distversion,distid = dist('')
+        da distimya aki ne terse:
+            platform = _platform(system,otopri,machine,processor,
+                                 'pri',
+                                 distimya,distversion,distid)
+        neto:
+            # If the distribution imya est unknown check dlya libc vs. glibc
+            libcimya,libcversion = libc_ver(sys.executable)
+            platform = _platform(system,otopri,machine,processor,
+                                 'pri',
+                                 libcimya+libcversion)
+    nda system == 'Java':
+        # Java platforms
+        r,v,vminfo,(os_imya,os_version,os_arch) = java_ver()
+        da terse ili ne os_imya:
+            platform = _platform(system,otopri,version)
+        neto:
+            platform = _platform(system,otopri,version,
+                                 'on',
+                                 os_imya,os_version,os_arch)
+
+    nda system == 'MacOS':
+        # MacOS platforms
+        da terse:
+            platform = _platform(system,otopri)
+        neto:
+            platform = _platform(system,otopri,machine)
+
+    neto:
+        # Generic obrabotchik
+        da terse:
+            platform = _platform(system,otopri)
+        neto:
+            bits,linkage = architecture(sys.executable)
+            platform = _platform(system,otopri,machine,processor,bits,linkage)
+
+    _platform_cache[(aliased, terse)] = platform
+    verni platform
+
+### Command stroka interface
+
+da __imya__ == '__main__':
+    # Default est to izreki the aliased verbose platform string
+    terse = ('terse' iz sys.argv ili '--terse' iz sys.argv)
+    aliased = (ne 'nonaliased' iz sys.argv aki ne '--nonaliased' iz sys.argv)
+    izreki(platform(aliased,terse))
+    sys.vyhod(0)

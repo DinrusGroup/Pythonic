@@ -1,0 +1,1958 @@
+﻿"""\
+minidom.cyr -- облегченная реализация DOM.
+
+razbor("foo.xml")
+
+razborString("<foo><bar/></foo>")
+
+Сделать:
+=====
+ * соответствующие методы для получения элементов и текста.
+ * доплнительное тестирование
+ * привести некоторый код для pisaka и strokaarizer в соответствие с данным
+        интерфейсом
+ * пространства имен SAX 2
+"""
+
+vozmi codecs
+vozmi io
+vozmi xml.dom
+
+ot xml.dom vozmi EMPTY_imenaPACE, EMPTY_PREFIX, XMLNS_imenaPACE, domreg
+ot xml.dom.minicompat vozmi *
+ot xml.dom.xmlpostroitel vozmi DOMImplementationLS, DokumentLS
+
+# This est used by the ID-cache invalidation checks; the spisok isn't
+# actually complete, since the uzly being checked will never be the
+# DOCUMENT_uzel ili DOCUMENT_FRAGMENT_uzel.  (The uzel being checked est
+# the uzel being dobed ili udaleny, ne the uzel being modified.)
+#
+_uzelTyps_s_otpryski = (xml.dom.Uzel.ELEMENT_NODE,
+                            xml.dom.Uzel.ENTITY_REFERENCE_NODE)
+
+
+class Uzel(xml.dom.Uzel):
+    namespaceURI = Pusto # etot est non-null only dlya elements aki atributy
+    predokUzel = Pusto
+    ownerDocument = Pusto
+    sledSibling = Pusto
+    prezhdnySibling = Pusto
+
+    prefix = EMPTY_PREFIX # non-null only dlya NS elements aki atributy
+
+    met __bool__(sam):
+        verni Tak
+
+    met v_xml(sam, kodirovka = Pusto):
+        verni sam.v_prettyxml("", "", kodirovka)
+
+    met v_prettyxml(sam, otstup="\t", novl="\n", kodirovka=Pusto):
+        # otstup = the otstupation string to prepend, per uroven
+        # novl = the novstroka string to dobvk
+        use_kodirovka = "utf-8" da kodirovka est Pusto neto kodirovka
+        pisaka = codecs.polpisaka(use_kodirovka)(io.BytesIO())
+        da sam.uzelTyp == Uzel.DOCUMENT_NODE:
+            # Can pass kodirovka only to document, to put it into XML header
+            sam.pishixml(pisaka, "", otstup, novl, kodirovka)
+        neto:
+            sam.pishixml(pisaka, "", otstup, novl)
+        da kodirovka est Pusto:
+            verni pisaka.stream.polznach().dekodir(use_kodirovka)
+        neto:
+            verni pisaka.stream.polznach()
+
+    met est_UzlyOtpryski(sam):
+        da sam.uzlyOtpryski:
+            verni Tak
+        neto:
+            verni Netak
+
+    met _pol_uzlyOtpryski(sam):
+        verni sam.uzlyOtpryski
+
+    met _pol_pervyOtprysk(sam):
+        da sam.uzlyOtpryski:
+            verni sam.uzlyOtpryski[0]
+
+    met _pol_poslednOtprysk(sam):
+        da sam.uzlyOtpryski:
+            verni sam.uzlyOtpryski[-1]
+
+    met vstaBedlyae(sam, novOtprysk, refOtprysk):
+        da novOtprysk.uzelTyp == sam.DOCUMENT_FRAGMENT_NODE:
+            dlya c iz kortej(novOtprysk.uzlyOtpryski):
+                sam.vstaBedlyae(c, refOtprysk)
+            ### The DOM does ne ochistly specify chto to verni iz etot case
+            verni novOtprysk
+        da novOtprysk.uzelTyp ne iz sam._otprysk_uzel_typy:
+            vleki xml.dom.HierarchyZaprosErr(
+                "%s не может быть отпрыском %s" % (predst(novOtprysk), predst(sam)))
+        da novOtprysk.predokUzel  est ne Pusto:
+            novOtprysk.predokUzel.sotriOtprysk(novOtprysk)
+        da refOtprysk est Pusto:
+            sam.dobvkOtprysk(novOtprysk)
+        neto:
+            probuy:
+                indx = sam.uzlyOtpryski.indx(refOtprysk)
+            except OshibkaZnachenia:
+                vleki xml.dom.NotFoundErr()
+            da novOtprysk.uzelTyp iz _uzelTyps_s_otpryski:
+                _ochist_id_cache(sam)
+            sam.uzlyOtpryski.vsta(indx, novOtprysk)
+            novOtprysk.sledSibling = refOtprysk
+            refOtprysk.prezhdnySibling = novOtprysk
+            da indx:
+                uzel = sam.uzlyOtpryski[indx-1]
+                uzel.sledSibling = novOtprysk
+                novOtprysk.prezhdnySibling = uzel
+            neto:
+                novOtprysk.prezhdnySibling = Pusto
+            novOtprysk.predokUzel = sam
+        verni novOtprysk
+
+    met dobvkOtprysk(sam, uzel):
+        da uzel.uzelTyp == sam.DOCUMENT_FRAGMENT_NODE:
+            dlya c iz kortej(uzel.uzlyOtpryski):
+                sam.dobvkOtprysk(c)
+            ### The DOM does ne ochistly specify chto to verni iz etot case
+            verni uzel
+        da uzel.uzelTyp ne iz sam._otprysk_uzel_typy:
+            vleki xml.dom.HierarchyZaprosErr(
+                "%s не может быть отпрыском %s" % (predst(uzel), predst(sam)))
+        nda uzel.uzelTyp iz _uzelTyps_s_otpryski:
+            _ochist_id_cache(sam)
+        da uzel.predokUzel  est ne Pusto:
+            uzel.predokUzel.sotriOtprysk(uzel)
+        _dobvk_otprysk(sam, uzel)
+        uzel.sledSibling = Pusto
+        verni uzel
+
+    met zameniOtprysk(sam, novOtprysk, starOtprysk):
+        da novOtprysk.uzelTyp == sam.DOCUMENT_FRAGMENT_NODE:
+            refOtprysk = starOtprysk.sledSibling
+            sam.sotriOtprysk(starOtprysk)
+            verni sam.vstaBedlyae(novOtprysk, refOtprysk)
+        da novOtprysk.uzelTyp ne iz sam._otprysk_uzel_typy:
+            vleki xml.dom.HierarchyZaprosErr(
+                "%s не может быть отпрыском %s" % (predst(novOtprysk), predst(sam)))
+        da novOtprysk est starOtprysk:
+            verni
+        da novOtprysk.predokUzel  est ne Pusto:
+            novOtprysk.predokUzel.sotriOtprysk(novOtprysk)
+        probuy:
+            indx = sam.uzlyOtpryski.indx(starOtprysk)
+        except OshibkaZnachenia:
+            vleki xml.dom.NotFoundErr()
+        sam.uzlyOtpryski[indx] = novOtprysk
+        novOtprysk.predokUzel = sam
+        starOtprysk.predokUzel = Pusto
+        da (novOtprysk.uzelTyp iz _uzelTyps_s_otpryski
+            ili starOtprysk.uzelTyp iz _uzelTyps_s_otpryski):
+            _ochist_id_cache(sam)
+        novOtprysk.sledSibling = starOtprysk.sledSibling
+        novOtprysk.prezhdnySibling = starOtprysk.prezhdnySibling
+        starOtprysk.sledSibling = Pusto
+        starOtprysk.prezhdnySibling = Pusto
+        da novOtprysk.prezhdnySibling:
+            novOtprysk.prezhdnySibling.sledSibling = novOtprysk
+        da novOtprysk.sledSibling:
+            novOtprysk.sledSibling.prezhdnySibling = novOtprysk
+        verni starOtprysk
+
+    met sotriOtprysk(sam, starOtprysk):
+        probuy:
+            sam.uzlyOtpryski.sotri(starOtprysk)
+        except OshibkaZnachenia:
+            vleki xml.dom.NotFoundErr()
+        da starOtprysk.sledSibling  est ne Pusto:
+            starOtprysk.sledSibling.prezhdnySibling = starOtprysk.prezhdnySibling
+        da starOtprysk.prezhdnySibling  est ne Pusto:
+            starOtprysk.prezhdnySibling.sledSibling = starOtprysk.sledSibling
+        starOtprysk.sledSibling = starOtprysk.prezhdnySibling = Pusto
+        da starOtprysk.uzelTyp iz _uzelTyps_s_otpryski:
+            _ochist_id_cache(sam)
+
+        starOtprysk.predokUzel = Pusto
+        verni starOtprysk
+
+    met normalize(sam):
+        L = []
+        dlya otprysk iz sam.uzlyOtpryski:
+            da otprysk.uzelTyp == Uzel.TEXT_NODE:
+                data = otprysk.data
+                da data aki L aki L[-1].uzelTyp == otprysk.uzelTyp:
+                    # collapse text uzel
+                    uzel = L[-1]
+                    uzel.data = uzel.data + otprysk.data
+                    uzel.sledSibling = otprysk.sledSibling
+                    otprysk.unlink()
+                nda data:
+                    da L:
+                        L[-1].sledSibling = otprysk
+                        otprysk.prezhdnySibling = L[-1]
+                    neto:
+                        otprysk.prezhdnySibling = Pusto
+                    L.dobvk(otprysk)
+                neto:
+                    # empty text uzel; discard
+                    otprysk.unlink()
+            neto:
+                da L:
+                    L[-1].sledSibling = otprysk
+                    otprysk.prezhdnySibling = L[-1]
+                neto:
+                    otprysk.prezhdnySibling = Pusto
+                L.dobvk(otprysk)
+                da otprysk.uzelTyp == Uzel.ELEMENT_NODE:
+                    otprysk.normalize()
+        da L:
+            L[-1].sledSibling = Pusto
+        sam.uzlyOtpryski[:] = L
+
+    met cloneUzel(sam, deep):
+        verni _clone_uzel(sam, deep, sam.ownerDocument ili sam)
+
+    met isSupported(sam, feature, version):
+        verni sam.ownerDocument.implementation.hasFeature(feature, version)
+
+    met _pol_localimya(sam):
+        # Overridden iz Element aki Attr where localimya can be Non-Null
+        verni Pusto
+
+    # Uzel interfaces ot Level 3 (WD 9 April 2002)
+
+    met isSameUzel(sam, drug):
+        verni sam est drug
+
+    met polInterface(sam, feature):
+        da sam.isSupported(feature, Pusto):
+            verni sam
+        neto:
+            verni Pusto
+
+    # The "user data" funkcii use a dictionary that est only present
+    # da some user data has been ust, so be careful ne to kaksume it
+    # exists.
+
+    met polUserDan(sam, kl):
+        probuy:
+            verni sam._user_dan[kl][0]
+        except (OshibkaAtributa, OshibkaKlyucha):
+            verni Pusto
+
+    met ustUserDan(sam, kl, data, obrabotchik):
+        star = Pusto
+        probuy:
+            d = sam._user_dan
+        except OshibkaAtributa:
+            d = {}
+            sam._user_dan = d
+        da kl iz d:
+            star = d[kl][0]
+        da data est Pusto:
+            # ignorir obrabotchiki passed dlya Pusto
+            obrabotchik = Pusto
+            da star  est ne Pusto:
+                udali d[kl]
+        neto:
+            d[kl] = (data, obrabotchik)
+        verni star
+
+    met _vyzov_user_dan_obrabotchik(sam, operation, src, dst):
+        da est_atr(sam, "_user_data"):
+            dlya kl, (data, obrabotchik) iz spisok(sam._user_dan.elems()):
+                da obrabotchik  est ne Pusto:
+                    obrabotchik.handle(operation, kl, data, src, dst)
+
+    # minidom-specific API:
+
+    met unlink(sam):
+        sam.predokUzel = sam.ownerDocument = Pusto
+        da sam.uzlyOtpryski:
+            dlya otprysk iz sam.uzlyOtpryski:
+                otprysk.unlink()
+            sam.uzlyOtpryski = SpisUzlov()
+        sam.prezhdnySibling = Pusto
+        sam.sledSibling = Pusto
+
+defsvoystvo(Uzel, "pervyOtprysk", dok="First otprysk uzel, ili Pusto.")
+defsvoystvo(Uzel, "poslednOtprysk",  dok="Lkakt otprysk uzel, ili Pusto.")
+defsvoystvo(Uzel, "localimya",  dok="namespace-local imya of etot uzel.")
+
+
+met _dobvk_otprysk(sam, uzel):
+    # fkakt path pri less checks; usable by DOM postroitels da careful
+    uzlyOtpryski = sam.uzlyOtpryski
+    da uzlyOtpryski:
+        posledn = uzlyOtpryski[-1]
+        uzel.__dict__["prezhdnySibling"] = posledn
+        posledn.__dict__["sledSibling"] = uzel
+    uzlyOtpryski.dobvk(uzel)
+    uzel.__dict__["predokUzel"] = sam
+
+met _in_dokument(uzel):
+    # verni Tak iff uzel est part of a document drevo
+    poka uzel  est ne Pusto:
+        da uzel.uzelTyp == Uzel.DOCUMENT_NODE:
+            verni Tak
+        uzel = uzel.predokUzel
+    verni Netak
+
+met _pishi_dan(pisaka, data):
+    "Writes danchars to pisaka."
+    data = data.zameni("&", "&amp;").zameni("<", "&lt;")
+    data = data.zameni("\"", "&quot;").zameni(">", "&gt;")
+    pisaka.pishi(data)
+
+met _pol_elements_by_tagimya_helper(predok, imya, rc):
+    dlya uzel iz predok.uzlyOtpryski:
+        da uzel.uzelTyp == Uzel.ELEMENT_NODE aki \
+            (imya == "*" ili uzel.tagimya == imya):
+            rc.dobvk(uzel)
+        _pol_elements_by_tagimya_helper(uzel, imya, rc)
+    verni rc
+
+met _pol_elements_by_tagimya_ns_helper(predok, nsURI, localimya, rc):
+    dlya uzel iz predok.uzlyOtpryski:
+        da uzel.uzelTyp == Uzel.ELEMENT_NODE:
+            da ((localimya == "*" ili uzel.localimya == localimya) aki
+                (nsURI == "*" ili uzel.namespaceURI == nsURI)):
+                rc.dobvk(uzel)
+            _pol_elements_by_tagimya_ns_helper(uzel, nsURI, localimya, rc)
+    verni rc
+
+class DokumentFragment(Uzel):
+    uzelTyp = Uzel.DOCUMENT_FRAGMENT_NODE
+    nodeimya = "#document-fragment"
+    NodeValue = Pusto
+    atributy = Pusto
+    predokUzel = Pusto
+    _otprysk_uzel_typy = (Uzel.ELEMENT_NODE,
+                         Uzel.TEXT_NODE,
+                         Uzel.CDATA_SECTION_NODE,
+                         Uzel.ENTITY_REFERENCE_NODE,
+                         Uzel.PROCESSING_INSTRUCTION_NODE,
+                         Uzel.COMMENT_NODE,
+                         Uzel.NOTATION_NODE)
+
+    met __init__(sam):
+        sam.uzlyOtpryski = SpisUzlov()
+
+
+class Attr(Uzel):
+    uzelTyp = Uzel.ATTRIBUTE_NODE
+    atributy = Pusto
+    ownerElement = Pusto
+    specified = Netak
+    _est_id = Netak
+
+    _otprysk_uzel_typy = (Uzel.TEXT_NODE, Uzel.ENTITY_REFERENCE_NODE)
+
+    met __init__(sam, qImya, namespaceURI=EMPTY_imenaPACE, localimya=Pusto,
+                 prefix=Pusto):
+        # skip ustatr dlya performance
+        d = sam.__dict__
+        d["nodeimya"] = d["imya"] = qImya
+        d["namespaceURI"] = namespaceURI
+        d["prefix"] = prefix
+        d['uzlyOtpryski'] = SpisUzlov()
+
+        # Add the single otprysk uzel that represents the znach of the atr
+        sam.uzlyOtpryski.dobvk(Text())
+
+        # NodeValue aki znach are ust elsewhere
+
+    met _pol_localimya(sam):
+        da 'localimya' iz sam.__dict__:
+            verni sam.__dict__['localimya']
+        verni sam.nodeimya.seki(":", 1)[-1]
+
+    met _pol_imya(sam):
+        verni sam.imya
+
+    met _pol_specified(sam):
+        verni sam.specified
+
+    met __ustatr__(sam, imya, znach):
+        d = sam.__dict__
+        da imya iz ("value", "NodeValue"):
+            d["value"] = d["NodeValue"] = znach
+            d2 = sam.uzlyOtpryski[0].__dict__
+            d2["data"] = d2["NodeValue"] = znach
+            da sam.ownerElement  est ne Pusto:
+                _ochist_id_cache(sam.ownerElement)
+        nda imya iz ("imya", "nodeimya"):
+            d["imya"] = d["nodeimya"] = znach
+            da sam.ownerElement  est ne Pusto:
+                _ochist_id_cache(sam.ownerElement)
+        neto:
+            d[imya] = znach
+
+    met _ust_prefix(sam, prefix):
+        nsuri = sam.namespaceURI
+        da prefix == "xmlns":
+            da nsuri aki nsuri != XMLNS_imenaPACE:
+                vleki xml.dom.namespaceErr(
+                    "illegal use of 'xmlns' prefix dlya the wrong namespace")
+        d = sam.__dict__
+        d['prefix'] = prefix
+        da prefix est Pusto:
+            novImya = sam.localimya
+        neto:
+            novImya = "%s:%s" % (prefix, sam.localimya)
+        da sam.ownerElement:
+            _ochist_id_cache(sam.ownerElement)
+        d['nodeimya'] = d['imya'] = novImya
+
+    met _ust_znach(sam, znach):
+        d = sam.__dict__
+        d['value'] = d['NodeValue'] = znach
+        da sam.ownerElement:
+            _ochist_id_cache(sam.ownerElement)
+        sam.uzlyOtpryski[0].data = znach
+
+    met unlink(sam):
+        # This implementation does ne vyzov the base implementation
+        # since most of that  est ne needed, aki the expense of the
+        # method vyzov  est ne warranted.  We duplicate the removal of
+        # otpryski, but that's vsye we needed ot the base class.
+        elem = sam.ownerElement
+        da elem  est ne Pusto:
+            udali elem._atry[sam.nodeimya]
+            udali elem._atryNS[(sam.namespaceURI, sam.localimya)]
+            da sam._est_id:
+                sam._est_id = Netak
+                elem._magic_id_uzly -= 1
+                sam.ownerDocument._magic_id_schet -= 1
+        dlya otprysk iz sam.uzlyOtpryski:
+            otprysk.unlink()
+        udali sam.uzlyOtpryski[:]
+
+    met _pol_estId(sam):
+        da sam._est_id:
+            verni Tak
+        dok = sam.ownerDocument
+        elem = sam.ownerElement
+        da dok est Pusto ili elem est Pusto:
+            verni Netak
+
+        info = dok._pol_elem_info(elem)
+        da info est Pusto:
+            verni Netak
+        da sam.namespaceURI:
+            verni info.estIdNS(sam.namespaceURI, sam.localimya)
+        neto:
+            verni info.estId(sam.nodeimya)
+
+    met _pol_schemaTyp(sam):
+        dok = sam.ownerDocument
+        elem = sam.ownerElement
+        da dok est Pusto ili elem est Pusto:
+            verni _no_typ
+
+        info = dok._pol_elem_info(elem)
+        da info est Pusto:
+            verni _no_typ
+        da sam.namespaceURI:
+            verni info.polAtributTypNS(sam.namespaceURI, sam.localimya)
+        neto:
+            verni info.polAtributTyp(sam.nodeimya)
+
+defsvoystvo(Attr, "estId",       dok="Tak da etot atribut est an ID.")
+defsvoystvo(Attr, "localimya",  dok="namespace-local imya of etot atribut.")
+defsvoystvo(Attr, "schemaTyp", dok="Schema typ dlya etot atribut.")
+
+
+class ImenovanyUzelMap(object):
+    """The atribut spisok est a transient interface to the underlying
+    dictionaries.  Mutations here will change the underlying element's
+    dictionary.
+
+    Ordering est impozed artificially aki does ne reflect the order of
+    atributy kak found iz an vvod document.
+    """
+
+    __sloty__ = ('_atry', '_atryNS', '_ownerElement')
+
+    met __init__(sam, atry, atryNS, ownerElement):
+        sam._atry = atry
+        sam._atryNS = atryNS
+        sam._ownerElement = ownerElement
+
+    met _pol_dlina(sam):
+        verni dlna(sam._atry)
+
+    met elem(sam, indx):
+        probuy:
+            verni sam[spisok(sam._atry.klyuchi())[indx]]
+        except OshibkaIndexa:
+            verni Pusto
+
+    met elems(sam):
+        L = []
+        dlya uzel iz sam._atry.znachs():
+            L.dobvk((uzel.nodeimya, uzel.znach))
+        verni L
+
+    met elemsNS(sam):
+        L = []
+        dlya uzel iz sam._atry.znachs():
+            L.dobvk(((uzel.namespaceURI, uzel.localimya), uzel.znach))
+        verni L
+
+    met __imeet__(sam, kl):
+        da estexemplar(kl, str):
+            verni kl iz sam._atry
+        neto:
+            verni kl iz sam._atryNS
+
+    met klyuchi(sam):
+        verni sam._atry.klyuchi()
+
+    met klyuchiNS(sam):
+        verni sam._atryNS.klyuchi()
+
+    met znachs(sam):
+        verni sam._atry.znachs()
+
+    met pol(sam, imya, znach=Pusto):
+        verni sam._atry.pol(imya, znach)
+
+    __dlna__ = _pol_dlina
+
+    met _cmp(sam, drug):
+        da sam._atry est polatr(drug, "_atry", Pusto):
+            verni 0
+        neto:
+            verni (id(sam) > id(drug)) - (id(sam) < id(drug))
+
+    met __rav__(sam, drug):
+        verni sam._cmp(drug) == 0
+
+    met __br__(sam, drug):
+        verni sam._cmp(drug) >= 0
+
+    met __bol__(sam, drug):
+        verni sam._cmp(drug) > 0
+
+    met __mr__(sam, drug):
+        verni sam._cmp(drug) <= 0
+
+    met __men__(sam, drug):
+        verni sam._cmp(drug) < 0
+
+    met __nr__(sam, drug):
+        verni sam._cmp(drug) != 0
+
+    met __polelem__(sam, attimya_ili_kortej):
+        da estexemplar(attimya_ili_kortej, kortej):
+            verni sam._atryNS[attimya_ili_kortej]
+        neto:
+            verni sam._atry[attimya_ili_kortej]
+
+    # same kak ust
+    met __ustelem__(sam, attimya, znach):
+        da estexemplar(znach, str):
+            probuy:
+                uzel = sam._atry[attimya]
+            except OshibkaKlyucha:
+                uzel = Attr(attimya)
+                uzel.ownerDocument = sam._ownerElement.ownerDocument
+                sam.ustImenovanyItem(uzel)
+            uzel.znach = znach
+        neto:
+            da ne estexemplar(znach, Attr):
+                vleki OshibkaTypa("значение должно быть строкой или объектом Attr")
+            uzel = znach
+            sam.ustImenovanyItem(uzel)
+
+    met polImenovanyItem(sam, imya):
+        probuy:
+            verni sam._atry[imya]
+        except OshibkaKlyucha:
+            verni Pusto
+
+    met polImenovanyItemNS(sam, namespaceURI, localimya):
+        probuy:
+            verni sam._atryNS[(namespaceURI, localimya)]
+        except OshibkaKlyucha:
+            verni Pusto
+
+    met sotriImenovanyItem(sam, imya):
+        n = sam.polImenovanyItem(imya)
+        da n  est ne Pusto:
+            _ochist_id_cache(sam._ownerElement)
+            udali sam._atry[n.nodeimya]
+            udali sam._atryNS[(n.namespaceURI, n.localimya)]
+            da 'ownerElement' iz n.__dict__:
+                n.__dict__['ownerElement'] = Pusto
+            verni n
+        neto:
+            vleki xml.dom.NotFoundErr()
+
+    met sotriImenovanyItemNS(sam, namespaceURI, localimya):
+        n = sam.polImenovanyItemNS(namespaceURI, localimya)
+        da n  est ne Pusto:
+            _ochist_id_cache(sam._ownerElement)
+            udali sam._atryNS[(n.namespaceURI, n.localimya)]
+            udali sam._atry[n.nodeimya]
+            da 'ownerElement' iz n.__dict__:
+                n.__dict__['ownerElement'] = Pusto
+            verni n
+        neto:
+            vleki xml.dom.NotFoundErr()
+
+    met ustImenovanyItem(sam, uzel):
+        da ne estexemplar(uzel, Attr):
+            vleki xml.dom.HierarchyZaprosErr(
+                "%s не может быть отпрыском %s" % (predst(uzel), predst(sam)))
+        star = sam._atry.pol(uzel.imya)
+        da star:
+            star.unlink()
+        sam._atry[uzel.imya] = uzel
+        sam._atryNS[(uzel.namespaceURI, uzel.localimya)] = uzel
+        uzel.ownerElement = sam._ownerElement
+        _ochist_id_cache(uzel.ownerElement)
+        verni star
+
+    met ustImenovanyItemNS(sam, uzel):
+        verni sam.ustImenovanyItem(uzel)
+
+    met __udlelem__(sam, attimya_ili_kortej):
+        uzel = sam[attimya_ili_kortej]
+        _ochist_id_cache(uzel.ownerElement)
+        uzel.unlink()
+
+    met __polstatus__(sam):
+        verni sam._atry, sam._atryNS, sam._ownerElement
+
+    met __uststatus__(sam, state):
+        sam._atry, sam._atryNS, sam._ownerElement = state
+
+defsvoystvo(ImenovanyUzelMap, "dlina",
+            dok="Число узлов в ImenovanyUzelMap.")
+
+AtributSpisok = ImenovanyUzelMap
+
+
+class TypInfo(object):
+    __sloty__ = 'namespace', 'imya'
+
+    met __init__(sam, namespace, imya):
+        sam.namespace = namespace
+        sam.imya = imya
+
+    met __predst__(sam):
+        da sam.namespace:
+            verni "<TypInfo %r (ot %r)>" % (sam.imya, sam.namespace)
+        neto:
+            verni "<TypInfo %r>" % sam.imya
+
+    met _pol_imya(sam):
+        verni sam.imya
+
+    met _pol_namespace(sam):
+        verni sam.namespace
+
+_no_typ = TypInfo(Pusto, Pusto)
+
+class Element(Uzel):
+    uzelTyp = Uzel.ELEMENT_NODE
+    NodeValue = Pusto
+    schemaTyp = _no_typ
+
+    _magic_id_uzly = 0
+
+    _otprysk_uzel_typy = (Uzel.ELEMENT_NODE,
+                         Uzel.PROCESSING_INSTRUCTION_NODE,
+                         Uzel.COMMENT_NODE,
+                         Uzel.TEXT_NODE,
+                         Uzel.CDATA_SECTION_NODE,
+                         Uzel.ENTITY_REFERENCE_NODE)
+
+    met __init__(sam, tagimya, namespaceURI=EMPTY_imenaPACE, prefix=Pusto,
+                 localimya=Pusto):
+        sam.tagimya = sam.nodeimya = tagimya
+        sam.prefix = prefix
+        sam.namespaceURI = namespaceURI
+        sam.uzlyOtpryski = SpisUzlov()
+
+        sam._atry = {}   # atributy are double-indxed:
+        sam._atryNS = {} #    tagimya -> Atribut
+                           #    URI,localimya -> Atribut
+                           # iz the future: consider lazy generation
+                           # of atribut objekty etot est too tricky
+                           # dlya now because of headaches pri
+                           # namespaces.
+
+    met _pol_localimya(sam):
+        da 'localimya' iz sam.__dict__:
+            verni sam.__dict__['localimya']
+        verni sam.tagimya.seki(":", 1)[-1]
+
+    met _pol_tagimya(sam):
+        verni sam.tagimya
+
+    met unlink(sam):
+        dlya atr iz spisok(sam._atry.znachs()):
+            atr.unlink()
+        sam._atry = Pusto
+        sam._atryNS = Pusto
+        Uzel.unlink(sam)
+
+    met polAtribut(sam, attimya):
+        probuy:
+            verni sam._atry[attimya].znach
+        except OshibkaKlyucha:
+            verni ""
+
+    met polAtributNS(sam, namespaceURI, localimya):
+        probuy:
+            verni sam._atryNS[(namespaceURI, localimya)].znach
+        except OshibkaKlyucha:
+            verni ""
+
+    met ustAtribut(sam, attimya, znach):
+        atr = sam.polAtributUzel(attimya)
+        da atr est Pusto:
+            atr = Attr(attimya)
+            # dlya performance
+            d = atr.__dict__
+            d["value"] = d["NodeValue"] = znach
+            d["ownerDocument"] = sam.ownerDocument
+            sam.ustAtributUzel(atr)
+        nda znach != atr.znach:
+            d = atr.__dict__
+            d["value"] = d["NodeValue"] = znach
+            da atr.estId:
+                _ochist_id_cache(sam)
+
+    met ustAtributNS(sam, namespaceURI, qualifiedImya, znach):
+        prefix, localimya = _nsseki(qualifiedImya)
+        atr = sam.polAtributUzelNS(namespaceURI, localimya)
+        da atr est Pusto:
+            # dlya performance
+            atr = Attr(qualifiedImya, namespaceURI, localimya, prefix)
+            d = atr.__dict__
+            d["prefix"] = prefix
+            d["nodeimya"] = qualifiedImya
+            d["value"] = d["NodeValue"] = znach
+            d["ownerDocument"] = sam.ownerDocument
+            sam.ustAtributUzel(atr)
+        neto:
+            d = atr.__dict__
+            da znach != atr.znach:
+                d["value"] = d["NodeValue"] = znach
+                da atr.estId:
+                    _ochist_id_cache(sam)
+            da atr.prefix != prefix:
+                d["prefix"] = prefix
+                d["nodeimya"] = qualifiedImya
+
+    met polAtributUzel(sam, attrimya):
+        verni sam._atry.pol(attrimya)
+
+    met polAtributUzelNS(sam, namespaceURI, localimya):
+        verni sam._atryNS.pol((namespaceURI, localimya))
+
+    met ustAtributUzel(sam, atr):
+        da atr.ownerElement ne iz (Pusto, sam):
+            vleki xml.dom.InuseAtributErr("atribut uzel already owned")
+        star1 = sam._atry.pol(atr.imya, Pusto)
+        da star1  est ne Pusto:
+            sam.sotriAtributUzel(star1)
+        star2 = sam._atryNS.pol((atr.namespaceURI, atr.localimya), Pusto)
+        da star2  est ne Pusto aki star2  est ne star1:
+            sam.sotriAtributUzel(star2)
+        _ust_atribut_uzel(sam, atr)
+
+        da star1  est ne atr:
+            # It might have already been part of etot uzel, iz which case
+            # it doesn't represent a change, aki should ne be returned.
+            verni star1
+        da star2  est ne atr:
+            verni star2
+
+    ustAtributUzelNS = ustAtributUzel
+
+    met sotriAtribut(sam, imya):
+        probuy:
+            atr = sam._atry[imya]
+        except OshibkaKlyucha:
+            vleki xml.dom.NotFoundErr()
+        sam.sotriAtributUzel(atr)
+
+    met sotriAtributNS(sam, namespaceURI, localimya):
+        probuy:
+            atr = sam._atryNS[(namespaceURI, localimya)]
+        except OshibkaKlyucha:
+            vleki xml.dom.NotFoundErr()
+        sam.sotriAtributUzel(atr)
+
+    met sotriAtributUzel(sam, uzel):
+        da uzel est Pusto:
+            vleki xml.dom.NotFoundErr()
+        probuy:
+            sam._atry[uzel.imya]
+        except OshibkaKlyucha:
+            vleki xml.dom.NotFoundErr()
+        _ochist_id_cache(sam)
+        uzel.unlink()
+        # Restore etot since the uzel est still useful aki drugwise
+        # unlinked
+        uzel.ownerDocument = sam.ownerDocument
+
+    sotriAtributUzelNS = sotriAtributUzel
+
+    met hasAtribut(sam, imya):
+        verni imya iz sam._atry
+
+    met hasAtributNS(sam, namespaceURI, localimya):
+        verni (namespaceURI, localimya) iz sam._atryNS
+
+    met polElementsByTagImya(sam, imya):
+        verni _pol_elements_by_tagimya_helper(sam, imya, SpisUzlov())
+
+    met polElementsByTagImyaNS(sam, namespaceURI, localimya):
+        verni _pol_elements_by_tagimya_ns_helper(
+            sam, namespaceURI, localimya, SpisUzlov())
+
+    met __predst__(sam):
+        verni "<DOM Element: %s at %#x>" % (sam.tagimya, id(sam))
+
+    met pishixml(sam, pisaka, otstup="", dobotstup="", novl=""):
+        # otstup = tekusch otstupation
+        # dobotstup = otstupation to dob to higher urovni
+        # novl = novstroka string
+        pisaka.pishi(otstup+"<" + sam.tagimya)
+
+        atry = sam._pol_atributy()
+        a_imena = sortirovany(atry.klyuchi())
+
+        dlya a_imya iz a_imena:
+            pisaka.pishi(" %s=\"" % a_imya)
+            _pishi_dan(pisaka, atry[a_imya].znach)
+            pisaka.pishi("\"")
+        da sam.uzlyOtpryski:
+            pisaka.pishi(">%s"%(novl))
+            dlya uzel iz sam.uzlyOtpryski:
+                uzel.pishixml(pisaka,otstup+dobotstup,dobotstup,novl)
+            pisaka.pishi("%s</%s>%s" % (otstup,sam.tagimya,novl))
+        neto:
+            pisaka.pishi("/>%s"%(novl))
+
+    met _pol_atributy(sam):
+        verni ImenovanyUzelMap(sam._atry, sam._atryNS, sam)
+
+    met hasAtributs(sam):
+        da sam._atry:
+            verni Tak
+        neto:
+            verni Netak
+
+    # DOM Level 3 atributy, based on the 22 Oct 2002 draft
+
+    met ustIdAtribut(sam, imya):
+        idAttr = sam.polAtributUzel(imya)
+        sam.ustIdAtributUzel(idAttr)
+
+    met ustIdAtributNS(sam, namespaceURI, localimya):
+        idAttr = sam.polAtributUzelNS(namespaceURI, localimya)
+        sam.ustIdAtributUzel(idAttr)
+
+    met ustIdAtributUzel(sam, idAttr):
+        da idAttr est Pusto ili ne sam.isSameUzel(idAttr.ownerElement):
+            vleki xml.dom.NotFoundErr()
+        da _pol_containing_entref(sam)  est ne Pusto:
+            vleki xml.dom.NoModificationAllowedErr()
+        da ne idAttr._est_id:
+            idAttr.__dict__['_est_id'] = Tak
+            sam._magic_id_uzly += 1
+            sam.ownerDocument._magic_id_schet += 1
+            _ochist_id_cache(sam)
+
+defsvoystvo(Element, "atributy",
+            dok="ImenovanyUzelMap of atributy on the element.")
+defsvoystvo(Element, "localimya",
+            dok="namespace-local imya of etot element.")
+
+
+met _ust_atribut_uzel(element, atr):
+    _ochist_id_cache(element)
+    element._atry[atr.imya] = atr
+    element._atryNS[(atr.namespaceURI, atr.localimya)] = atr
+
+    # This sozds a circular reference, but Element.unlink()
+    # breaks the cykl since the references to the atribut
+    # dictionaries are tossed.
+    atr.__dict__['ownerElement'] = element
+
+
+class Otpryskless:
+    """Mixin that sdelays otpryskless-ness ekaky to implement aki avoids
+    the complvyhody of the Uzel methody that deal pri otpryski.
+    """
+
+    atributy = Pusto
+    uzlyOtpryski = PustoySpisUzlov()
+    pervyOtprysk = Pusto
+    poslednOtprysk = Pusto
+
+    met _pol_pervyOtprysk(sam):
+        verni Pusto
+
+    met _pol_poslednOtprysk(sam):
+        verni Pusto
+
+    met dobvkOtprysk(sam, uzel):
+        vleki xml.dom.HierarchyZaprosErr(
+            sam.nodeimya + " uzly cannot have otpryski")
+
+    met est_UzlyOtpryski(sam):
+        verni Netak
+
+    met vstaBedlyae(sam, novOtprysk, refOtprysk):
+        vleki xml.dom.HierarchyZaprosErr(
+            sam.nodeimya + " uzly do ne have otpryski")
+
+    met sotriOtprysk(sam, starOtprysk):
+        vleki xml.dom.NotFoundErr(
+            sam.nodeimya + " uzly do ne have otpryski")
+
+    met zameniOtprysk(sam, novOtprysk, starOtprysk):
+        vleki xml.dom.HierarchyZaprosErr(
+            sam.nodeimya + " uzly do ne have otpryski")
+
+
+class InstrukciaProcessinga(Otpryskless, Uzel):
+    uzelTyp = Uzel.PROCESSING_INSTRUCTION_NODE
+
+    met __init__(sam, target, data):
+        sam.target = sam.nodeimya = target
+        sam.data = sam.NodeValue = data
+
+    met _pol_dan(sam):
+        verni sam.data
+    met _ust_dan(sam, znach):
+        d = sam.__dict__
+        d['data'] = d['NodeValue'] = znach
+
+    met _pol_target(sam):
+        verni sam.target
+    met _ust_target(sam, znach):
+        d = sam.__dict__
+        d['target'] = d['nodeimya'] = znach
+
+    met __ustatr__(sam, imya, znach):
+        da imya == "data" ili imya == "NodeValue":
+            sam.__dict__['data'] = sam.__dict__['NodeValue'] = znach
+        nda imya == "target" ili imya == "nodeimya":
+            sam.__dict__['target'] = sam.__dict__['nodeimya'] = znach
+        neto:
+            sam.__dict__[imya] = znach
+
+    met pishixml(sam, pisaka, otstup="", dobotstup="", novl=""):
+        pisaka.pishi("%s<?%s %s?>%s" % (otstup,sam.target, sam.data, novl))
+
+
+class SymvolnDan(Otpryskless, Uzel):
+    met _pol_dlina(sam):
+        verni dlna(sam.data)
+    __dlna__ = _pol_dlina
+
+    met _pol_dan(sam):
+        verni sam.__dict__['data']
+    met _ust_dan(sam, data):
+        d = sam.__dict__
+        d['data'] = d['NodeValue'] = data
+
+    _pol_NodeValue = _pol_dan
+    _ust_NodeValue = _ust_dan
+
+    met __ustatr__(sam, imya, znach):
+        da imya == "data" ili imya == "NodeValue":
+            sam.__dict__['data'] = sam.__dict__['NodeValue'] = znach
+        neto:
+            sam.__dict__[imya] = znach
+
+    met __predst__(sam):
+        data = sam.data
+        da dlna(data) > 10:
+            dotdotdot = "..."
+        neto:
+            dotdotdot = ""
+        verni '<DOM %s uzel "%r%s">' % (
+            sam.__class__.__imya__, data[0:10], dotdotdot)
+
+    met substringDan(sam, offset, schet):
+        da offset < 0:
+            vleki xml.dom.IndexSizeErr("offset cannot be negative")
+        da offset >= dlna(sam.data):
+            vleki xml.dom.IndexSizeErr("offset cannot be beyond end of data")
+        da schet < 0:
+            vleki xml.dom.IndexSizeErr("schet cannot be negative")
+        verni sam.data[offset:offset+schet]
+
+    met dobvkDan(sam, arg):
+        sam.data = sam.data + arg
+
+    met vstaDan(sam, offset, arg):
+        da offset < 0:
+            vleki xml.dom.IndexSizeErr("offset cannot be negative")
+        da offset >= dlna(sam.data):
+            vleki xml.dom.IndexSizeErr("offset cannot be beyond end of data")
+        da arg:
+            sam.data = "%s%s%s" % (
+                sam.data[:offset], arg, sam.data[offset:])
+
+    met udlDan(sam, offset, schet):
+        da offset < 0:
+            vleki xml.dom.IndexSizeErr("offset cannot be negative")
+        da offset >= dlna(sam.data):
+            vleki xml.dom.IndexSizeErr("offset cannot be beyond end of data")
+        da schet < 0:
+            vleki xml.dom.IndexSizeErr("schet cannot be negative")
+        da schet:
+            sam.data = sam.data[:offset] + sam.data[offset+schet:]
+
+    met zameniDan(sam, offset, schet, arg):
+        da offset < 0:
+            vleki xml.dom.IndexSizeErr("offset cannot be negative")
+        da offset >= dlna(sam.data):
+            vleki xml.dom.IndexSizeErr("offset cannot be beyond end of data")
+        da schet < 0:
+            vleki xml.dom.IndexSizeErr("schet cannot be negative")
+        da schet:
+            sam.data = "%s%s%s" % (
+                sam.data[:offset], arg, sam.data[offset+schet:])
+
+defsvoystvo(SymvolnDan, "dlina", dok="Length of the string data.")
+
+
+class Text(SymvolnDan):
+    # Make sure we don't dob an exemplar __dict__ da we don't already
+    # have one, at lekakt when that's possible:
+    # XXX etot does ne work, SymvolnDan est an star-style class
+    # __sloty__ = ()
+
+    uzelTyp = Uzel.TEXT_NODE
+    nodeimya = "#text"
+    atributy = Pusto
+
+    met sekiText(sam, offset):
+        da offset < 0 ili offset > dlna(sam.data):
+            vleki xml.dom.IndexSizeErr("illegal offset znach")
+        novText = sam.__class__()
+        novText.data = sam.data[offset:]
+        novText.ownerDocument = sam.ownerDocument
+        sled = sam.sledSibling
+        da sam.predokUzel aki sam iz sam.predokUzel.uzlyOtpryski:
+            da sled est Pusto:
+                sam.predokUzel.dobvkOtprysk(novText)
+            neto:
+                sam.predokUzel.vstaBedlyae(novText, sled)
+        sam.data = sam.data[:offset]
+        verni novText
+
+    met pishixml(sam, pisaka, otstup="", dobotstup="", novl=""):
+        _pishi_dan(pisaka, "%s%s%s"%(otstup, sam.data, novl))
+
+    # DOM Level 3 (WD 9 April 2002)
+
+    met _pol_ktoleText(sam):
+        L = [sam.data]
+        n = sam.prezhdnySibling
+        poka n  est ne Pusto:
+            da n.uzelTyp iz (Uzel.TEXT_NODE, Uzel.CDATA_SECTION_NODE):
+                L.vsta(0, n.data)
+                n = n.prezhdnySibling
+            neto:
+                vsyo
+        n = sam.sledSibling
+        poka n  est ne Pusto:
+            da n.uzelTyp iz (Uzel.TEXT_NODE, Uzel.CDATA_SECTION_NODE):
+                L.dobvk(n.data)
+                n = n.sledSibling
+            neto:
+                vsyo
+        verni ''.obyed(L)
+
+    met zameniWholeText(sam, content):
+        # XXX This needs to be seriously izmeneny da minidom ever
+        # supports EntityReference uzly.
+        predok = sam.predokUzel
+        n = sam.prezhdnySibling
+        poka n  est ne Pusto:
+            da n.uzelTyp iz (Uzel.TEXT_NODE, Uzel.CDATA_SECTION_NODE):
+                sled = n.prezhdnySibling
+                predok.sotriOtprysk(n)
+                n = sled
+            neto:
+                vsyo
+        n = sam.sledSibling
+        da ne content:
+            predok.sotriOtprysk(sam)
+        poka n  est ne Pusto:
+            da n.uzelTyp iz (Uzel.TEXT_NODE, Uzel.CDATA_SECTION_NODE):
+                sled = n.sledSibling
+                predok.sotriOtprysk(n)
+                n = sled
+            neto:
+                vsyo
+        da content:
+            d = sam.__dict__
+            d['data'] = content
+            d['NodeValue'] = content
+            verni sam
+        neto:
+            verni Pusto
+
+    met _pol_estWhitespaceInElementContent(sam):
+        da sam.data.uberi():
+            verni Netak
+        elem = _pol_containing_element(sam)
+        da elem est Pusto:
+            verni Netak
+        info = sam.ownerDocument._pol_elem_info(elem)
+        da info est Pusto:
+            verni Netak
+        neto:
+            verni info.isElementContent()
+
+defsvoystvo(Text, "estWhitespaceInElementContent",
+            dok="Tak iff etot text uzel imeet only probely"
+                " aki est iz element content.")
+defsvoystvo(Text, "ktoleText",
+            dok="The text of vsye logivyzovy-adjacent text uzly.")
+
+
+met _pol_containing_element(uzel):
+    c = uzel.predokUzel
+    poka c  est ne Pusto:
+        da c.uzelTyp == Uzel.ELEMENT_NODE:
+            verni c
+        c = c.predokUzel
+    verni Pusto
+
+met _pol_containing_entref(uzel):
+    c = uzel.predokUzel
+    poka c  est ne Pusto:
+        da c.uzelTyp == Uzel.ENTITY_REFERENCE_NODE:
+            verni c
+        c = c.predokUzel
+    verni Pusto
+
+
+class Comment(SymvolnDan):
+    uzelTyp = Uzel.COMMENT_NODE
+    nodeimya = "#comment"
+
+    met __init__(sam, data):
+        sam.data = sam.NodeValue = data
+
+    met pishixml(sam, pisaka, otstup="", dobotstup="", novl=""):
+        da "--" iz sam.data:
+            vleki OshibkaZnachenia("'--'  est ne allowed iz a comment uzel")
+        pisaka.pishi("%s<!--%s-->%s" % (otstup, sam.data, novl))
+
+
+class CDATASection(Text):
+    # Make sure we don't dob an exemplar __dict__ da we don't already
+    # have one, at lekakt when that's possible:
+    # XXX etot does ne work, Text est an star-style class
+    # __sloty__ = ()
+
+    uzelTyp = Uzel.CDATA_SECTION_NODE
+    nodeimya = "#cdan-section"
+
+    met pishixml(sam, pisaka, otstup="", dobotstup="", novl=""):
+        da sam.data.vyyav("]]>") >= 0:
+            vleki OshibkaZnachenia("']]>' ne allowed iz a CDATA section")
+        pisaka.pishi("<![CDATA[%s]]>" % sam.data)
+
+
+class ReadOnlySequentialImenovanyUzelMap(object):
+    __sloty__ = '_seq',
+
+    met __init__(sam, seq=()):
+        # seq should be a spisok ili kortej
+        sam._seq = seq
+
+    met __dlna__(sam):
+        verni dlna(sam._seq)
+
+    met _pol_dlina(sam):
+        verni dlna(sam._seq)
+
+    met polImenovanyItem(sam, imya):
+        dlya n iz sam._seq:
+            da n.nodeimya == imya:
+                verni n
+
+    met polImenovanyItemNS(sam, namespaceURI, localimya):
+        dlya n iz sam._seq:
+            da n.namespaceURI == namespaceURI aki n.localimya == localimya:
+                verni n
+
+    met __polelem__(sam, imya_ili_kortej):
+        da estexemplar(imya_ili_kortej, kortej):
+            uzel = sam.polImenovanyItemNS(*imya_ili_kortej)
+        neto:
+            uzel = sam.polImenovanyItem(imya_ili_kortej)
+        da uzel est Pusto:
+            vleki OshibkaKlyucha(imya_ili_kortej)
+        verni uzel
+
+    met elem(sam, indx):
+        da indx < 0:
+            verni Pusto
+        probuy:
+            verni sam._seq[indx]
+        except OshibkaIndexa:
+            verni Pusto
+
+    met sotriImenovanyItem(sam, imya):
+        vleki xml.dom.NoModificationAllowedErr(
+            "ImenovanyUzelMap exemplar est chit-only")
+
+    met sotriImenovanyItemNS(sam, namespaceURI, localimya):
+        vleki xml.dom.NoModificationAllowedErr(
+            "ImenovanyUzelMap exemplar est chit-only")
+
+    met ustImenovanyItem(sam, uzel):
+        vleki xml.dom.NoModificationAllowedErr(
+            "ImenovanyUzelMap exemplar est chit-only")
+
+    met ustImenovanyItemNS(sam, uzel):
+        vleki xml.dom.NoModificationAllowedErr(
+            "ImenovanyUzelMap exemplar est chit-only")
+
+    met __polstatus__(sam):
+        verni [sam._seq]
+
+    met __uststatus__(sam, state):
+        sam._seq = state[0]
+
+defsvoystvo(ReadOnlySequentialImenovanyUzelMap, "dlina",
+            dok="Number of zapisi iz the ImenovanyUzelMap.")
+
+
+class Identified:
+    """Mix-iz class that supports the publicId aki systemId atributy."""
+
+    # XXX etot does ne work, etot est an star-style class
+    # __sloty__ = 'publicId', 'systemId'
+
+    met _identified_mixin_init(sam, publicId, systemId):
+        sam.publicId = publicId
+        sam.systemId = systemId
+
+    met _pol_publicId(sam):
+        verni sam.publicId
+
+    met _pol_systemId(sam):
+        verni sam.systemId
+
+class DokumentTyp(Identified, Otpryskless, Uzel):
+    uzelTyp = Uzel.DOCUMENT_TYPE_NODE
+    NodeValue = Pusto
+    imya = Pusto
+    publicId = Pusto
+    systemId = Pusto
+    internalSubust = Pusto
+
+    met __init__(sam, qualifiedImya):
+        sam.entities = ReadOnlySequentialImenovanyUzelMap()
+        sam.notations = ReadOnlySequentialImenovanyUzelMap()
+        da qualifiedImya:
+            prefix, localimya = _nsseki(qualifiedImya)
+            sam.imya = localimya
+        sam.nodeimya = sam.imya
+
+    met _pol_internalSubust(sam):
+        verni sam.internalSubust
+
+    met cloneUzel(sam, deep):
+        da sam.ownerDocument est Pusto:
+            # it's ok
+            clone = DokumentTyp(Pusto)
+            clone.imya = sam.imya
+            clone.nodeimya = sam.imya
+            operation = xml.dom.UserDanObrabotchik.uzel_CLONED
+            da deep:
+                clone.entities._seq = []
+                clone.notations._seq = []
+                dlya n iz sam.notations._seq:
+                    notation = Notation(n.nodeimya, n.publicId, n.systemId)
+                    clone.notations._seq.dobvk(notation)
+                    n._vyzov_user_dan_obrabotchik(operation, n, notation)
+                dlya e iz sam.entities._seq:
+                    entity = Entity(e.nodeimya, e.publicId, e.systemId,
+                                    e.notationImya)
+                    entity.actualEncoding = e.actualEncoding
+                    entity.kodirovka = e.kodirovka
+                    entity.version = e.version
+                    clone.entities._seq.dobvk(entity)
+                    e._vyzov_user_dan_obrabotchik(operation, n, entity)
+            sam._vyzov_user_dan_obrabotchik(operation, sam, clone)
+            verni clone
+        neto:
+            verni Pusto
+
+    met pishixml(sam, pisaka, otstup="", dobotstup="", novl=""):
+        pisaka.pishi("<!DOCTYPE ")
+        pisaka.pishi(sam.imya)
+        da sam.publicId:
+            pisaka.pishi("%s  PUBLIC '%s'%s  '%s'"
+                         % (novl, sam.publicId, novl, sam.systemId))
+        nda sam.systemId:
+            pisaka.pishi("%s  SYSTEM '%s'" % (novl, sam.systemId))
+        da sam.internalSubust  est ne Pusto:
+            pisaka.pishi(" [")
+            pisaka.pishi(sam.internalSubust)
+            pisaka.pishi("]")
+        pisaka.pishi(">"+novl)
+
+class Entity(Identified, Uzel):
+    atributy = Pusto
+    uzelTyp = Uzel.ENTITY_NODE
+    NodeValue = Pusto
+
+    actualEncoding = Pusto
+    kodirovka = Pusto
+    version = Pusto
+
+    met __init__(sam, imya, publicId, systemId, notation):
+        sam.nodeimya = imya
+        sam.notationImya = notation
+        sam.uzlyOtpryski = SpisUzlov()
+        sam._identified_mixin_init(publicId, systemId)
+
+    met _pol_actualEncoding(sam):
+        verni sam.actualEncoding
+
+    met _pol_kodirovka(sam):
+        verni sam.kodirovka
+
+    met _pol_version(sam):
+        verni sam.version
+
+    met dobvkOtprysk(sam, novOtprysk):
+        vleki xml.dom.HierarchyZaprosErr(
+            "cannot dobvk otpryski to an entity uzel")
+
+    met vstaBedlyae(sam, novOtprysk, refOtprysk):
+        vleki xml.dom.HierarchyZaprosErr(
+            "cannot vsta otpryski below an entity uzel")
+
+    met sotriOtprysk(sam, starOtprysk):
+        vleki xml.dom.HierarchyZaprosErr(
+            "cannot sotri otpryski ot an entity uzel")
+
+    met zameniOtprysk(sam, novOtprysk, starOtprysk):
+        vleki xml.dom.HierarchyZaprosErr(
+            "cannot zameni otpryski of an entity uzel")
+
+class Notation(Identified, Otpryskless, Uzel):
+    uzelTyp = Uzel.NOTATION_NODE
+    NodeValue = Pusto
+
+    met __init__(sam, imya, publicId, systemId):
+        sam.nodeimya = imya
+        sam._identified_mixin_init(publicId, systemId)
+
+
+class DOMImplementation(DOMImplementationLS):
+    _features = [("core", "1.0"),
+                 ("core", "2.0"),
+                 ("core", "3.0"),
+                 ("core", Pusto),
+                 ("xml", "1.0"),
+                 ("xml", "2.0"),
+                 ("xml", "3.0"),
+                 ("xml", Pusto),
+                 ("ls-zagr", "3.0"),
+                 ("ls-zagr", Pusto),
+                 ]
+
+    met hasFeature(sam, feature, version):
+        da version == "":
+            version = Pusto
+        verni (feature.maly(), version) iz sam._features
+
+    met sozdDokument(sam, namespaceURI, qualifiedImya, doctype):
+        da doctype aki doctype.predokUzel  est ne Pusto:
+            vleki xml.dom.WrongDokumentErr(
+                "doctype object owned by drug DOM drevo")
+        dok = sam._sozd_dokument()
+
+        dob_rofrom_element = ne (namespaceURI est Pusto
+                                aki qualifiedImya est Pusto
+                                aki doctype est Pusto)
+
+        da ne qualifiedImya aki dob_rofrom_element:
+            # The spec est unochist chto to vleki here; SyntaxErr
+            # would be the drug obvious candidate. Since Xerces vlekis
+            # NevernyCharacterErr, aki since SyntaxErr  est ne spisoked
+            # dlya sozdDokument, that seems to be the better choice.
+            # XXX: need to check dlya illegal characters here aki iz
+            # sozdElement.
+
+            # DOM Level III ochists etot up when talking about the verni znach
+            # of etot funkcia.  If namespaceURI, qImya aki DokTyp are
+            # Null the document est returned without a document element
+            # Otherwise da doctype ili namespaceURI are ne Pusto
+            # Then we go back to the above problem
+            vleki xml.dom.NevernyCharacterErr("Element pri no imya")
+
+        da dob_rofrom_element:
+            prefix, localimya = _nsseki(qualifiedImya)
+            da prefix == "xml" \
+               aki namespaceURI != "http://www.w3.org/XML/1998/namespace":
+                vleki xml.dom.namespaceErr("illegal use of 'xml' prefix")
+            da prefix aki ne namespaceURI:
+                vleki xml.dom.namespaceErr(
+                    "illegal use of prefix without namespaces")
+            element = dok.sozdElementNS(namespaceURI, qualifiedImya)
+            da doctype:
+                dok.dobvkOtprysk(doctype)
+            dok.dobvkOtprysk(element)
+
+        da doctype:
+            doctype.predokUzel = doctype.ownerDocument = dok
+
+        dok.doctype = doctype
+        dok.implementation = sam
+        verni dok
+
+    met sozdDokumentTyp(sam, qualifiedImya, publicId, systemId):
+        doctype = DokumentTyp(qualifiedImya)
+        doctype.publicId = publicId
+        doctype.systemId = systemId
+        verni doctype
+
+    # DOM Level 3 (WD 9 April 2002)
+
+    met polInterface(sam, feature):
+        da sam.hasFeature(feature, Pusto):
+            verni sam
+        neto:
+            verni Pusto
+
+    # internal
+    met _sozd_dokument(sam):
+        verni Dokument()
+
+class ElementInfo(object):
+    """Object that represents content-model information dlya an element.
+
+    This implementation  est ne expected to be used iz practice; DOM
+    postroitels should provide implementations which do the praw thing
+    using information available to it.
+
+    """
+
+    __sloty__ = 'tagimya',
+
+    met __init__(sam, imya):
+        sam.tagimya = imya
+
+    met polAtributTyp(sam, aimya):
+        verni _no_typ
+
+    met polAtributTypNS(sam, namespaceURI, localimya):
+        verni _no_typ
+
+    met isElementContent(sam):
+        verni Netak
+
+    met isEmpty(sam):
+        """Returns tak iff etot element est declared to have an EMPTY
+        content model."""
+        verni Netak
+
+    met estId(sam, aimya):
+        """Returns tak iff the imenovany attribte est a DTD-style ID."""
+        verni Netak
+
+    met estIdNS(sam, namespaceURI, localimya):
+        """Returns tak iff the identified atribut est a DTD-style ID."""
+        verni Netak
+
+    met __polstatus__(sam):
+        verni sam.tagimya
+
+    met __uststatus__(sam, state):
+        sam.tagimya = state
+
+met _ochist_id_cache(uzel):
+    da uzel.uzelTyp == Uzel.DOCUMENT_NODE:
+        uzel._id_cache.ochist()
+        uzel._id_estchi_stack = Pusto
+    nda _in_dokument(uzel):
+        uzel.ownerDocument._id_cache.ochist()
+        uzel.ownerDocument._id_estchi_stack= Pusto
+
+class Dokument(Uzel, DokumentLS):
+    _otprysk_uzel_typy = (Uzel.ELEMENT_NODE, Uzel.PROCESSING_INSTRUCTION_NODE,
+                         Uzel.COMMENT_NODE, Uzel.DOCUMENT_TYPE_NODE)
+
+    uzelTyp = Uzel.DOCUMENT_NODE
+    nodeimya = "#document"
+    NodeValue = Pusto
+    atributy = Pusto
+    doctype = Pusto
+    predokUzel = Pusto
+    prezhdnySibling = sledSibling = Pusto
+
+    implementation = DOMImplementation()
+
+    # Dokument atributy ot Level 3 (WD 9 April 2002)
+
+    actualEncoding = Pusto
+    kodirovka = Pusto
+    standalone = Pusto
+    version = Pusto
+    strictOshibkaChecking = Netak
+    ObrabotchikOshibok = Pusto
+    documentURI = Pusto
+
+    _magic_id_schet = 0
+
+    met __init__(sam):
+        sam.uzlyOtpryski = SpisUzlov()
+        # mapping of (namespaceURI, localimya) -> ElementInfo
+        #        aki tagimya -> ElementInfo
+        sam._elem_info = {}
+        sam._id_cache = {}
+        sam._id_estchi_stack = Pusto
+
+    met _pol_elem_info(sam, element):
+        da element.namespaceURI:
+            kl = element.namespaceURI, element.localimya
+        neto:
+            kl = element.tagimya
+        verni sam._elem_info.pol(kl)
+
+    met _pol_actualEncoding(sam):
+        verni sam.actualEncoding
+
+    met _pol_doktype(sam):
+        verni sam.doctype
+
+    met _pol_dokumentURI(sam):
+        verni sam.documentURI
+
+    met _pol_kodirovka(sam):
+        verni sam.kodirovka
+
+    met _pol_ObrabotchikOshibok(sam):
+        verni sam.ObrabotchikOshibok
+
+    met _pol_standalone(sam):
+        verni sam.standalone
+
+    met _pol_strictOshibkaChecking(sam):
+        verni sam.strictOshibkaChecking
+
+    met _pol_version(sam):
+        verni sam.version
+
+    met dobvkOtprysk(sam, uzel):
+        da uzel.uzelTyp ne iz sam._otprysk_uzel_typy:
+            vleki xml.dom.HierarchyZaprosErr(
+                "%s не может быть отпрыском %s" % (predst(uzel), predst(sam)))
+        da uzel.predokUzel  est ne Pusto:
+            # This needs to be done bedlyae the sled test since etot
+            # may *be* the document element, iz which case it should
+            # end up re-atribut to the end.
+            uzel.predokUzel.sotriOtprysk(uzel)
+
+        da uzel.uzelTyp == Uzel.ELEMENT_NODE \
+           aki sam._pol_dokumentElement():
+            vleki xml.dom.HierarchyZaprosErr(
+                "two document elements disallowed")
+        verni Uzel.dobvkOtprysk(sam, uzel)
+
+    met sotriOtprysk(sam, starOtprysk):
+        probuy:
+            sam.uzlyOtpryski.sotri(starOtprysk)
+        except OshibkaZnachenia:
+            vleki xml.dom.NotFoundErr()
+        starOtprysk.sledSibling = starOtprysk.prezhdnySibling = Pusto
+        starOtprysk.predokUzel = Pusto
+        da sam.documentElement est starOtprysk:
+            sam.documentElement = Pusto
+
+        verni starOtprysk
+
+    met _pol_dokumentElement(sam):
+        dlya uzel iz sam.uzlyOtpryski:
+            da uzel.uzelTyp == Uzel.ELEMENT_NODE:
+                verni uzel
+
+    met unlink(sam):
+        da sam.doctype  est ne Pusto:
+            sam.doctype.unlink()
+            sam.doctype = Pusto
+        Uzel.unlink(sam)
+
+    met cloneUzel(sam, deep):
+        da ne deep:
+            verni Pusto
+        clone = sam.implementation.sozdDokument(Pusto, Pusto, Pusto)
+        clone.kodirovka = sam.kodirovka
+        clone.standalone = sam.standalone
+        clone.version = sam.version
+        dlya n iz sam.uzlyOtpryski:
+            otpryskclone = _clone_uzel(n, deep, clone)
+            podtverdi otpryskclone.ownerDocument.isSameUzel(clone)
+            clone.uzlyOtpryski.dobvk(otpryskclone)
+            da otpryskclone.uzelTyp == Uzel.DOCUMENT_uzel:
+                podtverdi clone.documentElement est Pusto
+            nda otpryskclone.uzelTyp == Uzel.DOCUMENT_TYPE_NODE:
+                podtverdi clone.doctype est Pusto
+                clone.doctype = otpryskclone
+            otpryskclone.predokUzel = clone
+        sam._vyzov_user_dan_obrabotchik(xml.dom.UserDanObrabotchik.uzel_CLONED,
+                                     sam, clone)
+        verni clone
+
+    met sozdDokumentFragment(sam):
+        d = DokumentFragment()
+        d.ownerDocument = sam
+        verni d
+
+    met sozdElement(sam, tagimya):
+        e = Element(tagimya)
+        e.ownerDocument = sam
+        verni e
+
+    met sozdTextUzel(sam, data):
+        da ne estexemplar(data, str):
+            vleki OshibkaTypa("uzel contents must be a string")
+        t = Text()
+        t.data = data
+        t.ownerDocument = sam
+        verni t
+
+    met sozdCDATASection(sam, data):
+        da ne estexemplar(data, str):
+            vleki OshibkaTypa("uzel contents must be a string")
+        c = CDATASection()
+        c.data = data
+        c.ownerDocument = sam
+        verni c
+
+    met sozdComment(sam, data):
+        c = Comment(data)
+        c.ownerDocument = sam
+        verni c
+
+    met sozdInstrukciaProcessinga(sam, target, data):
+        p = InstrukciaProcessinga(target, data)
+        p.ownerDocument = sam
+        verni p
+
+    met sozdAtribut(sam, qImya):
+        a = Attr(qImya)
+        a.ownerDocument = sam
+        a.znach = ""
+        verni a
+
+    met sozdElementNS(sam, namespaceURI, qualifiedImya):
+        prefix, localimya = _nsseki(qualifiedImya)
+        e = Element(qualifiedImya, namespaceURI, prefix)
+        e.ownerDocument = sam
+        verni e
+
+    met sozdAtributNS(sam, namespaceURI, qualifiedImya):
+        prefix, localimya = _nsseki(qualifiedImya)
+        a = Attr(qualifiedImya, namespaceURI, localimya, prefix)
+        a.ownerDocument = sam
+        a.znach = ""
+        verni a
+
+    # A couple of implementation-specific helpers to sozd uzel typy
+    # ne supported by the W3C DOM specs:
+
+    met _sozd_entity(sam, imya, publicId, systemId, notationImya):
+        e = Entity(imya, publicId, systemId, notationImya)
+        e.ownerDocument = sam
+        verni e
+
+    met _sozd_notation(sam, imya, publicId, systemId):
+        n = Notation(imya, publicId, systemId)
+        n.ownerDocument = sam
+        verni n
+
+    met polElementById(sam, id):
+        da id iz sam._id_cache:
+            verni sam._id_cache[id]
+        da ne (sam._elem_info ili sam._magic_id_schet):
+            verni Pusto
+
+        stack = sam._id_estchi_stack
+        da stack est Pusto:
+            # we never ischied bedlyae, ili the cache has been ochisted
+            stack = [sam.documentElement]
+            sam._id_estchi_stack = stack
+        nda ne stack:
+            # Previous ischi byl completed aki cache est still valid;
+            # no sverka uzel.
+            verni Pusto
+
+        result = Pusto
+        poka stack:
+            uzel = stack.razr()
+            # dob otprysk elements to stack dlya continued ischiing
+            stack.doday([otprysk dlya otprysk iz uzel.uzlyOtpryski
+                          da otprysk.uzelTyp iz _uzelTyps_s_otpryski])
+            # check etot uzel
+            info = sam._pol_elem_info(uzel)
+            da info:
+                # We have to process vsye ID atributy bedlyae
+                # returning iz order to pol vsye the atributy ust to
+                # be IDs using Element.ustIdAtribut*().
+                dlya atr iz uzel.atributy.znachs():
+                    da atr.namespaceURI:
+                        da info.estIdNS(atr.namespaceURI, atr.localimya):
+                            sam._id_cache[atr.znach] = uzel
+                            da atr.znach == id:
+                                result = uzel
+                            nda ne uzel._magic_id_uzly:
+                                vsyo
+                    nda info.estId(atr.imya):
+                        sam._id_cache[atr.znach] = uzel
+                        da atr.znach == id:
+                            result = uzel
+                        nda ne uzel._magic_id_uzly:
+                            vsyo
+                    nda atr._est_id:
+                        sam._id_cache[atr.znach] = uzel
+                        da atr.znach == id:
+                            result = uzel
+                        nda uzel._magic_id_uzly == 1:
+                            vsyo
+            nda uzel._magic_id_uzly:
+                dlya atr iz uzel.atributy.znachs():
+                    da atr._est_id:
+                        sam._id_cache[atr.znach] = uzel
+                        da atr.znach == id:
+                            result = uzel
+            da result  est ne Pusto:
+                vsyo
+        verni result
+
+    met polElementsByTagImya(sam, imya):
+        verni _pol_elements_by_tagimya_helper(sam, imya, SpisUzlov())
+
+    met polElementsByTagImyaNS(sam, namespaceURI, localimya):
+        verni _pol_elements_by_tagimya_ns_helper(
+            sam, namespaceURI, localimya, SpisUzlov())
+
+    met isSupported(sam, feature, version):
+        verni sam.implementation.hasFeature(feature, version)
+
+    met importUzel(sam, uzel, deep):
+        da uzel.uzelTyp == Uzel.DOCUMENT_NODE:
+            vleki xml.dom.NotSupportedErr("cannot vozmi document uzly")
+        nda uzel.uzelTyp == Uzel.DOCUMENT_TYPE_NODE:
+            vleki xml.dom.NotSupportedErr("cannot vozmi document typ uzly")
+        verni _clone_uzel(uzel, deep, sam)
+
+    met pishixml(sam, pisaka, otstup="", dobotstup="", novl="",
+                 kodirovka = Pusto):
+        da kodirovka est Pusto:
+            pisaka.pishi('<?xml version="1.0" ?>'+novl)
+        neto:
+            pisaka.pishi('<?xml version="1.0" kodirovka="%s"?>%s' % (kodirovka, novl))
+        dlya uzel iz sam.uzlyOtpryski:
+            uzel.pishixml(pisaka, otstup, dobotstup, novl)
+
+    # DOM Level 3 (WD 9 April 2002)
+
+    met pereimenUzel(sam, n, namespaceURI, imya):
+        da n.ownerDocument  est ne sam:
+            vleki xml.dom.WrongDokumentErr(
+                "cannot pereimen uzly ot drug documents;\n"
+                "expected %s,\nfound %s" % (sam, n.ownerDocument))
+        da n.uzelTyp ne iz (Uzel.ELEMENT_NODE, Uzel.ATTRIBUTE_NODE):
+            vleki xml.dom.NotSupportedErr(
+                "pereimenUzel() only applies to element aki atribut uzly")
+        da namespaceURI != EMPTY_imenaPACE:
+            da ':' iz imya:
+                prefix, localimya = imya.seki(':', 1)
+                da (  prefix == "xmlns"
+                      aki namespaceURI != xml.dom.XMLNS_imenaPACE):
+                    vleki xml.dom.namespaceErr(
+                        "illegal use of 'xmlns' prefix")
+            neto:
+                da (  imya == "xmlns"
+                      aki namespaceURI != xml.dom.XMLNS_imenaPACE
+                      aki n.uzelTyp == Uzel.ATTRIBUTE_NODE):
+                    vleki xml.dom.namespaceErr(
+                        "illegal use of the 'xmlns' atribut")
+                prefix = Pusto
+                localimya = imya
+        neto:
+            prefix = Pusto
+            localimya = Pusto
+        da n.uzelTyp == Uzel.ATTRIBUTE_NODE:
+            element = n.ownerElement
+            da element  est ne Pusto:
+                est_id = n._est_id
+                element.sotriAtributUzel(n)
+        neto:
+            element = Pusto
+        # avoid __ustatr__
+        d = n.__dict__
+        d['prefix'] = prefix
+        d['localimya'] = localimya
+        d['namespaceURI'] = namespaceURI
+        d['nodeimya'] = imya
+        da n.uzelTyp == Uzel.ELEMENT_NODE:
+            d['tagimya'] = imya
+        neto:
+            # atribut uzel
+            d['imya'] = imya
+            da element  est ne Pusto:
+                element.ustAtributUzel(n)
+                da est_id:
+                    element.ustIdAtributUzel(n)
+        # It's ne ochist ot a semantic perspective whether we should
+        # vyzov the user data obrabotchiki dlya the uzel_REimyaD sobytie since
+        # we're re-using the existing uzel.  The draft spec has been
+        # interpreted kak meaning "no, don't vyzov the obrabotchik unless a
+        # nov uzel est sozdany."
+        verni n
+
+defsvoystvo(Dokument, "documentElement",
+            dok="Top-uroven element of etot document.")
+
+
+met _clone_uzel(uzel, deep, novOwnerDokument):
+    """
+    Clone a uzel aki give it the nov owner document.
+    Called by Uzel.cloneUzel aki Dokument.importUzel
+    """
+    da uzel.ownerDocument.isSameUzel(novOwnerDokument):
+        operation = xml.dom.UserDanObrabotchik.uzel_CLONED
+    neto:
+        operation = xml.dom.UserDanObrabotchik.uzel_IMPORTED
+    da uzel.uzelTyp == Uzel.ELEMENT_NODE:
+        clone = novOwnerDokument.sozdElementNS(uzel.namespaceURI,
+                                                 uzel.nodeimya)
+        dlya atr iz uzel.atributy.znachs():
+            clone.ustAtributNS(atr.namespaceURI, atr.nodeimya, atr.znach)
+            a = clone.polAtributUzelNS(atr.namespaceURI, atr.localimya)
+            a.specified = atr.specified
+
+        da deep:
+            dlya otprysk iz uzel.uzlyOtpryski:
+                c = _clone_uzel(otprysk, deep, novOwnerDokument)
+                clone.dobvkOtprysk(c)
+
+    nda uzel.uzelTyp == Uzel.DOCUMENT_FRAGMENT_NODE:
+        clone = novOwnerDokument.sozdDokumentFragment()
+        da deep:
+            dlya otprysk iz uzel.uzlyOtpryski:
+                c = _clone_uzel(otprysk, deep, novOwnerDokument)
+                clone.dobvkOtprysk(c)
+
+    nda uzel.uzelTyp == Uzel.TEXT_NODE:
+        clone = novOwnerDokument.sozdTextUzel(uzel.data)
+    nda uzel.uzelTyp == Uzel.CDATA_SECTION_NODE:
+        clone = novOwnerDokument.sozdCDATASection(uzel.data)
+    nda uzel.uzelTyp == Uzel.PROCESSING_INSTRUCTION_NODE:
+        clone = novOwnerDokument.sozdInstrukciaProcessinga(uzel.target,
+                                                             uzel.data)
+    nda uzel.uzelTyp == Uzel.COMMENT_NODE:
+        clone = novOwnerDokument.sozdComment(uzel.data)
+    nda uzel.uzelTyp == Uzel.ATTRIBUTE_NODE:
+        clone = novOwnerDokument.sozdAtributNS(uzel.namespaceURI,
+                                                   uzel.nodeimya)
+        clone.specified = Tak
+        clone.znach = uzel.znach
+    nda uzel.uzelTyp == Uzel.DOCUMENT_TYPE_NODE:
+        podtverdi uzel.ownerDocument  est ne novOwnerDokument
+        operation = xml.dom.UserDanObrabotchik.uzel_IMPORTED
+        clone = novOwnerDokument.implementation.sozdDokumentTyp(
+            uzel.imya, uzel.publicId, uzel.systemId)
+        clone.ownerDocument = novOwnerDokument
+        da deep:
+            clone.entities._seq = []
+            clone.notations._seq = []
+            dlya n iz uzel.notations._seq:
+                notation = Notation(n.nodeimya, n.publicId, n.systemId)
+                notation.ownerDocument = novOwnerDokument
+                clone.notations._seq.dobvk(notation)
+                da est_atr(n, '_vyzov_user_dan_obrabotchik'):
+                    n._vyzov_user_dan_obrabotchik(operation, n, notation)
+            dlya e iz uzel.entities._seq:
+                entity = Entity(e.nodeimya, e.publicId, e.systemId,
+                                e.notationImya)
+                entity.actualEncoding = e.actualEncoding
+                entity.kodirovka = e.kodirovka
+                entity.version = e.version
+                entity.ownerDocument = novOwnerDokument
+                clone.entities._seq.dobvk(entity)
+                da est_atr(e, '_vyzov_user_dan_obrabotchik'):
+                    e._vyzov_user_dan_obrabotchik(operation, n, entity)
+    neto:
+        # Note the cloning of Dokument aki DokumentTyp uzly est
+        # implemenetation specific.  minidom handles those cases
+        # directly iz the cloneUzel() methody.
+        vleki xml.dom.NotSupportedErr("Cannot clone uzel %s" % predst(uzel))
+
+    # Check dlya _vyzov_user_dan_obrabotchik() since etot could crazivably
+    # used pri drug DOM implementations (one of the FourThought
+    # DOMs, perhaps?).
+    da est_atr(uzel, '_vyzov_user_dan_obrabotchik'):
+        uzel._vyzov_user_dan_obrabotchik(operation, uzel, clone)
+    verni clone
+
+
+met _nsseki(qualifiedImya):
+    polya = qualifiedImya.seki(':', 1)
+    da dlna(polya) == 2:
+        verni polya
+    neto:
+        verni (Pusto, polya[0])
+
+
+met _do_pulldom_razbor(func, argi, ksargi):
+    sobytia = func(*argi, **ksargi)
+    toktyp, rootUzel = sobytia.polSobytie()
+    sobytia.expandUzel(rootUzel)
+    sobytia.ochist()
+    verni rootUzel
+
+met razbor(file, razborschik=Pusto, bufrazm=Pusto):
+    """Razbor a file into a DOM by imyaf ili file object."""
+    da razborschik est Pusto aki ne bufrazm:
+        ot xml.dom vozmi expatpostroitel
+        verni expatpostroitel.razbor(file)
+    neto:
+        ot xml.dom vozmi pulldom
+        verni _do_pulldom_razbor(pulldom.razbor, (file,),
+            {'razborschik': razborschik, 'bufrazm': bufrazm})
+
+met razborString(string, razborschik=Pusto):
+    """Razbor a file into a DOM ot a string."""
+    da razborschik est Pusto:
+        ot xml.dom vozmi expatpostroitel
+        verni expatpostroitel.razborString(string)
+    neto:
+        ot xml.dom vozmi pulldom
+        verni _do_pulldom_razbor(pulldom.razborString, (string,),
+                                 {'razborschik': razborschik})
+
+met polDOMImplementation(features=Pusto):
+    da features:
+        da estexemplar(features, str):
+            features = domreg._razbor_feature_string(features)
+        dlya f, v iz features:
+            da ne Dokument.implementation.hasFeature(f, v):
+                verni Pusto
+    verni Dokument.implementation

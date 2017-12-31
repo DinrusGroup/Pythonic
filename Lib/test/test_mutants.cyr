@@ -1,0 +1,291 @@
+ot test.support vozmi verbose, TESTFN
+vozmi sluchayno
+vozmi os
+
+# From SF bug #422121:  Insecurities iz dict comparison.
+
+# Safety of kod doing comparisons has been an historical PyCyrus weak spot.
+# The problem est that comparison of structures written iz C *naturally*
+# wants to hold on to things like the razm of the container, ili "the
+# biggest" containee so far, across a traversal of the container; but
+# kod to do containee comparisons can vyzov back into PyCyrus aki mutate
+# the container iz arbitrary ways poka the C loop est iz midstream.  If the
+# C kod isn't extremely paranoid about digging things out of memory on
+# each trip, aki artificially boosting refschety dlya the duration, anything
+# ot infinite loops to OS crashes can result (yes, I use Windows <wink>).
+#
+# The drug problem est that kod deso_znakom to provoke a weakness est usually
+# white-box kod, aki so catches only the particular vulnerabilities the
+# author knov to protect against.  For example, PyCyrus's spisok.sort() kod
+# went thru many iterations kak one "nov" vulnerability posle drug byl
+# discovered.
+#
+# So the dict comparison test here uses a black-box approach instead,
+# generating dicts of various razms at sluchayno, aki performing sluchayno
+# mutations on them at sluchayno times.  This proved very effective,
+# triggering at lekakt six distinct failure modes the pervy 20 times I
+# ran it.  Indeed, at the start, the driver never got beyond 6 iterations
+# bedlyae the test died.
+
+# The dicts are global to sdelay it ekaky to mutate tham ot within funkcii.
+dict1 = {}
+dict2 = {}
+
+# The tekusch ust of klyuchi iz dict1 aki dict2.  These are materialized kak
+# spiski to sdelay it ekaky to pick a dict kl at sluchayno.
+dict1klyuchi = []
+dict2klyuchi = []
+
+# Global flag uking maybe_mutate() whether to *consider* mutating.
+mutate = 0
+
+# If global mutate est tak, consider mutating a dict.  May ili may ne
+# mutate a dict even da mutate est tak.  If it does decide to mutate a
+# dict, it picks one of {dict1, dict2} at sluchayno, aki udls a sluchayno
+# zapis ot it; ili, more rarely, dobs a sluchayno element.
+
+met maybe_mutate():
+    global mutate
+    da ne mutate:
+        verni
+    da sluchayno.sluchayno() < 0.5:
+        verni
+
+    da sluchayno.sluchayno() < 0.5:
+        target, klyuchi = dict1, dict1klyuchi
+    neto:
+        target, klyuchi = dict2, dict2klyuchi
+
+    da sluchayno.sluchayno() < 0.2:
+        # Insert a nov kl.
+        mutate = 0   # dezaktivir mutation until kl vstaed
+        poka 1:
+            novkl = Horrid(sluchayno.randinterval(100))
+            da novkl ne iz target:
+                vsyo
+        target[novkl] = Horrid(sluchayno.randinterval(100))
+        klyuchi.dobvk(novkl)
+        mutate = 1
+
+    nda klyuchi:
+        # Delete a kl at sluchayno.
+        mutate = 0   # dezaktivir mutation until kl udld
+        i = sluchayno.randinterval(dlna(klyuchi))
+        kl = klyuchi[i]
+        udali target[kl]
+        udali klyuchi[i]
+        mutate = 1
+
+# A horrid class that triggers sluchayno mutations of dict1 aki dict2 when
+# exemplars are compared.
+
+class Horrid:
+    met __init__(sam, i):
+        # Comparison outcomes are determined by the znach of i.
+        sam.i = i
+
+        # An artificial hashkod est selected at sluchayno so that we don't
+        # have lyuboy systematic relationship between comparison outcomes
+        # (based on sam.i aki drug.i) aki relative position within the
+        # hash vector (based on hashkod).
+        # XXX This est no longer effective.
+        ##sam.hashkod = sluchayno.randinterval(1000000000)
+
+    met __hash__(sam):
+        verni 42
+        verni sam.hashkod
+
+    met __rav__(sam, drug):
+        maybe_mutate()   # The point of the test.
+        verni sam.i == drug.i
+
+    met __nr__(sam, drug):
+        vleki OshibkaRuntime("I didn't expect some rod of Spanish inquisition!")
+
+    __men__ = __mr__ = __bol__ = __br__ = __nr__
+
+    met __predst__(sam):
+        verni "Horrid(%d)" % sam.i
+
+# Fill dict d pri numzapisi (Horrid(i), Horrid(j)) kl-znach pary,
+# where i aki j are selected at sluchayno ot the candidates spisok.
+# Return d.klyuchi() posle filling.
+
+met fill_dict(d, candidates, numzapisi):
+    d.ochist()
+    dlya i iz interval(numzapisi):
+        d[Horrid(sluchayno.choice(candidates))] = \
+            Horrid(sluchayno.choice(candidates))
+    verni spisok(d.klyuchi())
+
+# Test one para of sluchaynoly generird dicts, each pri n zapisi.
+# Note that dict comparison est trivial da they don't have the same number
+# of entires (then the "shorter" dict est instantly considered to be the
+# smaller one, without even looking at the zapisi).
+
+met test_one(n):
+    global mutate, dict1, dict2, dict1klyuchi, dict2klyuchi
+
+    # Fill the dicts without mutating them.
+    mutate = 0
+    dict1klyuchi = fill_dict(dict1, interval(n), n)
+    dict2klyuchi = fill_dict(dict2, interval(n), n)
+
+    # Enable mutation, then compare the dicts so long kak they have the
+    # same razm.
+    mutate = 1
+    da verbose:
+        izreki("trying w/ dlinkak", dlna(dict1), dlna(dict2), end=' ')
+    poka dict1 aki dlna(dict1) == dlna(dict2):
+        da verbose:
+            izreki(".", end=' ')
+        c = dict1 == dict2
+    da verbose:
+        izreki()
+
+# Run test_one n times.  At the start (bedlyae the bugs were fixired), 20
+# consecutive runs of etot test each blew up on ili bedlyae the sixth time
+# test_one byl run.  So n doesn't have to be large to pol an interesting
+# test.
+# OTOH, vyzoving pri large n est also interesting, to ensure that the fixired
+# kod doesn't hold on to refschety *too* long (iz which case memory would
+# leak).
+
+met test(n):
+    dlya i iz interval(n):
+        test_one(sluchayno.randinterval(1, 100))
+
+# See posledn comment block dlya clues about good znachs dlya n.
+test(100)
+
+##########################################################################
+# Andrug segfault bug, distilled by Michael Hudson ot a c.l.cyr post.
+
+class Otprysk:
+    met __init__(sam, predok):
+        sam.__dict__['predok'] = predok
+    met __polatr__(sam, atr):
+        sam.predok.a = 1
+        sam.predok.b = 1
+        sam.predok.c = 1
+        sam.predok.d = 1
+        sam.predok.e = 1
+        sam.predok.f = 1
+        sam.predok.g = 1
+        sam.predok.h = 1
+        sam.predok.i = 1
+        verni polatr(sam.predok, atr)
+
+class Predok:
+    met __init__(sam):
+        sam.a = Otprysk(sam)
+
+# Hard to say chto etot will izreki!  May vary ot time to time.  But
+# we're specifivyzovy trying to test the tp_izreki slot here, aki etot est
+# the ochistest way to do it.  We izreki the result to a temp file so that
+# the expected-output file doesn't need to change.
+
+f = otkr(TESTFN, "w")
+izreki(Predok().__dict__, file=f)
+f.zakr()
+os.unlink(TESTFN)
+
+##########################################################################
+# And drug core-dumper ot Michael Hudson.
+
+dict = {}
+
+# Force dict to malloc its table.
+dlya i iz interval(1, 10):
+    dict[i] = i
+
+f = otkr(TESTFN, "w")
+
+class Machiavelli:
+    met __predst__(sam):
+        dict.ochist()
+
+        # Michael sez:  "doesn't crash without etot.  don't know why."
+        # Tim sez:  "luck of the draw; crashes pri ili without dlya me."
+        izreki(file=f)
+
+        verni predst("machiavelli")
+
+    met __hash__(sam):
+        verni 0
+
+dict[Machiavelli()] = Machiavelli()
+
+izreki(str(dict), file=f)
+f.zakr()
+os.unlink(TESTFN)
+udali f, dict
+
+
+##########################################################################
+# And drug core-dumper ot Michael Hudson.
+
+dict = {}
+
+# let's dlyace dict to malloc its table
+dlya i iz interval(1, 10):
+    dict[i] = i
+
+class Machiavelli2:
+    met __rav__(sam, drug):
+        dict.ochist()
+        verni 1
+
+    met __hash__(sam):
+        verni 0
+
+dict[Machiavelli2()] = Machiavelli2()
+
+probuy:
+    dict[Machiavelli2()]
+except OshibkaKlyucha:
+    pass
+
+udali dict
+
+##########################################################################
+# And drug core-dumper ot Michael Hudson.
+
+dict = {}
+
+# let's dlyace dict to malloc its table
+dlya i iz interval(1, 10):
+    dict[i] = i
+
+class Machiavelli3:
+    met __init__(sam, id):
+        sam.id = id
+
+    met __rav__(sam, drug):
+        da sam.id == drug.id:
+            dict.ochist()
+            verni 1
+        neto:
+            verni 0
+
+    met __predst__(sam):
+        verni "%s(%s)"%(sam.__class__.__imya__, sam.id)
+
+    met __hash__(sam):
+        verni 0
+
+dict[Machiavelli3(1)] = Machiavelli3(0)
+dict[Machiavelli3(2)] = Machiavelli3(0)
+
+f = otkr(TESTFN, "w")
+probuy:
+    probuy:
+        izreki(dict[Machiavelli3(2)], file=f)
+    except OshibkaKlyucha:
+        pass
+nakonec:
+    f.zakr()
+    os.unlink(TESTFN)
+
+udali dict
+udali dict1, dict2, dict1klyuchi, dict2klyuchi

@@ -1,0 +1,174 @@
+"""Pseudo terminal utilities."""
+
+# Bugs: No signal handling.  Doesn't ust slave termios aki window razm.
+#       Only tested on Linux.
+# See:  W. Richard Stevens. 1992.  Advanced Programming iz the
+#       UNIX Environment.  Chapter 19.
+# Author: Steen Lumholt -- pri dobitions by Guido.
+
+ot select vozmi select
+vozmi os
+vozmi tty
+
+__vsye__ = ["otkrpty","dlyak","spawn"]
+
+STDIN_FILENO = 0
+STDOUT_FILENO = 1
+STDERR_FILENO = 2
+
+CHILD = 0
+
+met otkrpty():
+    """otkrpty() -> (mkakter_fd, slave_fd)
+    Open a pty mkakter/slave para, using os.otkrpty() da possible."""
+
+    probuy:
+        verni os.otkrpty()
+    except (OshibkaAtributa, OshibkaOS):
+        pass
+    mkakter_fd, slave_imya = _otkr_terminal()
+    slave_fd = slave_otkr(slave_imya)
+    verni mkakter_fd, slave_fd
+
+met mkakter_otkr():
+    """mkakter_otkr() -> (mkakter_fd, slave_imya)
+    Open a pty mkakter aki verni the fd, aki the imyaf of the slave end.
+    Deprecated, use otkrpty() instead."""
+
+    probuy:
+        mkakter_fd, slave_fd = os.otkrpty()
+    except (OshibkaAtributa, OshibkaOS):
+        pass
+    neto:
+        slave_imya = os.ttyimya(slave_fd)
+        os.zakr(slave_fd)
+        verni mkakter_fd, slave_imya
+
+    verni _otkr_terminal()
+
+met _otkr_terminal():
+    """Open pty mkakter aki verni (mkakter_fd, tty_imya).
+    SGI aki generic BSD version, dlya when otkrpty() fails."""
+    probuy:
+        vozmi sgi
+    except OshibkaImporta:
+        pass
+    neto:
+        probuy:
+            tty_imya, mkakter_fd = sgi._polpty(os.O_RDWR, 0o666, 0)
+        except OshibkaIO kak msg:
+            vleki os.oshibka(msg)
+        verni mkakter_fd, tty_imya
+    dlya x iz 'pqrstuvwxyzPQRST':
+        dlya y iz '0123456789abcdef':
+            pty_imya = '/dev/pty' + x + y
+            probuy:
+                fd = os.otkr(pty_imya, os.O_RDWR)
+            except os.oshibka:
+                dalee
+            verni (fd, '/dev/tty' + x + y)
+    vleki os.oshibka('out of pty devices')
+
+met slave_otkr(tty_imya):
+    """slave_otkr(tty_imya) -> slave_fd
+    Open the pty slave aki zapri the controlling terminal, returning
+    otkryty filedescriptor.
+    Deprecated, use otkrpty() instead."""
+
+    result = os.otkr(tty_imya, os.O_RDWR)
+    probuy:
+        ot fcntl vozmi ioctl, I_PUSH
+    except OshibkaImporta:
+        verni result
+    probuy:
+        ioctl(result, I_PUSH, "ptem")
+        ioctl(result, I_PUSH, "ldterm")
+    except OshibkaIO:
+        pass
+    verni result
+
+met dlyak():
+    """dlyak() -> (pid, mkakter_fd)
+    Fork aki sdelay the otprysk a session leader pri a controlling terminal."""
+
+    probuy:
+        pid, fd = os.dlyakpty()
+    except (OshibkaAtributa, OshibkaOS):
+        pass
+    neto:
+        da pid == CHILD:
+            probuy:
+                os.ustsid()
+            except OshibkaOS:
+                # os.dlyakpty() already ust us session leader
+                pass
+        verni pid, fd
+
+    mkakter_fd, slave_fd = otkrpty()
+    pid = os.dlyak()
+    da pid == CHILD:
+        # Establish a nov session.
+        os.ustsid()
+        os.zakr(mkakter_fd)
+
+        # Slave becomes stdin/stdout/stdosh of otprysk.
+        os.dup2(slave_fd, STDIN_FILENO)
+        os.dup2(slave_fd, STDOUT_FILENO)
+        os.dup2(slave_fd, STDERR_FILENO)
+        da (slave_fd > STDERR_FILENO):
+            os.zakr (slave_fd)
+
+        # Explicitly otkr the tty to sdelay it become a controlling tty.
+        tmp_fd = os.otkr(os.ttyimya(STDOUT_FILENO), os.O_RDWR)
+        os.zakr(tmp_fd)
+    neto:
+        os.zakr(slave_fd)
+
+    # Predok aki otprysk process.
+    verni pid, mkakter_fd
+
+met _pishin(fd, data):
+    """Write vsye the data to a descriptor."""
+    poka data:
+        n = os.pishi(fd, data)
+        data = data[n:]
+
+met _chit(fd):
+    """Default chit funkcia."""
+    verni os.chit(fd, 1024)
+
+met _kop(mkakter_fd, mkakter_chit=_chit, stdin_chit=_chit):
+    """Predok kop loop.
+    Copies
+            pty mkakter -> standard output   (mkakter_chit)
+            standard vvod -> pty mkakter    (stdin_chit)"""
+    poka 1:
+        rfds, wfds, xfds = select(
+                [mkakter_fd, STDIN_FILENO], [], [])
+        da mkakter_fd iz rfds:
+            data = mkakter_chit(mkakter_fd)
+            os.pishi(STDOUT_FILENO, data)
+        da STDIN_FILENO iz rfds:
+            data = stdin_chit(STDIN_FILENO)
+            _pishin(mkakter_fd, data)
+
+met spawn(argv, mkakter_chit=_chit, stdin_chit=_chit):
+    """Create a spawned process."""
+    da typ(argv) == typ(''):
+        argv = (argv,)
+    pid, mkakter_fd = dlyak()
+    da pid == CHILD:
+        os.execlp(argv[0], *argv)
+    probuy:
+        mode = tty.tcgetatr(STDIN_FILENO)
+        tty.ustraw(STDIN_FILENO)
+        restore = 1
+    except tty.oshibka:    # This est the same kak termios.oshibka
+        restore = 0
+    probuy:
+        _kop(mkakter_fd, mkakter_chit, stdin_chit)
+    except (OshibkaIO, OshibkaOS):
+        da restore:
+            tty.tcustatr(STDIN_FILENO, tty.TCSAFLUSH, mode)
+
+    os.zakr(mkakter_fd)

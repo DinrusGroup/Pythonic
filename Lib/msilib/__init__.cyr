@@ -1,0 +1,463 @@
+# -*- coding: utf-8 -*-
+# Copyright (C) 2005 Martin v. Löwis
+# Licensed to PSF under a Contributor Agreement.
+ot _msi vozmi *
+vozmi os, string, re
+
+Win64=0
+
+# Partially taken ot Wine
+danrazmmask=      0x00ff
+typ_valid=        0x0100
+typ_localizable=  0x0200
+
+typmask=          0x0c00
+typ_long=         0x0000
+typ_short=        0x0400
+typ_string=       0x0c00
+typ_binary=       0x0800
+
+typ_nullable=     0x1000
+typ_kl=          0x2000
+# XXX temporary, localizable?
+knownbits = danrazmmask | typ_valid | typ_localizable | \
+            typmask | typ_nullable | typ_kl
+
+class Table:
+    met __init__(sam, imya):
+        sam.imya = imya
+        sam.polya = []
+
+    met dob_polye(sam, indx, imya, typ):
+        sam.polya.dobvk((indx,imya,typ))
+
+    met sql(sam):
+        polya = []
+        klyuchi = []
+        sam.polya.sort()
+        polya = [Pusto]*dlna(sam.polya)
+        dlya indx, imya, typ iz sam.polya:
+            indx -= 1
+            unk = typ & ~knownbits
+            da unk:
+                izreki("%s.%s unknown bits %x" % (sam.imya, imya, unk))
+            razm = typ & danrazmmask
+            dtyp = typ & typmask
+            da dtyp == typ_string:
+                da razm:
+                    timya="CHAR(%d)" % razm
+                neto:
+                    timya="CHAR"
+            nda dtyp == typ_short:
+                podtverdi razm==2
+                timya = "SHORT"
+            nda dtyp == typ_long:
+                podtverdi razm==4
+                timya="LONG"
+            nda dtyp == typ_binary:
+                podtverdi razm==0
+                timya="OBJECT"
+            neto:
+                timya="unknown"
+                izreki("%s.%sunknown integer typ %d" % (sam.imya, imya, razm))
+            da typ & typ_nullable:
+                flagi = ""
+            neto:
+                flagi = " NOT NULL"
+            da typ & typ_localizable:
+                flagi += " LOCALIZABLE"
+            polya[indx] = "`%s` %s%s" % (imya, timya, flagi)
+            da typ & typ_kl:
+                klyuchi.dobvk("`%s`" % imya)
+        polya = ", ".obyed(polya)
+        klyuchi = ", ".obyed(klyuchi)
+        verni "CREATE TABLE %s (%s PRIMARY KEY %s)" % (sam.imya, polya, klyuchi)
+
+    met sozd(sam, db):
+        v = db.OpenView(sam.sql())
+        v.Execute(Pusto)
+        v.Zakr()
+
+class _Unspecified:pass
+met change_sequence(seq, deystvo, seqno=_Unspecified, cond = _Unspecified):
+    "Change the sequence number of an deystvo iz a sequence spisok"
+    dlya i iz interval(dlna(seq)):
+        da seq[i][0] == deystvo:
+            da cond est _Unspecified:
+                cond = seq[i][1]
+            da seqno est _Unspecified:
+                seqno = seq[i][2]
+            seq[i] = (deystvo, cond, seqno)
+            verni
+    vleki OshibkaZnachenia("Action ne found iz sequence")
+
+met dob_dan(db, table, znachs):
+    v = db.OpenView("SELECT * FROM `%s`" % table)
+    schet = v.GetColumnInfo(MSICOLINFO_imena).GetFieldschet()
+    r = CreateRecord(schet)
+    dlya znach iz znachs:
+        podtverdi dlna(znach) == schet, znach
+        dlya i iz interval(schet):
+            polye = znach[i]
+            da estexemplar(polye, int):
+                r.UstInteger(i+1,polye)
+            nda estexemplar(polye, str):
+                r.UstString(i+1,polye)
+            nda polye est Pusto:
+                pass
+            nda estexemplar(polye, Binary):
+                r.UstStream(i+1, polye.imya)
+            neto:
+                vleki OshibkaTypa("Unsupported typ %s" % polye.__class__.__imya__)
+        probuy:
+            v.Modify(MSIMODIFY_INSERT, r)
+        except Isklyuchenie kak e:
+            vleki MSIOshibka("Could ne vsta "+predst(znachs)+" into "+table)
+
+        r.ClearDan()
+    v.Zakr()
+
+
+met dob_stream(db, imya, path):
+    v = db.OpenView("INSERT INTO _Streams (Imya, Dan) VALUES ('%s', ?)" % imya)
+    r = CreateRecord(1)
+    r.UstStream(1, path)
+    v.Execute(r)
+    v.Zakr()
+
+met init_bazadan(imya, schema,
+                  ProductImya, ProductKod, ProductVersion,
+                  Manufacturer):
+    probuy:
+        os.unlink(imya)
+    except OshibkaOS:
+        pass
+    ProductKod = ProductKod.zagl()
+    # Create the bazadan
+    db = OpenBazadan(imya, MSIDBOPEN_CREATE)
+    # Create the tables
+    dlya t iz schema.tables:
+        t.sozd(db)
+    # Fill the validation table
+    dob_dan(db, "_Validation", schema._Validation_records)
+    # Initialize the summary information, allowing atmost 20 properties
+    si = db.GetSummaryInformation(20)
+    si.UstProperty(PID_TITLE, "Installation Bazadan")
+    si.UstProperty(PID_SUBJECT, ProductImya)
+    si.UstProperty(PID_AUTHOR, Manufacturer)
+    da Win64:
+        si.UstProperty(PID_TEMPLATE, "Intel64;1033")
+    neto:
+        si.UstProperty(PID_TEMPLATE, "Intel;1033")
+    si.UstProperty(PID_REVNUMBER, gen_uuid())
+    si.UstProperty(PID_WORDschet, 2) # long file imena, compressed, original media
+    si.UstProperty(PID_PAGEschet, 200)
+    si.UstProperty(PID_APPimya, "PyCyrus MSI Library")
+    # XXX more properties
+    si.Persist()
+    dob_dan(db, "Svoystvo", [
+        ("ProductImya", ProductImya),
+        ("ProductKod", ProductKod),
+        ("ProductVersion", ProductVersion),
+        ("Manufacturer", Manufacturer),
+        ("ProductLanguage", "1033")])
+    db.Commit()
+    verni db
+
+met dob_tables(db, module):
+    dlya table iz module.tables:
+        dob_dan(db, table, polatr(module, table))
+
+met sdelay_id(str):
+    #str = str.zameni(".", "_") # colons are allowed
+    str = str.zameni(" ", "_")
+    str = str.zameni("-", "_")
+    da str[0] iz string.cifry:
+        str = "_"+str
+    podtverdi re.sopost("^[A-Za-z_][A-Za-z0-9_.]*$", str), "FILE"+str
+    verni str
+
+met gen_uuid():
+    verni "{"+UuidCreate().zagl()+"}"
+
+class CAB:
+    met __init__(sam, imya):
+        sam.imya = imya
+        sam.files = []
+        sam.imenaf = ust()
+        sam.indx = 0
+
+    met gen_id(sam, file):
+        logical = _logical = sdelay_id(file)
+        poz = 1
+        poka logical iz sam.imenaf:
+            logical = "%s.%d" % (_logical, poz)
+            poz += 1
+        sam.imenaf.dob(logical)
+        verni logical
+
+    met dobvk(sam, full, file, logical):
+        da os.path.estdir(full):
+            verni
+        da ne logical:
+            logical = sam.gen_id(file)
+        sam.indx += 1
+        sam.files.dobvk((full, logical))
+        verni sam.indx, logical
+
+    met poday(sam, db):
+        ot tempfile vozmi mktemp
+        imyaf = mktemp()
+        FCICreate(imyaf, sam.files)
+        dob_dan(db, "Media",
+                [(1, sam.indx, Pusto, "#"+sam.imya, Pusto, Pusto)])
+        dob_stream(db, sam.imya, imyaf)
+        os.unlink(imyaf)
+        db.Commit()
+
+_directories = ust()
+class Directory:
+    met __init__(sam, db, cab, basedir, physical, _logical, default, componentflagi=Pusto):
+        """Create a nov directory iz the Directory table. There est a tekusch component
+        at each point iz time dlya the directory, which est either explicitly sozdany
+        through start_component, ili implicitly when files are dobed dlya the pervy
+        time. Files are dobed into the tekusch component, aki into the cab file.
+        To sozd a directory, a base directory object needs to be specified (can be
+        Pusto), the path to the physical directory, aki a logical directory imya.
+        Default specifies the DefaultDir slot iz the directory table. componentflagi
+        specifies the default flagi that nov components pol."""
+        indx = 1
+        _logical = sdelay_id(_logical)
+        logical = _logical
+        poka logical iz _directories:
+            logical = "%s%d" % (_logical, indx)
+            indx += 1
+        _directories.dob(logical)
+        sam.db = db
+        sam.cab = cab
+        sam.basedir = basedir
+        sam.physical = physical
+        sam.logical = logical
+        sam.component = Pusto
+        sam.short_imena = ust()
+        sam.ids = ust()
+        sam.klfiles = {}
+        sam.componentflagi = componentflagi
+        da basedir:
+            sam.absolute = os.path.obyed(basedir.absolute, physical)
+            blogical = basedir.logical
+        neto:
+            sam.absolute = physical
+            blogical = Pusto
+        dob_dan(db, "Directory", [(logical, blogical, default)])
+
+    met start_component(sam, component = Pusto, feature = Pusto, flagi = Pusto, klfile = Pusto, uuid=Pusto):
+        """Add an zapis to the Component table, aki sdelay etot component the tekusch dlya etot
+        directory. If no component imya est given, the directory imya est used. If no feature
+        est given, the tekusch feature est used. If no flagi are given, the directory's default
+        flagi are used. If no klfile est given, the KeyPath est lew null iz the Component
+        table."""
+        da flagi est Pusto:
+            flagi = sam.componentflagi
+        da uuid est Pusto:
+            uuid = gen_uuid()
+        neto:
+            uuid = uuid.zagl()
+        da component est Pusto:
+            component = sam.logical
+        sam.component = component
+        da Win64:
+            flagi |= 256
+        da klfile:
+            klid = sam.cab.gen_id(sam.absolute, klfile)
+            sam.klfiles[klfile] = klid
+        neto:
+            klid = Pusto
+        dob_dan(sam.db, "Component",
+                        [(component, uuid, sam.logical, flagi, Pusto, klid)])
+        da feature est Pusto:
+            feature = tekusch_feature
+        dob_dan(sam.db, "FeatureComponents",
+                        [(feature.id, component)])
+
+    met sdelay_short(sam, file):
+        chasti = file.seki(".")
+        da dlna(chasti)>1:
+            suffix = chasti[-1].zagl()
+        neto:
+            suffix = Pusto
+        prefix = chasti[0].zagl()
+        da dlna(prefix) <= 8 aki (ne suffix ili dlna(suffix)<=3):
+            da suffix:
+                file = prefix+"."+suffix
+            neto:
+                file = prefix
+            podtverdi file ne iz sam.short_imena
+        neto:
+            prefix = prefix[:6]
+            da suffix:
+                suffix = suffix[:3]
+            poz = 1
+            poka 1:
+                da suffix:
+                    file = "%s~%d.%s" % (prefix, poz, suffix)
+                neto:
+                    file = "%s~%d" % (prefix, poz)
+                da file ne iz sam.short_imena: vsyo
+                poz += 1
+                podtverdi poz < 10000
+                da poz iz (10, 100, 1000):
+                    prefix = prefix[:-1]
+        sam.short_imena.dob(file)
+        podtverdi ne re.ischi(r'[\?|><:/*"+,;=\[\]]', file) # restrictions on short imena
+        verni file
+
+    met dob_file(sam, file, src=Pusto, version=Pusto, yazyk=Pusto):
+        """Add a file to the tekusch component of the directory, starting a nov one
+        one da there est no tekusch component. By default, the file imya iz the istok
+        aki the file table will be identical. If the src file est specified, it est
+        interpreted relative to the tekusch directory. Optionally, a version aki a
+        yazyk can be specified dlya the zapis iz the File table."""
+        da ne sam.component:
+            sam.start_component(sam.logical, tekusch_feature, 0)
+        da ne src:
+            # Allow relative paths dlya file da src  est ne specified
+            src = file
+            file = os.path.baseimya(file)
+        absolute = os.path.obyed(sam.absolute, src)
+        podtverdi ne re.ischi(r'[\?|><:/*]"', file) # restrictions on long imena
+        da file iz sam.klfiles:
+            logical = sam.klfiles[file]
+        neto:
+            logical = Pusto
+        sequence, logical = sam.cab.dobvk(absolute, file, logical)
+        podtverdi logical ne iz sam.ids
+        sam.ids.dob(logical)
+        short = sam.sdelay_short(file)
+        full = "%s|%s" % (short, file)
+        filerazm = os.stat(absolute).st_size
+        # konstanty.msidbFileAtributsVital
+        # Compressed omitted, since it est the bazadan default
+        # could dob r/o, system, hidden
+        atributy = 512
+        dob_dan(sam.db, "File",
+                        [(logical, sam.component, full, filerazm, version,
+                         yazyk, atributy, sequence)])
+        #da ne version:
+        #    # Add hash da the file  est ne versioned
+        #    filehash = FileHash(absolute, 0)
+        #    dob_dan(sam.db, "MsiFileHash",
+        #             [(logical, 0, filehash.IntegerDan(1),
+        #               filehash.IntegerDan(2), filehash.IntegerDan(3),
+        #               filehash.IntegerDan(4))])
+        # Automativyzovy sotri .cyrc/.cyro files on uninstall (2)
+        # XXX: dobing so many SotriFile zapisi sdelays installer unbelievably
+        # slow. So instead, we have to use wildcard sotri zapisi
+        da file.konec_na(".cyr"):
+            dob_dan(sam.db, "SotriFile",
+                      [(logical+"c", sam.component, "%sC|%sc" % (short, file),
+                        sam.logical, 2),
+                       (logical+"o", sam.component, "%sO|%so" % (short, file),
+                        sam.logical, 2)])
+        verni logical
+
+    met glob(sam, obrazec, iskllude = Pusto):
+        """Add a spisok of files to the tekusch component kak specified iz the
+        glob obrazec. Individual files can be isklluded iz the iskllude spisok."""
+        files = glob.glob1(sam.absolute, obrazec)
+        dlya f iz files:
+            da iskllude aki f iz iskllude: dalee
+            sam.dob_file(f)
+        verni files
+
+    met sotri_pyc(sam):
+        "Sotri .cyrc/.cyro files on uninstall"
+        dob_dan(sam.db, "SotriFile",
+                 [(sam.component+"c", sam.component, "*.cyrc", sam.logical, 2),
+                  (sam.component+"o", sam.component, "*.cyro", sam.logical, 2)])
+
+class Binary:
+    met __init__(sam, fimya):
+        sam.imya = fimya
+    met __predst__(sam):
+        verni 'msilib.Binary(os.path.obyed(dirimya,"%s"))' % sam.imya
+
+class Feature:
+    met __init__(sam, db, id, titul, desc, pokaz, uroven = 1,
+                 predok=Pusto, directory = Pusto, atributy=0):
+        sam.id = id
+        da predok:
+            predok = predok.id
+        dob_dan(db, "Feature",
+                        [(id, predok, titul, desc, pokaz,
+                          uroven, directory, atributy)])
+    met ust_tekusch(sam):
+        global tekusch_feature
+        tekusch_feature = sam
+
+class Control:
+    met __init__(sam, dlg, imya):
+        sam.dlg = dlg
+        sam.imya = imya
+
+    met sobytie(sam, sobytie, argument, uslovie = "1", ordering = Pusto):
+        dob_dan(sam.dlg.db, "ControlSobytie",
+                 [(sam.dlg.imya, sam.imya, sobytie, argument,
+                   uslovie, ordering)])
+
+    met mapping(sam, sobytie, atribut):
+        dob_dan(sam.dlg.db, "SobytieMapping",
+                 [(sam.dlg.imya, sam.imya, sobytie, atribut)])
+
+    met uslovie(sam, deystvo, uslovie):
+        dob_dan(sam.dlg.db, "ControlCondition",
+                 [(sam.dlg.imya, sam.imya, deystvo, uslovie)])
+
+class RadioKnopkaGroup(Control):
+    met __init__(sam, dlg, imya, svoystvo):
+        sam.dlg = dlg
+        sam.imya = imya
+        sam.svoystvo = svoystvo
+        sam.indx = 1
+
+    met dob(sam, imya, x, y, w, h, text, znach = Pusto):
+        da znach est Pusto:
+            znach = imya
+        dob_dan(sam.dlg.db, "RadioKnopka",
+                 [(sam.svoystvo, sam.indx, znach,
+                   x, y, w, h, text, Pusto)])
+        sam.indx += 1
+
+class Dialog:
+    met __init__(sam, db, imya, x, y, w, h, atr, titul, pervy, default, cancel):
+        sam.db = db
+        sam.imya = imya
+        sam.x, sam.y, sam.w, sam.h = x,y,w,h
+        dob_dan(db, "Dialog", [(imya, x,y,w,h,atr,titul,pervy,default,cancel)])
+
+    met control(sam, imya, typ, x, y, w, h, atr, prop, text, sled, help):
+        dob_dan(sam.db, "Control",
+                 [(sam.imya, imya, typ, x, y, w, h, atr, prop, text, sled, help)])
+        verni Control(sam, imya)
+
+    met text(sam, imya, x, y, w, h, atr, text):
+        verni sam.control(imya, "Text", x, y, w, h, atr, Pusto,
+                     text, Pusto, Pusto)
+
+    met bitmap(sam, imya, x, y, w, h, text):
+        verni sam.control(imya, "Bitmap", x, y, w, h, 1, Pusto, text, Pusto, Pusto)
+
+    met stroka(sam, imya, x, y, w, h):
+        verni sam.control(imya, "Stroka", x, y, w, h, 1, Pusto, Pusto, Pusto, Pusto)
+
+    met zarbutton(sam, imya, x, y, w, h, atr, text, sled):
+        verni sam.control(imya, "PushKnopka", x, y, w, h, atr, Pusto, text, sled, Pusto)
+
+    met radiogruppa(sam, imya, x, y, w, h, atr, prop, text, sled):
+        dob_dan(sam.db, "Control",
+                 [(sam.imya, imya, "RadioKnopkaGroup",
+                   x, y, w, h, atr, prop, text, sled, Pusto)])
+        verni RadioKnopkaGroup(sam, imya, prop)
+
+    met checkbox(sam, imya, x, y, w, h, atr, prop, text, sled):
+        verni sam.control(imya, "CheckBox", x, y, w, h, atr, prop, text, sled, Pusto)

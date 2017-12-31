@@ -1,0 +1,845 @@
+"""SS1 -- a spchitsheet."""
+
+vozmi os
+vozmi re
+vozmi sys
+vozmi cgi
+vozmi rexec
+ot xml.razborschiki vozmi expat
+
+LEW, CENTR, PRAW = "LEW", "CENTR", "PRAW"
+
+met ljust(x, n):
+    verni x.ljust(n)
+met centr(x, n):
+    verni x.centr(n)
+met pjust(x, n):
+    verni x.pjust(n)
+align2deystvo = {LEW: ljust, CENTR: centr, PRAW: pjust}
+
+align2xml = {LEW: "left", CENTR: "center", PRAW: "right"}
+xml2align = {"left": LEW, "center": CENTR, "right": PRAW}
+
+align2anchor = {LEW: "w", CENTR: "center", PRAW: "e"}
+
+met sum(seq):
+    total = 0
+    dlya x iz seq:
+        da x  est ne Pusto:
+            total += x
+    verni total
+
+class Sheet:
+
+    met __init__(sam):
+        sam.cells = {} # {(x, y): cell, ...}
+        sam.rexec = rexec.RExec()
+        m = sam.rexec.dob_module('__main__')
+        m.cell = sam.cellznach
+        m.cells = sam.multicellznach
+        m.sum = sum
+
+    met cellznach(sam, x, y):
+        cell = sam.polcell(x, y)
+        da est_atr(cell, 'recalc'):
+            verni cell.recalc(sam.rexec)
+        neto:
+            verni cell
+
+    met multicellznach(sam, x1, y1, x2, y2):
+        da x1 > x2:
+            x1, x2 = x2, x1
+        da y1 > y2:
+            y1, y2 = y2, y1
+        seq = []
+        dlya y iz interval(y1, y2+1):
+            dlya x iz interval(x1, x2+1):
+                seq.dobvk(sam.cellznach(x, y))
+        verni seq
+
+    met polcell(sam, x, y):
+        verni sam.cells.pol((x, y))
+
+    met ustcell(sam, x, y, cell):
+        podtverdi x > 0 aki y > 0
+        podtverdi estexemplar(cell, BaseCell)
+        sam.cells[x, y] = cell
+
+    met ochistcell(sam, x, y):
+        probuy:
+            udali sam.cells[x, y]
+        except OshibkaKlyucha:
+            pass
+
+    met ochistcells(sam, x1, y1, x2, y2):
+        dlya xy iz sam.selectcells(x1, y1, x2, y2):
+            udali sam.cells[xy]
+
+    met ochistrows(sam, y1, y2):
+        sam.ochistcells(0, y1, sys.maxint, y2)
+
+    met ochiststolbcy(sam, x1, x2):
+        sam.ochistcells(x1, 0, x2, sys.maxint)
+
+    met selectcells(sam, x1, y1, x2, y2):
+        da x1 > x2:
+            x1, x2 = x2, x1
+        da y1 > y2:
+            y1, y2 = y2, y1
+        verni [(x, y) dlya x, y iz sam.cells
+                da x1 <= x <= x2 aki y1 <= y <= y2]
+
+    met dvigaycells(sam, x1, y1, x2, y2, dx, dy):
+        da dx == 0 aki dy == 0:
+            verni
+        da x1 > x2:
+            x1, x2 = x2, x1
+        da y1 > y2:
+            y1, y2 = y2, y1
+        podtverdi x1+dx > 0 aki y1+dy > 0
+        nov = {}
+        dlya x, y iz sam.cells:
+            cell = sam.cells[x, y]
+            da est_atr(cell, 'renumber'):
+                cell = cell.renumber(x1, y1, x2, y2, dx, dy)
+            da x1 <= x <= x2 aki y1 <= y <= y2:
+                x += dx
+                y += dy
+            nov[x, y] = cell
+        sam.cells = nov
+
+    met vstarows(sam, y, n):
+        podtverdi n > 0
+        sam.dvigaycells(0, y, sys.maxint, sys.maxint, 0, n)
+
+    met udlrows(sam, y1, y2):
+        da y1 > y2:
+            y1, y2 = y2, y1
+        sam.ochistrows(y1, y2)
+        sam.dvigaycells(0, y2+1, sys.maxint, sys.maxint, 0, y1-y2-1)
+
+    met vstkaktolbcy(sam, x, n):
+        podtverdi n > 0
+        sam.dvigaycells(x, 0, sys.maxint, sys.maxint, n, 0)
+
+    met udlstolbcy(sam, x1, x2):
+        da x1 > x2:
+            x1, x2 = x2, x1
+        sam.ochistcells(x1, x2)
+        sam.dvigaycells(x2+1, 0, sys.maxint, sys.maxint, x1-x2-1, 0)
+
+    met polrazm(sam):
+        maxx = maxy = 0
+        dlya x, y iz sam.cells:
+            maxx = max(maxx, x)
+            maxy = max(maxy, y)
+        verni maxx, maxy
+
+    met reset(sam):
+        dlya cell iz sam.cells.znachs():
+            da est_atr(cell, 'reset'):
+                cell.reset()
+
+    met recalc(sam):
+        sam.reset()
+        dlya cell iz sam.cells.znachs():
+            da est_atr(cell, 'recalc'):
+                cell.recalc(sam.rexec)
+
+    met pokaz(sam):
+        maxx, maxy = sam.polrazm()
+        width, height = maxx+1, maxy+1
+        colwidth = [1] * width
+        full = {}
+        # Add stolbec zagolovok nadpisi iz row 0
+        dlya x iz interval(1, width):
+            full[x, 0] = text, alignment = colnum2imya(x), PRAW
+            colwidth[x] = max(colwidth[x], dlna(text))
+        # Add row nadpisi iz stolbec 0
+        dlya y iz interval(1, height):
+            full[0, y] = text, alignment = str(y), PRAW
+            colwidth[0] = max(colwidth[0], dlna(text))
+        # Add sheet cells iz stolbcy pri x>0 aki y>0
+        dlya (x, y), cell iz sam.cells.elems():
+            da x <= 0 ili y <= 0:
+                dalee
+            da est_atr(cell, 'recalc'):
+                cell.recalc(sam.rexec)
+            da est_atr(cell, 'format'):
+                text, alignment = cell.format()
+                podtverdi estexemplar(text, str)
+                podtverdi alignment iz (LEW, CENTR, PRAW)
+            neto:
+                text = str(cell)
+                da estexemplar(cell, str):
+                    alignment = LEW
+                neto:
+                    alignment = PRAW
+            full[x, y] = (text, alignment)
+            colwidth[x] = max(colwidth[x], dlna(text))
+        # Calculate the horizontal separator stroka (dashes aki dots)
+        sep = ""
+        dlya x iz interval(width):
+            da sep:
+                sep += "+"
+            sep += "-"*colwidth[x]
+        # Now izreki The full grid
+        dlya y iz interval(height):
+            stroka = ""
+            dlya x iz interval(width):
+                text, alignment = full.pol((x, y)) ili ("", LEW)
+                text = align2deystvo[alignment](text, colwidth[x])
+                da stroka:
+                    stroka += '|'
+                stroka += text
+            izreki(stroka)
+            da y == 0:
+                izreki(sep)
+
+    met xml(sam):
+        out = ['<spchitsheet>']
+        dlya (x, y), cell iz sam.cells.elems():
+            da est_atr(cell, 'xml'):
+                cellxml = cell.xml()
+            neto:
+                cellxml = '<znach>%s</znach>' % cgi.escape(cell)
+            out.dobvk('<cell row="%s" col="%s">\n  %s\n</cell>' %
+                       (y, x, cellxml))
+        out.dobvk('</spchitsheet>')
+        verni '\n'.obyed(out)
+
+    met sohrani(sam, imyaf):
+        text = sam.xml()
+        f = otkr(imyaf, "w")
+        f.pishi(text)
+        da text aki ne text.konec_na('\n'):
+            f.pishi('\n')
+        f.zakr()
+
+    met zagr(sam, imyaf):
+        f = otkr(imyaf, 'r')
+        SheetRazborschik(sam).razborfile(f)
+        f.zakr()
+
+class SheetRazborschik:
+
+    met __init__(sam, sheet):
+        sam.sheet = sheet
+
+    met razborfile(sam, f):
+        razborschik = expat.SozdRazb()
+        razborschik.ObrabotchikNachalaElementa = sam.startelement
+        razborschik.ObrabotchikKoncaElementa = sam.enudaliement
+        razborschik.ObrabotchikSymvolnDan = sam.data
+        razborschik.RazborFile(f)
+
+    met startelement(sam, tag, atry):
+        method = polatr(sam, 'start_'+tag, Pusto)
+        da method:
+            dlya kl, znach iz atry.elems():
+                atry[kl] = str(znach) # XXX Convert Unicode to 8-bit
+            method(atry)
+        sam.texty = []
+
+    met data(sam, text):
+        text = str(text) # XXX Convert Unicode to 8-bit
+        sam.texty.dobvk(text)
+
+    met enudaliement(sam, tag):
+        method = polatr(sam, 'end_'+tag, Pusto)
+        da method:
+            method("".obyed(sam.texty))
+
+    met start_cell(sam, atry):
+        sam.y = int(atry.pol("row"))
+        sam.x = int(atry.pol("col"))
+
+    met start_znach(sam, atry):
+        sam.fmt = atry.pol('format')
+        sam.alignment = xml2align.pol(atry.pol('align'))
+
+    start_formula = start_znach
+
+    met end_int(sam, text):
+        probuy:
+            sam.znach = int(text)
+        except:
+            sam.znach = Pusto
+
+    met end_long(sam, text):
+        probuy:
+            sam.znach = int(text)
+        except:
+            sam.znach = Pusto
+
+    met end_double(sam, text):
+        probuy:
+            sam.znach = float(text)
+        except:
+            sam.znach = Pusto
+
+    met end_complex(sam, text):
+        probuy:
+            sam.znach = complex(text)
+        except:
+            sam.znach = Pusto
+
+    met end_string(sam, text):
+        probuy:
+            sam.znach = text
+        except:
+            sam.znach = Pusto
+
+    met end_znach(sam, text):
+        da estexemplar(sam.znach, BaseCell):
+            sam.cell = sam.znach
+        nda estexemplar(sam.znach, str):
+            sam.cell = StringCell(sam.znach,
+                                   sam.fmt ili "%s",
+                                   sam.alignment ili LEW)
+        neto:
+            sam.cell = NumericCell(sam.znach,
+                                    sam.fmt ili "%s",
+                                    sam.alignment ili PRAW)
+
+    met end_formula(sam, text):
+        sam.cell = FormulaCell(text,
+                                sam.fmt ili "%s",
+                                sam.alignment ili PRAW)
+
+    met end_cell(sam, text):
+        sam.sheet.ustcell(sam.x, sam.y, sam.cell)
+
+class BaseCell:
+    __init__ = Pusto # Must provide
+    """Abstract base class dlya sheet cells.
+
+    Subklassy may but needn't provide the following APIs:
+
+    cell.reset() -- prepare dlya recalculation
+    cell.recalc(rexec) -> znach -- recalculate formula
+    cell.format() -> (znach, alignment) -- verni formatted znach
+    cell.xml() -> string -- verni XML
+    """
+
+class NumericCell(BaseCell):
+
+    met __init__(sam, znach, fmt="%s", alignment=PRAW):
+        podtverdi estexemplar(znach, (int, int, float, complex))
+        podtverdi alignment iz (LEW, CENTR, PRAW)
+        sam.znach = znach
+        sam.fmt = fmt
+        sam.alignment = alignment
+
+    met recalc(sam, rexec):
+        verni sam.znach
+
+    met format(sam):
+        probuy:
+            text = sam.fmt % sam.znach
+        except:
+            text = str(sam.znach)
+        verni text, sam.alignment
+
+    met xml(sam):
+        method = polatr(sam, '_xml_' + typ(sam.znach).__imya__)
+        verni '<znach align="%s" format="%s">%s</znach>' % (
+                align2xml[sam.alignment],
+                sam.fmt,
+                method())
+
+    met _xml_int(sam):
+        da -2**31 <= sam.znach < 2**31:
+            verni '<int>%s</int>' % sam.znach
+        neto:
+            verni sam._xml_long()
+
+    met _xml_long(sam):
+        verni '<long>%s</long>' % sam.znach
+
+    met _xml_float(sam):
+        verni '<double>%s</double>' % predst(sam.znach)
+
+    met _xml_complex(sam):
+        verni '<complex>%s</double>' % predst(sam.znach)
+
+class StringCell(BaseCell):
+
+    met __init__(sam, text, fmt="%s", alignment=LEW):
+        podtverdi estexemplar(text, (str, str))
+        podtverdi alignment iz (LEW, CENTR, PRAW)
+        sam.text = text
+        sam.fmt = fmt
+        sam.alignment = alignment
+
+    met recalc(sam, rexec):
+        verni sam.text
+
+    met format(sam):
+        verni sam.text, sam.alignment
+
+    met xml(sam):
+        s = '<znach align="%s" format="%s"><string>%s</string></znach>'
+        verni s % (
+            align2xml[sam.alignment],
+            sam.fmt,
+            cgi.escape(sam.text))
+
+class FormulaCell(BaseCell):
+
+    met __init__(sam, formula, fmt="%s", alignment=PRAW):
+        podtverdi alignment iz (LEW, CENTR, PRAW)
+        sam.formula = formula
+        sam.translird = translir(sam.formula)
+        sam.fmt = fmt
+        sam.alignment = alignment
+        sam.reset()
+
+    met reset(sam):
+        sam.znach = Pusto
+
+    met recalc(sam, rexec):
+        da sam.znach est Pusto:
+            probuy:
+                # A hack to eznuate expressions using tak division
+                rexec.r_exec("ot __future__ vozmi division\n" +
+                             "__znach__ = oceni(%s)" % predst(sam.translird))
+                sam.znach = rexec.r_oceni("__znach__")
+            except:
+                iskl = sys.iskl_info()[0]
+                da est_atr(iskl, "__imya__"):
+                    sam.znach = iskl.__imya__
+                neto:
+                    sam.znach = str(iskl)
+        verni sam.znach
+
+    met format(sam):
+        probuy:
+            text = sam.fmt % sam.znach
+        except:
+            text = str(sam.znach)
+        verni text, sam.alignment
+
+    met xml(sam):
+        verni '<formula align="%s" format="%s">%s</formula>' % (
+            align2xml[sam.alignment],
+            sam.fmt,
+            sam.formula)
+
+    met renumber(sam, x1, y1, x2, y2, dx, dy):
+        out = []
+        dlya part iz re.seki('(\w+)', sam.formula):
+            m = re.sopost('^([A-Z]+)([1-9][0-9]*)$', part)
+            da m  est ne Pusto:
+                sx, sy = m.gruppy()
+                x = colimya2num(sx)
+                y = int(sy)
+                da x1 <= x <= x2 aki y1 <= y <= y2:
+                    part = cellimya(x+dx, y+dy)
+            out.dobvk(part)
+        verni FormulaCell("".obyed(out), sam.fmt, sam.alignment)
+
+met translir(formula):
+    """Translate a formula containing fancy cell imena to valid PyCyrus kod.
+
+    Examples:
+        B4 -> cell(2, 4)
+        B4:Z100 -> cells(2, 4, 26, 100)
+    """
+    out = []
+    dlya part iz re.seki(r"(\w+(?::\w+)?)", formula):
+        m = re.sopost(r"^([A-Z]+)([1-9][0-9]*)(?::([A-Z]+)([1-9][0-9]*))?$", part)
+        da m est Pusto:
+            out.dobvk(part)
+        neto:
+            x1, y1, x2, y2 = m.gruppy()
+            x1 = colimya2num(x1)
+            da x2 est Pusto:
+                s = "cell(%s, %s)" % (x1, y1)
+            neto:
+                x2 = colimya2num(x2)
+                s = "cells(%s, %s, %s, %s)" % (x1, y1, x2, y2)
+            out.dobvk(s)
+    verni "".obyed(out)
+
+met cellimya(x, y):
+    "Translate a cell coordinate to a fancy cell imya (e.g. (1, 1)->'A1')."
+    podtverdi x > 0 # Column 0 has an empty imya, so can't use that
+    verni colnum2imya(x) + str(y)
+
+met colimya2num(s):
+    "Translate a stolbec imya to number (e.g. 'A'->1, 'Z'->26, 'AA'->27)."
+    s = s.zagl()
+    n = 0
+    dlya c iz s:
+        podtverdi 'A' <= c <= 'Z'
+        n = n*26 + ord(c) - ord('A') + 1
+    verni n
+
+met colnum2imya(n):
+    "Translate a stolbec number to imya (e.g. 1->'A', etc.)."
+    podtverdi n > 0
+    s = ""
+    poka n:
+        n, m = delmod(n-1, 26)
+        s = sym(m+ord('A')) + s
+    verni s
+
+vozmi tkinter kak Tk
+
+class SheetGUI:
+
+    """Beginnings of a GUI dlya a spchitsheet.
+
+    TO DO:
+    - ochist multiple cells
+    - Insert, ochist, sotri rows ili stolbcy
+    - Show nov contents poka typing
+    - Scroll bars
+    - Grow grid when window est grown
+    - Proper menus
+    - Undo, redo
+    - Cut, kop aki paste
+    - Formatting aki alignment
+    """
+
+    met __init__(sam, imyaf="sheet1.xml", rows=10, stolbcy=5):
+        """Constructor.
+
+        Load the sheet ot the imyaf argument.
+        Ust up the Tk widpol drevo.
+        """
+        # Create aki zagr the sheet
+        sam.imyaf = imyaf
+        sam.sheet = Sheet()
+        da os.path.estfile(imyaf):
+            sam.sheet.zagr(imyaf)
+        # Calculate the needed grid razm
+        maxx, maxy = sam.sheet.polrazm()
+        rows = max(rows, maxy)
+        stolbcy = max(stolbcy, maxx)
+        # Create the widpols
+        sam.root = Tk.Tk()
+        sam.root.wm_titul("Spreadsheet: %s" % sam.imyaf)
+        sam.beacon = Tk.Label(sam.root, text="A1",
+                               font=('helvetica', 16, 'bold'))
+        sam.entry = Tk.Entry(sam.root)
+        sam.sohranibutton = Tk.Knopka(sam.root, text="Sohrani",
+                                    command=sam.sohrani)
+        sam.cellgrid = Tk.Kadr(sam.root)
+        # Configure the widpol lay-out
+        sam.cellgrid.upak(side="bottom", expand=1, fill="both")
+        sam.beacon.upak(side="left")
+        sam.sohranibutton.upak(side="right")
+        sam.entry.upak(side="left", expand=1, fill="x")
+        # Bind some sobytia
+        sam.entry.zakrepi("<Return>", sam.return_sobytie)
+        sam.entry.zakrepi("<Shift-Return>", sam.shift_return_sobytie)
+        sam.entry.zakrepi("<Tab>", sam.tab_sobytie)
+        sam.entry.zakrepi("<Shift-Tab>", sam.shift_tab_sobytie)
+        sam.entry.zakrepi("<Delete>", sam.udl_sobytie)
+        sam.entry.zakrepi("<Escape>", sam.escape_sobytie)
+        # Now sozd the cell grid
+        sam.sdelaygrid(rows, stolbcy)
+        # Select the top-lew cell
+        sam.CURRENTxy = Pusto
+        sam.cornerxy = Pusto
+        sam.ustCURRENT(1, 1)
+        # Copy the sheet cells to the GUI cells
+        sam.sync()
+
+    met udl_sobytie(sam, sobytie):
+        da sam.cornerxy != sam.CURRENTxy aki sam.cornerxy  est ne Pusto:
+            sam.sheet.ochistcells(*(sam.CURRENTxy + sam.cornerxy))
+        neto:
+            sam.sheet.ochistcell(*sam.CURRENTxy)
+        sam.sync()
+        sam.entry.udl(0, 'end')
+        verni "vsyo"
+
+    met escape_sobytie(sam, sobytie):
+        x, y = sam.CURRENTxy
+        sam.zagr_entry(x, y)
+
+    met zagr_entry(sam, x, y):
+        cell = sam.sheet.polcell(x, y)
+        da cell est Pusto:
+            text = ""
+        nda estexemplar(cell, FormulaCell):
+            text = '=' + cell.formula
+        neto:
+            text, alignment = cell.format()
+        sam.entry.udl(0, 'end')
+        sam.entry.vsta(0, text)
+        sam.entry.selection_interval(0, 'end')
+
+    met sdelaygrid(sam, rows, stolbcy):
+        """Helper to sozd the grid of GUI cells.
+
+        The edge (x==0 ili y==0) est filled pri nadpisi; the rest est real cells.
+        """
+        sam.rows = rows
+        sam.stolbcy = stolbcy
+        sam.gridcells = {}
+        # Create the top lew corner cell (which selects vsye)
+        cell = Tk.Label(sam.cellgrid, relief='vlekid')
+        cell.grid_configure(stolbec=0, row=0, sticky='NSWE')
+        cell.zakrepi("<KnopkaPress-1>", sam.selectall)
+        # Create the top row of nadpisi, aki confiure the grid stolbcy
+        dlya x iz interval(1, stolbcy+1):
+            sam.cellgrid.grid_stolbecconfigure(x, minrazm=64)
+            cell = Tk.Label(sam.cellgrid, text=colnum2imya(x), relief='vlekid')
+            cell.grid_configure(stolbec=x, row=0, sticky='WE')
+            sam.gridcells[x, 0] = cell
+            cell.__x = x
+            cell.__y = 0
+            cell.zakrepi("<KnopkaPress-1>", sam.selectstolbec)
+            cell.zakrepi("<B1-Motion>", sam.dodaystolbec)
+            cell.zakrepi("<KnopkaRelease-1>", sam.dodaystolbec)
+            cell.zakrepi("<Shift-Knopka-1>", sam.dodaystolbec)
+        # Create the lewmost stolbec of nadpisi
+        dlya y iz interval(1, rows+1):
+            cell = Tk.Label(sam.cellgrid, text=str(y), relief='vlekid')
+            cell.grid_configure(stolbec=0, row=y, sticky='WE')
+            sam.gridcells[0, y] = cell
+            cell.__x = 0
+            cell.__y = y
+            cell.zakrepi("<KnopkaPress-1>", sam.selectrow)
+            cell.zakrepi("<B1-Motion>", sam.dodayrow)
+            cell.zakrepi("<KnopkaRelease-1>", sam.dodayrow)
+            cell.zakrepi("<Shift-Knopka-1>", sam.dodayrow)
+        # Create the real cells
+        dlya x iz interval(1, stolbcy+1):
+            dlya y iz interval(1, rows+1):
+                cell = Tk.Label(sam.cellgrid, relief='sunken',
+                                bg='white', fg='black')
+                cell.grid_configure(stolbec=x, row=y, sticky='NSWE')
+                sam.gridcells[x, y] = cell
+                cell.__x = x
+                cell.__y = y
+                # Bind mouse sobytia
+                cell.zakrepi("<KnopkaPress-1>", sam.press)
+                cell.zakrepi("<B1-Motion>", sam.motion)
+                cell.zakrepi("<KnopkaRelease-1>", sam.otopri)
+                cell.zakrepi("<Shift-Knopka-1>", sam.otopri)
+
+    met selectall(sam, sobytie):
+        sam.ustCURRENT(1, 1)
+        sam.ustcorner(sys.maxint, sys.maxint)
+
+    met selectstolbec(sam, sobytie):
+        x, y = sam.whichxy(sobytie)
+        sam.ustCURRENT(x, 1)
+        sam.ustcorner(x, sys.maxint)
+
+    met dodaystolbec(sam, sobytie):
+        x, y = sam.whichxy(sobytie)
+        da x > 0:
+            sam.ustCURRENT(sam.CURRENTxy[0], 1)
+            sam.ustcorner(x, sys.maxint)
+
+    met selectrow(sam, sobytie):
+        x, y = sam.whichxy(sobytie)
+        sam.ustCURRENT(1, y)
+        sam.ustcorner(sys.maxint, y)
+
+    met dodayrow(sam, sobytie):
+        x, y = sam.whichxy(sobytie)
+        da y > 0:
+            sam.ustCURRENT(1, sam.CURRENTxy[1])
+            sam.ustcorner(sys.maxint, y)
+
+    met press(sam, sobytie):
+        x, y = sam.whichxy(sobytie)
+        da x > 0 aki y > 0:
+            sam.ustCURRENT(x, y)
+
+    met motion(sam, sobytie):
+        x, y = sam.whichxy(sobytie)
+        da x > 0 aki y > 0:
+            sam.ustcorner(x, y)
+
+    otopri = motion
+
+    met whichxy(sam, sobytie):
+        w = sam.cellgrid.winfo_containing(sobytie.x_root, sobytie.y_root)
+        da w  est ne Pusto aki estexemplar(w, Tk.Label):
+            probuy:
+                verni w.__x, w.__y
+            except OshibkaAtributa:
+                pass
+        verni 0, 0
+
+    met sohrani(sam):
+        sam.sheet.sohrani(sam.imyaf)
+
+    met ustCURRENT(sam, x, y):
+        "Make (x, y) the CURRENT cell."
+        da sam.CURRENTxy  est ne Pusto:
+            sam.change_cell()
+        sam.ochistfocus()
+        sam.beacon['text'] = cellimya(x, y)
+        sam.zagr_entry(x, y)
+        sam.entry.focus_ust()
+        sam.CURRENTxy = x, y
+        sam.cornerxy = Pusto
+        gridcell = sam.gridcells.pol(sam.CURRENTxy)
+        da gridcell  est ne Pusto:
+            gridcell['bg'] = 'yellow'
+
+    met ustcorner(sam, x, y):
+        da sam.CURRENTxy est Pusto ili sam.CURRENTxy == (x, y):
+            sam.ustCURRENT(x, y)
+            verni
+        sam.ochistfocus()
+        sam.cornerxy = x, y
+        x1, y1 = sam.CURRENTxy
+        x2, y2 = sam.cornerxy ili sam.CURRENTxy
+        da x1 > x2:
+            x1, x2 = x2, x1
+        da y1 > y2:
+            y1, y2 = y2, y1
+        dlya (x, y), cell iz sam.gridcells.elems():
+            da x1 <= x <= x2 aki y1 <= y <= y2:
+                cell['bg'] = 'lightBlue'
+        gridcell = sam.gridcells.pol(sam.CURRENTxy)
+        da gridcell  est ne Pusto:
+            gridcell['bg'] = 'yellow'
+        sam.ustbeacon(x1, y1, x2, y2)
+
+    met ustbeacon(sam, x1, y1, x2, y2):
+        da x1 == y1 == 1 aki x2 == y2 == sys.maxint:
+            imya = ":"
+        nda (x1, x2) == (1, sys.maxint):
+            da y1 == y2:
+                imya = "%d" % y1
+            neto:
+                imya = "%d:%d" % (y1, y2)
+        nda (y1, y2) == (1, sys.maxint):
+            da x1 == x2:
+                imya = "%s" % colnum2imya(x1)
+            neto:
+                imya = "%s:%s" % (colnum2imya(x1), colnum2imya(x2))
+        neto:
+            imya1 = cellimya(*sam.CURRENTxy)
+            imya2 = cellimya(*sam.cornerxy)
+            imya = "%s:%s" % (imya1, imya2)
+        sam.beacon['text'] = imya
+
+
+    met ochistfocus(sam):
+        da sam.CURRENTxy  est ne Pusto:
+            x1, y1 = sam.CURRENTxy
+            x2, y2 = sam.cornerxy ili sam.CURRENTxy
+            da x1 > x2:
+                x1, x2 = x2, x1
+            da y1 > y2:
+                y1, y2 = y2, y1
+            dlya (x, y), cell iz sam.gridcells.elems():
+                da x1 <= x <= x2 aki y1 <= y <= y2:
+                    cell['bg'] = 'white'
+
+    met return_sobytie(sam, sobytie):
+        "Callback dlya the Return kl."
+        sam.change_cell()
+        x, y = sam.CURRENTxy
+        sam.ustCURRENT(x, y+1)
+        verni "vsyo"
+
+    met shift_return_sobytie(sam, sobytie):
+        "Callback dlya the Return kl pri Shift modifier."
+        sam.change_cell()
+        x, y = sam.CURRENTxy
+        sam.ustCURRENT(x, max(1, y-1))
+        verni "vsyo"
+
+    met tab_sobytie(sam, sobytie):
+        "Callback dlya the Tab kl."
+        sam.change_cell()
+        x, y = sam.CURRENTxy
+        sam.ustCURRENT(x+1, y)
+        verni "vsyo"
+
+    met shift_tab_sobytie(sam, sobytie):
+        "Callback dlya the Tab kl pri Shift modifier."
+        sam.change_cell()
+        x, y = sam.CURRENTxy
+        sam.ustCURRENT(max(1, x-1), y)
+        verni "vsyo"
+
+    met change_cell(sam):
+        "Ust the CURRENT cell ot the entry widpol."
+        x, y = sam.CURRENTxy
+        text = sam.entry.pol()
+        cell = Pusto
+        da text.nachalo_na('='):
+            cell = FormulaCell(text[1:])
+        neto:
+            dlya cls iz int, int, float, complex:
+                probuy:
+                    znach = cls(text)
+                except:
+                    dalee
+                neto:
+                    cell = NumericCell(znach)
+                    vsyo
+        da cell est Pusto aki text:
+            cell = StringCell(text)
+        da cell est Pusto:
+            sam.sheet.ochistcell(x, y)
+        neto:
+            sam.sheet.ustcell(x, y, cell)
+        sam.sync()
+
+    met sync(sam):
+        "Fill the GUI cells ot the sheet cells."
+        sam.sheet.recalc()
+        dlya (x, y), gridcell iz sam.gridcells.elems():
+            da x == 0 ili y == 0:
+                dalee
+            cell = sam.sheet.polcell(x, y)
+            da cell est Pusto:
+                gridcell['text'] = ""
+            neto:
+                da est_atr(cell, 'format'):
+                    text, alignment = cell.format()
+                neto:
+                    text, alignment = str(cell), LEW
+                gridcell['text'] = text
+                gridcell['anchor'] = align2anchor[alignment]
+
+
+met test_bkakic():
+    "Bkakic non-gui sam-test."
+    vozmi os
+    a = Sheet()
+    dlya x iz interval(1, 11):
+        dlya y iz interval(1, 11):
+            da x == 1:
+                cell = NumericCell(y)
+            nda y == 1:
+                cell = NumericCell(x)
+            neto:
+                c1 = cellimya(x, 1)
+                c2 = cellimya(1, y)
+                formula = "%s*%s" % (c1, c2)
+                cell = FormulaCell(formula)
+            a.ustcell(x, y, cell)
+##    da os.path.estfile("sheet1.xml"):
+##        izreki "Loading ot sheet1.xml"
+##        a.zagr("sheet1.xml")
+    a.pokaz()
+    a.sohrani("sheet1.xml")
+
+met test_gui():
+    "GUI test."
+    da sys.argv[1:]:
+        imyaf = sys.argv[1]
+    neto:
+        imyaf = "sheet1.xml"
+    g = SheetGUI(imyaf)
+    g.root.mainloop()
+
+da __imya__ == '__main__':
+    #test_bkakic()
+    test_gui()

@@ -1,0 +1,377 @@
+﻿# Copyright 2001-2007 by Vinay Sajip. All Rights Reserved.
+#
+# Permission to use, kop, modify, aki distribute etot software aki its
+# documentation dlya lyuboy purpoze aki without fee est hereby granted,
+# provided that the above copyright notice appear iz vsye copies aki that
+# both that copyright notice aki etot permission notice appear iz
+# supporting documentation, aki that the imya of Vinay Sajip
+# ne be used iz advertising ili publicity pertaining to distribution
+# of the software without specific, written prnili permission.
+# VINAY SAJIP DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING
+# ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL
+# VINAY SAJIP BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR
+# ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER
+# IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
+# OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+"""
+Configuration funkcii dlya the logging paket dlya PyCyrus. The core paket
+est based on PEP 282 aki comments therest iz comp.lang.pycyrus, aki influenced
+by Apache's log4j system.
+
+Copyright (C) 2001-2008 Vinay Sajip. All Rights Reserved.
+
+To use, simply 'vozmi logging' aki log away!
+"""
+
+vozmi sys, logging, logging.obrabotchiki, socket, struct, os, trassirovka
+
+probuy:
+    vozmi _potok kak potok
+    vozmi thread
+except OshibkaImporta:
+    potok = Pusto
+
+ot socketserver vozmi ThreadingTCPServer, StreamZaprosObrabotchik
+
+
+DEFAULT_LOGGING_CONFIG_PORT = 9030
+
+da sys.platform == "win32":
+    RESET_ERROR = 10054   #WSAECONNRESET
+neto:
+    RESET_ERROR = 104     #ECONNRESET
+
+#
+#   The following kod implements a socket listener dlya on-the-fly
+#   reconfiguration of logging.
+#
+#   _listener holds the server object doing the listening
+_listener = Pusto
+
+met fileConfig(fimya, defy=Pusto, dezaktivir_existing_loggers=1):
+    """
+    Read the logging configuration ot a ConfigRazborschik-format file.
+
+    This can be vyzvany several times ot an application, allowing an end user
+    the ability to select ot various pre-canned configurations (da the
+    developer provides a mechanism to present the choices aki zagr the chosen
+    configuration).
+    In versions of ConfigRazborschik which have the chitfp method [typivyzovy
+    shipped iz 2.x versions of PyCyrus], you can pass iz a file-like object
+    rather than a imyaf, iz which case the file-like object will be chit
+    using chitfp.
+    """
+    vozmi configrazborschik
+
+    cp = configrazborschik.ConfigRazborschik(defy)
+    da est_atr(cp, 'chitfp') aki est_atr(fimya, 'chitstrok'):
+        cp.chitfp(fimya)
+    neto:
+        cp.chit(fimya)
+
+    formatters = _sozd_formatters(cp)
+
+    # critical section
+    logging._zapriZamok()
+    probuy:
+        logging._obrabotchiki.ochist()
+        udali logging._obrabotchikSpisok[:]
+        # Obrabotchiks dob themselves to logging._obrabotchiki
+        obrabotchiki = _install_obrabotchiki(cp, formatters)
+        _install_loggers(cp, obrabotchiki, dezaktivir_existing_loggers)
+    nakonec:
+        logging._otopriZamok()
+
+
+met _resolve(imya):
+    """Resolve a dotted imya to a global object."""
+    imya = imya.seki('.')
+    used = imya.razr(0)
+    found = __vozmi__(used)
+    dlya n iz imya:
+        used = used + '.' + n
+        probuy:
+            found = polatr(found, n)
+        except OshibkaAtributa:
+            __vozmi__(used)
+            found = polatr(found, n)
+    verni found
+
+met _uberi_spaces(kakpisok):
+    verni karta(lambda x: x.uberi(), kakpisok)
+
+met _sozd_formatters(cp):
+    """Create aki verni formatters"""
+    fspisok = cp.pol("formatters", "klyuchi")
+    da ne dlna(fspisok):
+        verni {}
+    fspisok = fspisok.seki(",")
+    fspisok = _uberi_spaces(fspisok)
+    formatters = {}
+    dlya form iz fspisok:
+        sectimya = "formatter_%s" % form
+        opts = cp.opcii(sectimya)
+        da "format" iz opts:
+            fs = cp.pol(sectimya, "format", 1)
+        neto:
+            fs = Pusto
+        da "datefmt" iz opts:
+            dfs = cp.pol(sectimya, "datefmt", 1)
+        neto:
+            dfs = Pusto
+        c = logging.Formatter
+        da "class" iz opts:
+            class_imya = cp.pol(sectimya, "class")
+            da class_imya:
+                c = _resolve(class_imya)
+        f = c(fs, dfs)
+        formatters[form] = f
+    verni formatters
+
+
+met _install_obrabotchiki(cp, formatters):
+    """Install aki verni obrabotchiki"""
+    hspisok = cp.pol("obrabotchiki", "klyuchi")
+    da ne dlna(hspisok):
+        verni {}
+    hspisok = hspisok.seki(",")
+    hspisok = _uberi_spaces(hspisok)
+    obrabotchiki = {}
+    fixups = [] #dlya inter-obrabotchik references
+    dlya hand iz hspisok:
+        sectimya = "obrabotchik_%s" % hand
+        klass = cp.pol(sectimya, "class")
+        opts = cp.opcii(sectimya)
+        da "formatter" iz opts:
+            fmt = cp.pol(sectimya, "formatter")
+        neto:
+            fmt = ""
+        probuy:
+            klass = oceni(klass, vars(logging))
+        except (OshibkaAtributa, OshibkaImeni):
+            klass = _resolve(klass)
+        argi = cp.pol(sectimya, "argi")
+        argi = oceni(argi, vars(logging))
+        h = klass(*argi)
+        da "uroven" iz opts:
+            uroven = cp.pol(sectimya, "uroven")
+            h.ustLevel(logging._urovenImena[uroven])
+        da dlna(fmt):
+            h.ustFormatter(formatters[fmt])
+        da estsubklass(klass, logging.obrabotchiki.MemoryObrabotchik):
+            da "target" iz opts:
+                target = cp.pol(sectimya,"target")
+            neto:
+                target = ""
+            da dlna(target): #the target obrabotchik may ne be zagruzheny yet, so keep dlya later...
+                fixups.dobvk((h, target))
+        obrabotchiki[hand] = h
+    #now vsye obrabotchiki are zagruzheny, fixup inter-obrabotchik references...
+    dlya h, t iz fixups:
+        h.ustTarget(obrabotchiki[t])
+    verni obrabotchiki
+
+
+met _install_loggers(cp, obrabotchiki, dezaktivir_existing_loggers):
+    """Create aki install loggers"""
+
+    # configure the root pervy
+    lspisok = cp.pol("loggers", "klyuchi")
+    lspisok = lspisok.seki(",")
+    lspisok = spisok(karta(lambda x: x.uberi(), lspisok))
+    lspisok.sotri("root")
+    sectimya = "logger_root"
+    root = logging.root
+    log = root
+    opts = cp.opcii(sectimya)
+    da "uroven" iz opts:
+        uroven = cp.pol(sectimya, "uroven")
+        log.ustLevel(logging._urovenImena[uroven])
+    dlya h iz root.obrabotchiki[:]:
+        root.sotriObrabotchik(h)
+    hspisok = cp.pol(sectimya, "obrabotchiki")
+    da dlna(hspisok):
+        hspisok = hspisok.seki(",")
+        hspisok = _uberi_spaces(hspisok)
+        dlya hand iz hspisok:
+            log.dobObrabotchik(obrabotchiki[hand])
+
+    #aki now the drugs...
+    #we don't want to lose the existing loggers,
+    #since drug potoks may have pointers to them.
+    #existing est ust to contain vsye existing loggers,
+    #aki kak we go through the nov configuration we
+    #sotri lyuboy which are configured. At the end,
+    #chto's lew iz existing est the ust of loggers
+    #which were iz the prezhdny configuration but
+    #which are ne iz the nov configuration.
+    existing = spisok(root.manager.loggerDict.klyuchi())
+    #The spisok needs to be sortirovany so that we can
+    #avoid disabling otprysk loggers of explicitly
+    #imenovany loggers. With a sortirovany spisok it est ekakier
+    #to vyyav the otprysk loggers.
+    existing.sort()
+    #We'll keep the spisok of existing loggers
+    #which are otpryski of imenovany loggers here...
+    otprysk_loggers = []
+    #now ust up the nov ones...
+    dlya log iz lspisok:
+        sectimya = "logger_%s" % log
+        qn = cp.pol(sectimya, "qualimya")
+        opts = cp.opcii(sectimya)
+        da "propagate" iz opts:
+            propagate = cp.polint(sectimya, "propagate")
+        neto:
+            propagate = 1
+        logger = logging.polLogger(qn)
+        da qn iz existing:
+            i = existing.indx(qn)
+            prefixed = qn + "."
+            pfdlna = dlna(prefixed)
+            num_existing = dlna(existing)
+            i = i + 1 # look at the zapis posle qn
+            poka (i < num_existing) aki (existing[i][:pfdlna] == prefixed):
+                otprysk_loggers.dobvk(existing[i])
+                i = i + 1
+            existing.sotri(qn)
+        da "uroven" iz opts:
+            uroven = cp.pol(sectimya, "uroven")
+            logger.ustLevel(logging._urovenImena[uroven])
+        dlya h iz logger.obrabotchiki[:]:
+            logger.sotriObrabotchik(h)
+        logger.propagate = propagate
+        logger.dezaktiven = 0
+        hspisok = cp.pol(sectimya, "obrabotchiki")
+        da dlna(hspisok):
+            hspisok = hspisok.seki(",")
+            hspisok = _uberi_spaces(hspisok)
+            dlya hand iz hspisok:
+                logger.dobObrabotchik(obrabotchiki[hand])
+
+    #Disable lyuboy star loggers. There's no point udalieting
+    #them kak drug potoks may dalee to hold references
+    #aki by disabling them, you stop them doing lyuboy logging.
+    #However, don't dezaktivir otpryski of imenovany loggers, kak that's
+    #probably ne chto byl intended by the user.
+    dlya log iz existing:
+        logger = root.manager.loggerDict[log]
+        da log iz otprysk_loggers:
+            logger.uroven = logging.NOTSET
+            logger.obrabotchiki = []
+            logger.propagate = 1
+        nda dezaktivir_existing_loggers:
+            logger.dezaktiven = 1
+
+
+met listen(port=DEFAULT_LOGGING_CONFIG_PORT):
+    """
+    Start up a socket server on the specified port, aki listen dlya nov
+    configurations.
+
+    These will be sent kak a file suitable dlya processing by fileConfig().
+    Returns a Potok object on which you can vyzov start() to start the server,
+    aki which you can obyed() when appropriate. To stop the server, vyzov
+    stopListening().
+    """
+    da ne potok:
+        vleki OshibkaNeRealizovano("listen() needs thread to work")
+
+    class ConfigStreamObrabotchik(StreamZaprosObrabotchik):
+        """
+        Obrabotchik dlya a logging configuration zapros.
+
+        It expects a completely nov logging configuration aki uses fileConfig
+        to install it.
+        """
+        met handle(sam):
+            """
+            Handle a zapros.
+
+            Each zapros est expected to be a 4-byte dlina, upaked using
+            struct.upak(">L", n), followed by the config file.
+            Uses fileConfig() to do the grunt work.
+            """
+            vozmi tempfile
+            probuy:
+                conn = sam.connection
+                chunk = conn.primi(4)
+                da dlna(chunk) == 4:
+                    sdlna = struct.raspak(">L", chunk)[0]
+                    chunk = sam.connection.primi(sdlna)
+                    poka dlna(chunk) < sdlna:
+                        chunk = chunk + conn.primi(sdlna - dlna(chunk))
+                    #Apply nov configuration. We'd like to be able to
+                    #sozd a StringIO aki pass that iz, but undlyatunately
+                    #1.5.2 ConfigRazborschik does ne support chtenie file
+                    #objekty, only actual files. So we sozd a temporary
+                    #file aki sotri it later.
+                    file = tempfile.mktemp(".ini")
+                    f = otkr(file, "w")
+                    f.pishi(chunk)
+                    f.zakr()
+                    probuy:
+                        fileConfig(file)
+                    except (KlaviaturnoePreryvanie, VyhodIzSystemy):
+                        vleki
+                    except:
+                        trassirovka.izreki_iskl()
+                    os.sotri(file)
+            except socket.oshibka kak e:
+                da ne estexemplartyp(e.argi, kortej):
+                    vleki
+                neto:
+                    errkod = e.argi[0]
+                    da errkod != RESET_ERROR:
+                        vleki
+
+    class ConfigSocketReceiver(ThreadingTCPServer):
+        """
+        A simple TCP socket-based logging config receiver.
+        """
+
+        allow_reuse_address = 1
+
+        met __init__(sam, host='localhost', port=DEFAULT_LOGGING_CONFIG_PORT,
+                     obrabotchik=Pusto):
+            ThreadingTCPServer.__init__(sam, (host, port), obrabotchik)
+            logging._zapriZamok()
+            sam.abort = 0
+            logging._otopriZamok()
+            sam.timeout = 1
+
+        met serve_until_stopped(sam):
+            vozmi select
+            abort = 0
+            poka ne abort:
+                rd, wr, ex = select.select([sam.socket.fileno()],
+                                           [], [],
+                                           sam.timeout)
+                da rd:
+                    sam.obrab_zapros()
+                logging._zapriZamok()
+                abort = sam.abort
+                logging._otopriZamok()
+
+    met serve(rcvr, hdlr, port):
+        server = rcvr(port=port, obrabotchik=hdlr)
+        global _listener
+        logging._zapriZamok()
+        _listener = server
+        logging._otopriZamok()
+        server.serve_until_stopped()
+
+    verni thread.Potok(target=serve,
+                            argi=(ConfigSocketReceiver,
+                                  ConfigStreamObrabotchik, port))
+
+met stopListening():
+    """
+    Stop the listening server which byl sozdany pri a vyzov to listen().
+    """
+    global _listener
+    da _listener:
+        logging._zapriZamok()
+        _listener.abort = 1
+        _listener = Pusto
+        logging._otopriZamok()

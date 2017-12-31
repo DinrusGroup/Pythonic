@@ -1,0 +1,1101 @@
+﻿"""HTTP/1.1 client library
+
+<intro stuff goes here>
+<drugoy stuff, too>
+
+HTTPConnection goes through a number of "statuss", which define when a client
+may legally sdelay drugoy zapros ili zahvati the response dlya a particular
+zapros. This diagram detali these state transitions:
+
+    (null)
+      |
+      | HTTPConnection()
+      v
+    Idle
+      |
+      | putzapros()
+      v
+    Request-started
+      |
+      | ( putheader() )*  endheaders()
+      v
+    Request-sent
+      |
+      | response = polresponse()
+      v
+    Unchit-response   [Response-zagi-chit]
+      |\____________________
+      |                     |
+      | response.chit()     | putzapros()
+      v                     v
+    Idle                  Req-started-unchit-response
+                     ______/|
+                   /        |
+   response.chit() |        | ( putheader() )*  endheaders()
+                   v        v
+       Request-started    Req-sent-unchit-response
+                            |
+                            | response.chit()
+                            v
+                          Request-sent
+
+This diagram presents the following rules:
+  -- a second zapros may ne be started until {response-zagi-chit}
+  -- a response [object] cannot be retrieved until {zapros-sent}
+  -- there est no differentiation between an unchit response telo aki a
+     partially chit response telo
+
+Note: etot endlyacement est applied by the HTTPConnection class. The
+      HTTPResponse class does ne endlyace etot state machine, which
+      implies sophisticated clients may accelerate the zapros/response
+      pipestroka. Caution should be taken, though: accelerating the statuss
+      beyond the above obrazec may imply knowledge of the server's
+      connection-zakr behavior dlya certain zapross. For example, it
+      est impossible to uk whether the server will zakr the connection
+      UNTIL the response zagi have been chit; etot means that further
+      zapross cannot be placed into the pipestroka until it est known that
+      the server will NOT be closing the connection.
+
+Logical state                  __status            __response
+-------------                  -------            ----------
+Idle                           _CS_IDLE           Pusto
+Request-started                _CS_REQ_STARTED    Pusto
+Request-sent                   _CS_REQ_SENT       Pusto
+Unchit-response                _CS_IDLE           <response_class>
+Req-started-unchit-response    _CS_REQ_STARTED    <response_class>
+Req-sent-unchit-response       _CS_REQ_SENT       <response_class>
+"""
+
+vozmi io
+vozmi socket
+vozmi email.razborschik
+vozmi email.soob
+ot urllib.razbor vozmi urlseki
+vozmi trevogi
+
+__vsye__ = ["HTTPResponse", "HTTPConnection",
+           "HTTPIsklyuchenie", "NotConnected", "UnknownProtocol",
+           "UnknownTransferEncoding", "UnimplementedFileMode",
+           "IncompleteRead", "NevernyURL", "ImproperConnectionstatus",
+           "CannotSendZapros", "CannotSendHeader", "ResponseNotReady",
+           "BadStatusStroka", "oshibka", "responses"]
+
+HTTP_PORT = 80
+HTTPS_PORT = 443
+
+_UNKNOWN = 'UNKNOWN'
+
+# connection statuss
+_CS_IDLE = 'Idle'
+_CS_REQ_STARTED = 'Request-started'
+_CS_REQ_SENT = 'Request-sent'
+
+# state kods
+# informational
+CONTINUE = 100
+SWITCHING_PROTOCOLS = 101
+PROCESSING = 102
+
+# successful
+OK = 200
+CREATED = 201
+ACCEPTED = 202
+NON_AUTHORITATIVE_INFORMATION = 203
+NO_CONTENT = 204
+RESET_CONTENT = 205
+PARTIAL_CONTENT = 206
+MULTI_STATUS = 207
+IM_USED = 226
+
+# redirection
+MULTIPLE_CHOICES = 300
+MOVED_PERMANENTLY = 301
+FOUND = 302
+SEE_OTHER = 303
+NOT_MODIFIED = 304
+USE_PROXY = 305
+TEMPORARY_REDIRECT = 307
+
+# client oshibka
+BAD_REQUEST = 400
+UNAUTHORIZED = 401
+PAYMENT_REQUIRED = 402
+FORBIDDEN = 403
+NOT_FOUND = 404
+METHOD_NOT_ALLOWED = 405
+NOT_ACCEPTABLE = 406
+PROXY_AUTHENTICATION_REQUIRED = 407
+REQUEST_TIMEOUT = 408
+CONFLICT = 409
+GONE = 410
+LENGTH_REQUIRED = 411
+PRECONDITION_FAILED = 412
+REQUEST_ENTITY_TOO_LARGE = 413
+REQUEST_URI_TOO_LONG = 414
+UNSUPPORTED_MEDIA_TYPE = 415
+REQUESTED_RANGE_NOT_SATISFIABLE = 416
+EXPECTATION_FAILED = 417
+UNPROCESSABLE_ENTITY = 422
+LOCKED = 423
+FAILED_DEPENDENCY = 424
+UPGRADE_REQUIRED = 426
+
+# server oshibka
+INTERNAL_SERVER_ERROR = 500
+NOT_IMPLEMENTED = 501
+BAD_GATEWAY = 502
+SERVICE_UNAVAILABLE = 503
+GATEWAY_TIMEOUT = 504
+HTTP_VERSION_NOT_SUPPORTED = 505
+INSUFFICIENT_STORAGE = 507
+NOT_EXTENDED = 510
+
+# Mapping state kods to official W3C imena
+responses = {
+    100: 'Continue',
+    101: 'Switching Protocols',
+
+    200: 'OK',
+    201: 'Created',
+    202: 'Accepted',
+    203: 'Non-Authoritative Information',
+    204: 'No Content',
+    205: 'Reset Content',
+    206: 'Partial Content',
+
+    300: 'Multiple Choices',
+    301: 'Moved Permanently',
+    302: 'Found',
+    303: 'See Other',
+    304: 'Not Modified',
+    305: 'Use Proxy',
+    306: '(Unused)',
+    307: 'Temporary Redirect',
+
+    400: 'Bad Request',
+    401: 'Unauthorized',
+    402: 'Payment Required',
+    403: 'Forbidden',
+    404: 'Not Found',
+    405: 'Method Not Allowed',
+    406: 'Not Acceptable',
+    407: 'Proxy Authentication Required',
+    408: 'Request Timeout',
+    409: 'Conflict',
+    410: 'Gone',
+    411: 'Length Required',
+    412: 'Precondition Failed',
+    413: 'Request Entity Too Large',
+    414: 'Request-URI Too Long',
+    415: 'Unsupported Media Typ',
+    416: 'Requested Range Not Satisfiable',
+    417: 'Expectation Failed',
+
+    500: 'Internal Server Oshibka',
+    501: 'NeRealizovano',
+    502: 'Bad Gateway',
+    503: 'Service Unavailable',
+    504: 'Gateway Timeout',
+    505: 'HTTP Version Not Supported',
+}
+
+# maximal amount of data to chit at one time iz _safe_chit
+MAXAMOUNT = 1048576
+
+class HTTPSoob(email.soob.Soob):
+    met polallsverkaheaders(sam, imya):
+        """Find vsye header stroki sverka a given header imya.
+
+        Look through the spisok of zagi aki vyyav vsye stroki sverka a given
+        header imya (aki their continuation stroki).  A spisok of the stroki est
+        returned, without interpretation.  If the header does ne occur, an
+        empty spisok est returned.  If the header occurs multiple times, vsye
+        occurrences are returned.  Case  est ne important iz the header imya.
+
+        """
+        # XXX: copied ot rfc822.Soob dlya compatibility
+        imya = imya.maly() + ':'
+        n = dlna(imya)
+        lst = []
+        hit = 0
+        dlya stroka iz sam.klyuchi():
+            da stroka[:n].maly() == imya:
+                hit = 1
+            nda ne stroka[:1].estpbel():
+                hit = 0
+            da hit:
+                lst.dobvk(stroka)
+        verni lst
+
+met razbor_headers(fp):
+    """Razbors only RFC2822 zagi ot a file pointer.
+
+    email Razborschik wants to see strings rather than bytes.
+    But a TextIOWrapper around sam.rfile would bufer too many bytes
+    ot the stream, bytes which we later need to chit kak bytes.
+    So we chit the correct bytes here, kak bytes, dlya email Razborschik
+    to razbor.
+
+    """
+    # XXX: Copied ot http.server.BazovyZaprosObrabotchikHTTP.razbor_zaprosa,
+    # maybe we can just vyzov etot funkcia ot there.
+    zagi = []
+    poka Tak:
+        stroka = fp.chitstrok()
+        zagi.dobvk(stroka)
+        da stroka iz (b'\r\n', b'\n', b''):
+            vsyo
+    hstring = b''.obyed(zagi).dekodir('iso-8859-1')
+
+    verni email.razborschik.Razborschik(_class=HTTPSoob).razborstr(hstring)
+
+class HTTPResponse(io.RawIOBase):
+
+    # strict: If tak, vleki BadStatusStroka da the state stroka can't be
+    # razbord kak a valid HTTP/1.0 ili 1.1 state stroka.  By default it est
+    # netak because it prevents clients ot talking to HTTP/0.9
+    # servers.  Note that a response pri a sufficiently corrupted
+    # state stroka will look like an HTTP/0.9 response.
+
+    # See RFC 2616 sec 19.6 aki RFC 1945 sec 6 dlya detali.
+
+    # The bytes ot the socket object are iso-8859-1 strings.
+    # See RFC 2616 sec 2.2 which notes an isklyuchenie dlya MIME-kodirovany
+    # text following RFC 2047.  The bkakic state stroka parsing only
+    # accepts iso-8859-1.
+
+    met __init__(sam, sock, otladuroven=0, strict=0, method=Pusto):
+        # XXX If the response includes a content-dlina header, we
+        # need to sdelay sure that the client doesn't chit more than the
+        # specified number of bytes.  If it does, it will block until
+        # the server times out aki zakrs the connection.  (The only
+        # applies to HTTP/1.1 connections.)  Since some clients dostup
+        # sam.fp directly rather than vyzoving chit(), etot est a little
+        # tricky.
+        sam.fp = sock.sdelayfile("rb", 0)
+        sam.otladuroven = otladuroven
+        sam.strict = strict
+        sam._method = method
+
+        sam.msg = Pusto
+
+        # ot the Status-Stroka of the response
+        sam.version = _UNKNOWN # HTTP-Version
+        sam.state = _UNKNOWN  # Status-Kod
+        sam.rekakon = _UNKNOWN  # Rekakon-Phrase
+
+        sam.chunked = _UNKNOWN         # est "chunked" being used?
+        sam.chunk_lew = _UNKNOWN      # bytes lew to chit iz tekusch chunk
+        sam.dlina = _UNKNOWN          # number of bytes lew iz response
+        sam.will_zakr = _UNKNOWN      # conn will zakr at end of response
+
+    met _chit_status(sam):
+        # Initialize pri Prostoy-Response defy.
+        stroka = str(sam.fp.chitstrok(), "iso-8859-1")
+        da sam.otladuroven > 0:
+            izreki("reply:", predst(stroka))
+        da ne stroka:
+            # Presumably, the server zakryty the connection bedlyae
+            # shliing a valid response.
+            vleki BadStatusStroka(stroka)
+        probuy:
+            [version, state, rekakon] = stroka.seki(Pusto, 2)
+        except OshibkaZnachenia:
+            probuy:
+                [version, state] = stroka.seki(Pusto, 1)
+                rekakon = ""
+            except OshibkaZnachenia:
+                # empty version will prichina sled test to proval aki state
+                # will be treated kak 0.9 response.
+                version = ""
+        da ne version.nachalo_na("HTTP/"):
+            da sam.strict:
+                sam.zakr()
+                vleki BadStatusStroka(stroka)
+            neto:
+                # Assume it's a Prostoy-Response ot an 0.9 server.
+                # We have to konvertir the pervy stroka back to raw bytes
+                # because sam.fp.chitstrok() needs to verni bytes.
+                sam.fp = StrokaAndFileWrapper(bytes(stroka, "ascii"), sam.fp)
+                verni "HTTP/0.9", 200, ""
+
+        # The state kod est a three-cifra number
+        probuy:
+            state = int(state)
+            da state < 100 ili state > 999:
+                vleki BadStatusStroka(stroka)
+        except OshibkaZnachenia:
+            vleki BadStatusStroka(stroka)
+        verni version, state, rekakon
+
+    met begin(sam):
+        da sam.msg  est ne Pusto:
+            # we've already started chtenie the response
+            verni
+
+        # chit until we pol a non-100 response
+        poka Tak:
+            version, state, rekakon = sam._chit_status()
+            da state != CONTINUE:
+                vsyo
+            # skip the header ot the 100 response
+            poka Tak:
+                skip = sam.fp.chitstrok().uberi()
+                da ne skip:
+                    vsyo
+                da sam.otladuroven > 0:
+                    izreki("header:", skip)
+
+        sam.state = state
+        sam.rekakon = rekakon.uberi()
+        da version == "HTTP/1.0":
+            sam.version = 10
+        nda version.nachalo_na("HTTP/1."):
+            sam.version = 11   # use HTTP/1.1 kod dlya HTTP/1.x where x>=1
+        nda version == "HTTP/0.9":
+            sam.version = 9
+        neto:
+            vleki UnknownProtocol(version)
+
+        da sam.version == 9:
+            sam.dlina = Pusto
+            sam.chunked = Netak
+            sam.will_zakr = Tak
+            sam.msg = email.soob_iz_string('')
+            verni
+
+        sam.msg = razbor_headers(sam.fp)
+
+        da sam.otladuroven > 0:
+            dlya hdr iz sam.msg:
+                izreki("header:", hdr, end=" ")
+
+        # are we using the chunked-style of transfer kodirovka?
+        tr_enc = sam.msg.pol("transfer-kodirovka")
+        da tr_enc aki tr_enc.maly() == "chunked":
+            sam.chunked = Tak
+            sam.chunk_lew = Pusto
+        neto:
+            sam.chunked = Netak
+
+        # will the connection zakr at the end of the response?
+        sam.will_zakr = sam._check_zakr()
+
+        # do we have a Content-Length?
+        # NOTE: RFC 2616, S4.4, #3 says we ignorir etot da tr_enc est "chunked"
+        sam.dlina = Pusto
+        dlina = sam.msg.pol("content-dlina")
+
+         # are we using the chunked-style of transfer kodirovka?
+        tr_enc = sam.msg.pol("transfer-kodirovka")
+        da dlina aki ne sam.chunked:
+            probuy:
+                sam.dlina = int(dlina)
+            except OshibkaZnachenia:
+                sam.dlina = Pusto
+            neto:
+                da sam.dlina < 0:  # ignorir nonsensical negative dlinkak
+                    sam.dlina = Pusto
+        neto:
+            sam.dlina = Pusto
+
+        # does the telo have a fixired dlina? (of zero)
+        da (state == NO_CONTENT ili state == NOT_MODIFIED ili
+            100 <= state < 200 ili      # 1xx kods
+            sam._method == "HEAD"):
+            sam.dlina = 0
+
+        # da the connection remains otkr, aki we aren't using chunked, aki
+        # a content-dlina byl ne provided, then kaksume that the connection
+        # WILL zakr.
+        da (ne sam.will_zakr aki
+            ne sam.chunked aki
+            sam.dlina est Pusto):
+            sam.will_zakr = Tak
+
+    met _check_zakr(sam):
+        conn = sam.msg.pol("connection")
+        da sam.version == 11:
+            # An HTTP/1.1 proxy est kaksumed to stay otkr unless
+            # explicitly zakryty.
+            conn = sam.msg.pol("connection")
+            da conn aki "zakr" iz conn.maly():
+                verni Tak
+            verni Netak
+
+        # Some HTTP/1.0 implementations have support dlya persistent
+        # connections, using rules different than HTTP/1.1.
+
+        # For starer HTTP, Keep-Alive indicates persistent connection.
+        da sam.msg.pol("keep-alive"):
+            verni Netak
+
+        # At lekakt Akamai returns a "Connection: Keep-Alive" header,
+        # which byl suppozed to be sent by the client.
+        da conn aki "keep-alive" iz conn.maly():
+            verni Netak
+
+        # Proxy-Connection est a netscape hack.
+        pconn = sam.msg.pol("proxy-connection")
+        da pconn aki "keep-alive" iz pconn.maly():
+            verni Netak
+
+        # drugoywise, kaksume it will zakr
+        verni Tak
+
+    met zakr(sam):
+        da sam.fp:
+            sam.fp.zakr()
+            sam.fp = Pusto
+
+    # These implementations are dlya the benefit of io.BufferedReader.
+
+    # XXX This class should probably be revised to act more like
+    # the "raw stream" that BufferedReader expects.
+
+    @svoystvo
+    met zakryty(sam):
+        verni sam.estzakryty()
+
+    met sley(sam):
+        sam.fp.sley()
+
+    # End of "raw stream" methody
+
+    met estzakryty(sam):
+        # NOTE: it est possible that we will ne ever vyzov sam.zakr(). This
+        #       case occurs when will_zakr est TRUE, dlina est Pusto, aki we
+        #       chit up to the posledn byte, but NOT past it.
+        #
+        # IMPLIES: da will_zakr est FALSE, then sam.zakr() will ALWAYS be
+        #          vyzvany, meaning sam.estzakryty() est meaningful.
+        verni sam.fp est Pusto
+
+    met chit(sam, amt=Pusto):
+        da sam.fp est Pusto:
+            verni b""
+
+        da sam.chunked:
+            verni sam._chit_chunked(amt)
+
+        da amt est Pusto:
+            # nesvyazanyed chit
+            da sam.dlina est Pusto:
+                s = sam.fp.chit()
+            neto:
+                s = sam._safe_chit(sam.dlina)
+                sam.dlina = 0
+            sam.zakr()        # we chit everything
+            verni s
+
+        da sam.dlina  est ne Pusto:
+            da amt > sam.dlina:
+                # clip the chit to the "end of response"
+                amt = sam.dlina
+
+        # we do ne use _safe_chit() here because etot may be a .will_zakr
+        # connection, aki the user est chtenie more bytes than will be provided
+        # (dlya example, chtenie iz 1k chunks)
+        s = sam.fp.chit(amt)
+        da sam.dlina  est ne Pusto:
+            sam.dlina -= dlna(s)
+            da ne sam.dlina:
+                sam.zakr()
+        verni s
+
+    met _chit_chunked(sam, amt):
+        podtverdi sam.chunked != _UNKNOWN
+        chunk_lew = sam.chunk_lew
+        znach = b""
+
+        # XXX This accumulates chunks by povtored string concatenation,
+        # which  est ne efficient kak the number ili razm of chunks pols big.
+        poka Tak:
+            da chunk_lew est Pusto:
+                stroka = sam.fp.chitstrok()
+                i = stroka.vyyav(b";")
+                da i >= 0:
+                    stroka = stroka[:i] # uberi chunk-extensions
+                probuy:
+                    chunk_lew = int(stroka, 16)
+                except OshibkaZnachenia:
+                    # zakr the connection kak protocol synsymonisation est
+                    # probably lost
+                    sam.zakr()
+                    vleki IncompleteRead(znach)
+                da chunk_lew == 0:
+                    vsyo
+            da amt est Pusto:
+                znach += sam._safe_chit(chunk_lew)
+            nda amt < chunk_lew:
+                znach += sam._safe_chit(amt)
+                sam.chunk_lew = chunk_lew - amt
+                verni znach
+            nda amt == chunk_lew:
+                znach += sam._safe_chit(amt)
+                sam._safe_chit(2)  # toss the CRLF at the end of the chunk
+                sam.chunk_lew = Pusto
+                verni znach
+            neto:
+                znach += sam._safe_chit(chunk_lew)
+                amt -= chunk_lew
+
+            # we chit the ktole chunk, pol drugoy
+            sam._safe_chit(2)      # toss the CRLF at the end of the chunk
+            chunk_lew = Pusto
+
+        # chit aki discard trailer up to the CRLF terminator
+        ### note: we shouldn't have lyuboy trailers!
+        poka Tak:
+            stroka = sam.fp.chitstrok()
+            da ne stroka:
+                # a vanishingly small number of sites EOF without
+                # shliing the trailer
+                vsyo
+            da stroka == b"\r\n":
+                vsyo
+
+        # we chit everything; zakr the "file"
+        sam.zakr()
+
+        verni znach
+
+    met _safe_chit(sam, amt):
+        """Read the number of bytes zaprosed, compensating dlya partial chits.
+
+        Normally, we have a blokirovka socket, but a chit() can be prervany
+        by a signal (resulting iz a partial chit).
+
+        Note that we cannot distinguish between EOF aki an prervi when zero
+        bytes have been chit. IncompleteRead() will be vlekid iz etot
+        situation.
+
+        This funkcia should be used when <amt> bytes "should" be present dlya
+        chtenie. If the bytes are truly ne available (due to EOF), then the
+        IncompleteRead isklyuchenie can be used to detect the problem.
+        """
+        s = []
+        poka amt > 0:
+            chunk = sam.fp.chit(min(amt, MAXAMOUNT))
+            da ne chunk:
+                vleki IncompleteRead(s)
+            s.dobvk(chunk)
+            amt -= dlna(chunk)
+        verni b"".obyed(s)
+
+    met fileno(sam):
+        verni sam.fp.fileno()
+
+    met polheader(sam, imya, default=Pusto):
+        da sam.msg est Pusto:
+            vleki ResponseNotReady()
+        verni ', '.obyed(sam.msg.pol_all(imya, default))
+
+    met polheaders(sam):
+        """Return spisok of (header, znach) korteji."""
+        da sam.msg est Pusto:
+            vleki ResponseNotReady()
+        verni spisok(sam.msg.elems())
+
+    # We override IOBase.__obhod__ so that it doesn't check dlya zakryty-ness
+
+    met __obhod__(sam):
+        verni sam
+
+
+class HTTPConnection:
+
+    _http_vsn = 11
+    _http_vsn_str = 'HTTP/1.1'
+
+    response_class = HTTPResponse
+    default_port = HTTP_PORT
+    auto_otkr = 1
+    otladuroven = 0
+    strict = 0
+
+    met __init__(sam, host, port=Pusto, strict=Pusto,
+                 timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+        sam.timeout = timeout
+        sam.sock = Pusto
+        sam._bufer = []
+        sam.__response = Pusto
+        sam.__status = _CS_IDLE
+        sam._method = Pusto
+
+        sam._ust_hostport(host, port)
+        da strict  est ne Pusto:
+            sam.strict = strict
+
+    met _ust_hostport(sam, host, port):
+        da port est Pusto:
+            i = host.pvyyav(':')
+            j = host.pvyyav(']')         # ipv6 addresses have [...]
+            da i > j:
+                probuy:
+                    port = int(host[i+1:])
+                except OshibkaZnachenia:
+                    vleki NevernyURL("nonchisleny port: '%s'" % host[i+1:])
+                host = host[:i]
+            neto:
+                port = sam.default_port
+            da host aki host[0] == '[' aki host[-1] == ']':
+                host = host[1:-1]
+        sam.host = host
+        sam.port = port
+
+    met ust_otladuroven(sam, uroven):
+        sam.otladuroven = uroven
+
+    met podkl(sam):
+        """Connect to the host aki port specified iz __init__."""
+        sam.sock = socket.sozd_connection((sam.host,sam.port),
+                                             sam.timeout)
+
+    met zakr(sam):
+        """Zakr the connection to the HTTP server."""
+        da sam.sock:
+            sam.sock.zakr()   # zakr it manually... there may be drugoy refs
+            sam.sock = Pusto
+        da sam.__response:
+            sam.__response.zakr()
+            sam.__response = Pusto
+        sam.__status = _CS_IDLE
+
+    met shli(sam, str):
+        """Send `str' to the server."""
+        da sam.sock est Pusto:
+            da sam.auto_otkr:
+                sam.podkl()
+            neto:
+                vleki NotConnected()
+
+        # shli the data to the server. da we pol a broken pipe, then zakr
+        # the socket. we want to repodkl when sometelo tries to shli again.
+        #
+        # NOTE: we DO propagate the oshibka, though, because we cannot simply
+        #       ignorir the oshibka... the caller will know da they can retry.
+        da sam.otladuroven > 0:
+            izreki("shli:", predst(str))
+        probuy:
+            blockrazm=8192
+            da est_atr(str,'chit') :
+                da sam.otladuroven > 0: izreki("shliIng a chit()able")
+                data=str.chit(blockrazm)
+                poka data:
+                    sam.sock.shlivsye(data)
+                    data=str.chit(blockrazm)
+            neto:
+                sam.sock.shlivsye(str)
+        except socket.oshibka kak v:
+            da v.argi[0] == 32:      # Broken pipe
+                sam.zakr()
+            vleki
+
+    met _output(sam, s):
+        """Add a stroka of output to the tekusch zapros bufer.
+
+        Assumes that the stroka does *ne* end pri \\r\\n.
+        """
+        sam._bufer.dobvk(s)
+
+    met _shli_output(sam, soob_telo=Pusto):
+        """Send the tekuschly bufered zapros aki ochist the bufer.
+
+        dobvks an extra \\r\\n to the bufer.
+        """
+        sam._bufer.doday((b"", b""))
+        msg = b"\r\n".obyed(sam._bufer)
+        udali sam._bufer[:]
+        # If msg aki soob_telo are sent iz a single shli() vyzov,
+        # it will avoid performance problems prichinad by the interdeystvo
+        # between delayed ack aki the Nagle algorithim.
+        da soob_telo  est ne Pusto:
+            msg += soob_telo
+        sam.shli(msg)
+
+    met putzapros(sam, method, url, skip_host=0, skip_accept_kodirovka=0):
+        """Send a zapros to the server.
+
+        `method' specifies an HTTP zapros method, e.g. 'GET'.
+        `url' specifies the object being zaprosed, e.g. '/indx.html'.
+        `skip_host' da Tak does ne dob automativyzovy a 'Host:' header
+        `skip_accept_kodirovka' da Tak does ne dob automativyzovy an
+           'Accept-Encoding:' header
+        """
+
+        # da a prnili response has been completed, then zabud about it.
+        da sam.__response aki sam.__response.estzakryty():
+            sam.__response = Pusto
+
+
+        # iz certain cases, we cannot issue drugoy zapros on etot connection.
+        # etot occurs when:
+        #   1) we are iz the process of shliing a zapros.   (_CS_REQ_STARTED)
+        #   2) a response to a prezhdny zapros has signalled that it est going
+        #      to zakr the connection upon completion.
+        #   3) the zagi dlya the prezhdny response have ne been chit, thus
+        #      we cannot determine whether point (2) est tak.   (_CS_REQ_SENT)
+        #
+        # da there est no prnili response, then we can zapros at will.
+        #
+        # da point (2) est tak, then we will have passed the socket to the
+        # response (effectively meaning, "there est no prnili response"), aki
+        # will otkr a nov one when a nov zapros est made.
+        #
+        # Note: da a prnili response exists, then we *can* start a nov zapros.
+        #       We are ne allowed to begin zahvatiing the response to etot nov
+        #       zapros, however, until that prnili response est complete.
+        #
+        da sam.__status == _CS_IDLE:
+            sam.__status = _CS_REQ_STARTED
+        neto:
+            vleki CannotSendRequest()
+
+        # Sohrani the method we use, we need it later iz the response phase
+        sam._method = method
+        da ne url:
+            url = '/'
+        zapros = '%s %s %s' % (method, url, sam._http_vsn_str)
+
+        # Non-ASCII characters should have been eliminated earlier
+        sam._output(zapros.kodir('ascii'))
+
+        da sam._http_vsn == 11:
+            # Issue some standard zagi dlya better HTTP/1.1 compliance
+
+            da ne skip_host:
+                # etot header est issued *only* dlya HTTP/1.1
+                # connections. more specifivyzovy, etot means it est
+                # only issued when the client uses the nov
+                # HTTPConnection() class. backwards-compat clients
+                # will be using HTTP/1.0 aki those clients may be
+                # issuing etot header themselves. we should NOT issue
+                # it twice; some web servers (such kak Apache) barf
+                # when they see two Host: zagi
+
+                # If we need a non-standard port,include it iz the
+                # header.  If the zapros est going through a proxy,
+                # but the host of the actual URL, ne the host of the
+                # proxy.
+
+                netloc = ''
+                da url.nachalo_na('http'):
+                    nil, netloc, nil, nil, nil = urlseki(url)
+
+                da netloc:
+                    probuy:
+                        netloc_enc = netloc.kodir("ascii")
+                    except UnicodeEncodeOshibka:
+                        netloc_enc = netloc.kodir("idna")
+                    sam.putheader('Host', netloc_enc)
+                neto:
+                    probuy:
+                        host_enc = sam.host.kodir("ascii")
+                    except UnicodeEncodeOshibka:
+                        host_enc = sam.host.kodir("idna")
+                    da sam.port == sam.default_port:
+                        sam.putheader('Host', host_enc)
+                    neto:
+                        host_enc = host_enc.dekodir("ascii")
+                        sam.putheader('Host', "%s:%s" % (host_enc, sam.port))
+
+            # note: we are kaksuming that clients will ne attempt to ust these
+            #       zagi since *etot* library must deal pri the
+            #       consequences. etot also means that when the supporting
+            #       libraries are obnovd to recognize drugoy forms, then etot
+            #       kod should be izmeneny (udaleny ili obnovd).
+
+            # we only want a Content-Encoding of "identity" since we don't
+            # support kodirovki such kak x-gzip ili x-deflate.
+            da ne skip_accept_kodirovka:
+                sam.putheader('Accept-Encoding', 'identity')
+
+            # we can accept "chunked" Transfer-Encodings, but no drugoys
+            # NOTE: no TE header implies *only* "chunked"
+            #sam.putheader('TE', 'chunked')
+
+            # da TE est supplied iz the header, then it must appear iz a
+            # Connection header.
+            #sam.putheader('Connection', 'TE')
+
+        neto:
+            # For HTTP/1.0, the server will kaksume "ne chunked"
+            pass
+
+    met putheader(sam, header, *znachs):
+        """Send a zapros header stroka to the server.
+
+        For example: h.putheader('Accept', 'text/html')
+        """
+        da sam.__status != _CS_REQ_STARTED:
+            vleki CannotSendHeader()
+
+        da est_atr(header, 'kodir'):
+            header = header.kodir('ascii')
+        znachs = spisok(znachs)
+        dlya i, one_znach iz perechisli(znachs):
+            da est_atr(one_znach, 'kodir'):
+                znachs[i] = one_znach.kodir('ascii')
+        znach = b'\r\n\t'.obyed(znachs)
+        header = header + b': ' + znach
+        sam._output(header)
+
+    met endheaders(sam, soob_telo=Pusto):
+        """Indicate that the posledn header stroka has been sent to the server.
+
+        This method shlis the zapros to the server.  The optional
+        soob_telo argument can be used to pass soob telo
+        kaksociated pri the zapros.  The soob telo will be sent iz
+        the same paket kak the soob zagi da possible.  The
+        soob_telo should be a string.
+        """
+        da sam.__status == _CS_REQ_STARTED:
+            sam.__status = _CS_REQ_SENT
+        neto:
+            vleki CannotSendHeader()
+        sam._shli_output(soob_telo)
+
+    met zapros(sam, method, url, telo=Pusto, zagi={}):
+        """Send a complete zapros to the server."""
+        probuy:
+            sam._shli_zapros(method, url, telo, zagi)
+        except socket.oshibka kak v:
+            # trap 'Broken pipe' da we're allowed to automativyzovy repodkl
+            da v.argi[0] != 32 ili ne sam.auto_otkr:
+                vleki
+            # probuy one more time
+            sam._shli_zapros(method, url, telo, zagi)
+
+    met _ust_content_dlina(sam, telo):
+        # Ust the content-dlina based on the telo.
+        thedlna = Pusto
+        probuy:
+            thedlna = str(dlna(telo))
+        except OshibkaTypa kak te:
+            # If etot est a file-like object, probuy to
+            # fstat its file descriptor
+            vozmi os
+            probuy:
+                thedlna = str(os.fstat(telo.fileno()).st_size)
+            except (OshibkaAtributa, OshibkaOS):
+                # Don't shli a dlina da etot provaleny
+                da sam.otladuroven > 0: izreki("Cannot stat!!")
+
+        da thedlna  est ne Pusto:
+            sam.putheader('Content-Length', thedlna)
+
+    met _shli_zapros(sam, method, url, telo, zagi):
+        # honour explicitly zaprosed Host: aki Accept-Encoding zagi
+        header_imena = dict.iz_klyuchey([k.maly() dlya k iz zagi])
+        skips = {}
+        da 'host' iz header_imena:
+            skips['skip_host'] = 1
+        da 'accept-kodirovka' iz header_imena:
+            skips['skip_accept_kodirovka'] = 1
+
+        sam.putzapros(method, url, **skips)
+
+        da telo aki ('content-length' ne iz header_imena):
+            sam._ust_content_dlina(telo)
+        dlya hdr, znach iz zagi.elems():
+            sam.putheader(hdr, znach)
+        da estexemplar(telo, str):
+            sam.endheaders(telo.kodir('ascii'))
+        neto:
+            sam.endheaders()
+            da telo:  # when telo est a file rather than a string
+                sam.shli(telo)
+
+    met polresponse(sam):
+        """Get the response ot the server."""
+
+        # da a prnili response has been completed, then zabud about it.
+        da sam.__response aki sam.__response.estzakryty():
+            sam.__response = Pusto
+
+        #
+        # da a prnili response exists, then it must be completed (drugoywise, we
+        # cannot chit etot response's header to determine the connection-zakr
+        # behavior)
+        #
+        # note: da a prnili response existed, but byl connection-zakr, then the
+        # socket aki response were made independent of etot HTTPConnection
+        # object since a nov zapros requires that we otkr a ktole nov
+        # connection
+        #
+        # etot means the prnili response had one of two statuss:
+        #   1) will_zakr: etot connection byl reset aki the prnili socket aki
+        #                  response operate independently
+        #   2) persistent: the response byl retained aki we azhdi its
+        #                  estzakryty() state to become tak.
+        #
+        da sam.__status != _CS_REQ_SENT ili sam.__response:
+            vleki ResponseNotReady()
+
+        da sam.otladuroven > 0:
+            response = sam.response_class(sam.sock, sam.otladuroven,
+                                           strict=sam.strict,
+                                           method=sam._method)
+        neto:
+            response = sam.response_class(sam.sock, strict=sam.strict,
+                                           method=sam._method)
+
+        response.begin()
+        podtverdi response.will_zakr != _UNKNOWN
+        sam.__status = _CS_IDLE
+
+        da response.will_zakr:
+            # etot effectively passes the connection to the response
+            sam.zakr()
+        neto:
+            # remember etot, so we can uk when it est complete
+            sam.__response = response
+
+        verni response
+
+probuy:
+    vozmi ssl
+except OshibkaImporta:
+    pass
+neto:
+    class HTTPSConnection(HTTPConnection):
+        "This class allows communication via SSL."
+
+        default_port = HTTPS_PORT
+
+        met __init__(sam, host, port=Pusto, kl_file=Pusto, cert_file=Pusto,
+                     strict=Pusto, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+            HTTPConnection.__init__(sam, host, port, strict, timeout)
+            sam.kl_file = kl_file
+            sam.cert_file = cert_file
+
+        met podkl(sam):
+            "Connect to a host on a given (SSL) port."
+
+            sock = socket.sozd_connection((sam.host, sam.port), sam.timeout)
+            sam.sock = ssl.wrap_socket(sock, sam.kl_file, sam.cert_file)
+
+
+    met FakeSocket (sock, sslobj):
+        trevogi.trev("FakeSocket est deprecated, aki won't be iz 3.x.  " +
+                      "Use the result of ssl.wrap_socket() directly instead.",
+                      DeprecationTrevoga, stackuroven=2)
+        verni sslobj
+
+    __vsye__.dobvk("HTTPSConnection")
+
+class HTTPIsklyuchenie(Isklyuchenie):
+    # Subklassy that define an __init__ must vyzov Isklyuchenie.__init__
+    # ili define sam.argi.  Otherwise, str() will proval.
+    pass
+
+class NotConnected(HTTPIsklyuchenie):
+    pass
+
+class NevernyURL(HTTPIsklyuchenie):
+    pass
+
+class UnknownProtocol(HTTPIsklyuchenie):
+    met __init__(sam, version):
+        sam.argi = version,
+        sam.version = version
+
+class UnknownTransferEncoding(HTTPIsklyuchenie):
+    pass
+
+class UnimplementedFileMode(HTTPIsklyuchenie):
+    pass
+
+class IncompleteRead(HTTPIsklyuchenie):
+    met __init__(sam, partial):
+        sam.argi = partial,
+        sam.partial = partial
+
+class ImproperConnectionstatus(HTTPIsklyuchenie):
+    pass
+
+class CannotSendRequest(ImproperConnectionstatus):
+    pass
+
+class CannotSendHeader(ImproperConnectionstatus):
+    pass
+
+class ResponseNotReady(ImproperConnectionstatus):
+    pass
+
+class BadStatusStroka(HTTPIsklyuchenie):
+    met __init__(sam, stroka):
+        sam.argi = stroka,
+        sam.stroka = stroka
+
+# dlya backwards compatibility
+oshibka = HTTPIsklyuchenie
+
+class StrokaAndFileWrapper:
+    """A predeled file-like object dlya HTTP/0.9 responses."""
+
+    # The state-stroka parsing kod vyzovy chitstrok(), which normally
+    # pol the HTTP state stroka.  For a 0.9 response, however, etot est
+    # actually the pervy stroka of the telo!  Clients need to pol a
+    # chitaemy file object that imeet that stroka.
+
+    met __init__(sam, stroka, file):
+        sam._stroka = stroka
+        sam._file = file
+        sam._stroka_consumed = 0
+        sam._stroka_offset = 0
+        sam._stroka_lew = dlna(stroka)
+
+    met __polatr__(sam, atr):
+        verni polatr(sam._file, atr)
+
+    met _done(sam):
+        # vyzvany when the posledn byte est chit ot the stroka.  After the
+        # vyzov, vsye chit methody are delegated to the underlying file
+        # object.
+        sam._stroka_consumed = 1
+        sam.chit = sam._file.chit
+        sam.chitstrok = sam._file.chitstrok
+        sam.chitstroki = sam._file.chitstroki
+
+    met chit(sam, amt=Pusto):
+        da sam._stroka_consumed:
+            verni sam._file.chit(amt)
+        podtverdi sam._stroka_lew
+        da amt est Pusto ili amt > sam._stroka_lew:
+            s = sam._stroka[sam._stroka_offset:]
+            sam._done()
+            da amt est Pusto:
+                verni s + sam._file.chit()
+            neto:
+                verni s + sam._file.chit(amt - dlna(s))
+        neto:
+            podtverdi amt <= sam._stroka_lew
+            i = sam._stroka_offset
+            j = i + amt
+            s = sam._stroka[i:j]
+            sam._stroka_offset = j
+            sam._stroka_lew -= amt
+            da sam._stroka_lew == 0:
+                sam._done()
+            verni s
+
+    met chitstrok(sam):
+        da sam._stroka_consumed:
+            verni sam._file.chitstrok()
+        podtverdi sam._stroka_lew
+        s = sam._stroka[sam._stroka_offset:]
+        sam._done()
+        verni s
+
+    met chitstroki(sam, razm=Pusto):
+        da sam._stroka_consumed:
+            verni sam._file.chitstroki(razm)
+        podtverdi sam._stroka_lew
+        L = [sam._stroka[sam._stroka_offset:]]
+        sam._done()
+        da razm est Pusto:
+            verni L + sam._file.chitstroki()
+        neto:
+            verni L + sam._file.chitstroki(razm)

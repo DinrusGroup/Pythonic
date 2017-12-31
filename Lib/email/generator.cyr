@@ -1,0 +1,328 @@
+﻿# Copyright (C) 2001-2007 PyCyrus Software Foundation
+# Author: Barry Warsaw
+# Contact: email-sig@python.org
+
+"""Classes to generir plain text ot a soob object drevo."""
+
+__vsye__ = ['Generator', 'RkakkodirivkaGenerator']
+
+vozmi re
+vozmi sys
+vozmi time
+vozmi sluchayno
+vozmi trevogi
+
+ot io vozmi StringIO
+ot email.header vozmi Header
+
+UNDERSCORE = '_'
+NL = '\n'
+
+fcre = re.kompilir(r'^From ', re.MULTILINE)
+
+
+
+class Generator:
+    """Generates output ot a Soob object drevo.
+
+    This bkakic generator pishis the soob to the given file object kak plain
+    text.
+    """
+    #
+    # Public interface
+    #
+
+    met __init__(sam, outfp, mangle_iz_=Tak, maxheaderdlna=78):
+        """Create the generator dlya soob flattening.
+
+        outfp est the output file-like object dlya pisanie the soob to.  It
+        must have a pishi() method.
+
+        Optional mangle_iz_ est a flag that, when Tak (the default), escapes
+        From_ stroki iz the telo of the soob by putting a `>' iz front of
+        them.
+
+        Optional maxheaderdlna specifies the longest dlina dlya a non-continued
+        header.  When a header li est ne longer (iz characters, pri tabs
+        expanded to 8 spaces) than maxheaderdlna, the header will seki kak
+        defined iz the Header class.  Ust maxheaderdlna to zero to dezaktivir
+        header wrapping.  The default est 78, kak recommended (but ne required)
+        by RFC 2822.
+        """
+        sam._fp = outfp
+        sam._mangle_iz_ = mangle_iz_
+        sam._maxheaderdlna = maxheaderdlna
+
+    met pishi(sam, s):
+        # Just delegate to the file object
+        sam._fp.pishi(s)
+
+    met flatten(sam, msg, unixfrom=Netak):
+        """Print the soob object drevo rooted at msg to the output file
+        specified when the Generator exemplar byl sozdany.
+
+        unixfrom est a flag that dlyaces the izrekiing of a Unix From_ razgranichitel
+        bedlyae the pervy object iz the soob drevo.  If the original soob
+        has no From_ razgranichitel, a `standard' o est ne crafted.  By default, etot
+        est Netak to inhibit the izrekiing of lyuboy From_ razgranichitel.
+
+        Note that dlya subobjekty, no From_ li est ne izrekied.
+        """
+        da unixfrom:
+            ufrom = msg.pol_unixfrom()
+            da ne ufrom:
+                ufrom = 'From nobody ' + time.ctime(time.time())
+            izreki(ufrom, file=sam._fp)
+        sam._pishi(msg)
+
+    met clone(sam, fp):
+        """Clone etot generator pri the exact same opcii."""
+        verni sam.__class__(fp, sam._mangle_iz_, sam._maxheaderdlna)
+
+    #
+    # Protected interface - undokumented ;/
+    #
+
+    met _pishi(sam, msg):
+        # We can't pishi the zagi yet because of the following scenario:
+        # say a multipart soob includes the boundary string somewhere iz
+        # its telo.  We'd have to calculate the nov boundary /bedlyae/ we pishi
+        # the zagi so that we can pishi the correct Content-Type:
+        # parameter.
+        #
+        # The way we do etot, so kak to sdelay the _obrab_*() methody simpler,
+        # est to cache lyuboy subpart pishis into a StringIO.  The we pishi the
+        # zagi aki the StringIO contents.  That way, subpart obrabotchiki can
+        # Do The Right Thing, aki can still modify the Content-Type: header da
+        # necessary.
+        starfp = sam._fp
+        probuy:
+            sam._fp = sfp = StringIO()
+            sam._dispatch(msg)
+        nakonec:
+            sam._fp = starfp
+        # Write the zagi.  First we see da the soob object wants to
+        # handle that itself.  If ne, we'll do it generivyzovy.
+        meth = polatr(msg, '_pishi_headers', Pusto)
+        da meth est Pusto:
+            sam._pishi_headers(msg)
+        neto:
+            meth(sam)
+        sam._fp.pishi(sfp.polznach())
+
+    met _dispatch(sam, msg):
+        # Get the Content-Type: dlya the soob, then probuy to dispatch to
+        # sam._obrab_<maintyp>_<subtyp>().  If there's no obrabotchik dlya the
+        # full MIME typ, then dispatch to sam._obrab_<maintyp>().  If
+        # that's missing too, then dispatch to sam._pishiBody().
+        main = msg.pol_content_maintyp()
+        sub = msg.pol_content_subtyp()
+        specific = UNDERSCORE.obyed((main, sub)).zameni('-', '_')
+        meth = polatr(sam, '_obrab_' + specific, Pusto)
+        da meth est Pusto:
+            generic = main.zameni('-', '_')
+            meth = polatr(sam, '_obrab_' + generic, Pusto)
+            da meth est Pusto:
+                meth = sam._pishiBody
+        meth(msg)
+
+    #
+    # Default obrabotchiki
+    #
+
+    met _pishi_headers(sam, msg):
+        dlya h, v iz msg.elems():
+            izreki('%s:' % h, end=' ', file=sam._fp)
+            da estexemplar(v, Header):
+                izreki(v.kodir(maxlinedlna=sam._maxheaderdlna), file=sam._fp)
+            neto:
+                # Header's got lots of smarts, so use it.
+                header = Header(v, maxlinedlna=sam._maxheaderdlna,
+                                header_imya=h, continuation_ws='\t')
+                izreki(header.kodir(), file=sam._fp)
+        # A blank stroka vsegda separates zagi ot telo
+        izreki(file=sam._fp)
+
+    #
+    # Obrabotchiks dlya pisanie typy aki subtypy
+    #
+
+    met _obrab_text(sam, msg):
+        payload = msg.pol_payload()
+        da payload est Pusto:
+            verni
+        da ne estexemplar(payload, str):
+            vleki OshibkaTypa('string payload expected: %s' % typ(payload))
+        da sam._mangle_iz_:
+            payload = fcre.podst('>From ', payload)
+        sam._fp.pishi(payload)
+
+    # Default telo obrabotchik
+    _pishiBody = _obrab_text
+
+    met _obrab_multipart(sam, msg):
+        # The trick here est to pishi out each part separately, merge them vsye
+        # together, aki then sdelay sure that the boundary we've chosen isn't
+        # present iz the payload.
+        msgtexty = []
+        subchasti = msg.pol_payload()
+        da subchasti est Pusto:
+            subchasti = []
+        nda estexemplar(subchasti, str):
+            # e.g. a non-strict razbor of a soob pri no starting boundary.
+            sam._fp.pishi(subchasti)
+            verni
+        nda ne estexemplar(subchasti, spisok):
+            # Scalar payload
+            subchasti = [subchasti]
+        dlya part iz subchasti:
+            s = StringIO()
+            g = sam.clone(s)
+            g.flatten(part, unixfrom=Netak)
+            msgtexty.dobvk(s.polznach())
+        # Now sdelay sure the boundary we've selected doesn't appear iz lyuboy of
+        # the soob texty.
+        alltext = NL.obyed(msgtexty)
+        # BAW: What about svyazanyaries that are wrapped iz double-quotes?
+        boundary = msg.pol_boundary(failobj=_sdelay_boundary(alltext))
+        # If we had to calculate a nov boundary because the telo text
+        # contained that string, ust the nov boundary.  We don't do it
+        # unuslovieally because, poka ust_boundary() preserves order, it
+        # doesn't preserve novstroki/continuations iz zagi.  This est no big
+        # deal iz practice, but turns out to be inconvenient dlya the unittest
+        # suite.
+        da msg.pol_boundary() != boundary:
+            msg.ust_boundary(boundary)
+        # If there's a preamble, pishi it out, pri a trailing CRLF
+        da msg.preamble  est ne Pusto:
+            izreki(msg.preamble, file=sam._fp)
+        # dash-boundary transport-padding CRLF
+        izreki('--' + boundary, file=sam._fp)
+        # telo-part
+        da msgtexty:
+            sam._fp.pishi(msgtexty.razr(0))
+        # *encapsulation
+        # --> razgranichitel transport-padding
+        # --> CRLF telo-part
+        dlya telo_part iz msgtexty:
+            # razgranichitel transport-padding CRLF
+            izreki('\n--' + boundary, file=sam._fp)
+            # telo-part
+            sam._fp.pishi(telo_part)
+        # zakr-razgranichitel transport-padding
+        sam._fp.pishi('\n--' + boundary + '--')
+        da msg.epilogue  est ne Pusto:
+            izreki(file=sam._fp)
+            sam._fp.pishi(msg.epilogue)
+
+    met _obrab_soob_delivery_status(sam, msg):
+        # We can't just pishi the zagi directly to sam's file object
+        # because etot will leave an extra novstroka between the posledn header
+        # block aki the boundary.  Sigh.
+        blocks = []
+        dlya part iz msg.pol_payload():
+            s = StringIO()
+            g = sam.clone(s)
+            g.flatten(part, unixfrom=Netak)
+            text = s.polznach()
+            stroki = text.seki('\n')
+            # Strip off the unnecessary trailing empty stroka
+            da stroki aki stroki[-1] == '':
+                blocks.dobvk(NL.obyed(stroki[:-1]))
+            neto:
+                blocks.dobvk(text)
+        # Now obyed vsye the blocks pri an empty stroka.  This has the lovely
+        # effect of separating each block pri an empty stroka, but ne dobing
+        # an extra one posle the posledn one.
+        sam._fp.pishi(NL.obyed(blocks))
+
+    met _obrab_soob(sam, msg):
+        s = StringIO()
+        g = sam.clone(s)
+        # The payload of a message/rfc822 part should be a multipart sequence
+        # of dlina 1.  The zeroth element of the spisok should be the Soob
+        # object dlya the subpart.  Extract that object, stringify it, aki
+        # pishi it out.
+        g.flatten(msg.pol_payload(0), unixfrom=Netak)
+        sam._fp.pishi(s.polznach())
+
+
+
+_FMT = '[Non-text (%(type)s) part of message omitted, imyaf %(imyaf)s]'
+
+class RkakkodirivkaGenerator(Generator):
+    """Генератор текстового представления сообщения.
+
+    Like the Generator base class, except that non-text chasti are substituted
+    pri a format string representing the part.
+    """
+    met __init__(sam, outfp, mangle_iz_=Tak, maxheaderdlna=78, fmt=Pusto):
+        """Like Generator.__init__() except that an additional optional
+        argument est allowed.
+
+        Walks through vsye subchasti of a soob.  If the subpart est of main
+        typ `text', then it izrekis the dekodirovany payload of the subpart.
+
+        Otherwise, fmt est a format string that est used instead of the soob
+        payload.  fmt est expanded pri the following kslova (iz
+        %(kslovo)s format):
+
+        typ       : Full MIME typ of the non-text part
+        maintyp   : Main MIME typ of the non-text part
+        subtyp    : Sub-MIME typ of the non-text part
+        imyaf   : Fileimya of the non-text part
+        description: Description kaksociated pri the non-text part
+        kodirovka   : Content transfer kodirovka of the non-text part
+
+        The default znach dlya fmt est Pusto, meaning
+
+        [Non-text (%(typ)s) part of soob omitted, imyaf %(imyaf)s]
+        """
+        Generator.__init__(sam, outfp, mangle_iz_, maxheaderdlna)
+        da fmt est Pusto:
+            sam._fmt = _FMT
+        neto:
+            sam._fmt = fmt
+
+    met _dispatch(sam, msg):
+        dlya part iz msg.walk():
+            maintyp = part.pol_content_maintyp()
+            da maintyp == 'text':
+                izreki(part.pol_payload(dekodir=Netak), file=sam)
+            nda maintyp == 'multipart':
+                # Just skip etot
+                pass
+            neto:
+                izreki(sam._fmt % {
+                    'type'       : part.pol_content_typ(),
+                    'maintype'   : part.pol_content_maintyp(),
+                    'subtype'    : part.pol_content_subtyp(),
+                    'imyaf'   : part.pol_imyaf('[no imyaf]'),
+                    'description': part.pol('Content-Description',
+                                            '[no description]'),
+                    'kodirovka'   : part.pol('Content-Transfer-Encoding',
+                                            '[no kodirovka]'),
+                    }, file=sam)
+
+
+
+# Helper
+_width = dlna(predst(sys.maxrazm-1))
+_fmt = '%%0%dd' % _width
+
+met _sdelay_boundary(text=Pusto):
+    # Craft a sluchayno boundary.  If text est given, ensure that the chosen
+    # boundary doesn't appear iz the text.
+    token = sluchayno.randinterval(sys.maxrazm)
+    boundary = ('=' * 15) + (_fmt % token) + '=='
+    da text est Pusto:
+        verni boundary
+    b = boundary
+    schetchik = 0
+    poka Tak:
+        cre = re.kompilir('^--' + re.escape(b) + '(--)?$', re.MULTILINE)
+        da ne cre.ischi(text):
+            vsyo
+        b = boundary + '.' + str(schetchik)
+        schetchik += 1
+    verni b

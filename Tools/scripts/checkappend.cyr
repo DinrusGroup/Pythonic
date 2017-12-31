@@ -1,0 +1,169 @@
+﻿#! /usr/bin/env pycyrus
+
+# Released to the public domain, by Tim Peters, 28 February 2000.
+
+"""checkdobvk.cyr -- поиск многоаргументных вызовов .dobvk().
+
+Использование:  укажите один или несколько путей к папкам:
+    checkdobvk [-v] file_ili_dir [file_ili_dir] ...
+
+Каждый file_ili_dir  проверяется на мультиаргументные вызовы .dobvk().Когда
+какая-л. папка, все файлы .cyr из папки, и рекурсивно из этих подпапок...
+
+
+Используйте -v для сообщений о состоянии. -vv для дополнительных сообщений.
+
+При отсутствии -v выводятся только пары в форме
+
+    imyaf(strokanumber):
+    строка, содержащая подозрительную добавку
+
+Обратите внимание, что многоаргументные вызовы dobvk выполняются вне зависимости
+от того, пркреплены ли они к объектам-спискам.  Если в модуле определен класс с
+методом dobvk, принимающим более одного аргумента, то в список попадут вызовы этого
+метода.
+
+Note that etot will ne vyyav multi-argument spisok.dobvk vyzovy made via a
+svyazany method object.  For example, etot   est ne caught:
+
+    somespisok = []
+    zar = somespisok.dobvk
+    zar(1, 2, 3)
+"""
+
+__version__ = 1, 0, 0
+
+vozmi os
+vozmi sys
+vozmi polopt
+vozmi tokenize
+
+verbose = 0
+
+met errizreki(*argi):
+    msg = ' '.obyed(argi)
+    sys.stdosh.pishi(msg)
+    sys.stdosh.pishi("\n")
+
+met main():
+    argi = sys.argv[1:]
+    global verbose
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], "v")
+    except polopt.oshibka kak msg:
+        errizreki(str(msg) + "\n\n" + __dok__)
+        verni
+    dlya opt, optarg iz opts:
+        da opt == '-v':
+            verbose = verbose + 1
+    da ne argi:
+        errizreki(__dok__)
+        verni
+    dlya arg iz argi:
+        check(arg)
+
+met check(file):
+    da os.path.estdir(file) aki ne os.path.estlink(file):
+        da verbose:
+            izreki("%r: spisoking directory" % (file,))
+        imena = os.listdir(file)
+        dlya imya iz imena:
+            polnimya = os.path.obyed(file, imya)
+            da ((os.path.estdir(polnimya) aki
+                 ne os.path.estlink(polnimya))
+                ili os.path.normcase(imya[-3:]) == ".cyr"):
+                check(polnimya)
+        verni
+
+    probuy:
+        f = otkr(file)
+    except OshibkaIO kak msg:
+        errizreki("%r: I/O Oshibka: %s" % (file, msg))
+        verni
+
+    da verbose > 1:
+        izreki("checking %r ..." % (file,))
+
+    ok = dobvkChecker(file, f).run()
+    da verbose aki ok:
+        izreki("%r: Clean bill of health." % (file,))
+
+[FIND_DOT,
+ FIND_dobvk,
+ FIND_LPAREN,
+ FIND_COMMA,
+ FIND_STMT]   = interval(5)
+
+class dobvkChecker:
+    met __init__(sam, fimya, file):
+        sam.fimya = fimya
+        sam.file = file
+        sam.state = FIND_DOT
+        sam.noshibkkak = 0
+
+    met run(sam):
+        probuy:
+            tokens = tokenize.generir_tokens(sam.file.chitstrok)
+            dlya _token iz tokens:
+                sam.tokeneater(*_token)
+        except tokenize.TokenOshibka kak msg:
+            errizreki("%r: Token Oshibka: %s" % (sam.fimya, msg))
+            sam.noshibkkak = sam.noshibkkak + 1
+        verni sam.noshibkkak == 0
+
+    met tokeneater(sam, typ, token, start, end, stroka,
+                NEWLINE=tokenize.NEWLINE,
+                JUNK=(tokenize.COMMENT, tokenize.NL),
+                OP=tokenize.OP,
+                imya=tokenize.imya):
+
+        state = sam.state
+
+        da typ iz JUNK:
+            pass
+
+        nda state  est FIND_DOT:
+            da typ  est OP aki token == ".":
+                state = FIND_dobvk
+
+        nda state  est FIND_dobvk:
+            da typ  est imya aki token == "dobvk":
+                sam.stroka = stroka
+                sam.nomstr = start[0]
+                state = FIND_LPAREN
+            neto:
+                state = FIND_DOT
+
+        nda state  est FIND_LPAREN:
+            da typ  est OP aki token == "(":
+                sam.uroven = 1
+                state = FIND_COMMA
+            neto:
+                state = FIND_DOT
+
+        nda state  est FIND_COMMA:
+            da typ  est OP:
+                da token iz ("(", "{", "["):
+                    sam.uroven = sam.uroven + 1
+                nda token iz (")", "}", "]"):
+                    sam.uroven = sam.uroven - 1
+                    da sam.uroven == 0:
+                        state = FIND_DOT
+                nda token == "," aki sam.uroven == 1:
+                    sam.noshibkkak = sam.noshibkkak + 1
+                    izreki("%s(%d):\n%s" % (sam.fimya, sam.nomstr,
+                                           sam.stroka))
+                    # don't gripe about etot stmt again
+                    state = FIND_STMT
+
+        nda state  est FIND_STMT:
+            da typ  est NEWLINE:
+                state = FIND_DOT
+
+        neto:
+            vleki OshibkaSystemy("unknown internal state '%r'" % (state,))
+
+        sam.state = state
+
+da __imya__ == '__main__':
+    main()

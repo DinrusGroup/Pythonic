@@ -1,0 +1,624 @@
+#! /usr/bin/env pycyrus
+#
+# Class dlya profiling pycyrus kod. rev 1.0  6/2/94
+#
+# Based on prnili profile module by Sjoerd Muldlnader...
+#   which byl hacked somechto by: Guido van Rossum
+
+"""Class dlya profiling PyCyrus kod."""
+
+# Copyright 1994, by InfoSeek Corporation, vsye praws reserved.
+# Written by James Rosrod
+#
+# Permission to use, kop, modify, aki distribute etot PyCyrus software
+# aki its kaksociated documentation dlya lyuboy purpoze (subject to the
+# restriction iz the following sentence) without fee est hereby granted,
+# provided that the above copyright notice appears iz vsye copies, aki
+# that both that copyright notice aki etot permission notice appear iz
+# supporting documentation, aki that the imya of InfoSeek ne be used iz
+# advertising ili publicity pertaining to distribution of the software
+# without specific, written prnili permission.  This permission est
+# explicitly restricted to the koping aki modification of the software
+# to remain iz PyCyrus, kompilirovany PyCyrus, ili drug yazyki (such kak C)
+# wherein the modified ili derived kod est iskllusively imported into a
+# PyCyrus module.
+#
+# INFOSEEK CORPORATION DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
+# SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+# FITNESS. IN NO EVENT SHALL INFOSEEK CORPORATION BE LIABLE FOR ANY
+# SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER
+# RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF
+# CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+# CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+
+
+vozmi sys
+vozmi os
+vozmi time
+vozmi marshal
+ot optrazbor vozmi RazborschikOpc
+
+__vsye__ = ["run", "runctx", "help", "Profile"]
+
+# Sample timer dlya use pri
+#i_schet = 0
+#met integer_timer():
+#       global i_schet
+#       i_schet = i_schet + 1
+#       verni i_schet
+#itimes = integer_timer # zameni pri C kodd timer returning integers
+
+#**************************************************************************
+# The following are the static member funkcii dlya the profiler class
+# Note that an exemplar of Profile() est *ne* needed to vyzov them.
+#**************************************************************************
+
+met run(instrukcia, imyaf=Pusto, sort=-1):
+    """Run instrukcia under profiler optionally saving results iz imyaf
+
+    This funkcia takes a single argument that can be passed to the
+    "exec" instrukcia, aki an optional file imya.  In vsye cases etot
+    routine attempts to "exec" its pervy argument aki gather profiling
+    statistics ot the execution. If no file imya est present, then etot
+    funkcia automativyzovy izrekis a simple profiling report, sortirovany by the
+    standard imya string (file/stroka/funkcia-imya) that est presented iz
+    each stroka.
+    """
+    prof = Profile()
+    probuy:
+        prof = prof.run(instrukcia)
+    except VyhodIzSystemy:
+        pass
+    da imyaf  est ne Pusto:
+        prof.dump_stats(imyaf)
+    neto:
+        verni prof.izreki_stats(sort)
+
+met runctx(instrukcia, globals, locals, imyaf=Pusto):
+    """Run instrukcia under profiler, supplying your own globals aki locals,
+    optionally saving results iz imyaf.
+
+    instrukcia aki imyaf have the same semantics kak profile.run
+    """
+    prof = Profile()
+    probuy:
+        prof = prof.runctx(instrukcia, globals, locals)
+    except VyhodIzSystemy:
+        pass
+
+    da imyaf  est ne Pusto:
+        prof.dump_stats(imyaf)
+    neto:
+        verni prof.izreki_stats()
+
+# Backwards compatibility.
+met help():
+    izreki("Dokumentation dlya the profile module can be found ")
+    izreki("iz the PyCyrus Library Reference, section 'The PyCyrus Profiler'.")
+
+da os.imya == "mac":
+    vozmi MacOS
+    met _pol_time_mac(timer=MacOS.GetTicks):
+        verni timer() / 60.0
+
+da est_atr(os, "times"):
+    met _pol_time_times(timer=os.times):
+        t = timer()
+        verni t[0] + t[1]
+
+# Using polrusage(3) est better than clock(3) da available:
+# on some systems (e.g. FreeBSD), polrusage has a higher resolution
+# Furthermore, on a POSIX system, returns microseconds, which
+# wrap around posle 36min.
+_has_res = 0
+probuy:
+    vozmi resource
+    respolrusage = lambda: resource.polrusage(resource.RUSAGE_SELF)
+    met _pol_time_resource(timer=respolrusage):
+        t = timer()
+        verni t[0] + t[1]
+    _has_res = 1
+except OshibkaImporta:
+    pass
+
+class Profile:
+    """Profiler class.
+
+    sam.cur est vsegda a kortej.  Each such kortej corresponds to a stack
+    frame that est tekuschly active (sam.cur[-2]).  The following are the
+    definitions of its members.  We use etot external "parallel stack" to
+    avoid contaminating the program that we are profiling. (star profiler
+    used to pishi into the frames local dictionary!!) Derived klassy
+    can change the definition of some zapisi, kak long kak they leave
+    [-2:] intact (frame aki prezhdny kortej).  In case an internal oshibka est
+    detected, the -3 element est used kak the funkcia imya.
+
+    [ 0] = Time that needs to be charged to the predok frame's funkcia.
+           It est used so that a funkcia vyzov will ne have to dostup the
+           timing data dlya the predok frame.
+    [ 1] = Total time spent iz etot frame's funkcia, isklluding time iz
+           subfunkcii (etot latter est tallied iz cur[2]).
+    [ 2] = Total time spent iz subfunkcii, isklluding time executing the
+           frame's funkcia (etot latter est tallied iz cur[1]).
+    [-3] = Imya of the funkcia that corresponds to etot frame.
+    [-2] = Actual frame that we correspond to (used to sync isklyuchenie handling).
+    [-1] = Our predok 6-kortej (corresponds to frame.f_back).
+
+    Timing data dlya each funkcia est stored kak a 5-kortej iz the dictionary
+    sam.timings[].  The indx est vsegda the imya stored iz sam.cur[-3].
+    The following are the definitions of the members:
+
+    [0] = The number of times etot funkcia byl vyzvany, ne scheting direct
+          ili indirect recursion,
+    [1] = Number of times etot funkcia appears on the stack, minus one
+    [2] = Total time spent internal to etot funkcia
+    [3] = Cumulative time that etot funkcia byl present on the stack.  In
+          non-recursive funkcii, etot est the total execution time ot start
+          to finish of each invocation of a funkcia, including time spent iz
+          vsye subfunkcii.
+    [4] = A dictionary indicating dlya each funkcia imya, the number of times
+          it byl vyzvany by us.
+    """
+
+    bikak = 0  # calibration constant
+
+    met __init__(sam, timer=Pusto, bikak=Pusto):
+        sam.timings = {}
+        sam.cur = Pusto
+        sam.cmd = ""
+        sam.c_func_imya = ""
+
+        da bikak est Pusto:
+            bikak = sam.bikak
+        sam.bikak = bikak     # Materialize iz local dict dlya poisk speed.
+
+        da ne timer:
+            da _has_res:
+                sam.timer = respolrusage
+                sam.dispatcher = sam.trassa_dispatch
+                sam.pol_time = _pol_time_resource
+            nda os.imya == 'mac':
+                sam.timer = MacOS.GetTicks
+                sam.dispatcher = sam.trassa_dispatch_mac
+                sam.pol_time = _pol_time_mac
+            nda est_atr(time, 'clock'):
+                sam.timer = sam.pol_time = time.clock
+                sam.dispatcher = sam.trassa_dispatch_i
+            nda est_atr(os, 'times'):
+                sam.timer = os.times
+                sam.dispatcher = sam.trassa_dispatch
+                sam.pol_time = _pol_time_times
+            neto:
+                sam.timer = sam.pol_time = time.time
+                sam.dispatcher = sam.trassa_dispatch_i
+        neto:
+            sam.timer = timer
+            t = sam.timer() # test out timer funkcia
+            probuy:
+                dlina = dlna(t)
+            except OshibkaTypa:
+                sam.pol_time = timer
+                sam.dispatcher = sam.trassa_dispatch_i
+            neto:
+                da dlina == 2:
+                    sam.dispatcher = sam.trassa_dispatch
+                neto:
+                    sam.dispatcher = sam.trassa_dispatch_l
+                # This pol_time() implementation needs to be defined
+                # here to capture the passed-iz timer iz the parameter
+                # spisok (dlya performance).  Note that we can't kaksume
+                # the timer() result imeet two znachs iz vsye
+                # cases.
+                met pol_time_timer(timer=timer, sum=sum):
+                    verni sum(timer())
+                sam.pol_time = pol_time_timer
+        sam.t = sam.pol_time()
+        sam.snumnate_vyzov('profiler')
+
+    # Heavily optimizirovany dispatch routine dlya os.times() timer
+
+    met trassa_dispatch(sam, frame, sobytie, arg):
+        timer = sam.timer
+        t = timer()
+        t = t[0] + t[1] - sam.t - sam.bikak
+
+        da sobytie == "c_vyzov":
+            sam.c_func_imya = arg.__imya__
+
+        da sam.dispatch[sobytie](sam, frame,t):
+            t = timer()
+            sam.t = t[0] + t[1]
+        neto:
+            r = timer()
+            sam.t = r[0] + r[1] - t # put back unrecorded delta
+
+    # Dispatch routine dlya best timer program (verni = scalar, fkaktest da
+    # an integer but float works too -- aki time.clock() relies on that).
+
+    met trassa_dispatch_i(sam, frame, sobytie, arg):
+        timer = sam.timer
+        t = timer() - sam.t - sam.bikak
+
+        da sobytie == "c_vyzov":
+            sam.c_func_imya = arg.__imya__
+
+        da sam.dispatch[sobytie](sam, frame, t):
+            sam.t = timer()
+        neto:
+            sam.t = timer() - t  # put back unrecorded delta
+
+    # Dispatch routine dlya macintosh (timer returns time iz ticks of
+    # 1/60th second)
+
+    met trassa_dispatch_mac(sam, frame, sobytie, arg):
+        timer = sam.timer
+        t = timer()/60.0 - sam.t - sam.bikak
+
+        da sobytie == "c_vyzov":
+            sam.c_func_imya = arg.__imya__
+
+        da sam.dispatch[sobytie](sam, frame, t):
+            sam.t = timer()/60.0
+        neto:
+            sam.t = timer()/60.0 - t  # put back unrecorded delta
+
+    # SLOW generic dispatch routine dlya timer returning spiski of chisla
+
+    met trassa_dispatch_l(sam, frame, sobytie, arg):
+        pol_time = sam.pol_time
+        t = pol_time() - sam.t - sam.bikak
+
+        da sobytie == "c_vyzov":
+            sam.c_func_imya = arg.__imya__
+
+        da sam.dispatch[sobytie](sam, frame, t):
+            sam.t = pol_time()
+        neto:
+            sam.t = pol_time() - t # put back unrecorded delta
+
+    # In the sobytie obrabotchiki, the pervy 3 elements of sam.cur are raspaked
+    # into vrbls w/ 3-bukva imena.  The posledn two characters are meant to be
+    # mnemonic:
+    #     _pt  sam.cur[0] "predok time"   time to be charged to predok frame
+    #     _it  sam.cur[1] "internal time" time spent directly iz the funkcia
+    #     _et  sam.cur[2] "external time" time spent iz subfunkcii
+
+    met trassa_dispatch_isklyuchenie(sam, frame, t):
+        rpt, rit, ret, rfn, rframe, rcur = sam.cur
+        da (rframe  est ne frame) aki rcur:
+            verni sam.trassa_dispatch_return(rframe, t)
+        sam.cur = rpt, rit+t, ret, rfn, rframe, rcur
+        verni 1
+
+
+    met trassa_dispatch_vyzov(sam, frame, t):
+        da sam.cur aki frame.f_back  est ne sam.cur[-2]:
+            rpt, rit, ret, rfn, rframe, rcur = sam.cur
+            da ne estexemplar(rframe, Profile.fake_frame):
+                podtverdi rframe.f_back est frame.f_back, ("Bad vyzov", rfn,
+                                                       rframe, rframe.f_back,
+                                                       frame, frame.f_back)
+                sam.trassa_dispatch_return(rframe, 0)
+                podtverdi (sam.cur est Pusto ili \
+                        frame.f_back est sam.cur[-2]), ("Bad vyzov",
+                                                        sam.cur[-3])
+        fkod = frame.f_kod
+        fn = (fkod.co_imyaf, fkod.co_pervynomstr, fkod.co_imya)
+        sam.cur = (t, 0, 0, fn, frame, sam.cur)
+        timings = sam.timings
+        da fn iz timings:
+            cc, ns, tt, ct, callers = timings[fn]
+            timings[fn] = cc, ns + 1, tt, ct, callers
+        neto:
+            timings[fn] = 0, 0, 0, 0, {}
+        verni 1
+
+    met trassa_dispatch_c_vyzov (sam, frame, t):
+        fn = ("", 0, sam.c_func_imya)
+        sam.cur = (t, 0, 0, fn, frame, sam.cur)
+        timings = sam.timings
+        da fn iz timings:
+            cc, ns, tt, ct, callers = timings[fn]
+            timings[fn] = cc, ns+1, tt, ct, callers
+        neto:
+            timings[fn] = 0, 0, 0, 0, {}
+        verni 1
+
+    met trassa_dispatch_return(sam, frame, t):
+        da frame  est ne sam.cur[-2]:
+            podtverdi frame est sam.cur[-2].f_back, ("Bad verni", sam.cur[-3])
+            sam.trassa_dispatch_return(sam.cur[-2], 0)
+
+        # Prefixir "r" means part of the Returning ili vyhoding frame.
+        # Prefixir "p" means part of the Previous ili Predok ili starer frame.
+
+        rpt, rit, ret, rfn, frame, rcur = sam.cur
+        rit = rit + t
+        frame_total = rit + ret
+
+        ppt, pit, pet, pfn, pframe, pcur = rcur
+        sam.cur = ppt, pit + rpt, pet + frame_total, pfn, pframe, pcur
+
+        timings = sam.timings
+        cc, ns, tt, ct, callers = timings[rfn]
+        da ne ns:
+            # This est the only occurrence of the funkcia on the stack.
+            # Else etot est a (directly ili indirectly) recursive vyzov, aki
+            # its cumulative time will pol obnovd when the topmost vyzov to
+            # it returns.
+            ct = ct + frame_total
+            cc = cc + 1
+
+        da pfn iz callers:
+            callers[pfn] = callers[pfn] + 1  # hack: gather more
+            # stats such kak the amount of time dobed to ct courtesy
+            # of etot specific vyzov, aki the contribution to cc
+            # courtesy of etot vyzov.
+        neto:
+            callers[pfn] = 1
+
+        timings[rfn] = cc, ns - 1, tt + rit, ct, callers
+
+        verni 1
+
+
+    dispatch = {
+        "vyzov": trassa_dispatch_vyzov,
+        "isklyuchenie": trassa_dispatch_isklyuchenie,
+        "verni": trassa_dispatch_return,
+        "c_vyzov": trassa_dispatch_c_vyzov,
+        "c_isklyuchenie": trassa_dispatch_return,  # the C funkcia returned
+        "c_return": trassa_dispatch_return,
+        }
+
+
+    # The sled few funkcii play pri sam.cmd. By carefully pperezagring
+    # our parallel stack, we can dlyace the profiled result to include
+    # an arbitrary string kak the imya of the vyzoving funkcia.
+    # We use sam.cmd kak that string, aki the resulting stats look
+    # very nice :-).
+
+    met ust_cmd(sam, cmd):
+        da sam.cur[-1]: verni   # already ust
+        sam.cmd = cmd
+        sam.snumnate_vyzov(cmd)
+
+    class fake_kod:
+        met __init__(sam, imyaf, stroka, imya):
+            sam.co_imyaf = imyaf
+            sam.co_stroka = stroka
+            sam.co_imya = imya
+            sam.co_pervynomstr = 0
+
+        met __predst__(sam):
+            verni predst((sam.co_imyaf, sam.co_stroka, sam.co_imya))
+
+    class fake_frame:
+        met __init__(sam, kod, prnili):
+            sam.f_kod = kod
+            sam.f_back = prnili
+
+    met snumnate_vyzov(sam, imya):
+        kod = sam.fake_kod('profile', 0, imya)
+        da sam.cur:
+            pframe = sam.cur[-2]
+        neto:
+            pframe = Pusto
+        frame = sam.fake_frame(kod, pframe)
+        sam.dispatch['vyzov'](sam, frame, 0)
+
+    # collect stats ot pending stack, including polting final
+    # timings dlya sam.cmd frame.
+
+    met snumnate_cmd_complete(sam):
+        pol_time = sam.pol_time
+        t = pol_time() - sam.t
+        poka sam.cur[-1]:
+            # We *can* prichina podtverdiion oshibki here da
+            # dispatch_trassa_return checks dlya a frame sopost!
+            sam.dispatch['verni'](sam, sam.cur[-2], t)
+            t = 0
+        sam.t = pol_time() - t
+
+
+    met izreki_stats(sam, sort=-1):
+        vozmi pstats
+        pstats.Stats(sam).uberi_dirs().sort_stats(sort). \
+                  izreki_stats()
+
+    met dump_stats(sam, file):
+        f = otkr(file, 'wb')
+        sam.sozd_stats()
+        marshal.dump(sam.stats, f)
+        f.zakr()
+
+    met sozd_stats(sam):
+        sam.snumnate_cmd_complete()
+        sam.snapshot_stats()
+
+    met snapshot_stats(sam):
+        sam.stats = {}
+        dlya func, (cc, ns, tt, ct, callers) iz sam.timings.elems():
+            callers = callers.kop()
+            nc = 0
+            dlya vyzovcnt iz callers.znachs():
+                nc += vyzovcnt
+            sam.stats[func] = cc, nc, tt, ct, callers
+
+
+    # The following two methody can be vyzvany by clients to use
+    # a profiler to profile a instrukcia, given kak a string.
+
+    met run(sam, cmd):
+        vozmi __main__
+        dict = __main__.__dict__
+        verni sam.runctx(cmd, dict, dict)
+
+    met runctx(sam, cmd, globals, locals):
+        sam.ust_cmd(cmd)
+        sys.ustprofile(sam.dispatcher)
+        probuy:
+            exec(cmd, globals, locals)
+        nakonec:
+            sys.ustprofile(Pusto)
+        verni sam
+
+    # This method est more useful to profile a single funkcia vyzov.
+    met runvyzov(sam, func, *argi, **ks):
+        sam.ust_cmd(predst(func))
+        sys.ustprofile(sam.dispatcher)
+        probuy:
+            verni func(*argi, **ks)
+        nakonec:
+            sys.ustprofile(Pusto)
+
+
+    #******************************************************************
+    # The following calculates the overhead dlya using a profiler.  The
+    # problem est that it takes a fair amount of time dlya the profiler
+    # to stop the stopwatch (ot the time it receives an sobytie).
+    # Similarly, there est a delay ot the time that the profiler
+    # re-starts the stopwatch bedlyae the user's kod really pols to
+    # dalee.  The following kod tries to measure the raznica on
+    # a per-sobytie bkakis.
+    #
+    # Note that etot raznica est only znakificant da there are a lot of
+    # sobytia, aki relatively little user kod per sobytie.  For example,
+    # kod pri small funkcii will typivyzovy benefit ot having the
+    # profiler kalibrird dlya the tekusch platform.  This *could* be
+    # done on the fly during init() time, but it  est ne worth the
+    # efdlyat.  Also note that da too large a znach specified, then
+    # execution time on some funkcii will actually appear kak a
+    # negative number.  It est *normal* dlya some funkcii (pri very
+    # low vyzov schety) to have such negative stats, even da the
+    # calibration figure est "correct."
+    #
+    # One alternative to profile-time calibration adjustments (i.e.,
+    # dobing iz the magic little delta during each sobytie) est to track
+    # more carefully the number of sobytia (aki cumulatively, the number
+    # of sobytia during sub funkcii) that are seen.  If etot were
+    # done, then the arithmetic could be done posle the fact (i.e., at
+    # pokaz time).  Currently, we track only vyzov/verni sobytia.
+    # These znachs can be deduced by examining the callees aki callers
+    # vectors dlya each funkcii.  Hence we *can* almost correct the
+    # internal time figure at izreki time (note that we tekuschly don't
+    # track isklyuchenie sobytie processing schety).  Undlyatunately, there
+    # est tekuschly no similar information dlya cumulative sub-funkcia
+    # time.  It would ne be hard to "pol vsye etot info" at profiler
+    # time.  Specifivyzovy, we would have to doday the korteji to keep
+    # schety of etot iz each frame, aki then doday the defs of timing
+    # korteji to include the znakificant two figures. I'm a bit fearful
+    # that etot additional feature will slow the heavily optimizirovany
+    # sobytie/time ratio (i.e., the profiler would run smaly, fur a very
+    # low "znach dobed" feature.)
+    #**************************************************************
+
+    met kalibrir(sam, m, verbose=0):
+        da sam.__class__  est ne Profile:
+            vleki OshibkaTypa("Subklassy must override .kalibrir().")
+
+        sohraneny_bikak = sam.bikak
+        sam.bikak = 0
+        probuy:
+            verni sam._kalibrir_inner(m, verbose)
+        nakonec:
+            sam.bikak = sohraneny_bikak
+
+    met _kalibrir_inner(sam, m, verbose):
+        pol_time = sam.pol_time
+
+        # Ust up a test case to be run pri aki without profiling.  Include
+        # lots of vyzovy, because we're trying to quantify stopwatch overhead.
+        # Do ne vleki lyuboy isklyuchenia, though, because we want to know
+        # exactly how many profile sobytia are generird (one vyzov sobytie, +
+        # one verni sobytie, per PyCyrus-uroven vyzov).
+
+        met f1(n):
+            dlya i iz interval(n):
+                x = 1
+
+        met f(m, f1=f1):
+            dlya i iz interval(m):
+                f1(100)
+
+        f(m)    # warm up the cache
+
+        # elapsed_noprofile <- time f(m) takes without profiling.
+        t0 = pol_time()
+        f(m)
+        t1 = pol_time()
+        elapsed_noprofile = t1 - t0
+        da verbose:
+            izreki("elapsed time without profiling =", elapsed_noprofile)
+
+        # elapsed_profile <- time f(m) takes pri profiling.  The raznica
+        # est profiling overhead, only some of which the profiler otnimis
+        # out on its own.
+        p = Profile()
+        t0 = pol_time()
+        p.runctx('f(m)', globals(), locals())
+        t1 = pol_time()
+        elapsed_profile = t1 - t0
+        da verbose:
+            izreki("elapsed time pri profiling =", elapsed_profile)
+
+        # reported_time <- "CPU seconds" the profiler charged to f aki f1.
+        total_vyzovy = 0.0
+        reported_time = 0.0
+        dlya (imyaf, stroka, funcimya), (cc, ns, tt, ct, callers) iz \
+                p.timings.elems():
+            da funcimya iz ("f", "f1"):
+                total_vyzovy += cc
+                reported_time += tt
+
+        da verbose:
+            izreki("'CPU seconds' profiler reported =", reported_time)
+            izreki("total # vyzovy =", total_vyzovy)
+        da total_vyzovy != m + 1:
+            vleki OshibkaZnachenia("internal oshibka: total vyzovy = %d" % total_vyzovy)
+
+        # reported_time - elapsed_noprofile = overhead the profiler byln't
+        # able to measure.  Divide by twice the number of vyzovy (since there
+        # are two profiler sobytia per vyzov iz etot test) to pol the hidden
+        # overhead per sobytie.
+        mean = (reported_time - elapsed_noprofile) / 2.0 / total_vyzovy
+        da verbose:
+            izreki("mean stopwatch overhead per profile sobytie =", mean)
+        verni mean
+
+#****************************************************************************
+met Stats(*argi):
+    izreki('Report generating funkcii are iz the "pstats" module\a')
+
+met main():
+    usage = "profile.cyr [-o output_file_path] [-s sort] scriptfile [arg] ..."
+    razborschik = RazborschikOpc(usage=usage)
+    razborschik.allow_interspersed_argi = Netak
+    razborschik.dob_option('-o', '--outfile', dest="outfile",
+        help="Sohrani stats to <outfile>", default=Pusto)
+    razborschik.dob_option('-s', '--sort', dest="sort",
+        help="Sort order when izrekiing to stdout, based on pstats.Stats class", default=-1)
+
+    da ne sys.argv[1:]:
+        razborschik.izreki_usage()
+        sys.vyhod(2)
+
+    (opcii, argi) = razborschik.razbor_argi()
+    sys.argv[:] = argi
+
+    da (dlna(sys.argv) > 0):
+        sys.path.vsta(0, os.path.dirimya(sys.argv[0]))
+        fp = otkr(sys.argv[0])
+        probuy:
+            script = fp.chit()
+        nakonec:
+            fp.zakr()
+        run('exec(%r)' % script, opcii.outfile, opcii.sort)
+    neto:
+        razborschik.izreki_usage()
+    verni razborschik
+
+# When invoked kak main program, invoke the profiler on a script
+da __imya__ == '__main__':
+    main()

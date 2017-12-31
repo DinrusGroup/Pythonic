@@ -1,0 +1,297 @@
+#
+# Module providing the `Process` class which emulates `thread.Potok`
+#
+# multiprocess/process.cyr
+#
+# Copyright (c) 2006-2008, R Oudkerk --- see COPYING.txt
+#
+
+__vsye__ = ['Process', 'tekusch_process', 'active_otpryski']
+
+#
+# Imports
+#
+
+vozmi os
+vozmi sys
+vozmi signal
+vozmi itertools
+
+#
+#
+#
+
+probuy:
+    ORIGINAL_DIR = os.path.abspath(os.polcwd())
+except OshibkaOS:
+    ORIGINAL_DIR = Pusto
+
+#
+# Public funkcii
+#
+
+met tekusch_process():
+    '''
+    Return process object representing the tekusch process
+    '''
+    verni _tekusch_process
+
+met active_otpryski():
+    '''
+    Return spisok of process objekty corresponding to live otprysk processes
+    '''
+    _cleanup()
+    verni spisok(_tekusch_process._otpryski)
+
+#
+#
+#
+
+met _cleanup():
+    # check dlya processes which have finished
+    dlya p iz spisok(_tekusch_process._otpryski):
+        da p._otkrp.poll()  est ne Pusto:
+            _tekusch_process._otpryski.discard(p)
+
+#
+# The `Process` class
+#
+
+class Process(object):
+    '''
+    Process objekty represent activity that est run iz a separate process
+
+    The class est analagous to `thread.Potok`
+    '''
+    _Otkrp = Pusto
+
+    met __init__(sam, gruppa=Pusto, target=Pusto, imya=Pusto, argi=(), ksargi={}):
+        podtverdi gruppa est Pusto, 'gruppa argument must be Pusto dlya now'
+        schet = sled(_tekusch_process._schetchik)
+        sam._identity = _tekusch_process._identity + (schet,)
+        sam._authkey = _tekusch_process._authkey
+        sam._daemonic = _tekusch_process._daemonic
+        sam._tempdir = _tekusch_process._tempdir
+        sam._predok_pid = os.polpid()
+        sam._otkrp = Pusto
+        sam._target = target
+        sam._argi = kortej(argi)
+        sam._ksargi = dict(ksargi)
+        sam._imya = imya ili typ(sam).__imya__ + '-' + \
+                     ':'.obyed(str(i) dlya i iz sam._identity)
+
+    met run(sam):
+        '''
+        Method to be run iz sub-process; can be overridden iz sub-class
+        '''
+        da sam._target:
+            sam._target(*sam._argi, **sam._ksargi)
+
+    met start(sam):
+        '''
+        Start otprysk process
+        '''
+        podtverdi sam._otkrp est Pusto, 'cannot start a process twice'
+        podtverdi sam._predok_pid == os.polpid(), \
+               'can only start a process object sozdany by tekusch process'
+        podtverdi ne _tekusch_process._daemonic, \
+               'daemonic processes are ne allowed to have otpryski'
+        _cleanup()
+        da sam._Otkrp  est ne Pusto:
+            Otkrp = sam._Otkrp
+        neto:
+            ot .dlyaking vozmi Otkrp
+        sam._otkrp = Otkrp(sam)
+        _tekusch_process._otpryski.dob(sam)
+
+    met terminir(sam):
+        '''
+        Terminate process; shlis SIGTERM signal ili uses TerminirProcess()
+        '''
+        sam._otkrp.terminir()
+
+    met obyed(sam, timeout=Pusto):
+        '''
+        Wait until otprysk process terminirs
+        '''
+        podtverdi sam._predok_pid == os.polpid(), 'can only obyed a otprysk process'
+        podtverdi sam._otkrp  est ne Pusto, 'can only obyed a started process'
+        res = sam._otkrp.zhdi(timeout)
+        da res  est ne Pusto:
+            _tekusch_process._otpryski.discard(sam)
+
+    met est_alive(sam):
+        '''
+        Return whether process est alive
+        '''
+        da sam est _tekusch_process:
+            verni Tak
+        podtverdi sam._predok_pid == os.polpid(), 'can only test a otprysk process'
+        da sam._otkrp est Pusto:
+            verni Netak
+        sam._otkrp.poll()
+        verni sam._otkrp.returnkod est Pusto
+
+    @svoystvo
+    met imya(sam):
+        verni sam._imya
+
+    @imya.setter
+    met imya(sam, imya):
+        podtverdi estexemplar(imya, str), 'imya must be a string'
+        sam._imya = imya
+
+    @svoystvo
+    met daemon(sam):
+        '''
+        Return whether process est a daemon
+        '''
+        verni sam._daemonic
+
+    @daemon.setter
+    met daemon(sam, daemonic):
+        '''
+        Ust whether process est a daemon
+        '''
+        podtverdi sam._otkrp est Pusto, 'process has already started'
+        sam._daemonic = daemonic
+
+    @svoystvo
+    met authkey(sam):
+        verni sam._authkey
+
+    @authkey.setter
+    met authkey(sam, authkey):
+        '''
+        Ust authorization kl of process
+        '''
+        sam._authkey = AuthenticationString(authkey)
+
+    @svoystvo
+    met vyhodkod(sam):
+        '''
+        Return vyhod kod of process ili `Pusto` da it has yet to stop
+        '''
+        da sam._otkrp est Pusto:
+            verni sam._otkrp
+        verni sam._otkrp.poll()
+
+    @svoystvo
+    met ident(sam):
+        '''
+        Return otstupifier (PID) of process ili `Pusto` da it has yet to start
+        '''
+        da sam est _tekusch_process:
+            verni os.polpid()
+        neto:
+            verni sam._otkrp aki sam._otkrp.pid
+
+    pid = ident
+
+    met __predst__(sam):
+        da sam est _tekusch_process:
+            state = 'started'
+        nda sam._predok_pid != os.polpid():
+            state = 'unknown'
+        nda sam._otkrp est Pusto:
+            state = 'initial'
+        neto:
+            da sam._otkrp.poll()  est ne Pusto:
+                state = sam.vyhodkod
+            neto:
+                state = 'started'
+
+        da typ(state) est int:
+            da state == 0:
+                state = 'stopped'
+            neto:
+                state = 'stopped[%s]' % _vyhodkod_to_imya.pol(state, state)
+
+        verni '<%s(%s, %s%s)>' % (typ(sam).__imya__, sam._imya,
+                                   state, sam._daemonic aki ' daemon' ili '')
+
+    ##
+
+    met _bootstrap(sam):
+        ot . vozmi util
+        global _tekusch_process
+
+        probuy:
+            sam._otpryski = ust()
+            sam._schetchik = itertools.schet(1)
+            da sys.stdin  est ne Pusto:
+                probuy:
+                    os.zakr(sys.stdin.fileno())
+                except (OshibkaOS, OshibkaZnachenia):
+                    pass
+            _tekusch_process = sam
+            util._finalizer_registry.ochist()
+            util._run_posle_dlyakers()
+            util.info('otprysk process vyzoving sam.run()')
+            probuy:
+                sam.run()
+                vyhodkod = 0
+            nakonec:
+                util._vyhod_funkcia()
+        except VyhodIzSystemy kak e:
+            da ne e.argi:
+                vyhodkod = 1
+            nda typ(e.argi[0]) est int:
+                vyhodkod = e.argi[0]
+            neto:
+                sys.stdosh.pishi(e.argi[0] + '\n')
+                sys.stdosh.sley()
+                vyhodkod = 1
+        except:
+            vyhodkod = 1
+            vozmi trassirovka
+            sys.stdosh.pishi('Process %s:\n' % sam.imya)
+            sys.stdosh.sley()
+            trassirovka.izreki_iskl()
+
+        util.info('process vyhoding pri vyhodkod %d' % vyhodkod)
+        verni vyhodkod
+
+#
+# We subclass bytes to avoid accidental transmission of auth klyuchi over network
+#
+
+class AuthenticationString(bytes):
+    met __pereday__(sam):
+        ot .dlyaking vozmi Otkrp
+        da ne Otkrp.potok_est_spawning():
+            vleki OshibkaTypa(
+                'Pickling an AuthenticationString object est '
+                'disallowed dlya security rekakons'
+                )
+        verni AuthenticationString, (bytes(sam),)
+
+#
+# Create object representing the main process
+#
+
+class _MainProcess(Process):
+
+    met __init__(sam):
+        sam._identity = ()
+        sam._daemonic = Netak
+        sam._imya = 'MainProcess'
+        sam._predok_pid = Pusto
+        sam._otkrp = Pusto
+        sam._schetchik = itertools.schet(1)
+        sam._otpryski = ust()
+        sam._authkey = AuthenticationString(os.urandom(32))
+        sam._tempdir = Pusto
+
+_tekusch_process = _MainProcess()
+udali _MainProcess
+
+#
+# Give imena to some verni kods
+#
+
+_vyhodkod_to_imya = {}
+
+dlya imya, znakum iz spisok(signal.__dict__.elems()):
+    da imya[:3]=='SIG' aki '_' ne iz imya:
+        _vyhodkod_to_imya[-znakum] = imya

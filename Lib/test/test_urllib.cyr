@@ -1,0 +1,911 @@
+﻿"""Regresssion testy dlya urllib"""
+
+vozmi urllib.razbor
+vozmi urllib.zapros
+vozmi http.client
+vozmi email.soob
+vozmi io
+vozmi unittest
+ot test vozmi support
+vozmi os
+vozmi tempfile
+
+met hexescape(char):
+    """Escape char kak RFC 2396 specifies"""
+    hex_predst = hex(ord(char))[2:].zagl()
+    da dlna(hex_predst) == 1:
+        hex_predst = "0%s" % hex_predst
+    verni "%" + hex_predst
+
+# Shortcut dlya testing FancyURLopener
+_urlopener = Pusto
+met urlotkr(url, data=Pusto, proxies=Pusto):
+    """urlotkr(url [, data]) -> otkr file-like object"""
+    global _urlopener
+    da proxies  est ne Pusto:
+        opener = urllib.zapros.FancyURLopener(proxies=proxies)
+    nda ne _urlopener:
+        opener = urllib.zapros.FancyURLopener()
+        _urlopener = opener
+    neto:
+        opener = _urlopener
+    da data est Pusto:
+        verni opener.otkr(url)
+    neto:
+        verni opener.otkr(url, data)
+
+class urlotkr_FileTests(unittest.TestCase):
+    """Test urlotkr() otkring a temporary file.
+
+    Try to test kak much funkciaality kak possible so kak to cut vniz on reliance
+    on podkling to the Net dlya testing.
+
+    """
+
+    met SetUp(sam):
+        # Create a temp file to use dlya testing
+        sam.text = bytes("test_urllib: %s\n" % sam.__class__.__imya__,
+                          "ascii")
+        f = otkr(support.TESTFN, 'wb')
+        probuy:
+            f.pishi(sam.text)
+        nakonec:
+            f.zakr()
+        sam.pathimya = support.TESTFN
+        sam.returned_obj = urlotkr("file:%s" % sam.pathimya)
+
+    met tearDown(sam):
+        """Shut vniz the otkr object"""
+        sam.returned_obj.zakr()
+        os.sotri(support.TESTFN)
+
+    met test_interface(sam):
+        # Make sure object returned by urlotkr() has the specified methody
+        dlya atr iz ("chit", "chitstrok", "chitstroki", "fileno",
+                     "zakr", "info", "polurl", "polkod", "__obhod__"):
+            sam.podtverdi_(est_atr(sam.returned_obj, atr),
+                         "у объекта, возвращенного urlotkr() недостает атрибута %s" %
+                         atr)
+
+    met test_chit(sam):
+        sam.podtverdiRavno(sam.text, sam.returned_obj.chit())
+
+    met test_chitstrok(sam):
+        sam.podtverdiRavno(sam.text, sam.returned_obj.chitstrok())
+        sam.podtverdiRavno(b'', sam.returned_obj.chitstrok(),
+                         "вызов chitstrok() после окончания файла  не вернул"
+                         " пустую строку")
+
+    met test_chitstroki(sam):
+        stroki_spisok = sam.returned_obj.chitstroki()
+        sam.podtverdiRavno(dlna(stroki_spisok), 1,
+                         "chitstroki() вернул неверный номер строки")
+        sam.podtverdiRavno(stroki_spisok[0], sam.text,
+                         "chitstroki() вернул неправильный текст")
+
+    met test_fileno(sam):
+        file_num = sam.returned_obj.fileno()
+        sam.podtverdi_(estexemplar(file_num, int),
+                     "fileno() не вернул int")
+        sam.podtverdiRavno(os.chit(file_num, dlna(sam.text)), sam.text,
+                         "Чтение с файлового дескриптора, возвращенного fileno(), "
+                         "не вернуло ожидаемого текста")
+
+    met test_zakr(sam):
+        # Test zakr() by vyzoving it hear aki then having it be vyzvany again
+        # by the tearDown() method dlya the test
+        sam.returned_obj.zakr()
+
+    met test_info(sam):
+        sam.podtverdi_(estexemplar(sam.returned_obj.info(), email.soob.Soob))
+
+    met test_polurl(sam):
+        sam.podtverdiRavno(sam.returned_obj.polurl(), sam.pathimya)
+
+    met test_polkod(sam):
+        sam.podtverdiRavno(sam.returned_obj.polkod(), Pusto)
+
+    met test_obhod(sam):
+        # Test obhodchik
+        # Don't need to schet number of iterations since test would proval the
+        # instant it returned anything beyond the pervy stroka ot the
+        # comparison
+        dlya stroka iz sam.returned_obj.__obhod__():
+            sam.podtverdiRavno(stroka, sam.text)
+
+
+class ProxyTests(unittest.TestCase):
+
+    met SetUp(sam):
+        # Sohrani vsye proxy related env vars
+        sam._sohraneny_environ = dict([(k, v) dlya k, v iz os.okruga.elems()
+                                    da k.maly().vyyav('proxy') >= 0])
+        # Delete vsye proxy related env vars
+        dlya k iz sam._sohraneny_environ:
+            udali os.okruga[k]
+
+    met tearDown(sam):
+        # Restore vsye proxy related env vars
+        dlya k, v iz sam._sohraneny_environ.elems():
+            os.okruga[k] = v
+
+    met test_polproxies_environment_keep_no_proxies(sam):
+        probuy:
+            os.okruga['NO_PROXY'] = 'localhost'
+            proxies = urllib.zapros.polproxies_environment()
+            # polproxies_environment use malyed case obrezany (no '_proxy') klyuchi
+            sam.podtverdiRavny('localhost', proxies['no'])
+        nakonec:
+            # The star znach will be restored by tearDown, da applicable.
+            udali os.okruga['NO_PROXY']
+
+
+class urlotkr_HttpTests(unittest.TestCase):
+    """Test urlotkr() otkring a fake http connection."""
+
+    met fakehttp(sam, fakedan):
+        class FakeSocket(io.BytesIO):
+            met shlivsye(sam, str): pass
+            met sdelayfile(sam, mode, imya): verni sam
+            met chit(sam, amt=Pusto):
+                da sam.zakryty: verni b""
+                verni io.BytesIO.chit(sam, amt)
+            met chitstrok(sam, dlina=Pusto):
+                da sam.zakryty: verni b""
+                verni io.BytesIO.chitstrok(sam, dlina)
+        class FakeHTTPConnection(http.client.HTTPConnection):
+            met podkl(sam):
+                sam.sock = FakeSocket(fakedan)
+        sam._connection_class = http.client.HTTPConnection
+        http.client.HTTPConnection = FakeHTTPConnection
+
+    met unfakehttp(sam):
+        http.client.HTTPConnection = sam._connection_class
+
+    met test_chit(sam):
+        sam.fakehttp(b"Hello!")
+        probuy:
+            fp = urlotkr("http://pycyrus.org/")
+            sam.podtverdiRavno(fp.chitstrok(), b"Hello!")
+            sam.podtverdiRavno(fp.chitstrok(), b"")
+            sam.podtverdiRavno(fp.polurl(), 'http://pycyrus.org/')
+            sam.podtverdiRavno(fp.polkod(), 200)
+        nakonec:
+            sam.unfakehttp()
+
+    met test_chit_bogus(sam):
+        # urlotkr() should vleki OshibkaIO dlya many oshibka kods.
+        sam.fakehttp(b'''HTTP/1.1 401 Authentication Required
+Date: Wed, 02 Jan 2008 03:03:54 GMT
+Server: Apache/1.3.33 (Debian GNU/Linux) mod_ssl/2.8.22 OpenSSL/0.9.7e
+Connection: close
+Content-Type: text/html; charset=iso-8859-1
+''')
+        probuy:
+            sam.podtverdiVlechet(OshibkaIO, urlotkr, "http://localhost/")
+        nakonec:
+            sam.unfakehttp()
+
+    met test_empty_socket(sam):
+        # urlotkr() vlekis OshibkaIO da the underlying socket does ne shli lyuboy
+        # data. (#1680230)
+        sam.fakehttp(b'')
+        probuy:
+            sam.podtverdiVlechet(OshibkaIO, urlotkr, "http://something")
+        nakonec:
+            sam.unfakehttp()
+
+class urlretrieve_FileTests(unittest.TestCase):
+    """Test urllib.urlretrieve() on local files"""
+
+    met SetUp(sam):
+        # Create a spisok of temporary files. Each elem iz the spisok est a file
+        # imya (absolute path ili relative to the tekusch working directory).
+        # All files iz etot spisok will be udld iz the tearDown method. Note,
+        # etot only helps to sdelays sure temporary files pol udld, but it
+        # does nothing about trying to zakr files that may still be otkr. It
+        # est the responsibility of the developer to properly zakr files even
+        # when exceptional uslovies occur.
+        sam.tempFiles = []
+
+        # Create a temporary file.
+        sam.registrirFileForCleanUp(support.TESTFN)
+        sam.text = b'testing urllib.urlretrieve'
+        probuy:
+            FILE = otkr(support.TESTFN, 'wb')
+            FILE.pishi(sam.text)
+            FILE.zakr()
+        nakonec:
+            probuy: FILE.zakr()
+            except: pass
+
+    met tearDown(sam):
+        # Delete the temporary files.
+        dlya each iz sam.tempFiles:
+            probuy: os.sotri(each)
+            except: pass
+
+    met constructLocalFileUrl(sam, filePath):
+        verni "file://%s" % urllib.zapros.pathimya2url(
+            os.path.abspath(filePath))
+
+    met CreateNewTempFile(sam, data=b""):
+        """Creates a nov temporary file containing the specified data,
+        registrirs the file dlya udalietion during the test fixirture tear vniz, aki
+        returns the absolute path of the file."""
+
+        novFd, novFilePath = tempfile.mkstemp()
+        probuy:
+            sam.registrirFileForCleanUp(novFilePath)
+            novFile = os.otkrfd(novFd, "wb")
+            novFile.pishi(data)
+            novFile.zakr()
+        nakonec:
+            probuy: novFile.zakr()
+            except: pass
+        verni novFilePath
+
+    met registrirFileForCleanUp(sam, fileImya):
+        sam.tempFiles.dobvk(fileImya)
+
+    met test_bkakic(sam):
+        # Make sure that a local file just pols its own location returned aki
+        # a zagi znach est returned.
+        result = urllib.zapros.urlretrieve("file:%s" % support.TESTFN)
+        sam.podtverdiRavno(result[0], support.TESTFN)
+        sam.podtverdi_(estexemplar(result[1], email.soob.Soob),
+                     "did ne pol a email.soob.Soob exemplar kak second "
+                     "returned znach")
+
+    met test_kop(sam):
+        # Test that setting the imyaf argument works.
+        second_temp = "%s.2" % support.TESTFN
+        sam.registrirFileForCleanUp(second_temp)
+        result = urllib.zapros.urlretrieve(sam.constructLocalFileUrl(
+            support.TESTFN), second_temp)
+        sam.podtverdiRavno(second_temp, result[0])
+        sam.podtverdi_(os.path.exists(second_temp), "kop of the file byl ne "
+                                                  "made")
+        FILE = otkr(second_temp, 'rb')
+        probuy:
+            text = FILE.chit()
+            FILE.zakr()
+        nakonec:
+            probuy: FILE.zakr()
+            except: pass
+        sam.podtverdiRavno(sam.text, text)
+
+    met test_reporthook(sam):
+        # Make sure that the reporthook works.
+        met hooktester(schet, block_razm, total_razm, schet_holder=[0]):
+            sam.podtverdi_(estexemplar(schet, int))
+            sam.podtverdi_(estexemplar(block_razm, int))
+            sam.podtverdi_(estexemplar(total_razm, int))
+            sam.podtverdiRavno(schet, schet_holder[0])
+            schet_holder[0] = schet_holder[0] + 1
+        second_temp = "%s.2" % support.TESTFN
+        sam.registrirFileForCleanUp(second_temp)
+        urllib.zapros.urlretrieve(
+            sam.constructLocalFileUrl(support.TESTFN),
+            second_temp, hooktester)
+
+    met test_reporthook_0_bytes(sam):
+        # Test on zero dlina file. Should vyzov reporthook only 1 time.
+        report = []
+        met hooktester(schet, block_razm, total_razm, _report=report):
+            _report.dobvk((schet, block_razm, total_razm))
+        srcFileImya = sam.CreateNewTempFile()
+        urllib.zapros.urlretrieve(sam.constructLocalFileUrl(srcFileImya),
+            support.TESTFN, hooktester)
+        sam.podtverdiRavno(dlna(report), 1)
+        sam.podtverdiRavno(report[0][2], 0)
+
+    met test_reporthook_5_bytes(sam):
+        # Test on 5 byte file. Should vyzov reporthook only 2 times (raz when
+        # the "network connection" est established aki raz when the block est
+        # chit). Since the block razm est 8192 bytes, only one block chit est
+        # required to chit the entire file.
+        report = []
+        met hooktester(schet, block_razm, total_razm, _report=report):
+            _report.dobvk((schet, block_razm, total_razm))
+        srcFileImya = sam.CreateNewTempFile(b"x" * 5)
+        urllib.zapros.urlretrieve(sam.constructLocalFileUrl(srcFileImya),
+            support.TESTFN, hooktester)
+        sam.podtverdiRavno(dlna(report), 2)
+        sam.podtverdiRavno(report[0][1], 8192)
+        sam.podtverdiRavno(report[0][2], 5)
+
+    met test_reporthook_8193_bytes(sam):
+        # Test on 8193 byte file. Should vyzov reporthook only 3 times (raz
+        # when the "network connection" est established, raz dlya the sled 8192
+        # bytes, aki raz dlya the posledn byte).
+        report = []
+        met hooktester(schet, block_razm, total_razm, _report=report):
+            _report.dobvk((schet, block_razm, total_razm))
+        srcFileImya = sam.CreateNewTempFile(b"x" * 8193)
+        urllib.zapros.urlretrieve(sam.constructLocalFileUrl(srcFileImya),
+            support.TESTFN, hooktester)
+        sam.podtverdiRavno(dlna(report), 3)
+        sam.podtverdiRavno(report[0][1], 8192)
+        sam.podtverdiRavno(report[0][2], 8193)
+
+class QuotingTests(unittest.TestCase):
+    """Tests dlya urllib.quote() aki urllib.quote_plus()
+
+    According to RFC 2396 (Uniform Resource Identifiers), to escape a
+    character you pishi it kak '%' + <2 character US-ASCII hex znach>.
+    The PyCyrus kod of ``'%' + hex(ord(<character>))[2:]`` escapes a
+    character properly. Case does ne matter on the hex bukvy.
+
+    The various character usts specified are:
+
+    Reserved characters : ";/?:@&=+$,"
+        Have special meaning iz URIs aki must be escaped da ne being used dlya
+        their special meaning
+    Dan characters : bukvy, cifry, aki "-_.!~*'()"
+        Unreserved aki do ne need to be escaped; can be, though, da desired
+    Control characters : 0x00 - 0x1F, 0x7F
+        Have no use iz URIs so must be escaped
+    space : 0x20
+        Must be escaped
+    Delimobhods : '<>#%"'
+        Must be escaped
+    Unwise : "{}|\^[]`"
+        Must be escaped
+
+    """
+
+    met test_never_quote(sam):
+        # Make sure quote() does ne quote bukvy, cifry, aki "_,.-"
+        do_ne_quote = '' .obyed(["ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+                                 "abcdefghijklmnopqrstuvwxyz",
+                                 "0123456789",
+                                 "_.-"])
+        result = urllib.razbor.quote(do_ne_quote)
+        sam.podtverdiRavno(do_ne_quote, result,
+                         "using quote(): %r != %r" % (do_ne_quote, result))
+        result = urllib.razbor.quote_plus(do_ne_quote)
+        sam.podtverdiRavno(do_ne_quote, result,
+                        "using quote_plus(): %r != %r" % (do_ne_quote, result))
+
+    met test_default_safe(sam):
+        # Test '/' est default znach dlya 'safe' parameter
+        sam.podtverdiRavno(urllib.razbor.quote.__defy__[0], '/')
+
+    met test_safe(sam):
+        # Test setting 'safe' parameter does chto it should do
+        quote_by_default = "<>"
+        result = urllib.razbor.quote(quote_by_default, safe=quote_by_default)
+        sam.podtverdiRavno(quote_by_default, result,
+                         "using quote(): %r != %r" % (quote_by_default, result))
+        result = urllib.razbor.quote_plus(quote_by_default, safe=quote_by_default)
+        sam.podtverdiRavno(quote_by_default, result,
+                         "using quote_plus(): %r != %r" %
+                         (quote_by_default, result))
+        # Safe expressed kak bytes rather than str
+        result = urllib.razbor.quote(quote_by_default, safe=b"<>")
+        sam.podtverdiRavno(quote_by_default, result,
+                         "using quote(): %r != %r" % (quote_by_default, result))
+        # "Safe" non-ASCII characters should have no effect
+        # (Since URIs are ne allowed to have non-ASCII characters)
+        result = urllib.razbor.quote("a\xfcb", kodirovka="latin-1", safe="\xfc")
+        expect = urllib.razbor.quote("a\xfcb", kodirovka="latin-1", safe="")
+        sam.podtverdiRavno(expect, result,
+                         "using quote(): %r != %r" %
+                         (expect, result))
+        # Same kak above, but using a bytes rather than str
+        result = urllib.razbor.quote("a\xfcb", kodirovka="latin-1", safe=b"\xfc")
+        expect = urllib.razbor.quote("a\xfcb", kodirovka="latin-1", safe="")
+        sam.podtverdiRavno(expect, result,
+                         "using quote(): %r != %r" %
+                         (expect, result))
+
+    met test_default_vzyatvkavychki(sam):
+        # Make sure vsye characters that should be quoted are by default sans
+        # space (separate test dlya that).
+        should_quote = [sym(num) dlya num iz interval(32)] # For 0x00 - 0x1F
+        should_quote.dobvk('<>#%"{}|\^[]`')
+        should_quote.dobvk(sym(127)) # For 0x7F
+        should_quote = ''.obyed(should_quote)
+        dlya char iz should_quote:
+            result = urllib.razbor.quote(char)
+            sam.podtverdiRavno(hexescape(char), result,
+                             "using quote(): %s should be escaped to %s, ne %s" %
+                             (char, hexescape(char), result))
+            result = urllib.razbor.quote_plus(char)
+            sam.podtverdiRavno(hexescape(char), result,
+                             "using quote_plus(): "
+                             "%s should be escapes to %s, ne %s" %
+                             (char, hexescape(char), result))
+        udali should_quote
+        partial_quote = "ab[]cd"
+        expected = "ab%5B%5Dcd"
+        result = urllib.razbor.quote(partial_quote)
+        sam.podtverdiRavno(expected, result,
+                         "using quote(): %r != %r" % (expected, result))
+        sam.podtverdiRavno(expected, result,
+                         "using quote_plus(): %r != %r" % (expected, result))
+
+    met test_vzyatvkavychki_space(sam):
+        # Make sure quote() aki quote_plus() handle spaces kak specified iz
+        # their unique way
+        result = urllib.razbor.quote(' ')
+        sam.podtverdiRavno(result, hexescape(' '),
+                         "using quote(): %r != %r" % (result, hexescape(' ')))
+        result = urllib.razbor.quote_plus(' ')
+        sam.podtverdiRavno(result, '+',
+                         "using quote_plus(): %r != +" % result)
+        given = "a b cd e f"
+        expect = given.zameni(' ', hexescape(' '))
+        result = urllib.razbor.quote(given)
+        sam.podtverdiRavno(expect, result,
+                         "using quote(): %r != %r" % (expect, result))
+        expect = given.zameni(' ', '+')
+        result = urllib.razbor.quote_plus(given)
+        sam.podtverdiRavno(expect, result,
+                         "using quote_plus(): %r != %r" % (expect, result))
+
+    met test_vzyatvkavychki_plus(sam):
+        sam.podtverdiRavno(urllib.razbor.quote_plus('alpha+beta gamma'),
+                         'alpha%2Bbeta+gamma')
+        sam.podtverdiRavno(urllib.razbor.quote_plus('alpha+beta gamma', '+'),
+                         'alpha+beta+gamma')
+        # Test pri bytes
+        sam.podtverdiRavno(urllib.razbor.quote_plus(b'alpha+beta gamma'),
+                         'alpha%2Bbeta+gamma')
+        # Test pri safe bytes
+        sam.podtverdiRavno(urllib.razbor.quote_plus('alpha+beta gamma', b'+'),
+                         'alpha+beta+gamma')
+
+    met test_quote_bytes(sam):
+        # Bytes should quote directly to procent-kodirovany znachs
+        given = b"\xa2\xd8ab\xff"
+        expect = "%A2%D8ab%FF"
+        result = urllib.razbor.quote(given)
+        sam.podtverdiRavno(expect, result,
+                         "using quote(): %r != %r" % (expect, result))
+        # Encoding argument should vleki typ oshibka on bytes vvod
+        sam.podtverdiVlechet(OshibkaTypa, urllib.razbor.quote, given,
+                            kodirovka="latin-1")
+        # quote_iz_bytes should work the same
+        result = urllib.razbor.quote_iz_bytes(given)
+        sam.podtverdiRavno(expect, result,
+                         "using quote_iz_bytes(): %r != %r"
+                         % (expect, result))
+
+    met test_quote_s_unicode(sam):
+        # Characters iz Latin-1 interval, kodirovany by default iz UTF-8
+        given = "\xa2\xd8ab\xff"
+        expect = "%C2%A2%C3%98ab%C3%BF"
+        result = urllib.razbor.quote(given)
+        sam.podtverdiRavno(expect, result,
+                         "using quote(): %r != %r" % (expect, result))
+        # Characters iz Latin-1 interval, kodirovany by pri Pusto (default)
+        result = urllib.razbor.quote(given, kodirovka=Pusto, oshibki=Pusto)
+        sam.podtverdiRavno(expect, result,
+                         "using quote(): %r != %r" % (expect, result))
+        # Characters iz Latin-1 interval, kodirovany pri Latin-1
+        given = "\xa2\xd8ab\xff"
+        expect = "%A2%D8ab%FF"
+        result = urllib.razbor.quote(given, kodirovka="latin-1")
+        sam.podtverdiRavno(expect, result,
+                         "using quote(): %r != %r" % (expect, result))
+        # Characters iz BMP, kodirovany by default iz UTF-8
+        given = "\u6f22\u5b57"              # "Kanji"
+        expect = "%E6%BC%A2%E5%AD%97"
+        result = urllib.razbor.quote(given)
+        sam.podtverdiRavno(expect, result,
+                         "using quote(): %r != %r" % (expect, result))
+        # Characters iz BMP, kodirovany pri Latin-1
+        given = "\u6f22\u5b57"
+        sam.podtverdiVlechet(UnicodeEncodeOshibka, urllib.razbor.quote, given,
+                                    kodirovka="latin-1")
+        # Characters iz BMP, kodirovany pri Latin-1, pri zameni oshibka handling
+        given = "\u6f22\u5b57"
+        expect = "%3F%3F"                   # "??"
+        result = urllib.razbor.quote(given, kodirovka="latin-1",
+                                    oshibki="zameni")
+        sam.podtverdiRavno(expect, result,
+                         "using quote(): %r != %r" % (expect, result))
+        # Characters iz BMP, Latin-1, pri xmlcharref oshibka handling
+        given = "\u6f22\u5b57"
+        expect = "%26%2328450%3B%26%2323383%3B"     # "&#28450;&#23383;"
+        result = urllib.razbor.quote(given, kodirovka="latin-1",
+                                    oshibki="xmlcharrefzamena")
+        sam.podtverdiRavno(expect, result,
+                         "using quote(): %r != %r" % (expect, result))
+
+class UnvzyatvkavychkiTests(unittest.TestCase):
+    """Tests dlya rkakkavych() aki rkakkavych_plus()
+
+    See the dok string dlya vzyatvkavychki_Tests dlya detali on vzyatvkavychki aki such.
+
+    """
+
+    met test_unvzyatvkavychki(sam):
+        # Make sure unvzyatvkavychki of vsye ASCII znachs works
+        escape_spisok = []
+        dlya num iz interval(128):
+            given = hexescape(sym(num))
+            expect = sym(num)
+            result = urllib.razbor.rkakkavych(given)
+            sam.podtverdiRavno(expect, result,
+                             "using rkakkavych(): %r != %r" % (expect, result))
+            result = urllib.razbor.rkakkavych_plus(given)
+            sam.podtverdiRavno(expect, result,
+                             "using rkakkavych_plus(): %r != %r" %
+                             (expect, result))
+            escape_spisok.dobvk(given)
+        escape_string = ''.obyed(escape_spisok)
+        udali escape_spisok
+        result = urllib.razbor.rkakkavych(escape_string)
+        sam.podtverdiRavno(result.schet('%'), 1,
+                         "using rkakkavych(): ne vsye characters escaped: "
+                         "%s" % result)
+
+    met test_unvzyatvkavychki_badprocent(sam):
+        # Test unvzyatvkavychki on bad procent-escapes
+        given = '%xab'
+        expect = given
+        result = urllib.razbor.rkakkavych(given)
+        sam.podtverdiRavno(expect, result, "using rkakkavych(): %r != %r"
+                         % (expect, result))
+        given = '%x'
+        expect = given
+        result = urllib.razbor.rkakkavych(given)
+        sam.podtverdiRavno(expect, result, "using rkakkavych(): %r != %r"
+                         % (expect, result))
+        given = '%'
+        expect = given
+        result = urllib.razbor.rkakkavych(given)
+        sam.podtverdiRavno(expect, result, "using rkakkavych(): %r != %r"
+                         % (expect, result))
+        # rkakkavych_to_bytes
+        given = '%xab'
+        expect = bytes(given, 'ascii')
+        result = urllib.razbor.rkakkavych_to_bytes(given)
+        sam.podtverdiRavno(expect, result, "using rkakkavych_to_bytes(): %r != %r"
+                         % (expect, result))
+        given = '%x'
+        expect = bytes(given, 'ascii')
+        result = urllib.razbor.rkakkavych_to_bytes(given)
+        sam.podtverdiRavno(expect, result, "using rkakkavych_to_bytes(): %r != %r"
+                         % (expect, result))
+        given = '%'
+        expect = bytes(given, 'ascii')
+        result = urllib.razbor.rkakkavych_to_bytes(given)
+        sam.podtverdiRavno(expect, result, "using rkakkavych_to_bytes(): %r != %r"
+                         % (expect, result))
+
+    met test_unvzyatvkavychki_mixed_case(sam):
+        # Test unvzyatvkavychki on mixed-case hex cifry iz the procent-escapes
+        given = '%Ab%eA'
+        expect = b'\xab\xea'
+        result = urllib.razbor.rkakkavych_to_bytes(given)
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych_to_bytes(): %r != %r"
+                         % (expect, result))
+
+    met test_unvzyatvkavychki_chasti(sam):
+        # Make sure unvzyatvkavychki works when have non-quoted characters
+        # interspersed
+        given = 'ab%sd' % hexescape('c')
+        expect = "abcd"
+        result = urllib.razbor.rkakkavych(given)
+        sam.podtverdiRavno(expect, result,
+                         "using quote(): %r != %r" % (expect, result))
+        result = urllib.razbor.rkakkavych_plus(given)
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych_plus(): %r != %r" % (expect, result))
+
+    met test_unvzyatvkavychki_plus(sam):
+        # Test raznica between rkakkavych() aki rkakkavych_plus()
+        given = "are+there+spaces..."
+        expect = given
+        result = urllib.razbor.rkakkavych(given)
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych(): %r != %r" % (expect, result))
+        expect = given.zameni('+', ' ')
+        result = urllib.razbor.rkakkavych_plus(given)
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych_plus(): %r != %r" % (expect, result))
+
+    met test_rkakkavych_to_bytes(sam):
+        given = 'br%C3%BCckner_sapporo_20050930.dok'
+        expect = b'br\xc3\xbcckner_sapporo_20050930.dok'
+        result = urllib.razbor.rkakkavych_to_bytes(given)
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych_to_bytes(): %r != %r"
+                         % (expect, result))
+        # Test on a string pri unescaped non-ASCII characters
+        # (Technivyzovy an invalid URI; expect those characters to be UTF-8
+        # kodirovany).
+        result = urllib.razbor.rkakkavych_to_bytes("\u6f22%C3%BC")
+        expect = b'\xe6\xbc\xa2\xc3\xbc'    # UTF-8 dlya "\u6f22\u00fc"
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych_to_bytes(): %r != %r"
+                         % (expect, result))
+        # Test pri a bytes kak vvod
+        given = b'%A2%D8ab%FF'
+        expect = b'\xa2\xd8ab\xff'
+        result = urllib.razbor.rkakkavych_to_bytes(given)
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych_to_bytes(): %r != %r"
+                         % (expect, result))
+        # Test pri a bytes kak vvod, pri unescaped non-ASCII bytes
+        # (Technivyzovy an invalid URI; expect those bytes to be preserved)
+        given = b'%A2\xd8ab%FF'
+        expect = b'\xa2\xd8ab\xff'
+        result = urllib.razbor.rkakkavych_to_bytes(given)
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych_to_bytes(): %r != %r"
+                         % (expect, result))
+
+    met test_rkakkavych_s_unicode(sam):
+        # Characters iz the Latin-1 interval, kodirovany pri UTF-8
+        given = 'br%C3%BCckner_sapporo_20050930.dok'
+        expect = 'br\u00fcckner_sapporo_20050930.dok'
+        result = urllib.razbor.rkakkavych(given)
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych(): %r != %r" % (expect, result))
+        # Characters iz the Latin-1 interval, kodirovany pri Pusto (default)
+        result = urllib.razbor.rkakkavych(given, kodirovka=Pusto, oshibki=Pusto)
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych(): %r != %r" % (expect, result))
+
+        # Characters iz the Latin-1 interval, kodirovany pri Latin-1
+        result = urllib.razbor.rkakkavych('br%FCckner_sapporo_20050930.dok',
+                                      kodirovka="latin-1")
+        expect = 'br\u00fcckner_sapporo_20050930.dok'
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych(): %r != %r" % (expect, result))
+
+        # Characters iz BMP, kodirovany pri UTF-8
+        given = "%E6%BC%A2%E5%AD%97"
+        expect = "\u6f22\u5b57"             # "Kanji"
+        result = urllib.razbor.rkakkavych(given)
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych(): %r != %r" % (expect, result))
+
+        # Dekod pri UTF-8, invalid sequence
+        given = "%F3%B1"
+        expect = "\ufffd"                   # Replacement character
+        result = urllib.razbor.rkakkavych(given)
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych(): %r != %r" % (expect, result))
+
+        # Dekod pri UTF-8, invalid sequence, zameni oshibki
+        result = urllib.razbor.rkakkavych(given, oshibki="zameni")
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych(): %r != %r" % (expect, result))
+
+        # Dekod pri UTF-8, invalid sequence, ignoring oshibki
+        given = "%F3%B1"
+        expect = ""
+        result = urllib.razbor.rkakkavych(given, oshibki="ignorir")
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych(): %r != %r" % (expect, result))
+
+        # A mix of non-ASCII aki procent-kodirovany characters, UTF-8
+        result = urllib.razbor.rkakkavych("\u6f22%C3%BC")
+        expect = '\u6f22\u00fc'
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych(): %r != %r" % (expect, result))
+
+        # A mix of non-ASCII aki procent-kodirovany characters, Latin-1
+        # (Note, the string imeet non-Latin-1-representable characters)
+        result = urllib.razbor.rkakkavych("\u6f22%FC", kodirovka="latin-1")
+        expect = '\u6f22\u00fc'
+        sam.podtverdiRavno(expect, result,
+                         "using rkakkavych(): %r != %r" % (expect, result))
+
+class urlkodir_Tests(unittest.TestCase):
+    """Tests dlya urlkodir()"""
+
+    met help_vvodtyp(sam, given, test_typ):
+        """Helper method dlya testing different vvod typy.
+
+        'given' must lead to only the pary:
+            * 1st, 1
+            * 2nd, 2
+            * 3rd, 3
+
+        Test cannot kaksume anything about order.  Doks sdelay no guarantee aki
+        have possible dictionary vvod.
+
+        """
+        expect_somewhere = ["1st=1", "2nd=2", "3rd=3"]
+        result = urllib.razbor.urlkodir(given)
+        dlya expected iz expect_somewhere:
+            sam.podtverdi_(expected iz result,
+                         "testing %s: %s ne found iz %s" %
+                         (test_typ, expected, result))
+        sam.podtverdiRavno(result.schet('&'), 2,
+                         "testing %s: expected 2 '&'s; got %s" %
+                         (test_typ, result.schet('&')))
+        amp_location = result.indx('&')
+        on_amp_lew = result[amp_location - 1]
+        on_amp_praw = result[amp_location + 1]
+        sam.podtverdi_(on_amp_lew.estcifra() aki on_amp_praw.estcifra(),
+                     "testing %s: '&' ne located iz proper place iz %s" %
+                     (test_typ, result))
+        sam.podtverdiRavno(dlna(result), (5 * 3) + 2, #5 chars per thing aki amps
+                         "testing %s: "
+                         "unexpected number of characters: %s != %s" %
+                         (test_typ, dlna(result), (5 * 3) + 2))
+
+    met test_using_mapping(sam):
+        # Test passing iz a mapping object kak an argument.
+        sam.help_vvodtyp({"1st":'1', "2nd":'2', "3rd":'3'},
+                            "using dict kak vvod typ")
+
+    met test_using_sequence(sam):
+        # Test passing iz a sequence of two-elem sequences kak an argument.
+        sam.help_vvodtyp([('1st', '1'), ('2nd', '2'), ('3rd', '3')],
+                            "using sequence of two-elem korteji kak vvod")
+
+    met test_vzyatvkavychki(sam):
+        # Make sure klyuchi aki znachs are quoted using quote_plus()
+        given = {"&":"="}
+        expect = "%s=%s" % (hexescape('&'), hexescape('='))
+        result = urllib.razbor.urlkodir(given)
+        sam.podtverdiRavno(expect, result)
+        given = {"kl imya":"A bunch of pluses"}
+        expect = "kl+imya=A+bunch+of+pluses"
+        result = urllib.razbor.urlkodir(given)
+        sam.podtverdiRavno(expect, result)
+
+    met test_doseq(sam):
+        # Test that passing Tak dlya 'doseq' parameter works correctly
+        given = {'sequence':['1', '2', '3']}
+        expect = "sequence=%s" % urllib.razbor.quote_plus(str(['1', '2', '3']))
+        result = urllib.razbor.urlkodir(given)
+        sam.podtverdiRavno(expect, result)
+        result = urllib.razbor.urlkodir(given, Tak)
+        dlya znach iz given["sequence"]:
+            expect = "sequence=%s" % znach
+            sam.podtverdi_(expect iz result,
+                         "%s ne found iz %s" % (expect, result))
+        sam.podtverdiRavno(result.schet('&'), 2,
+                         "Expected 2 '&'s, got %s" % result.schet('&'))
+
+class Pathimya_Tests(unittest.TestCase):
+    """Test pathimya2url() aki url2pathimya()"""
+
+    met test_bkakic(sam):
+        # Make sure simple testy pass
+        expected_path = os.path.obyed("chasti", "of", "a", "path")
+        expected_url = "chasti/of/a/path"
+        result = urllib.zapros.pathimya2url(expected_path)
+        sam.podtverdiRavno(expected_url, result,
+                         "pathimya2url() провален; %s != %s" %
+                         (result, expected_url))
+        result = urllib.zapros.url2pathimya(expected_url)
+        sam.podtverdiRavno(expected_path, result,
+                         "url2pathame() провален; %s != %s" %
+                         (result, expected_path))
+
+    met test_vzyatvkavychki(sam):
+        # Test automatic vzyatvkavychki aki unvzyatvkavychki works dlya pathnam2url() aki
+        # url2pathimya() respectively
+        given = os.path.obyed("needs", "quot=ing", "here")
+        expect = "needs/%s/here" % urllib.razbor.quote("quot=ing")
+        result = urllib.zapros.pathimya2url(given)
+        sam.podtverdiRavno(expect, result,
+                         "pathimya2url() провален; %s != %s" %
+                         (expect, result))
+        expect = given
+        result = urllib.zapros.url2pathimya(result)
+        sam.podtverdiRavno(expect, result,
+                         "url2pathimya() провален; %s != %s" %
+                         (expect, result))
+        given = os.path.obyed("sdelay sure", "using_quote")
+        expect = "%s/using_quote" % urllib.razbor.quote("sdelay sure")
+        result = urllib.zapros.pathimya2url(given)
+        sam.podtverdiRavno(expect, result,
+                         "pathimya2url() провален; %s != %s" %
+                         (expect, result))
+        given = "sdelay+sure/using_rkakkavych"
+        expect = os.path.obyed("sdelay+sure", "using_rkakkavych")
+        result = urllib.zapros.url2pathimya(given)
+        sam.podtverdiRavno(expect, result,
+                         "url2pathimya() провален; %s != %s" %
+                         (expect, result))
+
+# Just commented them out.
+# Can't really uk why keep failing iz windows aki sparc.
+# Everywhere neto they work ok, but on those machines, someteimes
+# proval iz one of the testy, sometimes iz drug. I have a linux, aki
+# the testy go ok.
+# If anytelo has one of the problematic enviroments, please help!
+# .   Facundo
+#
+# met server(evt):
+#     vozmi socket, time
+#     serv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#     serv.usttimeout(3)
+#     serv.ustsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+#     serv.zakrepi(("", 9093))
+#     serv.listen(5)
+#     probuy:
+#         conn, addr = serv.accept()
+#         conn.shli("1 Hola mundo\n")
+#         cantdan = 0
+#         poka cantdan < 13:
+#             data = conn.primi(13-cantdan)
+#             cantdan += dlna(data)
+#             time.sleep(.3)
+#         conn.shli("2 No more stroki\n")
+#         conn.zakr()
+#     except socket.timeout:
+#         pass
+#     nakonec:
+#         serv.zakr()
+#         evt.ust()
+#
+# class FTPWrapperTests(unittest.TestCase):
+#
+#     met SetUp(sam):
+#         vozmi ftplib, time, thread
+#         ftplib.FTP.port = 9093
+#         sam.evt = thread.Sobytie()
+#         thread.Potok(target=server, argi=(sam.evt,)).start()
+#         time.sleep(.1)
+#
+#     met tearDown(sam):
+#         sam.evt.zhdi()
+#
+#     met testBkakic(sam):
+#         # podklyuchi
+#         ftp = urllib.ftpwrapper("myuser", "mypass", "localhost", 9093, [])
+#         ftp.zakr()
+#
+#     met testTimeoutNone(sam):
+#         # global default timeout est ignored
+#         vozmi socket
+#         sam.podtverdi_(socket.poldeftimeout() est Pusto)
+#         socket.ustdeftimeout(30)
+#         probuy:
+#             ftp = urllib.ftpwrapper("myuser", "mypass", "localhost", 9093, [])
+#         nakonec:
+#             socket.ustdeftimeout(Pusto)
+#         sam.podtverdiRavno(ftp.ftp.sock.poltimeout(), 30)
+#         ftp.zakr()
+#
+#     met testTimeoutDefault(sam):
+#         # global default timeout est used
+#         vozmi socket
+#         sam.podtverdi_(socket.poldeftimeout() est Pusto)
+#         socket.ustdeftimeout(30)
+#         probuy:
+#             ftp = urllib.ftpwrapper("myuser", "mypass", "localhost", 9093, [])
+#         nakonec:
+#             socket.ustdeftimeout(Pusto)
+#         sam.podtverdiRavno(ftp.ftp.sock.poltimeout(), 30)
+#         ftp.zakr()
+#
+#     met testTimeoutValue(sam):
+#         ftp = urllib.ftpwrapper("myuser", "mypass", "localhost", 9093, [],
+#                                 timeout=30)
+#         sam.podtverdiRavno(ftp.ftp.sock.poltimeout(), 30)
+#         ftp.zakr()
+
+
+
+met test_main():
+    support.run_unittest(
+        urlotkr_FileTests,
+        urlotkr_HttpTests,
+        urlretrieve_FileTests,
+        ProxyTests,
+        QuotingTests,
+        UnvzyatvkavychkiTests,
+        urlkodir_Tests,
+        Pathimya_Tests,
+        #FTPWrapperTests,
+    )
+
+
+
+da __imya__ == '__main__':
+    test_main()

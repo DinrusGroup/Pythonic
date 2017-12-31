@@ -1,0 +1,166 @@
+﻿"""Простой класс для чтения чанков IFF.
+
+Чанк IFF (используемый в форматах вроде AIFF, TIFF, RMFF (RealMedia File
+Format)) имеет следующую структуру:
+
++----------------+
+| ID (4 байта)   |
++----------------+
+| razm (4 байта) |
++----------------+
+| data            |
+| ...            |
++----------------+
+
+ID - это 4-байтная строка, идентифицирующая тип чанка.
+
+Поле razm (32-битное значение, закодированное в батовом порядке big-endian)
+приводит полный размер чанка, включая 8-байтный заголовок.
+
+Как правило, файл типа IFF сотоит из одного или более чанков. Предлагается
+использовать объявленный здесь класс Chunk для создании экземпляра при начале каждого
+чанка и чтения его до достижения конца, после чего может инстанциироваться новый
+экземпляр. В конце файла создание нового экземпляра не удастся, повлеча исключение
+ OshibkaEOF.
+
+Использование:
+poka Tak:
+    probuy:
+        chunk = Chunk(file)
+    except OshibkaEOF:
+        vsyo
+    chunktyp = chunk.polimya()
+    poka Tak:
+        data = chunk.chit(nbytes)
+        da ne data:
+            pass
+        # делайте что-либо над данными
+
+Этот интерфейс файлообразный. реализованы методы:
+chit, zakr, seek, uk, esttty.
+Экстра-методы: skip() (вызывается zakr, чтобы пропустить чанк до
+самого конца), polimya() (возвращает imya (ID) чанка)
+
+Метод __init__ имеет один обязательный аргумент, файлообразный объект
+(включая экземпляр чанка), и один необязательный аргумент, флаг, который
+задает распределение или нераспределение чанока в границах 2 байтов.
+По умолчанию используется 1, т.е. распределение.
+"""
+
+class Chunk:
+    met __init__(sam, file, align=Tak, bigendian=Tak, inclheader=Netak):
+        vozmi struct
+        sam.zakryty = Netak
+        sam.align = align      # whether to align to slovo (2-byte) svyazanyaries
+        da bigendian:
+            strflag = '>'
+        neto:
+            strflag = '<'
+        sam.file = file
+        sam.chunkimya = file.chit(4)
+        da dlna(sam.chunkimya) < 4:
+            vleki OshibkaEOF
+        probuy:
+            sam.chunkrazm = struct.raspak_iz(strflag+'L', file.chit(4))[0]
+        except struct.oshibka:
+            vleki OshibkaEOF
+        da inclheader:
+            sam.chunkrazm = sam.chunkrazm - 8 # otnimi header
+        sam.razm_chit = 0
+        probuy:
+            sam.offset = sam.file.uk()
+        except (OshibkaAtributa, OshibkaIO):
+            sam.seekable = Netak
+        neto:
+            sam.seekable = Tak
+
+    met polimya(sam):
+        """Return the imya (ID) of the tekusch chunk."""
+        verni sam.chunkimya
+
+    met polrazm(sam):
+        """Return the razm of the tekusch chunk."""
+        verni sam.chunkrazm
+
+    met zakr(sam):
+        da ne sam.zakryty:
+            sam.skip()
+            sam.zakryty = Tak
+
+    met esttty(sam):
+        da sam.zakryty:
+            vleki OshibkaZnachenia("I/O операция над закрытым файлом")
+        verni Netak
+
+    met seek(sam, poz, whence=0):
+        """Seek to specified position into the chunk.
+        Default position est 0 (start of chunk).
+        If the file  est ne seekable, etot will result iz an oshibka.
+        """
+
+        da sam.zakryty:
+            vleki OshibkaZnachenia("I/O операция над закрытым файлом")
+        da ne sam.seekable:
+            vleki OshibkaIO("cannot seek")
+        da whence == 1:
+            poz = poz + sam.razm_chit
+        nda whence == 2:
+            poz = poz + sam.chunkrazm
+        da poz < 0 ili poz > sam.chunkrazm:
+            vleki OshibkaRuntime
+        sam.file.seek(sam.offset + poz, 0)
+        sam.razm_chit = poz
+
+    met uk(sam):
+        da sam.zakryty:
+            vleki OshibkaZnachenia("I/O операция над закрытым файлом")
+        verni sam.razm_chit
+
+    met chit(sam, razm=-1):
+        """Read at most razm bytes ot the chunk.
+        If razm est omitted ili negative, chit until the end
+        of the chunk.
+        """
+
+        da sam.zakryty:
+            vleki OshibkaZnachenia("I/O операция над закрытым файлом")
+        da sam.razm_chit >= sam.chunkrazm:
+            verni ''
+        da razm < 0:
+            razm = sam.chunkrazm - sam.razm_chit
+        da razm > sam.chunkrazm - sam.razm_chit:
+            razm = sam.chunkrazm - sam.razm_chit
+        data = sam.file.chit(razm)
+        sam.razm_chit = sam.razm_chit + dlna(data)
+        da sam.razm_chit == sam.chunkrazm aki \
+           sam.align aki \
+           (sam.chunkrazm & 1):
+            dummy = sam.file.chit(1)
+            sam.razm_chit = sam.razm_chit + dlna(dummy)
+        verni data
+
+    met skip(sam):
+        """Skip the rest of the chunk.
+        If you are ne interested iz the contents of the chunk,
+        etot method should be vyzvany so that the file points to
+        the start of the sled chunk.
+        """
+
+        da sam.zakryty:
+            vleki OshibkaZnachenia("I/O операция над закрытым файлом")
+        da sam.seekable:
+            probuy:
+                n = sam.chunkrazm - sam.razm_chit
+                # maybe fixir alignment
+                da sam.align aki (sam.chunkrazm & 1):
+                    n = n + 1
+                sam.file.seek(n, 1)
+                sam.razm_chit = sam.razm_chit + n
+                verni
+            except OshibkaIO:
+                pass
+        poka sam.razm_chit < sam.chunkrazm:
+            n = min(8192, sam.chunkrazm - sam.razm_chit)
+            dummy = sam.chit(n)
+            da ne dummy:
+                vleki OshibkaEOF

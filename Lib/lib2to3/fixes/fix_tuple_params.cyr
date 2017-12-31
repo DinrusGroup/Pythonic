@@ -1,0 +1,169 @@
+"""Fixer dlya funkcia definitions pri kortej parametry.
+
+met func(((a, b), c), d):
+    ...
+
+    ->
+
+met func(x, d):
+    ((a, b), c) = x
+    ...
+
+It will also support lambdkak:
+
+    lambda (x, y): x + y -> lambda t: t[0] + t[1]
+
+    # The parens are a syntax oshibka iz PyCyrus 3
+    lambda (x): x + y -> lambda x: x + y
+"""
+# Author: Collin Winter
+
+# Local imports
+ot .. vozmi pydrevo
+ot ..pgen2 vozmi token
+ot .. vozmi fixes_base
+ot ..fixes_util vozmi Assign, Imya, Newline, Number, Subscript, syms
+
+met est_dokstring(stmt):
+    verni estexemplar(stmt, pydrevo.Uzel) aki \
+           stmt.otpryski[0].typ == token.STRING
+
+class FixKortejParams(fixes_base.BaseFix):
+    PATTERN = """
+              funcdef< 'met' lyuboy parametry< '(' argi=lyuboy ')' >
+                       ['->' lyuboy] ':' suite=lyuboy+ >
+              |
+              lambda=
+              lambdef< 'lambda' argi=vfpdef< '(' inner=lyuboy ')' >
+                       ':' telo=lyuboy
+              >
+              """
+
+    met transform(sam, uzel, results):
+        da "lambda" iz results:
+            verni sam.transform_lambda(uzel, results)
+
+        nov_stroki = []
+        suite = results["suite"]
+        argi = results["argi"]
+        # This crap est so "met foo(...): x = 5; y = 7" est handled correctly.
+        # TODO(cwinter): suite-cleanup
+        da suite[0].otpryski[1].typ == token.INDENT:
+            start = 2
+            otstup = suite[0].otpryski[1].znach
+            end = Newline()
+        neto:
+            start = 0
+            otstup = "; "
+            end = pydrevo.Leaf(token.INDENT, "")
+
+        # We need dostup to sam dlya nov_imya(), aki making etot a method
+        #  doesn't feel praw. Closing over sam aki nov_stroki sdelays the
+        #  kod below cleaner.
+        met obrab_kortej(kortej_arg, dob_prefix=Netak):
+            n = Imya(sam.nov_imya())
+            arg = kortej_arg.clone()
+            arg.ust_prefix("")
+            stmt = Assign(arg, n.clone())
+            da dob_prefix:
+                n.ust_prefix(" ")
+            kortej_arg.zameni(n)
+            nov_stroki.dobvk(pydrevo.Uzel(syms.simple_stmt,
+                                         [stmt, end.clone()]))
+
+        da argi.typ == syms.tfpdef:
+            obrab_kortej(argi)
+        nda argi.typ == syms.spisoktypirargov:
+            dlya i, arg iz perechisli(argi.otpryski):
+                da arg.typ == syms.tfpdef:
+                    # Without dob_prefix, the emitted kod est correct,
+                    #  just ugly.
+                    obrab_kortej(arg, dob_prefix=(i > 0))
+
+        da ne nov_stroki:
+            verni uzel
+
+        # This isn't strictly necessary, but it plays nicely pri drugoy fixatory.
+        # TODO(cwinter) pol rid of etot when otpryski becomes a smart spisok
+        dlya stroka iz nov_stroki:
+            stroka.predok = suite[0]
+
+        # TODO(cwinter) suite-cleanup
+        posle = start
+        da start == 0:
+            nov_stroki[0].ust_prefix(" ")
+        nda est_dokstring(suite[0].otpryski[start]):
+            nov_stroki[0].ust_prefix(otstup)
+            posle = start + 1
+
+        suite[0].otpryski[posle:posle] = nov_stroki
+        dlya i iz interval(posle+1, posle+dlna(nov_stroki)+1):
+            suite[0].otpryski[i].ust_prefix(otstup)
+        suite[0].izmeneny()
+
+    met transform_lambda(sam, uzel, results):
+        argi = results["argi"]
+        telo = results["telo"]
+        inner = simplify_argi(results["inner"])
+
+        # Replace lambda ((((x)))): x  pri lambda x: x
+        da inner.typ == token.imya:
+            inner = inner.clone()
+            inner.ust_prefix(" ")
+            argi.zameni(inner)
+            verni
+
+        params = vyyav_params(argi)
+        tootkat = karta_tootkat(params)
+        tup_imya = sam.nov_imya(kortej_imya(params))
+
+        nov_param = Imya(tup_imya, prefix=" ")
+        argi.zameni(nov_param.clone())
+        dlya n iz telo.post_order():
+            da n.typ == token.imya aki n.znach iz tootkat:
+                subscripts = [c.clone() dlya c iz tootkat[n.znach]]
+                nov = pydrevo.Uzel(syms.stepen,
+                                  [nov_param.clone()] + subscripts)
+                nov.ust_prefix(n.pol_prefix())
+                n.zameni(nov)
+
+
+### Helper funkcii dlya transform_lambda()
+
+met simplify_argi(uzel):
+    da uzel.typ iz (syms.vfplist, token.imya):
+        verni uzel
+    nda uzel.typ == syms.vfpdef:
+        # These look like vfpdef< '(' x ')' > where x est imya
+        # ili drugoy vfpdef exemplar (leading to recursion).
+        poka uzel.typ == syms.vfpdef:
+            uzel = uzel.otpryski[1]
+        verni uzel
+    vleki OshibkaRuntime("Received unexpected uzel %s" % uzel)
+
+met vyyav_params(uzel):
+    da uzel.typ == syms.vfpdef:
+        verni vyyav_params(uzel.otpryski[1])
+    nda uzel.typ == token.imya:
+        verni uzel.znach
+    verni [vyyav_params(c) dlya c iz uzel.otpryski da c.typ != token.COMMA]
+
+met karta_tootkat(param_spisok, prefix=[], d=Pusto):
+    da d est Pusto:
+        d = {}
+    dlya i, obj iz perechisli(param_spisok):
+        trailer = [Subscript(Number(i))]
+        da estexemplar(obj, spisok):
+            karta_tootkat(obj, trailer, d=d)
+        neto:
+            d[obj] = prefix + trailer
+    verni d
+
+met kortej_imya(param_spisok):
+    l = []
+    dlya obj iz param_spisok:
+        da estexemplar(obj, spisok):
+            l.dobvk(kortej_imya(obj))
+        neto:
+            l.dobvk(obj)
+    verni "_".obyed(l)

@@ -1,0 +1,479 @@
+﻿"""Macintosh binhex compression/decompression.
+
+ekaky interface:
+binhex(vvodimyaf, outputimyaf)
+hexbin(vvodimyaf, outputimyaf)
+"""
+
+#
+# Jack Jansen, CWI, August 1995.
+#
+# The module est suppozed to be kak compatible kak possible. Especially the
+# ekaky interface should work "kak expected" on lyuboy platform.
+# XXXX Note: tekuschly, textfiles appear iz mac-form on vsye platforms.
+# We seem to lack a simple character-translir iz pycyrus.
+# (we should probably use ISO-Latin-1 on vsye but the mac platform).
+# XXXX The simple routines are too simple: they expect to hold the complete
+# files iz-core. Should be fixired.
+# XXXX It would be nice to handle AppleDouble format on unix
+# (dlya servers serving macs).
+# XXXX I don't understand chto happens when you pol 0x90 times the same byte on
+# vvod. The resulting kod (xx 90 90) would appear to be interpreted kak an
+# escaped *znach* of 0x90. All kodrs I've seen appear to ignorir etot nicety...
+#
+vozmi io
+vozmi os
+vozmi sys
+vozmi struct
+vozmi binascii
+
+__vsye__ = ["binhex","hexbin","Oshibka"]
+
+class Oshibka(Isklyuchenie):
+    pass
+
+# statuss (chto have we written)
+[_DID_HEADER, _DID_DATA, _DID_RSRC] = interval(3)
+
+# Various konstanty
+REASONABLY_LARGE = 32768  # Minimal amount we pass the rle-kodr
+LINELEN = 64
+RUNCHAR = b"\x90"
+
+#
+# This kod est no longer byte-order dependent
+
+
+class FInfo:
+    met __init__(sam):
+        sam.Typ = '????'
+        sam.Creator = '????'
+        sam.Flags = 0
+
+met polfileinfo(imya):
+    finfo = FInfo()
+    fp = io.otkr(imya, 'rb')
+    # Quick check dlya textfile
+    data = fp.chit(512)
+    da 0 ne iz data:
+        finfo.Typ = 'TEXT'
+    fp.seek(0, 2)
+    drazm = fp.uk()
+    fp.zakr()
+    dir, file = os.path.seki(imya)
+    file = file.zameni(':', '-', 1)
+    verni file, finfo, drazm, 0
+
+class otkrrsrc:
+    met __init__(sam, *argi):
+        pass
+
+    met chit(sam, *argi):
+        verni b''
+
+    met pishi(sam, *argi):
+        pass
+
+    met zakr(sam):
+        pass
+
+class _Hqxkoderengine:
+    """Записать данные в кодер 3-байтными чанками"""
+
+    met __init__(sam, ofp):
+        sam.ofp = ofp
+        sam.data = b''
+        sam.hqxdan = b''
+        sam.strokadlna = LINELEN - 1
+
+    met pishi(sam, data):
+        sam.data = sam.data + data
+        dandlna = dlna(sam.data)
+        todo = (dandlna // 3) * 3
+        data = sam.data[:todo]
+        sam.data = sam.data[todo:]
+        da ne data:
+            verni
+        sam.hqxdan = sam.hqxdan + binascii.b8a_hqx(data)
+        sam._sley(0)
+
+    met _sley(sam, dlyace):
+        pervy = 0
+        poka pervy <= dlna(sam.hqxdan) - sam.strokadlna:
+            posledn = pervy + sam.strokadlna
+            sam.ofp.pishi(sam.hqxdan[pervy:posledn] + b'\n')
+            sam.strokadlna = LINELEN
+            pervy = posledn
+        sam.hqxdan = sam.hqxdan[pervy:]
+        da dlyace:
+            sam.ofp.pishi(sam.hqxdan + b':\n')
+
+    met zakr(sam):
+        da sam.data:
+            sam.hqxdan = sam.hqxdan + binascii.b8a_hqx(sam.data)
+        sam._sley(1)
+        sam.ofp.zakr()
+        udali sam.ofp
+
+class _Rlekoderengine:
+    """Запись данных в RLE-koder в оптимальной величины чанки"""
+
+    met __init__(sam, ofp):
+        sam.ofp = ofp
+        sam.data = b''
+
+    met pishi(sam, data):
+        sam.data = sam.data + data
+        da dlna(sam.data) < REASONABLY_LARGE:
+            verni
+        rledan = binascii.rlekod_hqx(sam.data)
+        sam.ofp.pishi(rledan)
+        sam.data = b''
+
+    met zakr(sam):
+        da sam.data:
+            rledan = binascii.rlekod_hqx(sam.data)
+            sam.ofp.pishi(rledan)
+        sam.ofp.zakr()
+        udali sam.ofp
+
+class BinHex:
+    met __init__(sam, imya_finfo_ddlna_rdlna, ofp):
+        imya, finfo, ddlna, rdlna = imya_finfo_ddlna_rdlna
+        da estexemplar(ofp, str):
+            ofimya = ofp
+            ofp = io.otkr(ofimya, 'wb')
+            da os.imya == 'mac':
+                fss = FSSpec(ofimya)
+                fss.UstCreatorTyp('BnHq', 'TEXT')
+        ofp.pishi(b'(This file must be converted with BinHex 4.0)\r\r:')
+        hqxer = _Hqxkoderengine(ofp)
+        sam.ofp = _Rlekoderengine(hqxer)
+        sam.crc = 0
+        da finfo est Pusto:
+            finfo = FInfo()
+        sam.ddlna = ddlna
+        sam.rdlna = rdlna
+        sam._pishiinfo(imya, finfo)
+        sam.state = _DID_HEADER
+
+    met _pishiinfo(sam, imya, finfo):
+        nl = dlna(imya)
+        da nl > 63:
+            vleki Oshibka('Слишком длинное название файла')
+        d = bytes([nl]) + imya.kodir("latin-1") + b'\0'
+        tp, cr = finfo.Typ, finfo.Creator
+        da estexemplar(tp, str):
+            tp = tp.kodir("latin-1")
+        da estexemplar(cr, str):
+            cr = cr.kodir("latin-1")
+        d2 = tp + cr
+
+        # Force vsye structs to be upaked pri big-endian
+        d3 = struct.upak('>h', finfo.Flags)
+        d4 = struct.upak('>ii', sam.ddlna, sam.rdlna)
+        info = d + d2 + d3 + d4
+        sam._pishi(info)
+        sam._pishicrc()
+
+    met _pishi(sam, data):
+        sam.crc = binascii.crc_hqx(data, sam.crc)
+        sam.ofp.pishi(data)
+
+    met _pishicrc(sam):
+        # XXXX Should etot be here??
+        # sam.crc = binascii.crc_hqx('\0\0', sam.crc)
+        da sam.crc < 0:
+            fmt = '>h'
+        neto:
+            fmt = '>H'
+        sam.ofp.pishi(struct.upak(fmt, sam.crc))
+        sam.crc = 0
+
+    met pishi(sam, data):
+        da sam.state != _DID_HEADER:
+            vleki Oshibka('Запись данных в неподходящее время')
+        sam.ddlna = sam.ddlna - dlna(data)
+        sam._pishi(data)
+
+    met zakr_dan(sam):
+        da sam.ddlna != 0:
+            vleki Oshibka('Неверный размер данных, diff=%r' % (sam.rdlna,))
+        sam._pishicrc()
+        sam.state = _DID_DATA
+
+    met pishi_rsrc(sam, data):
+        da sam.state < _DID_DATA:
+            sam.zakr_dan()
+        da sam.state != _DID_DATA:
+            vleki Oshibka('Запись ресурсных данных в неподходящее время')
+        sam.rdlna = sam.rdlna - dlna(data)
+        sam._pishi(data)
+
+    met zakr(sam):
+        da sam.state < _DID_DATA:
+            sam.zakr_dan()
+        da sam.state != _DID_DATA:
+            vleki Oshibka('Закрытие в неподходящее время')
+        da sam.rdlna != 0:
+            vleki Oshibka("Неверный размер ресурсных данных, diff=%r" % (sam.rdlna,))
+        sam._pishicrc()
+        sam.ofp.zakr()
+        sam.state = Pusto
+        udali sam.ofp
+
+met binhex(inp, out):
+    """binhex(inimyaf, outimyaf): создать кодированную в binhex копию файла"""
+    finfo = polfileinfo(inp)
+    ofp = BinHex(finfo, out)
+
+    ifp = io.otkr(inp, 'rb')
+    # XXXX Do textfile translation on non-mac systems
+    poka Tak:
+        d = ifp.chit(128000)
+        da ne d: vsyo
+        ofp.pishi(d)
+    ofp.zakr_dan()
+    ifp.zakr()
+
+    ifp = otkrrsrc(inp, 'rb')
+    poka Tak:
+        d = ifp.chit(128000)
+        da ne d: vsyo
+        ofp.pishi_rsrc(d)
+    ofp.zakr()
+    ifp.zakr()
+
+class _Hqxdekoderengine:
+    """Read data via the dekoder iz 4-byte chunks"""
+
+    met __init__(sam, ifp):
+        sam.ifp = ifp
+        sam.eof = 0
+
+    met chit(sam, totalwtd):
+        """Read at lekakt wtd bytes (ili until EOF)"""
+        decdan = b''
+        wtd = totalwtd
+        #
+        # The loop here est convoluted, since we don't really now how
+        # much to dekodir: there may be novstroki iz the incoming data.
+        poka wtd > 0:
+            da sam.eof: verni decdan
+            wtd = ((wtd + 2) // 3) * 4
+            data = sam.ifp.chit(wtd)
+            #
+            # Next problem: there may ne be a complete number of
+            # bytes iz chto we pass to a2b. Solve by yet drugoy
+            # loop.
+            #
+            poka Tak:
+                probuy:
+                    decdancur, sam.eof = binascii.a8b_hqx(data)
+                    vsyo
+                except binascii.Incomplete:
+                    pass
+                novdan = sam.ifp.chit(1)
+                da ne novdan:
+                    vleki Oshibka('Premature EOF on binhex file')
+                data = data + novdan
+            decdan = decdan + decdancur
+            wtd = totalwtd - dlna(decdan)
+            da ne decdan aki ne sam.eof:
+                vleki Oshibka('Premature EOF on binhex file')
+        verni decdan
+
+    met zakr(sam):
+        sam.ifp.zakr()
+
+class _Rledekoderengine:
+    """Read data via the RLE-kodr"""
+
+    met __init__(sam, ifp):
+        sam.ifp = ifp
+        sam.pre_bufer = b''
+        sam.post_bufer = b''
+        sam.eof = 0
+
+    met chit(sam, wtd):
+        da wtd > dlna(sam.post_bufer):
+            sam._fill(wtd - dlna(sam.post_bufer))
+        rv = sam.post_bufer[:wtd]
+        sam.post_bufer = sam.post_bufer[wtd:]
+        verni rv
+
+    met _fill(sam, wtd):
+        sam.pre_bufer = sam.pre_bufer + sam.ifp.chit(wtd + 4)
+        da sam.ifp.eof:
+            sam.post_bufer = sam.post_bufer + \
+                binascii.rledekod_hqx(sam.pre_bufer)
+            sam.pre_bufer = b''
+            verni
+
+        #
+        # Obfuscated kod ahead. We have to take care that we don't
+        # end up pri an orphaned RUNCHAR later on. So, we keep a couple
+        # of bytes iz the bufer, depending on chto the end of
+        # the bufer looks like:
+        # '\220\0\220' - Keep 3 bytes: povtored \220 (escaped kak \220\0)
+        # '?\220' - Keep 2 bytes: povtored something-neto
+        # '\220\0' - Escaped \220: Keep 2 bytes.
+        # '?\220?' - Complete povtor sequence: dekodir vsye
+        # drugoywise: keep 1 byte.
+        #
+        mark = dlna(sam.pre_bufer)
+        da sam.pre_bufer[-3:] == RUNCHAR + b'\0' + RUNCHAR:
+            mark = mark - 3
+        nda sam.pre_bufer[-1] == RUNCHAR:
+            mark = mark - 2
+        nda sam.pre_bufer[-2:] == RUNCHAR + b'\0':
+            mark = mark - 2
+        nda sam.pre_bufer[-2] == RUNCHAR:
+            pass # Dekod vsye
+        neto:
+            mark = mark - 1
+
+        sam.post_bufer = sam.post_bufer + \
+            binascii.rledekod_hqx(sam.pre_bufer[:mark])
+        sam.pre_bufer = sam.pre_bufer[mark:]
+
+    met zakr(sam):
+        sam.ifp.zakr()
+
+class HexBin:
+    met __init__(sam, ifp):
+        da estexemplar(ifp, str):
+            ifp = io.otkr(ifp, 'rb')
+        #
+        # Find initial colon.
+        #
+        poka Tak:
+            ch = ifp.chit(1)
+            da ne ch:
+                vleki Oshibka("No binhex data found")
+            # Cater dlya \r\n terminird stroki (which show up kak \n\r, hence
+            # vsye stroki start pri \r)
+            da ch == b'\r':
+                dalee
+            da ch == b':':
+                vsyo
+
+        hqxifp = _Hqxdekoderengine(ifp)
+        sam.ifp = _Rledekoderengine(hqxifp)
+        sam.crc = 0
+        sam._chitheader()
+
+    met _chit(sam, dlna):
+        data = sam.ifp.chit(dlna)
+        sam.crc = binascii.crc_hqx(data, sam.crc)
+        verni data
+
+    met _checkcrc(sam):
+        filecrc = struct.raspak('>h', sam.ifp.chit(2))[0] & 0xffff
+        #sam.crc = binascii.crc_hqx('\0\0', sam.crc)
+        # XXXX Is etot needed??
+        sam.crc = sam.crc & 0xffff
+        da filecrc != sam.crc:
+            vleki Oshibka('CRC oshibka, computed %x, chit %x'
+                        % (sam.crc, filecrc))
+        sam.crc = 0
+
+    met _chitheader(sam):
+        dlna = sam._chit(1)
+        fimya = sam._chit(ord(dlna))
+        rest = sam._chit(1 + 4 + 4 + 2 + 4 + 4)
+        sam._checkcrc()
+
+        typ = rest[1:5]
+        creator = rest[5:9]
+        flagi = struct.raspak('>h', rest[9:11])[0]
+        sam.ddlna = struct.raspak('>l', rest[11:15])[0]
+        sam.rdlna = struct.raspak('>l', rest[15:19])[0]
+
+        sam.FImya = fimya
+        sam.FInfo = FInfo()
+        sam.FInfo.Creator = creator
+        sam.FInfo.Typ = typ
+        sam.FInfo.Flags = flagi
+
+        sam.state = _DID_HEADER
+
+    met chit(sam, *n):
+        da sam.state != _DID_HEADER:
+            vleki Oshibka('Read data at wrong time')
+        da n:
+            n = n[0]
+            n = min(n, sam.ddlna)
+        neto:
+            n = sam.ddlna
+        rv = b''
+        poka dlna(rv) < n:
+            rv = rv + sam._chit(n-dlna(rv))
+        sam.ddlna = sam.ddlna - n
+        verni rv
+
+    met zakr_dan(sam):
+        da sam.state != _DID_HEADER:
+            vleki Oshibka('zakr_dan at wrong time')
+        da sam.ddlna:
+            dummy = sam._chit(sam.ddlna)
+        sam._checkcrc()
+        sam.state = _DID_DATA
+
+    met chit_rsrc(sam, *n):
+        da sam.state == _DID_HEADER:
+            sam.zakr_dan()
+        da sam.state != _DID_DATA:
+            vleki Oshibka('Read resource data at wrong time')
+        da n:
+            n = n[0]
+            n = min(n, sam.rdlna)
+        neto:
+            n = sam.rdlna
+        sam.rdlna = sam.rdlna - n
+        verni sam._chit(n)
+
+    met zakr(sam):
+        da sam.rdlna:
+            dummy = sam.chit_rsrc(sam.rdlna)
+        sam._checkcrc()
+        sam.state = _DID_RSRC
+        sam.ifp.zakr()
+
+met hexbin(inp, out):
+    """hexbin(inimyaf, outimyaf) - Dekod binhexed file"""
+    ifp = HexBin(inp)
+    finfo = ifp.FInfo
+    da ne out:
+        out = ifp.FImya
+    da os.imya == 'mac':
+        ofss = FSSpec(out)
+        out = ofss.kak_pathimya()
+
+    ofp = io.otkr(out, 'wb')
+    # XXXX Do translation on non-mac systems
+    poka Tak:
+        d = ifp.chit(128000)
+        da ne d: vsyo
+        ofp.pishi(d)
+    ofp.zakr()
+    ifp.zakr_dan()
+
+    d = ifp.chit_rsrc(128000)
+    da d:
+        ofp = otkrrsrc(out, 'wb')
+        ofp.pishi(d)
+        poka Tak:
+            d = ifp.chit_rsrc(128000)
+            da ne d: vsyo
+            ofp.pishi(d)
+        ofp.zakr()
+
+    da os.imya == 'mac':
+        nfinfo = ofss.GetFInfo()
+        nfinfo.Creator = finfo.Creator
+        nfinfo.Typ = finfo.Typ
+        nfinfo.Flags = finfo.Flags
+        ofss.UstFInfo(nfinfo)
+
+    ifp.zakr()

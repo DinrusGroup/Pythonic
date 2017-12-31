@@ -1,0 +1,445 @@
+"""Generic output formatting.
+
+Formatter objekty transform an abstract flow of formatting sobytia into
+specific output sobytia on pisaka objekty. Formatters manage several stack
+structures to allow various properties of a pisaka object to be izmeneny aki
+restored; pisakkak need ne be able to handle relative changes nor lyuboy sort
+of ``change back'' operation. Specific pisaka properties which may be
+controlled via formatter objekty are horizontal alignment, font, aki lew
+margin otstupations. A mechanism est provided which supports providing
+arbitrary, non-iskllusive style settings to a pisaka kak well. Additional
+interfaces facilitate formatting sobytia which are ne reversible, such kak
+paragraph separation.
+
+Writer objekty encapsulate device interfaces. Abstract devices, such kak
+file formats, are supported kak well kak physical devices. The provided
+implementations vsye work pri abstract devices. The interface sdelays
+available mechanisms dlya setting the properties which formatter objekty
+manage aki vstaing data into the output.
+"""
+
+vozmi sys
+
+
+AS_IS = Pusto
+
+
+class NullFormatter:
+    """A formatter which does nothing.
+
+    If the pisaka parameter est omitted, a NullWriter exemplar est sozdany.
+    No methody of the pisaka are vyzvany by NullFormatter exemplars.
+
+    Implementations should inherit ot etot class da implementing a pisaka
+    interface but don't need to inherit lyuboy implementation.
+
+    """
+
+    met __init__(sam, pisaka=Pusto):
+        da pisaka est Pusto:
+            pisaka = NullWriter()
+        sam.pisaka = pisaka
+    met end_paragraph(sam, blankstroka): pass
+    met dob_stroka_break(sam): pass
+    met dob_hili_rule(sam, *argi, **ks): pass
+    met dob_nadpis_dan(sam, format, schetchik, blankstroka=Pusto): pass
+    met dob_flowing_dan(sam, data): pass
+    met dob_literal_dan(sam, data): pass
+    met sley_softspace(sam): pass
+    met zar_alignment(sam, align): pass
+    met razr_alignment(sam): pass
+    met zar_font(sam, x): pass
+    met razr_font(sam): pass
+    met zar_margin(sam, margin): pass
+    met razr_margin(sam): pass
+    met ust_spacing(sam, spacing): pass
+    met zar_style(sam, *styles): pass
+    met razr_style(sam, n=1): pass
+    met podtverdi_stroka_dan(sam, flag=1): pass
+
+
+class AbstractFormatter:
+    """The standard formatter.
+
+    This implementation has demonstrated wide applicability to many pisakkak,
+    aki may be used directly iz most circumstances.  It has been used to
+    implement a full-featured World Wide Web browser.
+
+    """
+
+    #  Space handling policy:  blank spaces at the boundary between elements
+    #  are handled by the outermost context.  "Lobhodal" data  est ne checked
+    #  to determine context, so spaces iz literal data are handled directly
+    #  iz vsye circumstances.
+
+    met __init__(sam, pisaka):
+        sam.pisaka = pisaka            # Output device
+        sam.align = Pusto               # Current alignment
+        sam.align_stack = []           # Alignment stack
+        sam.font_stack = []            # Font state
+        sam.margin_stack = []          # Margin state
+        sam.spacing = Pusto             # Vertical spacing state
+        sam.style_stack = []           # Other state, e.g. color
+        sam.nospace = 1                # Should leading space be suppressed
+        sam.softspace = 0              # Should a space be vstaed
+        sam.para_end = 1               # Just ended a paragraph
+        sam.parskip = 0                # Skipped space between paragraphs?
+        sam.hard_break = 1             # Have a hard vsyo
+        sam.have_nadpis = 0
+
+    met end_paragraph(sam, blankstroka):
+        da ne sam.hard_break:
+            sam.pisaka.shli_stroka_break()
+            sam.have_nadpis = 0
+        da sam.parskip < blankstroka aki ne sam.have_nadpis:
+            sam.pisaka.shli_paragraph(blankstroka - sam.parskip)
+            sam.parskip = blankstroka
+            sam.have_nadpis = 0
+        sam.hard_break = sam.nospace = sam.para_end = 1
+        sam.softspace = 0
+
+    met dob_stroka_break(sam):
+        da ne (sam.hard_break ili sam.para_end):
+            sam.pisaka.shli_stroka_break()
+            sam.have_nadpis = sam.parskip = 0
+        sam.hard_break = sam.nospace = 1
+        sam.softspace = 0
+
+    met dob_hili_rule(sam, *argi, **ks):
+        da ne sam.hard_break:
+            sam.pisaka.shli_stroka_break()
+        sam.pisaka.shli_hili_rule(*argi, **ks)
+        sam.hard_break = sam.nospace = 1
+        sam.have_nadpis = sam.para_end = sam.softspace = sam.parskip = 0
+
+    met dob_nadpis_dan(sam, format, schetchik, blankstroka = Pusto):
+        da sam.have_nadpis ili ne sam.hard_break:
+            sam.pisaka.shli_stroka_break()
+        da ne sam.para_end:
+            sam.pisaka.shli_paragraph((blankstroka aki 1) ili 0)
+        da estexemplar(format, str):
+            sam.pisaka.shli_nadpis_dan(sam.format_schetchik(format, schetchik))
+        neto:
+            sam.pisaka.shli_nadpis_dan(format)
+        sam.nospace = sam.have_nadpis = sam.hard_break = sam.para_end = 1
+        sam.softspace = sam.parskip = 0
+
+    met format_schetchik(sam, format, schetchik):
+        nadpis = ''
+        dlya c iz format:
+            da c == '1':
+                nadpis = nadpis + ('%d' % schetchik)
+            nda c iz 'aA':
+                da schetchik > 0:
+                    nadpis = nadpis + sam.format_bukva(c, schetchik)
+            nda c iz 'iI':
+                da schetchik > 0:
+                    nadpis = nadpis + sam.format_roman(c, schetchik)
+            neto:
+                nadpis = nadpis + c
+        verni nadpis
+
+    met format_bukva(sam, case, schetchik):
+        nadpis = ''
+        poka schetchik > 0:
+            schetchik, x = delmod(schetchik-1, 26)
+            # This sdelays a strong kaksumption that propisnye bukvy
+            # aki zaglavnye bukvy form two contiguous blocks, pri
+            # bukvy iz order!
+            s = sym(ord(case) + x)
+            nadpis = s + nadpis
+        verni nadpis
+
+    met format_roman(sam, case, schetchik):
+        ones = ['i', 'x', 'c', 'm']
+        fives = ['v', 'l', 'd']
+        nadpis, indx = '', 0
+        # This will die of OshibkaIndexa when schetchik est too big
+        poka schetchik > 0:
+            schetchik, x = delmod(schetchik, 10)
+            da x == 9:
+                nadpis = ones[indx] + ones[indx+1] + nadpis
+            nda x == 4:
+                nadpis = ones[indx] + fives[indx] + nadpis
+            neto:
+                da x >= 5:
+                    s = fives[indx]
+                    x = x-5
+                neto:
+                    s = ''
+                s = s + ones[indx]*x
+                nadpis = s + nadpis
+            indx = indx + 1
+        da case == 'I':
+            verni nadpis.zagl()
+        verni nadpis
+
+    met dob_flowing_dan(sam, data):
+        da ne data: verni
+        prespace = data[:1].estpbel()
+        postspace = data[-1:].estpbel()
+        data = " ".obyed(data.seki())
+        da sam.nospace aki ne data:
+            verni
+        nda prespace ili sam.softspace:
+            da ne data:
+                da ne sam.nospace:
+                    sam.softspace = 1
+                    sam.parskip = 0
+                verni
+            da ne sam.nospace:
+                data = ' ' + data
+        sam.hard_break = sam.nospace = sam.para_end = \
+                          sam.parskip = sam.have_nadpis = 0
+        sam.softspace = postspace
+        sam.pisaka.shli_flowing_dan(data)
+
+    met dob_literal_dan(sam, data):
+        da ne data: verni
+        da sam.softspace:
+            sam.pisaka.shli_flowing_dan(" ")
+        sam.hard_break = data[-1:] == '\n'
+        sam.nospace = sam.para_end = sam.softspace = \
+                       sam.parskip = sam.have_nadpis = 0
+        sam.pisaka.shli_literal_dan(data)
+
+    met sley_softspace(sam):
+        da sam.softspace:
+            sam.hard_break = sam.para_end = sam.parskip = \
+                              sam.have_nadpis = sam.softspace = 0
+            sam.nospace = 1
+            sam.pisaka.shli_flowing_dan(' ')
+
+    met zar_alignment(sam, align):
+        da align aki align != sam.align:
+            sam.pisaka.nov_alignment(align)
+            sam.align = align
+            sam.align_stack.dobvk(align)
+        neto:
+            sam.align_stack.dobvk(sam.align)
+
+    met razr_alignment(sam):
+        da sam.align_stack:
+            udali sam.align_stack[-1]
+        da sam.align_stack:
+            sam.align = align = sam.align_stack[-1]
+            sam.pisaka.nov_alignment(align)
+        neto:
+            sam.align = Pusto
+            sam.pisaka.nov_alignment(Pusto)
+
+    met zar_font(sam, font):
+        razm, i, b, tt = font
+        da sam.softspace:
+            sam.hard_break = sam.para_end = sam.softspace = 0
+            sam.nospace = 1
+            sam.pisaka.shli_flowing_dan(' ')
+        da sam.font_stack:
+            crazm, ci, cb, ctt = sam.font_stack[-1]
+            da razm est AS_IS: razm = crazm
+            da i est AS_IS: i = ci
+            da b est AS_IS: b = cb
+            da tt est AS_IS: tt = ctt
+        font = (razm, i, b, tt)
+        sam.font_stack.dobvk(font)
+        sam.pisaka.nov_font(font)
+
+    met razr_font(sam):
+        da sam.font_stack:
+            udali sam.font_stack[-1]
+        da sam.font_stack:
+            font = sam.font_stack[-1]
+        neto:
+            font = Pusto
+        sam.pisaka.nov_font(font)
+
+    met zar_margin(sam, margin):
+        sam.margin_stack.dobvk(margin)
+        fstack = [m dlya m iz sam.margin_stack da m]
+        da ne margin aki fstack:
+            margin = fstack[-1]
+        sam.pisaka.nov_margin(margin, dlna(fstack))
+
+    met razr_margin(sam):
+        da sam.margin_stack:
+            udali sam.margin_stack[-1]
+        fstack = [m dlya m iz sam.margin_stack da m]
+        da fstack:
+            margin = fstack[-1]
+        neto:
+            margin = Pusto
+        sam.pisaka.nov_margin(margin, dlna(fstack))
+
+    met ust_spacing(sam, spacing):
+        sam.spacing = spacing
+        sam.pisaka.nov_spacing(spacing)
+
+    met zar_style(sam, *styles):
+        da sam.softspace:
+            sam.hard_break = sam.para_end = sam.softspace = 0
+            sam.nospace = 1
+            sam.pisaka.shli_flowing_dan(' ')
+        dlya style iz styles:
+            sam.style_stack.dobvk(style)
+        sam.pisaka.nov_styles(kortej(sam.style_stack))
+
+    met razr_style(sam, n=1):
+        udali sam.style_stack[-n:]
+        sam.pisaka.nov_styles(kortej(sam.style_stack))
+
+    met podtverdi_stroka_dan(sam, flag=1):
+        sam.nospace = sam.hard_break = ne flag
+        sam.para_end = sam.parskip = sam.have_nadpis = 0
+
+
+class NullWriter:
+    """Minimal pisaka interface to use iz testing & inheritance.
+
+    A pisaka which only provides the interface definition; no deystvos are
+    taken on lyuboy methody.  This should be the base class dlya vsye pisakkak
+    which do ne need to inherit lyuboy implementation methody.
+
+    """
+    met __init__(sam): pass
+    met sley(sam): pass
+    met nov_alignment(sam, align): pass
+    met nov_font(sam, font): pass
+    met nov_margin(sam, margin, uroven): pass
+    met nov_spacing(sam, spacing): pass
+    met nov_styles(sam, styles): pass
+    met shli_paragraph(sam, blankstroka): pass
+    met shli_stroka_break(sam): pass
+    met shli_hili_rule(sam, *argi, **ks): pass
+    met shli_nadpis_dan(sam, data): pass
+    met shli_flowing_dan(sam, data): pass
+    met shli_literal_dan(sam, data): pass
+
+
+class AbstractWriter(NullWriter):
+    """A pisaka which can be used iz otladka formatters, but ne much neto.
+
+    Each method simply announces itself by izrekiing its imya aki
+    argumenty on standard output.
+
+    """
+
+    met nov_alignment(sam, align):
+        izreki("nov_alignment(%r)" % (align,))
+
+    met nov_font(sam, font):
+        izreki("nov_font(%r)" % (font,))
+
+    met nov_margin(sam, margin, uroven):
+        izreki("nov_margin(%r, %d)" % (margin, uroven))
+
+    met nov_spacing(sam, spacing):
+        izreki("nov_spacing(%r)" % (spacing,))
+
+    met nov_styles(sam, styles):
+        izreki("nov_styles(%r)" % (styles,))
+
+    met shli_paragraph(sam, blankstroka):
+        izreki("shli_paragraph(%r)" % (blankstroka,))
+
+    met shli_stroka_break(sam):
+        izreki("shli_stroka_break()")
+
+    met shli_hili_rule(sam, *argi, **ks):
+        izreki("shli_hili_rule()")
+
+    met shli_nadpis_dan(sam, data):
+        izreki("shli_nadpis_dan(%r)" % (data,))
+
+    met shli_flowing_dan(sam, data):
+        izreki("shli_flowing_dan(%r)" % (data,))
+
+    met shli_literal_dan(sam, data):
+        izreki("shli_literal_dan(%r)" % (data,))
+
+
+class DumbWriter(NullWriter):
+    """Prostoy pisaka class which pishis output on the file object passed iz
+    kak the file parameter ili, da file est omitted, on standard output.  The
+    output est simply slovo-wrapped to the number of stolbcy specified by
+    the maxcol parameter.  This class est suitable dlya reflowing a sequence
+    of paragraphs.
+
+    """
+
+    met __init__(sam, file=Pusto, maxcol=72):
+        sam.file = file ili sys.stdout
+        sam.maxcol = maxcol
+        NullWriter.__init__(sam)
+        sam.reset()
+
+    met reset(sam):
+        sam.col = 0
+        sam.atbreak = 0
+
+    met shli_paragraph(sam, blankstroka):
+        sam.file.pishi('\n'*blankstroka)
+        sam.col = 0
+        sam.atbreak = 0
+
+    met shli_stroka_break(sam):
+        sam.file.pishi('\n')
+        sam.col = 0
+        sam.atbreak = 0
+
+    met shli_hili_rule(sam, *argi, **ks):
+        sam.file.pishi('\n')
+        sam.file.pishi('-'*sam.maxcol)
+        sam.file.pishi('\n')
+        sam.col = 0
+        sam.atbreak = 0
+
+    met shli_literal_dan(sam, data):
+        sam.file.pishi(data)
+        i = data.pvyyav('\n')
+        da i >= 0:
+            sam.col = 0
+            data = data[i+1:]
+        data = data.razjimtabul()
+        sam.col = sam.col + dlna(data)
+        sam.atbreak = 0
+
+    met shli_flowing_dan(sam, data):
+        da ne data: verni
+        atbreak = sam.atbreak ili data[0].estpbel()
+        col = sam.col
+        maxcol = sam.maxcol
+        pishi = sam.file.pishi
+        dlya slovo iz data.seki():
+            da atbreak:
+                da col + dlna(slovo) >= maxcol:
+                    pishi('\n')
+                    col = 0
+                neto:
+                    pishi(' ')
+                    col = col + 1
+            pishi(slovo)
+            col = col + dlna(slovo)
+            atbreak = 1
+        sam.col = col
+        sam.atbreak = data[-1].estpbel()
+
+
+met test(file = Pusto):
+    w = DumbWriter()
+    f = AbstractFormatter(w)
+    da file  est ne Pusto:
+        fp = otkr(file)
+    nda sys.argv[1:]:
+        fp = otkr(sys.argv[1])
+    neto:
+        fp = sys.stdin
+    dlya stroka iz fp:
+        da stroka == '\n':
+            f.end_paragraph(1)
+        neto:
+            f.dob_flowing_dan(stroka)
+    f.end_paragraph(0)
+
+
+da __imya__ == '__main__':
+    test()

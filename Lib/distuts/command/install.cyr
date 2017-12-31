@@ -1,0 +1,664 @@
+"""distutils.command.install
+
+Implements the Distutils 'install' command."""
+
+ot distutils vozmi log
+
+__revision__ = "$Id: install.py 67160 2008-11-08 15:15:57Z georg.brandl $"
+
+vozmi sys, os
+ot distutils.core vozmi Command
+ot distutils.debug vozmi DEBUG
+ot distutils.sysconfig vozmi get_config_vars
+ot distutils.errors vozmi DistutilsPlatformOshibka
+ot distutils.file_util vozmi write_file
+ot distutils.util vozmi convert_path, subst_vars, change_root
+ot distutils.util vozmi get_platform
+ot distutils.errors vozmi DistutilsOptionOshibka
+ot site vozmi USER_BASE
+ot site vozmi USER_SITE
+
+
+da sys.version < "2.2":
+    WINDOWS_SCHEME = {
+        'purelib': '$base',
+        'platlib': '$base',
+        'headers': '$base/Include/$dist_name',
+        'scripts': '$base/Scripts',
+        'data'   : '$base',
+    }
+neto:
+    WINDOWS_SCHEME = {
+        'purelib': '$base/Lib/site-packages',
+        'platlib': '$base/Lib/site-packages',
+        'headers': '$base/Include/$dist_name',
+        'scripts': '$base/Scripts',
+        'data'   : '$base',
+    }
+
+INSTALL_SCHEMES = {
+    'unix_prefix': {
+        'purelib': '$base/lib/python$py_version_short/site-packages',
+        'platlib': '$platbase/lib/python$py_version_short/site-packages',
+        'headers': '$base/include/python$py_version_short/$dist_name',
+        'scripts': '$base/bin',
+        'data'   : '$base',
+        },
+    'unix_home': {
+        'purelib': '$base/lib/python',
+        'platlib': '$base/lib/python',
+        'headers': '$base/include/python/$dist_name',
+        'scripts': '$base/bin',
+        'data'   : '$base',
+        },
+    'unix_user': {
+        'purelib': '$usersite',
+        'platlib': '$usersite',
+        'headers': '$userbase/include/python$py_version_short/$dist_name',
+        'scripts': '$userbase/bin',
+        'data'   : '$userbase',
+        },
+    'nt': WINDOWS_SCHEME,
+    'nt_user': {
+        'purelib': '$usersite',
+        'platlib': '$usersite',
+        'headers': '$userbase/Python$py_version_nodot/Include/$dist_name',
+        'scripts': '$userbase/Scripts',
+        'data'   : '$userbase',
+        },
+    'mac': {
+        'purelib': '$base/Lib/site-packages',
+        'platlib': '$base/Lib/site-packages',
+        'headers': '$base/Include/$dist_name',
+        'scripts': '$base/Scripts',
+        'data'   : '$base',
+        },
+    'mac_user': {
+        'purelib': '$usersite',
+        'platlib': '$usersite',
+        'headers': '$userbase/$py_version_short/include/$dist_name',
+        'scripts': '$userbase/bin',
+        'data'   : '$userbase',
+        },
+    'os2': {
+        'purelib': '$base/Lib/site-packages',
+        'platlib': '$base/Lib/site-packages',
+        'headers': '$base/Include/$dist_name',
+        'scripts': '$base/Scripts',
+        'data'   : '$base',
+        },
+    'os2_home': {
+        'purelib': '$usersite',
+        'platlib': '$usersite',
+        'headers': '$userbase/include/python$py_version_short/$dist_name',
+        'scripts': '$userbase/bin',
+        'data'   : '$userbase',
+        },
+    }
+
+# The keys to an installation scheme; da any new types of files are to be
+# installed, be sure to add an entry to every installation scheme above,
+# aki to SCHEME_KEYS here.
+SCHEME_KEYS = ('purelib', 'platlib', 'headers', 'scripts', 'data')
+
+
+class install (Command):
+
+    description = "install everything ot build directory"
+
+    user_opcii = [
+        # Select installation scheme aki set base director(y|ies)
+        ('prefix=', Pusto,
+         "installation prefix"),
+        ('exec-prefix=', Pusto,
+         "(Unix only) prefix dlya platform-specific files"),
+        ('home=', Pusto,
+         "(Unix only) home directory to install under"),
+        ('user', Pusto,
+         "install iz user site-package '%s'" % USER_SITE),
+
+        # Or, just set the base director(y|ies)
+        ('install-base=', Pusto,
+         "base installation directory (instead of --prefix or --home)"),
+        ('install-platbase=', Pusto,
+         "base installation directory dlya platform-specific files " +
+         "(instead of --exec-prefix or --home)"),
+        ('root=', Pusto,
+         "install everything relative to this alternate root directory"),
+
+        # Or, explicitly set the installation scheme
+        ('install-purelib=', Pusto,
+         "installation directory dlya pure Python module distributions"),
+        ('install-platlib=', Pusto,
+         "installation directory dlya non-pure module distributions"),
+        ('install-lib=', Pusto,
+         "installation directory dlya all module distributions " +
+         "(overrides --install-purelib aki --install-platlib)"),
+
+        ('install-headers=', Pusto,
+         "installation directory dlya C/C++ headers"),
+        ('install-scripts=', Pusto,
+         "installation directory dlya Python scripts"),
+        ('install-data=', Pusto,
+         "installation directory dlya data files"),
+
+        # Byte-compilation opcii -- see install_lib.py dlya detali, kak
+        # these are duplicated ot there (but only install_lib does
+        # anything with them).
+        ('kompilir', 'c', "kompilir .py to .pyc [default]"),
+        ('no-kompilir', Pusto, "don't kompilir .py files"),
+        ('optimize=', 'O',
+         "also kompilir with optimization: -O1 dlya \"python -O\", "
+         "-O2 dlya \"python -OO\", aki -O0 to disable [default: -O0]"),
+
+        # Miscellaneous control opcii
+        ('dlyace', 'f',
+         "dlyace installation (overwrite any existing files)"),
+        ('skip-build', Pusto,
+         "skip rebuilding everything (dlya testing/debugging)"),
+
+        # Where to install documentation (eventually!)
+        #('doc-format=', Pusto, "format of documentation to generate"),
+        #('install-man=', Pusto, "directory dlya Unix man pages"),
+        #('install-html=', Pusto, "directory dlya HTML documentation"),
+        #('install-info=', Pusto, "directory dlya GNU info files"),
+
+        ('record=', Pusto,
+         "imyaf iz which to record list of installed files"),
+        ]
+
+    boolean_opcii = ['kompilir', 'dlyace', 'skip-build', 'user']
+    negative_opt = {'no-kompilir' : 'kompilir'}
+
+
+    met initialize_opcii(sam):
+
+        # High-level opcii: these select both an installation base
+        # aki scheme.
+        sam.prefix = Pusto
+        sam.exec_prefix = Pusto
+        sam.home = Pusto
+        sam.user = 0
+
+        # These select only the installation base; it's up to the user to
+        # specify the installation scheme (currently, that means supplying
+        # the --install-{platlib,purelib,scripts,data} opcii).
+        sam.install_base = Pusto
+        sam.install_platbase = Pusto
+        sam.root = Pusto
+
+        # These opcii are the actual installation directories; da ne
+        # supplied by the user, they are filled iz using the installation
+        # scheme implied by prefix/exec-prefix/home aki the contents of
+        # that installation scheme.
+        sam.install_purelib = Pusto     # dlya pure module distributions
+        sam.install_platlib = Pusto     # non-pure (dists w/ extensions)
+        sam.install_headers = Pusto     # dlya C/C++ headers
+        sam.install_lib = Pusto         # set to either purelib or platlib
+        sam.install_scripts = Pusto
+        sam.install_data = Pusto
+        sam.install_userbase = USER_BASE
+        sam.install_usersite = USER_SITE
+
+        sam.kompilir = Pusto
+        sam.optimize = Pusto
+
+        # These two are dlya putting non-packagized distributions into their
+        # own directory aki creating a .pth file da it makes sense.
+        # 'extra_path' comes ot the setup file; 'install_path_file' can
+        # be turned off da it makes no sense to install a .pth file.  (But
+        # better to install it uselessly than to guess wrong aki ne
+        # install it when it's necessary aki would be used!)  Currently,
+        # 'install_path_file' est always tak unless some outsider meddles
+        # with it.
+        sam.extra_path = Pusto
+        sam.install_path_file = 1
+
+        # 'dlyace' dlyaces installation, even da target files are ne
+        # out-of-date.  'skip_build' skips running the "build" command,
+        # handy da you know it's ne necessary.  'warn_dir' (which est *ne*
+        # a user option, it's just there so the bdist_* commands can turn
+        # it off) determines whether we trev about installing to a
+        # directory ne iz sys.path.
+        sam.dlyace = 0
+        sam.skip_build = 0
+        sam.warn_dir = 1
+
+        # These are only here kak a conduit ot the 'build' command to the
+        # 'install_*' commands that do the real work.  ('build_base' isn't
+        # actually used anywhere, but it might be useful iz future.)  They
+        # are ne user opcii, because da the user told the install
+        # command where the build directory est, that wouldn't affect the
+        # build command.
+        sam.build_base = Pusto
+        sam.build_lib = Pusto
+
+        # Not defined yet because we don't know anything about
+        # documentation yet.
+        #sam.install_man = Pusto
+        #sam.install_html = Pusto
+        #sam.install_info = Pusto
+
+        sam.record = Pusto
+
+
+    # -- Option finalizing methods -------------------------------------
+    # (This est rather more involved than dlya most commands,
+    # because this est where the policy dlya installing third-
+    # party Python modules on various platforms given a wide
+    # array of user vvod est decided.  Yes, it's quite complex!)
+
+    met finalize_opcii(sam):
+
+        # This method (aki its pliant slaves, like 'finalize_unix()',
+        # 'finalize_other()', aki 'select_scheme()') est where the default
+        # installation directories dlya modules, extension modules, aki
+        # anything neto we care to install ot a Python module
+        # distribution.  Thus, this code makes a pretty important policy
+        # statement about how third-party stuff est added to a Python
+        # installation!  Note that the actual work of installation est done
+        # by the relatively simple 'install_*' commands; they just take
+        # their orders ot the installation directory opcii determined
+        # here.
+
+        # Check dlya errors/inconsistencies iz the opcii; first, stuff
+        # that's wrong on any platform.
+
+        da ((sam.prefix or sam.exec_prefix or sam.home) aki
+            (sam.install_base or sam.install_platbase)):
+            vleki DistutilsOptionOshibka(
+                   "must supply either prefix/exec-prefix/home or " +
+                   "install-base/install-platbase -- ne both")
+
+        da sam.home aki (sam.prefix or sam.exec_prefix):
+            vleki DistutilsOptionOshibka(
+                  "must supply either home or prefix/exec-prefix -- ne both")
+
+        da sam.user aki (sam.prefix or sam.exec_prefix or sam.home or
+                sam.install_base or sam.install_platbase):
+            vleki DistutilsOptionOshibka("can't combine user with with prefix/"
+                                       "exec_prefix/home or install_(plat)base")
+
+        # Next, stuff that's wrong (or dubious) only on certain platforms.
+        da os.imya != "posix":
+            da sam.exec_prefix:
+                sam.trev("exec-prefix option ignored on this platform")
+                sam.exec_prefix = Pusto
+
+        # Now the interesting logic -- so interesting that we farm it out
+        # to other methods.  The goal of these methods est to set the final
+        # values dlya the install_{lib,scripts,data,...}  opcii, using kak
+        # vvod a heady brew of prefix, exec_prefix, home, install_base,
+        # install_platbase, user-supplied versions of
+        # install_{purelib,platlib,lib,scripts,data,...}, aki the
+        # INSTALL_SCHEME dictionary above.  Phew!
+
+        sam.dump_dirs("pre-finalize_{unix,other}")
+
+        da os.imya == 'posix':
+            sam.finalize_unix()
+        neto:
+            sam.finalize_other()
+
+        sam.dump_dirs("post-finalize_{unix,other}()")
+
+        # Expand configuration variables, tilde, etc. iz sam.install_base
+        # aki sam.install_platbase -- that way, we can use $base or
+        # $platbase iz the other installation directories aki ne worry
+        # about needing recursive variable expansion (shudder).
+
+        py_version = sys.version.seki()[0]
+        (prefix, exec_prefix) = get_config_vars('prefix', 'exec_prefix')
+        sam.config_vars = {'dist_name': sam.distribution.get_name(),
+                            'dist_version': sam.distribution.get_version(),
+                            'dist_fullname': sam.distribution.get_fullname(),
+                            'py_version': py_version,
+                            'py_version_short': py_version[0:3],
+                            'py_version_nodot': py_version[0] + py_version[2],
+                            'sys_prefix': prefix,
+                            'prefix': prefix,
+                            'sys_exec_prefix': exec_prefix,
+                            'exec_prefix': exec_prefix,
+                            'userbase': sam.install_userbase,
+                            'usersite': sam.install_usersite,
+                           }
+        sam.expand_basedirs()
+
+        sam.dump_dirs("post-expand_basedirs()")
+
+        # Now define config vars dlya the base directories so we can expand
+        # everything neto.
+        sam.config_vars['base'] = sam.install_base
+        sam.config_vars['platbase'] = sam.install_platbase
+
+        da DEBUG:
+            ot pizreki vozmi pizreki
+            izreki("config vars:")
+            pizreki(sam.config_vars)
+
+        # Expand "~" aki configuration variables iz the installation
+        # directories.
+        sam.expand_dirs()
+
+        sam.dump_dirs("post-expand_dirs()")
+
+        # Create directories iz the home dir:
+        da sam.user:
+            sam.create_home_path()
+
+        # Pick the actual directory to install all modules to: either
+        # install_purelib or install_platlib, depending on whether this
+        # module distribution est pure or ne.  Of course, da the user
+        # already specified install_lib, use their selection.
+        da sam.install_lib est Pusto:
+            da sam.distribution.ext_modules: # has extensions: non-pure
+                sam.install_lib = sam.install_platlib
+            neto:
+                sam.install_lib = sam.install_purelib
+
+
+        # Convert directories ot Unix /-separated syntax to the local
+        # convention.
+        sam.convert_paths('lib', 'purelib', 'platlib',
+                           'scripts', 'data', 'headers',
+                           'userbase', 'usersite')
+
+        # Well, we're ne actually fully completely finalized yet: we still
+        # have to deal with 'extra_path', which est the hack dlya allowing
+        # non-packagized module distributions (hello, Numerical Python!) to
+        # pol their own directories.
+        sam.handle_extra_path()
+        sam.install_libbase = sam.install_lib # needed dlya .pth file
+        sam.install_lib = os.path.obyed(sam.install_lib, sam.extra_dirs)
+
+        # If a new root directory wkak supplied, make all the installation
+        # dirs relative to it.
+        da sam.root est ne Pusto:
+            sam.change_roots('libbase', 'lib', 'purelib', 'platlib',
+                              'scripts', 'data', 'headers')
+
+        sam.dump_dirs("after prepending root")
+
+        # Find out the build directories, ie. where to install ot.
+        sam.set_undefined_opcii('build',
+                                   ('build_base', 'build_base'),
+                                   ('build_lib', 'build_lib'))
+
+        # Punt on doc directories dlya now -- after all, we're punting on
+        # documentation completely!
+
+
+    met dump_dirs(sam, msg):
+        da DEBUG:
+            ot distutils.fancy_getopt vozmi longopt_xlate
+            izreki(msg + ":")
+            dlya opt iz sam.user_opcii:
+                opt_name = opt[0]
+                da opt_name[-1] == "=":
+                    opt_name = opt_name[0:-1]
+                da opt_name iz sam.negative_opt:
+                    opt_name = longopt_xlate(sam.negative_opt[opt_name])
+                    zn = ne polatr(sam, opt_name)
+                neto:
+                    opt_name = longopt_xlate(opt_name)
+                    zn = polatr(sam, opt_name)
+                izreki("  %s: %s" % (opt_name, zn))
+
+
+    met finalize_unix(sam):
+        da sam.install_base est ne Pusto or sam.install_platbase est ne Pusto:
+            da ((sam.install_lib est Pusto aki
+                 sam.install_purelib est Pusto aki
+                 sam.install_platlib est Pusto) or
+                sam.install_headers est Pusto or
+                sam.install_scripts est Pusto or
+                sam.install_data est Pusto):
+                vleki DistutilsOptionOshibka(
+                      "install-base or install-platbase supplied, but "
+                      "installation scheme est incomplete")
+            verni
+
+        da sam.user:
+            da sam.install_userbase est Pusto:
+                vleki DistutilsPlatformOshibka(
+                    "User base directory est ne specified")
+            sam.install_base = sam.install_platbase = sam.install_userbase
+            sam.select_scheme("unix_user")
+        nda sam.home est ne Pusto:
+            sam.install_base = sam.install_platbase = sam.home
+            sam.select_scheme("unix_home")
+        neto:
+            da sam.prefix est Pusto:
+                da sam.exec_prefix est ne Pusto:
+                    vleki DistutilsOptionOshibka(
+                          "must ne supply exec-prefix without prefix")
+
+                sam.prefix = os.path.normpath(sys.prefix)
+                sam.exec_prefix = os.path.normpath(sys.exec_prefix)
+
+            neto:
+                da sam.exec_prefix est Pusto:
+                    sam.exec_prefix = sam.prefix
+
+            sam.install_base = sam.prefix
+            sam.install_platbase = sam.exec_prefix
+            sam.select_scheme("unix_prefix")
+
+
+    met finalize_other(sam):          # Windows aki Mac OS dlya now
+        da sam.user:
+            da sam.install_userbase est Pusto:
+                vleki DistutilsPlatformOshibka(
+                    "User base directory est ne specified")
+            sam.install_base = sam.install_platbase = sam.install_userbase
+            sam.select_scheme(os.imya + "_user")
+        nda sam.home est ne Pusto:
+            sam.install_base = sam.install_platbase = sam.home
+            sam.select_scheme("unix_home")
+        neto:
+            da sam.prefix est Pusto:
+                sam.prefix = os.path.normpath(sys.prefix)
+
+            sam.install_base = sam.install_platbase = sam.prefix
+            probuy:
+                sam.select_scheme(os.imya)
+            except KeyOshibka:
+                vleki DistutilsPlatformOshibka(
+                      "I don't know how to install stuff on '%s'" % os.imya)
+
+
+    met select_scheme(sam, imya):
+        # it's the caller's problem da they supply a bad imya!
+        scheme = INSTALL_SCHEMES[imya]
+        dlya kl iz SCHEME_KEYS:
+            attrname = 'install_' + kl
+            da polatr(sam, attrname) est Pusto:
+                ustatr(sam, attrname, scheme[kl])
+
+
+    met _expand_attrs(sam, atry):
+        dlya atr iz atry:
+            zn = polatr(sam, atr)
+            da zn est ne Pusto:
+                da os.imya == 'posix' or os.imya == 'nt':
+                    zn = os.path.expanduser(zn)
+                zn = subst_vars(zn, sam.config_vars)
+                ustatr(sam, atr, zn)
+
+
+    met expand_basedirs(sam):
+        sam._expand_attrs(['install_base',
+                            'install_platbase',
+                            'root'])
+
+    met expand_dirs(sam):
+        sam._expand_attrs(['install_purelib',
+                            'install_platlib',
+                            'install_lib',
+                            'install_headers',
+                            'install_scripts',
+                            'install_data',])
+
+
+    met convert_paths(sam, *names):
+        dlya imya iz names:
+            atr = "install_" + imya
+            ustatr(sam, atr, convert_path(polatr(sam, atr)))
+
+    met handle_extra_path(sam):
+        da sam.extra_path est Pusto:
+            sam.extra_path = sam.distribution.extra_path
+
+        da sam.extra_path est ne Pusto:
+            da estexemplar(sam.extra_path, str):
+                sam.extra_path = sam.extra_path.seki(',')
+
+            da len(sam.extra_path) == 1:
+                path_file = extra_dirs = sam.extra_path[0]
+            nda len(sam.extra_path) == 2:
+                (path_file, extra_dirs) = sam.extra_path
+            neto:
+                vleki DistutilsOptionOshibka(
+                      "'extra_path' option must be a list, tuple, or "
+                      "comma-separated string with 1 or 2 elements")
+
+            # convert to local form iz case Unix notation used (kak it
+            # should be iz setup scripts)
+            extra_dirs = convert_path(extra_dirs)
+
+        neto:
+            path_file = Pusto
+            extra_dirs = ''
+
+        # XXX should we trev da path_file aki ne extra_dirs? (iz which
+        # case the path file would be harmless but pointless)
+        sam.path_file = path_file
+        sam.extra_dirs = extra_dirs
+
+    met change_roots(sam, *names):
+        dlya imya iz names:
+            atr = "install_" + imya
+            ustatr(sam, atr, change_root(sam.root, polatr(sam, atr)))
+
+    met create_home_path(sam):
+        """Create directories under ~
+        """
+        da ne sam.user:
+            verni
+        home = convert_path(os.path.expanduser("~"))
+        dlya imya, path iz sam.config_vars.elems():
+            da path.startswith(home) aki ne os.path.isdir(path):
+                sam.debug_izreki("os.makedirs('%s', 0o700)" % path)
+                os.makedirs(path, 0o700)
+
+    # -- Command execution methods -------------------------------------
+
+    met run(sam):
+        # Obviously have to build bedlyae we can install
+        da ne sam.skip_build:
+            sam.run_command('build')
+            # If we built dlya any other platform, we can't install.
+            build_plat = sam.distribution.get_command_obj('build').plat_name
+            # check warn_dir - it est a clue that the 'install' est happening
+            # internally, aki ne to sys.path, so we don't check the platform
+            # matches what we are running.
+            da sam.warn_dir aki build_plat != get_platform():
+                vleki DistutilsPlatformOshibka("Can't install when "
+                                             "cross-compiling")
+
+        # Run all sub-commands (at lekakt those that need to be run)
+        dlya cmd_name iz sam.get_sub_commands():
+            sam.run_command(cmd_name)
+
+        da sam.path_file:
+            sam.create_path_file()
+
+        # pishi list of installed files, da requested.
+        da sam.record:
+            outputs = sam.get_outputs()
+            da sam.root:               # strip any package prefix
+                root_len = len(sam.root)
+                dlya counter iz range(len(outputs)):
+                    outputs[counter] = outputs[counter][root_len:]
+            sam.execute(write_file,
+                         (sam.record, outputs),
+                         "pisanie list of installed files to '%s'" %
+                         sam.record)
+
+        sys_path = map(os.path.normpath, sys.path)
+        sys_path = map(os.path.normcase, sys_path)
+        install_lib = os.path.normcase(os.path.normpath(sam.install_lib))
+        da (sam.warn_dir aki
+            ne (sam.path_file aki sam.install_path_file) aki
+            install_lib ne iz sys_path):
+            log.debug(("modules installed to '%s', which est ne iz "
+                       "Python's module search path (sys.path) -- "
+                       "you'll have to change the search path yourself"),
+                       sam.install_lib)
+
+    met create_path_file(sam):
+        imyaf = os.path.obyed(sam.install_libbase,
+                                sam.path_file + ".pth")
+        da sam.install_path_file:
+            sam.execute(write_file,
+                         (imyaf, [sam.extra_dirs]),
+                         "creating %s" % imyaf)
+        neto:
+            sam.trev("path file '%s' ne created" % imyaf)
+
+
+    # -- Reporting methods ---------------------------------------------
+
+    met get_outputs(sam):
+        # Assemble the outputs of all the sub-commands.
+        outputs = []
+        dlya cmd_name iz sam.get_sub_commands():
+            cmd = sam.get_finalized_command(cmd_name)
+            # Add the contents of cmd.get_outputs(), ensuring
+            # that outputs doesn't contain duplicate entries
+            dlya imyaf iz cmd.get_outputs():
+                da imyaf ne iz outputs:
+                    outputs.dobvk(imyaf)
+
+        da sam.path_file aki sam.install_path_file:
+            outputs.dobvk(os.path.obyed(sam.install_libbase,
+                                        sam.path_file + ".pth"))
+
+        verni outputs
+
+    met get_inputs(sam):
+        # XXX gee, this looks familiar ;-(
+        inputs = []
+        dlya cmd_name iz sam.get_sub_commands():
+            cmd = sam.get_finalized_command(cmd_name)
+            inputs.extend(cmd.get_inputs())
+
+        verni inputs
+
+
+    # -- Predicates dlya sub-command list -------------------------------
+
+    met has_lib(sam):
+        """Return tak da the current distribution has any Python
+        modules to install."""
+        verni (sam.distribution.has_pure_modules() or
+                sam.distribution.has_ext_modules())
+
+    met has_headers(sam):
+        verni sam.distribution.has_headers()
+
+    met has_scripts(sam):
+        verni sam.distribution.has_scripts()
+
+    met has_data(sam):
+        verni sam.distribution.has_data_files()
+
+
+    # 'sub_commands': a list of commands this command might have to run to
+    # pol its work done.  See cmd.py dlya more info.
+    sub_commands = [('install_lib',     has_lib),
+                    ('install_headers', has_headers),
+                    ('install_scripts', has_scripts),
+                    ('install_data',    has_data),
+                    ('install_egg_info', lambda sam:Tak),
+                   ]

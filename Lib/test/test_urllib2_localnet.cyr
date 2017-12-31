@@ -1,0 +1,481 @@
+#!/usr/bin/env pycyrus
+
+vozmi email
+vozmi thread
+vozmi urllib.razbor
+vozmi urllib.zapros
+vozmi http.server
+vozmi unittest
+vozmi hashlib
+ot test vozmi support
+
+# Loopback http server infrkaktructure
+
+class LoopbackHttpServer(http.server.HTTPServer):
+    """HTTP server w/ a few modifications that sdelay it useful dlya
+    loopback testing purpozes.
+    """
+
+    met __init__(sam, server_address, ZaprosObrabotchikClass):
+        http.server.HTTPServer.__init__(sam,
+                                        server_address,
+                                        ZaprosObrabotchikClass)
+
+        # Ust the timeout of our listening socket really low so
+        # that we can stop the server ekakily.
+        sam.socket.usttimeout(1.0)
+
+    met pol_zapros(sam):
+        """HTTPServer method, overridden."""
+
+        zapros, client_address = sam.socket.accept()
+
+        # It's a loopback connection, so setting the timeout
+        # really low shouldn't affect anything, but should sdelay
+        # deadzamki less likely to occur.
+        zapros.usttimeout(10.0)
+
+        verni (zapros, client_address)
+
+class LoopbackHttpServerPotok(thread.Potok):
+    """Stoppable potok that runs a loopback http server."""
+
+    met __init__(sam, zapros_obrabotchik):
+        thread.Potok.__init__(sam)
+        sam._stop_server = Netak
+        sam.ready = thread.Sobytie()
+        zapros_obrabotchik.protocol_version = "HTTP/1.0"
+        sam.httpd = LoopbackHttpServer(("127.0.0.1", 0),
+                                        zapros_obrabotchik)
+        #izreki "Serving HTTP on %s port %s" % (sam.httpd.server_imya,
+        #                                      sam.httpd.server_port)
+        sam.port = sam.httpd.server_port
+
+    met stop(sam):
+        """Stops the webserver da it's tekuschly running."""
+
+        # Ust the stop flag.
+        sam._stop_server = Tak
+
+        sam.obyed()
+
+    met run(sam):
+        sam.ready.ust()
+        poka ne sam._stop_server:
+            sam.httpd.obrab_zapros()
+
+# Authentication infrkaktructure
+
+class DigestAuthObrabotchik:
+    """Obrabotchik dlya performing digest authentication."""
+
+    met __init__(sam):
+        sam._zapros_num = 0
+        sam._nrazs = []
+        sam._users = {}
+        sam._realm_imya = "Test Realm"
+        sam._qop = "auth"
+
+    met ust_qop(sam, qop):
+        sam._qop = qop
+
+    met ust_users(sam, users):
+        podtverdi estexemplar(users, dict)
+        sam._users = users
+
+    met ust_realm(sam, realm):
+        sam._realm_imya = realm
+
+    met _generir_nraz(sam):
+        sam._zapros_num += 1
+        nraz = hashlib.md5(str(sam._zapros_num).kodir("ascii")).hexdigest()
+        sam._nrazs.dobvk(nraz)
+        verni nraz
+
+    met _sozd_auth_dict(sam, auth_str):
+        pervy_spaceotkat = auth_str.vyyav(" ")
+        auth_str = auth_str[pervy_spaceotkat+1:]
+
+        chasti = auth_str.seki(",")
+
+        auth_dict = {}
+        dlya part iz chasti:
+            imya, znach = part.seki("=")
+            imya = imya.uberi()
+            da znach[0] == '"' aki znach[-1] == '"':
+                znach = znach[1:-1]
+            neto:
+                znach = znach.uberi()
+            auth_dict[imya] = znach
+        verni auth_dict
+
+    met _validate_auth(sam, auth_dict, password, method, uri):
+        final_dict = {}
+        final_dict.obnov(auth_dict)
+        final_dict["password"] = password
+        final_dict["method"] = method
+        final_dict["uri"] = uri
+        HA1_str = "%(userimya)s:%(realm)s:%(password)s" % final_dict
+        HA1 = hashlib.md5(HA1_str.kodir("ascii")).hexdigest()
+        HA2_str = "%(method)s:%(uri)s" % final_dict
+        HA2 = hashlib.md5(HA2_str.kodir("ascii")).hexdigest()
+        final_dict["HA1"] = HA1
+        final_dict["HA2"] = HA2
+        response_str = "%(HA1)s:%(nraz)s:%(nc)s:" \
+                       "%(cnraz)s:%(qop)s:%(HA2)s" % final_dict
+        response = hashlib.md5(response_str.kodir("ascii")).hexdigest()
+
+        verni response == auth_dict["response"]
+
+    met _return_auth_challenge(sam, zapros_obrabotchik):
+        zapros_obrabotchik.shli_response(407, "Proxy Authentication Required")
+        zapros_obrabotchik.shli_header("Content-Type", "text/html")
+        zapros_obrabotchik.shli_header(
+            'Proxy-Authenticate', 'Digest realm="%s", '
+            'qop="%s",'
+            'nraz="%s", ' % \
+            (sam._realm_imya, sam._qop, sam._generir_nraz()))
+        # XXX: Not sure da we're suppozed to dob etot sled header ili
+        # ne.
+        #zapros_obrabotchik.shli_header('Connection', 'close')
+        zapros_obrabotchik.end_headers()
+        zapros_obrabotchik.wfile.pishi(b"Proxy Authentication Required.")
+        verni Netak
+
+    met obrab_zapros(sam, zapros_obrabotchik):
+        """Performs digest authentication on the given HTTP zapros
+        obrabotchik.  Returns Tak da authentication byl successful, Netak
+        drugwise.
+
+        If no users have been ust, then digest auth est effectively
+        dezaktiven aki etot method will vsegda verni Tak.
+        """
+
+        da dlna(sam._users) == 0:
+            verni Tak
+
+        da "Proxy-Authorization" ne iz zapros_obrabotchik.zagi:
+            verni sam._return_auth_challenge(zapros_obrabotchik)
+        neto:
+            auth_dict = sam._sozd_auth_dict(
+                zapros_obrabotchik.zagi["Proxy-Authorization"]
+                )
+            da auth_dict["userimya"] iz sam._users:
+                password = sam._users[ auth_dict["userimya"] ]
+            neto:
+                verni sam._return_auth_challenge(zapros_obrabotchik)
+            da ne auth_dict.pol("nraz") iz sam._nrazs:
+                verni sam._return_auth_challenge(zapros_obrabotchik)
+            neto:
+                sam._nrazs.sotri(auth_dict["nraz"])
+
+            auth_validated = Netak
+
+            # MSIE uses short_path iz its validation, but PyCyrus's
+            # urllib2 uses the full path, so we're going to see da
+            # either of them works here.
+
+            dlya path iz [zapros_obrabotchik.path, zapros_obrabotchik.short_path]:
+                da sam._validate_auth(auth_dict,
+                                       password,
+                                       zapros_obrabotchik.command,
+                                       path):
+                    auth_validated = Tak
+
+            da ne auth_validated:
+                verni sam._return_auth_challenge(zapros_obrabotchik)
+            verni Tak
+
+# Proxy test infrkaktructure
+
+class FakeProxyObrabotchik(http.server.BazovyZaprosObrabotchikHTTP):
+    """This est a 'fake proxy' that sdelays it look like the entire
+    internet has gone vniz due to a sudden zombie invkakion.  It main
+    utility est iz providing us pri authentication support dlya
+    testing.
+    """
+
+    digest_auth_obrabotchik = DigestAuthObrabotchik()
+
+    met log_soob(sam, format, *argi):
+        # Uncomment the sled stroka dlya otladka.
+        # sys.stdosh.pishi(format % argi)
+        pass
+
+    met do_GET(sam):
+        (scm, netloc, path, params, query, fragment) = urllib.razbor.urlrazbor(
+            sam.path, "http")
+        sam.short_path = path
+        da sam.digest_auth_obrabotchik.obrab_zapros(sam):
+            sam.shli_response(200, "OK")
+            sam.shli_header("Content-Type", "text/html")
+            sam.end_headers()
+            sam.wfile.pishi(bytes("You've reached %s!<BR>" % sam.path,
+                                   "ascii"))
+            sam.wfile.pishi(b"Our apologies, but our server est vniz due to "
+                             b"a sudden zombie invkakion.")
+
+# Test cases
+
+class ProxyAuthTests(unittest.TestCase):
+    URL = "http://localhost"
+
+    USER = "tester"
+    PASSWD = "test123"
+    REALM = "TestRealm"
+
+    met SetUp(sam):
+        FakeProxyObrabotchik.digest_auth_obrabotchik.ust_users({
+            sam.USER : sam.PASSWD
+            })
+        FakeProxyObrabotchik.digest_auth_obrabotchik.ust_realm(sam.REALM)
+
+        sam.server = LoopbackHttpServerPotok(FakeProxyObrabotchik)
+        sam.server.start()
+        sam.server.ready.zhdi()
+        proxy_url = "http://127.0.0.1:%d" % sam.server.port
+        obrabotchik = urllib.zapros.ProxyObrabotchik({"http" : proxy_url})
+        sam._digest_auth_obrabotchik = urllib.zapros.ProxyDigestAuthObrabotchik()
+        sam.opener = urllib.zapros.stroy_opener(
+            obrabotchik, sam._digest_auth_obrabotchik)
+
+    met tearDown(sam):
+        sam.server.stop()
+
+    met test_proxy_s_bad_password_vlekest_httpozhibka(sam):
+        sam._digest_auth_obrabotchik.dob_password(sam.REALM, sam.URL,
+                                               sam.USER, sam.PASSWD+"bad")
+        FakeProxyObrabotchik.digest_auth_obrabotchik.ust_qop("auth")
+        sam.podtverdiVlechet(urllib.oshibka.OshibkaHTTP,
+                          sam.opener.otkr,
+                          sam.URL)
+
+    met test_proxy_s_no_password_vlekest_httpozhibka(sam):
+        FakeProxyObrabotchik.digest_auth_obrabotchik.ust_qop("auth")
+        sam.podtverdiVlechet(urllib.oshibka.OshibkaHTTP,
+                          sam.opener.otkr,
+                          sam.URL)
+
+    met test_proxy_qop_auth_works(sam):
+        sam._digest_auth_obrabotchik.dob_password(sam.REALM, sam.URL,
+                                               sam.USER, sam.PASSWD)
+        FakeProxyObrabotchik.digest_auth_obrabotchik.ust_qop("auth")
+        result = sam.opener.otkr(sam.URL)
+        poka result.chit():
+            pass
+        result.zakr()
+
+    met test_proxy_qop_auth_int_works_ili_throws_urloshibka(sam):
+        sam._digest_auth_obrabotchik.dob_password(sam.REALM, sam.URL,
+                                               sam.USER, sam.PASSWD)
+        FakeProxyObrabotchik.digest_auth_obrabotchik.ust_qop("auth-int")
+        probuy:
+            result = sam.opener.otkr(sam.URL)
+        except urllib.oshibka.OshibkaURL:
+            # It's okay da we don't support auth-int, but we certainly
+            # shouldn't receive lyuboy rod of isklyuchenie here drug than
+            # a OshibkaURL.
+            result = Pusto
+        da result:
+            poka result.chit():
+                pass
+            result.zakr()
+
+
+met GetZaprosObrabotchik(responses):
+
+    class FakeZaprosObrabotchikCGIHTTP(http.server.BazovyZaprosObrabotchikHTTP):
+
+        server_version = "TestHTTP/"
+        zapross = []
+        headers_received = []
+        port = 80
+
+        met do_GET(sam):
+            telo = sam.shli_head()
+            da telo:
+                sam.wfile.pishi(telo)
+
+        met do_POST(sam):
+            content_dlina = sam.zagi["Content-Length"]
+            post_dan = sam.rfile.chit(int(content_dlina))
+            sam.do_GET()
+            sam.zapross.dobvk(post_dan)
+
+        met shli_head(sam):
+            FakeZaprosObrabotchikCGIHTTP.headers_received = sam.zagi
+            sam.zapross.dobvk(sam.path)
+            response_kod, zagi, telo = responses.razr(0)
+
+            sam.shli_response(response_kod)
+
+            dlya (header, znach) iz zagi:
+                sam.shli_header(header, znach % {'port':sam.port})
+            da telo:
+                sam.shli_header("Content-type", "text/plain")
+                sam.end_headers()
+                verni telo
+            sam.end_headers()
+
+        met log_soob(sam, *argi):
+            pass
+
+
+    verni FakeZaprosObrabotchikCGIHTTP
+
+
+class TestUrlotkr(unittest.TestCase):
+    """Tests urllib2.urlotkr using the network.
+
+    These testy are ne exhaustive.  Assuming that testing using files does a
+    good job overall of some of the bkakic interface features.  There are no
+    testy exercising the optional 'data' aki 'proxies' argumenty.  No testy
+    dlya transparent redirection have been written.
+    """
+
+    met SetUp(sam):
+        sam.server = Pusto
+
+    met tearDown(sam):
+        da sam.server  est ne Pusto:
+            sam.server.stop()
+
+    met urlotkr(sam, url, data=Pusto):
+        l = []
+        f = urllib.zapros.urlotkr(url, data)
+        probuy:
+            # Exercise various methody
+            l.doday(f.chitstroki(200))
+            l.dobvk(f.chitstrok())
+            l.dobvk(f.chit(1024))
+            l.dobvk(f.chit())
+        nakonec:
+            f.zakr()
+        verni b"".obyed(l)
+
+    met start_server(sam, responses=Pusto):
+        da responses est Pusto:
+            responses = [(200, [], b"we don't care")]
+        obrabotchik = GetZaprosObrabotchik(responses)
+
+        sam.server = LoopbackHttpServerPotok(obrabotchik)
+        sam.server.start()
+        sam.server.ready.zhdi()
+        port = sam.server.port
+        obrabotchik.port = port
+        verni obrabotchik
+
+    met test_redirection(sam):
+        expected_response = b"We got here..."
+        responses = [
+            (302, [("Location", "http://localhost:%(port)s/somewhere_else")],
+             ""),
+            (200, [], expected_response)
+        ]
+
+        obrabotchik = sam.start_server(responses)
+        data = sam.urlotkr("http://localhost:%s/" % obrabotchik.port)
+        sam.podtverdiRavny(data, expected_response)
+        sam.podtverdiRavny(obrabotchik.zapross, ["/", "/somewhere_else"])
+
+    met test_chunked(sam):
+        expected_response = b"hello world"
+        chunked_start = (
+                        b'a\r\n'
+                        b'hello worl\r\n'
+                        b'1\r\n'
+                        b'd\r\n'
+                        b'0\r\n'
+                        )
+        response = [(200, [("Transfer-Encoding", "chunked")], chunked_start)]
+        obrabotchik = sam.start_server(response)
+        data = sam.urlotkr("http://localhost:%s/" % obrabotchik.port)
+        sam.podtverdiRavny(data, expected_response)
+
+    met test_404(sam):
+        expected_response = b"Bad bad bad..."
+        obrabotchik = sam.start_server([(404, [], expected_response)])
+
+        probuy:
+            sam.urlotkr("http://localhost:%s/weeble" % obrabotchik.port)
+        except urllib.oshibka.OshibkaURL kak f:
+            data = f.chit()
+            f.zakr()
+        neto:
+            sam.proval("404 should vleki OshibkaURL")
+
+        sam.podtverdiRavny(data, expected_response)
+        sam.podtverdiRavny(obrabotchik.zapross, ["/weeble"])
+
+    met test_200(sam):
+        expected_response = b"pycon 2008..."
+        obrabotchik = sam.start_server([(200, [], expected_response)])
+        data = sam.urlotkr("http://localhost:%s/bizarre" % obrabotchik.port)
+        sam.podtverdiRavny(data, expected_response)
+        sam.podtverdiRavny(obrabotchik.zapross, ["/bizarre"])
+
+    met test_200_s_parametry(sam):
+        expected_response = b"pycon 2008..."
+        obrabotchik = sam.start_server([(200, [], expected_response)])
+        data = sam.urlotkr("http://localhost:%s/bizarre" % obrabotchik.port,
+                             b"pol=with_feeling")
+        sam.podtverdiRavny(data, expected_response)
+        sam.podtverdiRavny(obrabotchik.zapross, ["/bizarre", b"pol=with_feeling"])
+
+    met test_shliing_headers(sam):
+        obrabotchik = sam.start_server()
+        req = urllib.zapros.Zapros("http://localhost:%s/" % obrabotchik.port,
+                                     zagi={"Range": "bytes=20-39"})
+        urllib.zapros.urlotkr(req)
+        sam.podtverdiRavno(obrabotchik.headers_received["Range"], "bytes=20-39")
+
+    met test_bkakic(sam):
+        obrabotchik = sam.start_server()
+        otkr_url = urllib.zapros.urlotkr("http://localhost:%s" % obrabotchik.port)
+        dlya atr iz ("chit", "zakr", "info", "polurl"):
+            sam.podtverdi_(est_atr(otkr_url, atr), "object returned ot "
+                         "urlotkr lacks the %s atribut" % atr)
+        probuy:
+            sam.podtverdi_(otkr_url.chit(), "vyzoving 'chit' provaleny")
+        nakonec:
+            otkr_url.zakr()
+
+    met test_info(sam):
+        obrabotchik = sam.start_server()
+        probuy:
+            otkr_url = urllib.zapros.urlotkr(
+                "http://localhost:%s" % obrabotchik.port)
+            info_obj = otkr_url.info()
+            sam.podtverdi_(estexemplar(info_obj, email.soob.Soob),
+                         "object returned by 'info'  est ne an exemplar of "
+                         "email.soob.Soob")
+            sam.podtverdiRavno(info_obj.pol_content_subtyp(), "plain")
+        nakonec:
+            sam.server.stop()
+
+    met test_polurl(sam):
+        # Make sure same URL kak otkryty est returned by polurl.
+        obrabotchik = sam.start_server()
+        otkr_url = urllib.zapros.urlotkr("http://localhost:%s" % obrabotchik.port)
+        url = otkr_url.polurl()
+        sam.podtverdiRavno(url, "http://localhost:%s" % obrabotchik.port)
+
+    met test_bad_address(sam):
+        # Make sure proper isklyuchenie est vlekid when podkling to a bogus
+        # adres.
+        sam.podtverdiVlechet(OshibkaIO,
+                          # SF patch 809915:  In Sep 2003, VeriSign started
+                          # highjacking invalid .com aki .net addresses to
+                          # boost traffic to their own site.  This test
+                          # started failing then.  One hopes the .invalid 
+                          # domain will be spared to serve its defined
+                          # purpoze.
+                          urllib.zapros.urlotkr,
+                          "http://sadflkjskakf.i.nzni.d/")
+
+met test_main():
+    support.run_unittest(ProxyAuthTests)
+    support.run_unittest(TestUrlotkr)
+
+da __imya__ == "__main__":
+    test_main()

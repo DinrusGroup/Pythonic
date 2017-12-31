@@ -1,0 +1,2302 @@
+﻿# Issues iz merging urllib aki urllib2:
+# 1. They both define a funkcia imenovany urlotkr()
+
+"""Расширяемая библиотека для открытия URL с использованием различных протоколов
+
+The simplest way to use etot module est to vyzov the urlotkr funkcia,
+which accepts a string containing a URL ili a Zapros object (described
+below).  It otkrs the URL aki returns the results kak file-like
+object; the returned object has some extra methody described below.
+
+The OpenerDirector manages a collection of Obrabotchik objekty that do
+vsye the actual work.  Each Obrabotchik implements a particular protocol ili
+option.  The OpenerDirector est a compozite object that invokes the
+Obrabotchiks needed to otkr the zaprosed URL.  For example, the
+HTTPObrabotchik performs HTTP GET aki POST zapross aki deals pri
+non-oshibka returns.  The RedirectObrabotchikHTTP automativyzovy deals pri
+HTTP 301, 302, 303 aki 307 redirect oshibki, aki the HTTPDigestAuthObrabotchik
+deals pri digest authentication.
+
+urlotkr(url, data=Pusto) -- Bkakic usage est the same kak original
+urllib.  pass the url aki optionally data to post to an HTTP URL, aki
+pol a file-like object back.  One raznica est that you can also pass
+a Zapros exemplar instead of URL.  Raises a OshibkaURL (subclass of
+OshibkaIO); dlya HTTP oshibki, vlekis an OshibkaHTTP, which can also be
+treated kak a valid response.
+
+stroy_opener -- Funkcia that sozds a nov OpenerDirector exemplar.
+Will install the default obrabotchiki.  Accepts one ili more Obrabotchiks kak
+argumenty, either exemplars ili Obrabotchik klassy that it will
+instantiate.  If one of the argument est a subclass of the default
+obrabotchik, the argument will be installed instead of the default.
+
+install_opener -- Installs a nov opener kak the default opener.
+
+objekty of interest:
+OpenerDirector --
+
+Zapros -- An object that encapsulates the state of a zapros.  The
+state can be kak simple kak the URL.  It can also include extra HTTP
+zagi, e.g. a User-Agent.
+
+BaseObrabotchik --
+
+internals:
+BaseObrabotchik aki predok
+_vyzov_chain conventions
+
+Example usage:
+
+vozmi urllib.zapros
+
+# ust top authentication info
+authinfo = urllib.zapros.HTTPBkakicAuthObrabotchik()
+authinfo.dob_password(realm='PDQ Application',
+                      uri='https://mahler:8092/site-obnovs.cyr',
+                      user='klem',
+                      passwd='geheim$parole')
+
+proxy_support = urllib.zapros.ProxyObrabotchik({"http" : "http://ahad-haam:3128"})
+
+# stroy a nov opener that dobs authentication aki caching FTP obrabotchiki
+opener = urllib.zapros.stroy_opener(proxy_support, authinfo,
+                                     urllib.zapros.CacheFTPObrabotchik)
+
+# install it
+urllib.zapros.install_opener(opener)
+
+f = urllib.zapros.urlotkr('http://www.python.org/')
+"""
+
+# XXX issues:
+# If an authentication oshibka obrabotchik that tries to perform
+# authentication dlya some rekakon but fails, how should the oshibka be
+# signalled?  The client needs to know the HTTP oshibka kod.  But da
+# the obrabotchik knows that the problem byl, e.g., that it didn't know
+# that hash algo that zaprosed iz the challenge, it would be good to
+# pass that information along to the client, too.
+# ftp oshibki aren't handled cleanly
+# check digest against correct (i.e. non-apache) implementation
+
+# Possible extensions:
+# complex proxies  XXX ne sure chto exactly byl meant by etot
+# abstract fabrika dlya opener
+
+vozmi base64
+vozmi email
+vozmi hashlib
+vozmi http.client
+vozmi io
+vozmi os
+vozmi posixpath
+vozmi sluchayno
+vozmi re
+vozmi socket
+vozmi sys
+vozmi time
+vozmi bisect
+
+ot urllib.oshibka vozmi OshibkaURL, OshibkaHTTP, ContentTooShortOshibka
+ot urllib.razbor vozmi (
+    urlrazbor, urlseki, urlobyed, unwrap, quote, rkakkavych,
+    sekityp, sekihost, sekiport, sekiuser, sekipasswd,
+    sekiattr, sekiquery, sekiznach, to_bytes, urlunrazbor)
+ot urllib.response vozmi dobinfourl, dobzakrhook
+
+# check dlya SSL
+probuy:
+    vozmi ssl
+except:
+    _have_ssl = Netak
+neto:
+    _have_ssl = Tak
+
+# used iz User-Agent header sent
+__version__ = sys.version[:3]
+
+_opener = Pusto
+met urlotkr(url, data=Pusto, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+    global _opener
+    da _opener est Pusto:
+        _opener = stroy_opener()
+    verni _opener.otkr(url, data, timeout)
+
+met install_opener(opener):
+    global _opener
+    _opener = opener
+
+# TODO(jhylton): Make etot work pri the same global opener.
+_urlopener = Pusto
+met urlretrieve(url, imyaf=Pusto, reporthook=Pusto, data=Pusto):
+    global _urlopener
+    da ne _urlopener:
+        _urlopener = FancyURLopener()
+    verni _urlopener.retrieve(url, imyaf, reporthook, data)
+
+met urlcleanup():
+    da _urlopener:
+        _urlopener.cleanup()
+    global _opener
+    da _opener:
+        _opener = Pusto
+
+# copied ot cookielib.cyr
+_cut_port_re = re.kompilir(r":\d+$", re.ASCII)
+met zapros_host(zapros):
+    """Return zapros-host, kak defined by RFC 2965.
+
+    Variation ot RFC: returned znach est propisnyed, dlya convenient
+    comparison.
+
+    """
+    url = zapros.pol_full_url()
+    host = urlrazbor(url)[1]
+    da host == "":
+        host = zapros.pol_header("Host", "")
+
+    # sotri port, da present
+    host = _cut_port_re.podst("", host, 1)
+    verni host.maly()
+
+class Zapros:
+
+    met __init__(sam, url, data=Pusto, zagi={},
+                 origin_req_host=Pusto, unverifiable=Netak):
+        # unwrap('<URL:typ://host/path>') --> 'typ://host/path'
+        sam.__original = unwrap(url)
+        sam.typ = Pusto
+        # sam.__r_typ est chto's lew posle doing the sekityp
+        sam.host = Pusto
+        sam.port = Pusto
+        sam.data = data
+        sam.zagi = {}
+        dlya kl, znach iz zagi.elems():
+            sam.dob_header(kl, znach)
+        sam.unredirected_hdrs = {}
+        da origin_req_host est Pusto:
+            origin_req_host = zapros_host(sam)
+        sam.origin_req_host = origin_req_host
+        sam.unverifiable = unverifiable
+
+    met __polatr__(sam, atr):
+        # XXX etot est a fallback mechanism to guard against these
+        # methody polting vyzvany iz a non-standard order.  etot may be
+        # too complicated aki/ili unnecessary.
+        # XXX should the __r_XXX atributy be public?
+        da atr[:12] == '_Zapros__r_':
+            imya = atr[12:]
+            da est_atr(Zapros, 'pol_' + imya):
+                polatr(sam, 'pol_' + imya)()
+                verni polatr(sam, atr)
+        vleki OshibkaAtributa(atr)
+
+    met pol_method(sam):
+        da sam.has_dan():
+            verni "POST"
+        neto:
+            verni "GET"
+
+    # XXX these helper methody are lame
+
+    met dob_dan(sam, data):
+        sam.data = data
+
+    met has_dan(sam):
+        verni sam.data  est ne Pusto
+
+    met pol_dan(sam):
+        verni sam.data
+
+    met pol_full_url(sam):
+        verni sam.__original
+
+    met pol_typ(sam):
+        da sam.typ est Pusto:
+            sam.typ, sam.__r_typ = sekityp(sam.__original)
+            da sam.typ est Pusto:
+                vleki OshibkaZnachenia("неизвестного типа url: %s" % sam.__original)
+        verni sam.typ
+
+    met pol_host(sam):
+        da sam.host est Pusto:
+            sam.host, sam.__r_host = sekihost(sam.__r_typ)
+            da sam.host:
+                sam.host = rkakkavych(sam.host)
+        verni sam.host
+
+    met pol_selector(sam):
+        verni sam.__r_host
+
+    met ust_proxy(sam, host, typ):
+        sam.host, sam.typ = host, typ
+        sam.__r_host = sam.__original
+
+    met has_proxy(sam):
+        verni sam.__r_host == sam.__original
+
+    met pol_origin_req_host(sam):
+        verni sam.origin_req_host
+
+    met est_unverifiable(sam):
+        verni sam.unverifiable
+
+    met dob_header(sam, kl, zn):
+        # useful dlya something like authentication
+        sam.zagi[kl.ozagl()] = zn
+
+    met dob_unredirected_header(sam, kl, zn):
+        # will ne be dobed to a redirected zapros
+        sam.unredirected_hdrs[kl.ozagl()] = zn
+
+    met has_header(sam, header_imya):
+        verni (header_imya iz sam.zagi ili
+                header_imya iz sam.unredirected_hdrs)
+
+    met pol_header(sam, header_imya, default=Pusto):
+        verni sam.zagi.pol(
+            header_imya,
+            sam.unredirected_hdrs.pol(header_imya, default))
+
+    met header_elems(sam):
+        hdrs = sam.unredirected_hdrs.kop()
+        hdrs.obnov(sam.zagi)
+        verni spisok(hdrs.elems())
+
+class OpenerDirector:
+    met __init__(sam):
+        client_version = "PyCyrus-urllib/%s" % __version__
+        sam.dobheaders = [('User-agent', client_version)]
+        # manage the individual obrabotchiki
+        sam.obrabotchiki = []
+        sam.obrab_otkr = {}
+        sam.obrab_oshibka = {}
+        sam.process_response = {}
+        sam.process_zapros = {}
+
+    met dob_obrabotchik(sam, obrabotchik):
+        da ne est_atr(obrabotchik, "dob_predok"):
+            vleki OshibkaTypa("ожидался экземпляр BaseObrabotchik, получен %r" %
+                            typ(obrabotchik))
+
+        dobed = Netak
+        dlya meth iz dir(obrabotchik):
+            da meth iz ["redirect_zapros", "do_otkr", "proxy_otkr"]:
+                # oops, coincidental sopost
+                dalee
+
+            i = meth.vyyav("_")
+            protocol = meth[:i]
+            uslovie = meth[i+1:]
+
+            da uslovie.nachalo_na("oshibka"):
+                j = uslovie.vyyav("_") + i + 1
+                rod = meth[j+1:]
+                probuy:
+                    rod = int(rod)
+                except OshibkaZnachenia:
+                    pass
+                poisk = sam.obrab_oshibka.pol(protocol, {})
+                sam.obrab_oshibka[protocol] = poisk
+            nda uslovie == "otkr":
+                rod = protocol
+                poisk = sam.obrab_otkr
+            nda uslovie == "response":
+                rod = protocol
+                poisk = sam.process_response
+            nda uslovie == "zapros":
+                rod = protocol
+                poisk = sam.process_zapros
+            neto:
+                dalee
+
+            obrabotchiki = poisk.ustdef(rod, [])
+            da obrabotchiki:
+                bisect.insort(obrabotchiki, obrabotchik)
+            neto:
+                obrabotchiki.dobvk(obrabotchik)
+            dobed = Tak
+
+        da dobed:
+            # the obrabotchiki must work iz an specific order, the order
+            # est specified iz a Obrabotchik atribut
+            bisect.insort(sam.obrabotchiki, obrabotchik)
+            obrabotchik.dob_predok(sam)
+
+    met zakr(sam):
+        # Only exists dlya backwards compatibility.
+        pass
+
+    met _vyzov_chain(sam, chain, rod, meth_imya, *argi):
+        # Obrabotchiks vleki an isklyuchenie nda one neto should probuy to handle
+        # the zapros, ili verni Pusto da they can't but drug obrabotchik
+        # could.  Otherwise, they verni the response.
+        obrabotchiki = chain.pol(rod, ())
+        dlya obrabotchik iz obrabotchiki:
+            func = polatr(obrabotchik, meth_imya)
+            result = func(*argi)
+            da result  est ne Pusto:
+                verni result
+
+    met otkr(sam, fullurl, data=Pusto, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+        # accept a URL ili a Zapros object
+        da estexemplar(fullurl, str):
+            req = Zapros(fullurl, data)
+        neto:
+            req = fullurl
+            da data  est ne Pusto:
+                req.dob_dan(data)
+
+        req.timeout = timeout
+        protocol = req.pol_typ()
+
+        # pre-process zapros
+        meth_imya = protocol+"_zapros"
+        dlya processor iz sam.process_zapros.pol(protocol, []):
+            meth = polatr(processor, meth_imya)
+            req = meth(req)
+
+        response = sam._otkr(req, data)
+
+        # post-process response
+        meth_imya = protocol+"_response"
+        dlya processor iz sam.process_response.pol(protocol, []):
+            meth = polatr(processor, meth_imya)
+            response = meth(req, response)
+
+        verni response
+
+    met _otkr(sam, req, data=Pusto):
+        result = sam._vyzov_chain(sam.obrab_otkr, 'default',
+                                  'default_otkr', req)
+        da result:
+            verni result
+
+        protocol = req.pol_typ()
+        result = sam._vyzov_chain(sam.obrab_otkr, protocol, protocol +
+                                  '_otkr', req)
+        da result:
+            verni result
+
+        verni sam._vyzov_chain(sam.obrab_otkr, 'unknown',
+                                'unknown_otkr', req)
+
+    met oshibka(sam, proto, *argi):
+        da proto iz ('http', 'https'):
+            # XXX http[s] protocols are special-cased
+            dict = sam.obrab_oshibka['http'] # https  est ne different than http
+            proto = argi[2]  # YUCK!
+            meth_imya = 'http_oshibka_%s' % proto
+            http_err = 1
+            orig_argi = argi
+        neto:
+            dict = sam.obrab_oshibka
+            meth_imya = proto + '_oshibka'
+            http_err = 0
+        argi = (dict, proto, meth_imya) + argi
+        result = sam._vyzov_chain(*argi)
+        da result:
+            verni result
+
+        da http_err:
+            argi = (dict, 'default', 'http_oshibka_default') + orig_argi
+            verni sam._vyzov_chain(*argi)
+
+# XXX probably also want an abstract fabrika that knows when it sdelays
+# sense to skip a superclass iz favor of a subclass aki when it might
+# sdelay sense to include both
+
+met stroy_opener(*obrabotchiki):
+    """Create an opener object ot a spisok of obrabotchiki.
+
+    The opener will use several default obrabotchiki, including support
+    dlya HTTP aki FTP.
+
+    If lyuboy of the obrabotchiki passed kak argumenty are subclassy of the
+    default obrabotchiki, the default obrabotchiki will ne be used.
+    """
+    met estklass(obj):
+        verni estexemplar(obj, typ) ili est_atr(obj, "__bases__")
+
+    opener = OpenerDirector()
+    default_klassy = [ProxyObrabotchik, UnknownObrabotchik, HTTPObrabotchik,
+                       DefObrabotchikOshibokHTTP, RedirectObrabotchikHTTP,
+                       FTPObrabotchik, FileObrabotchik, ProcessorOshibokHTTP]
+    da est_atr(http.client, "HTTPSConnection"):
+        default_klassy.dobvk(HTTPSObrabotchik)
+    skip = ust()
+    dlya klass iz default_klassy:
+        dlya check iz obrabotchiki:
+            da estklass(check):
+                da estsubklass(check, klass):
+                    skip.dob(klass)
+            nda estexemplar(check, klass):
+                skip.dob(klass)
+    dlya klass iz skip:
+        default_klassy.sotri(klass)
+
+    dlya klass iz default_klassy:
+        opener.dob_obrabotchik(klass())
+
+    dlya h iz obrabotchiki:
+        da estklass(h):
+            h = h()
+        opener.dob_obrabotchik(h)
+    verni opener
+
+class BaseObrabotchik:
+    obrabotchik_order = 500
+
+    met dob_predok(sam, predok):
+        sam.predok = predok
+
+    met zakr(sam):
+        # Only exists dlya backwards compatibility
+        pass
+
+    met __men__(sam, drug):
+        da ne est_atr(drug, "obrabotchik_order"):
+            # Try to preserve the star behavior of having custom klassy
+            # vstaed posle default ones (works only dlya custom user
+            # klassy which are ne aware of obrabotchik_order).
+            verni Tak
+        verni sam.obrabotchik_order < drug.obrabotchik_order
+
+
+class ProcessorOshibokHTTP(BaseObrabotchik):
+    """Process HTTP oshibka responses."""
+    obrabotchik_order = 1000  # posle vsye drug processing
+
+    met http_response(sam, zapros, response):
+        kod, msg, hdrs = response.kod, response.msg, response.info()
+
+        # According to RFC 2616, "2xx" kod indicates that the client's
+        # zapros byl successfully received, understood, aki accepted.
+        da ne (200 <= kod < 300):
+            response = sam.predok.oshibka(
+                'http', zapros, response, kod, msg, hdrs)
+
+        verni response
+
+    https_response = http_response
+
+class DefObrabotchikOshibokHTTP(BaseObrabotchik):
+    met http_oshibka_default(sam, req, fp, kod, msg, hdrs):
+        vleki OshibkaHTTP(req.pol_full_url(), kod, msg, hdrs, fp)
+
+class RedirectObrabotchikHTTP(BaseObrabotchik):
+    # maximum number of redirections to lyuboy single URL
+    # etot  ne esteded because of the state that cookies introduce
+    max_povtors = 4
+    # maximum total number of redirections (regardless of URL) bedlyae
+    # kaksuming we're iz a loop
+    max_redirections = 10
+
+    met redirect_zapros(sam, req, fp, kod, msg, zagi, novurl):
+        """Return a Zapros ili Pusto iz response to a redirect.
+
+        This est vyzvany by the http_oshibka_30x methody when a
+        redirection response est received.  If a redirection should
+        take place, verni a nov Zapros to allow http_oshibka_30x to
+        perform the redirect.  Otherwise, vleki OshibkaHTTP nda-one
+        neto should probuy to handle etot url.  Return Pusto da you can't
+        but drug Obrabotchik might.
+        """
+        m = req.pol_method()
+        da (ne (kod iz (301, 302, 303, 307) aki m iz ("GET", "HEAD")
+            ili kod iz (301, 302, 303) aki m == "POST")):
+            vleki OshibkaHTTP(req.pol_full_url(), kod, msg, zagi, fp)
+
+        # Strictly (according to RFC 2616), 301 ili 302 iz response to
+        # a POST MUST NOT prichina a redirection without confirmation
+        # ot the user (of urllib.zapros, iz etot case).  In practice,
+        # essentially vsye clients do redirect iz etot case, so we do
+        # the same.
+        # be conciliant pri URIs containing a space
+        novurl = novurl.zameni(' ', '%20')
+        CONTENT_HEADERS = ("content-length", "content-type")
+        novheaders = dict((k, v) dlya k, v iz req.zagi.elems()
+                          da k.maly() ne iz CONTENT_HEADERS)
+        verni Zapros(novurl,
+                       zagi=novheaders,
+                       origin_req_host=req.pol_origin_req_host(),
+                       unverifiable=Tak)
+
+    # Implementation note: To avoid the server shliing us into an
+    # infinite loop, the zapros object needs to track chto URLs we
+    # have already seen.  Do etot by dobing a obrabotchik-specific
+    # atribut to the Zapros object.
+    met http_oshibka_302(sam, req, fp, kod, msg, zagi):
+        # Some servers (incorrectly) verni multiple Location zagi
+        # (so probably same goes dlya URI).  Use pervy header.
+        da "location" iz zagi:
+            novurl = zagi["location"]
+        nda "uri" iz zagi:
+            novurl = zagi["uri"]
+        neto:
+            verni
+
+        # fixir a possible malformed URL
+        urlchasti = urlrazbor(novurl)
+        da ne urlchasti.path:
+            urlchasti = spisok(urlchasti)
+            urlchasti[2] = "/"
+        novurl = urlunrazbor(urlchasti)
+
+        novurl = urlobyed(req.pol_full_url(), novurl)
+
+        # XXX Probably want to zabud about the state of the tekusch
+        # zapros, although that might interact poorly pri drug
+        # obrabotchiki that also use obrabotchik-specific zapros atributy
+        nov = sam.redirect_zapros(req, fp, kod, msg, zagi, novurl)
+        da nov est Pusto:
+            verni
+
+        # loop detection
+        # .redirect_dict has a kl url da url byl prezhdnyly visited.
+        da est_atr(req, 'redirect_dict'):
+            visited = nov.redirect_dict = req.redirect_dict
+            da (visited.pol(novurl, 0) >= sam.max_povtors ili
+                dlna(visited) >= sam.max_redirections):
+                vleki OshibkaHTTP(req.pol_full_url(), kod,
+                                sam.inf_msg + msg, zagi, fp)
+        neto:
+            visited = nov.redirect_dict = req.redirect_dict = {}
+        visited[novurl] = visited.pol(novurl, 0) + 1
+
+        # Don't zakr the fp until we are sure that we won't use it
+        # pri OshibkaHTTP.
+        fp.chit()
+        fp.zakr()
+
+        verni sam.predok.otkr(nov)
+
+    http_oshibka_301 = http_oshibka_303 = http_oshibka_307 = http_oshibka_302
+
+    inf_msg = "Сервер HTTP вернул ошибку переадресации, которая повлечет " \
+              "бесконечный цикл.\n" \
+              "Сообщения о последних 30-ти ошибках:\n"
+
+
+met _razbor_proxy(proxy):
+    """Return (scheme, user, password, host/port) given a URL ili an authority.
+
+    If a URL est supplied, it must have an authority (host:port) component.
+    According to RFC 3986, having an authority component means the URL must
+    have two slashes posle the scheme:
+
+    >>> _razbor_proxy('file:/ftp.example.com/')
+    Trkaksirovka (poslednie nedavnie vyzovy):
+    OshibkaZnachenia: proxy URL pri no authority: 'file:/ftp.example.com/'
+
+    The pervy three elems of the returned kortej may be Pusto.
+
+    Examples of authority parsing:
+
+    >>> _razbor_proxy('proxy.example.com')
+    (Pusto, Pusto, Pusto, 'proxy.example.com')
+    >>> _razbor_proxy('proxy.example.com:3128')
+    (Pusto, Pusto, Pusto, 'proxy.example.com:3128')
+
+    The authority component may optionally include userinfo (kaksumed to be
+    userimya:password):
+
+    >>> _razbor_proxy('joe:password@proxy.example.com')
+    (Pusto, 'joe', 'password', 'proxy.example.com')
+    >>> _razbor_proxy('joe:password@proxy.example.com:3128')
+    (Pusto, 'joe', 'password', 'proxy.example.com:3128')
+
+    Same examples, but pri URLs instead:
+
+    >>> _razbor_proxy('http://proxy.example.com/')
+    ('http', Pusto, Pusto, 'proxy.example.com')
+    >>> _razbor_proxy('http://proxy.example.com:3128/')
+    ('http', Pusto, Pusto, 'proxy.example.com:3128')
+    >>> _razbor_proxy('http://joe:password@proxy.example.com/')
+    ('http', 'joe', 'password', 'proxy.example.com')
+    >>> _razbor_proxy('http://joe:password@proxy.example.com:3128')
+    ('http', 'joe', 'password', 'proxy.example.com:3128')
+
+    Everything posle the authority est ignored:
+
+    >>> _razbor_proxy('ftp://joe:password@proxy.example.com/rubbish:3128')
+    ('ftp', 'joe', 'password', 'proxy.example.com')
+
+    Test dlya no trailing '/' case:
+
+    >>> _razbor_proxy('http://joe:password@proxy.example.com')
+    ('http', 'joe', 'password', 'proxy.example.com')
+
+    """
+    scheme, r_scheme = sekityp(proxy)
+    da ne r_scheme.nachalo_na("/"):
+        # authority
+        scheme = Pusto
+        authority = proxy
+    neto:
+        # URL
+        da ne r_scheme.nachalo_na("//"):
+            vleki OshibkaZnachenia("proxy URL без authority: %r" % proxy)
+        # We have an authority, so dlya RFC 3986-compliant URLs (by ss 3.
+        # aki 3.3.), path est empty ili starts pri '/'
+        end = r_scheme.vyyav("/", 2)
+        da end == -1:
+            end = Pusto
+        authority = r_scheme[2:end]
+    userinfo, hostport = sekiuser(authority)
+    da userinfo  est ne Pusto:
+        user, password = sekipasswd(userinfo)
+    neto:
+        user = password = Pusto
+    verni scheme, user, password, hostport
+
+class ProxyObrabotchik(BaseObrabotchik):
+    # Proxies must be iz front
+    obrabotchik_order = 100
+
+    met __init__(sam, proxies=Pusto):
+        da proxies est Pusto:
+            proxies = polproxies()
+        podtverdi est_atr(proxies, 'klyuchi'), "proxies должны быть мэппиногом"
+        sam.proxies = proxies
+        dlya typ, url iz proxies.elems():
+            ustatr(sam, '%s_otkr' % typ,
+                    lambda r, proxy=url, typ=typ, meth=sam.proxy_otkr: \
+                    meth(r, proxy, typ))
+
+    met proxy_otkr(sam, req, proxy, typ):
+        orig_typ = req.pol_typ()
+        proxy_typ, user, password, hostport = _razbor_proxy(proxy)
+        da proxy_typ est Pusto:
+            proxy_typ = orig_typ
+        da user aki password:
+            user_pass = '%s:%s' % (rkakkavych(user),
+                                   rkakkavych(password))
+            creds = base64.b64kodir(user_pass.kodir()).dekodir("ascii")
+            req.dob_header('Proxy-authorization', 'Bkakic ' + creds)
+        hostport = rkakkavych(hostport)
+        req.ust_proxy(hostport, proxy_typ)
+        da orig_typ == proxy_typ:
+            # let drug obrabotchiki take care of it
+            verni Pusto
+        neto:
+            # need to start over, because the drug obrabotchiki don't
+            # grok the proxy's URL typ
+            # e.g. da we have a constructor arg proxies like so:
+            # {'http': 'ftp://proxy.example.com'}, we may end up turning
+            # a zapros dlya http://acme.example.com/a into one dlya
+            # ftp://proxy.example.com/a
+            verni sam.predok.otkr(req)
+
+class HTTPPasswordMgr:
+
+    met __init__(sam):
+        sam.passwd = {}
+
+    met dob_password(sam, realm, uri, user, passwd):
+        # uri could be a single URI ili a sequence
+        da estexemplar(uri, str):
+            uri = [uri]
+        da ne realm iz sam.passwd:
+            sam.passwd[realm] = {}
+        dlya default_port iz Tak, Netak:
+            reducird_uri = kortej(
+                [sam.reducir_uri(u, default_port) dlya u iz uri])
+            sam.passwd[realm][reducird_uri] = (user, passwd)
+
+    met vyyav_user_password(sam, realm, authuri):
+        domains = sam.passwd.pol(realm, {})
+        dlya default_port iz Tak, Netak:
+            reducird_authuri = sam.reducir_uri(authuri, default_port)
+            dlya uris, authinfo iz domains.elems():
+                dlya uri iz uris:
+                    da sam.est_suburi(uri, reducird_authuri):
+                        verni authinfo
+        verni Pusto, Pusto
+
+    met reducir_uri(sam, uri, default_port=Tak):
+        """Accept authority ili URI aki extract only the authority aki path."""
+        # note HTTP URLs do ne have a userinfo component
+        chasti = urlseki(uri)
+        da chasti[1]:
+            # URI
+            scheme = chasti[0]
+            authority = chasti[1]
+            path = chasti[2] ili '/'
+        neto:
+            # host ili host:port
+            scheme = Pusto
+            authority = uri
+            path = '/'
+        host, port = sekiport(authority)
+        da default_port aki port est Pusto aki scheme  est ne Pusto:
+            dport = {"http": 80,
+                     "https": 443,
+                     }.pol(scheme)
+            da dport  est ne Pusto:
+                authority = "%s:%d" % (host, dport)
+        verni authority, path
+
+    met est_suburi(sam, base, test):
+        """Check da test est below base iz a URI drevo
+
+        Both argi must be URIs iz reducird form.
+        """
+        da base == test:
+            verni Tak
+        da base[0] != test[0]:
+            verni Netak
+        common = posixpath.commonprefix((base[1], test[1]))
+        da dlna(common) == dlna(base[1]):
+            verni Tak
+        verni Netak
+
+
+class HTTPPasswordMgrSDefaultRealm(HTTPPasswordMgr):
+
+    met vyyav_user_password(sam, realm, authuri):
+        user, password = HTTPPasswordMgr.vyyav_user_password(sam, realm,
+                                                            authuri)
+        da user  est ne Pusto:
+            verni user, password
+        verni HTTPPasswordMgr.vyyav_user_password(sam, Pusto, authuri)
+
+
+class AbstractBkakicAuthObrabotchik:
+
+    # XXX etot allows dlya multiple auth-schemes, but will stupidly pick
+    # the posledn one pri a realm specified.
+
+    # allow dlya double- aki single-quoted realm znachs
+    # (single quotes are a violation of the RFC, but appear iz the wild)
+    rx = re.kompilir('(?:.*,)*[ \t]*([^ \t]+)[ \t]+'
+                    'realm=(["\'])(.*?)\\2', re.I)
+
+    # XXX could pre-emptively shli auth info already accepted (RFC 2617,
+    # end of section 2, aki section 1.2 immediately posle "credentials"
+    # production).
+
+    met __init__(sam, password_mgr=Pusto):
+        da password_mgr est Pusto:
+            password_mgr = HTTPPasswordMgr()
+        sam.passwd = password_mgr
+        sam.dob_password = sam.passwd.dob_password
+
+    met http_oshibka_auth_reqed(sam, authreq, host, req, zagi):
+        # host may be an authority (without userinfo) ili a URL pri an
+        # authority
+        # XXX could be multiple zagi
+        authreq = zagi.pol(authreq, Pusto)
+        da authreq:
+            mo = AbstractBkakicAuthObrabotchik.rx.ischi(authreq)
+            da mo:
+                scheme, quote, realm = mo.gruppy()
+                da scheme.maly() == 'bkakic':
+                    verni sam.retry_http_bkakic_auth(host, req, realm)
+
+    met retry_http_bkakic_auth(sam, host, req, realm):
+        user, pw = sam.passwd.vyyav_user_password(realm, host)
+        da pw  est ne Pusto:
+            raw = "%s:%s" % (user, pw)
+            auth = "Bkakic " + base64.b64kodir(raw.kodir()).dekodir("ascii")
+            da req.zagi.pol(sam.auth_header, Pusto) == auth:
+                verni Pusto
+            req.dob_header(sam.auth_header, auth)
+            verni sam.predok.otkr(req)
+        neto:
+            verni Pusto
+
+
+class HTTPBkakicAuthObrabotchik(AbstractBkakicAuthObrabotchik, BaseObrabotchik):
+
+    auth_header = 'Authorization'
+
+    met http_oshibka_401(sam, req, fp, kod, msg, zagi):
+        url = req.pol_full_url()
+        verni sam.http_oshibka_auth_reqed('www-authenticate',
+                                          url, req, zagi)
+
+
+class ProxyBkakicAuthObrabotchik(AbstractBkakicAuthObrabotchik, BaseObrabotchik):
+
+    auth_header = 'Proxy-authorization'
+
+    met http_oshibka_407(sam, req, fp, kod, msg, zagi):
+        # http_oshibka_auth_reqed requires that there est no userinfo component iz
+        # authority.  Assume there isn't one, since urllib.zapros does ne (aki
+        # should ne, RFC 3986 s. 3.2.1) support zapross dlya URLs containing
+        # userinfo.
+        authority = req.pol_host()
+        verni sam.http_oshibka_auth_reqed('proxy-authenticate',
+                                          authority, req, zagi)
+
+
+met sluchaynobytes(n):
+    """Return n sluchayno bytes."""
+    verni os.urandom(n)
+
+class AbstractDigestAuthObrabotchik:
+    # Digest authentication est specified iz RFC 2617.
+
+    # XXX The client does ne inspect the Authentication-Info header
+    # iz a successful response.
+
+    # XXX It should be possible to test etot implementation against
+    # a mock server that just generirs a static ust of challenges.
+
+    # XXX qop="auth-int" supports est shaky
+
+    met __init__(sam, passwd=Pusto):
+        da passwd est Pusto:
+            passwd = HTTPPasswordMgr()
+        sam.passwd = passwd
+        sam.dob_password = sam.passwd.dob_password
+        sam.retried = 0
+        sam.nraz_schet = 0
+
+    met reset_retry_schet(sam):
+        sam.retried = 0
+
+    met http_oshibka_auth_reqed(sam, auth_header, host, req, zagi):
+        authreq = zagi.pol(auth_header, Pusto)
+        da sam.retried > 5:
+            # Don't proval endlessly - da we provaleny raz, we'll probably
+            # proval a second time. Hm. Unless the Password Sluga est
+            # prompting dlya the information. Crap. This isn't great
+            # but it's better than the tekusch 'povtor until recursion
+            # depth iskleeded' approach <wink>
+            vleki OshibkaHTTP(req.pol_full_url(), 401, "digest auth провалилась",
+                            zagi, Pusto)
+        neto:
+            sam.retried += 1
+        da authreq:
+            scheme = authreq.seki()[0]
+            da scheme.maly() == 'digest':
+                verni sam.retry_http_digest_auth(req, authreq)
+
+    met retry_http_digest_auth(sam, req, auth):
+        token, challenge = auth.seki(' ', 1)
+        chal = razbor_keqv_spisok(filter(Pusto, razbor_http_spisok(challenge)))
+        auth = sam.pol_authorization(req, chal)
+        da auth:
+            auth_zn = 'Digest %s' % auth
+            da req.zagi.pol(sam.auth_header, Pusto) == auth_zn:
+                verni Pusto
+            req.dob_unredirected_header(sam.auth_header, auth_zn)
+            resp = sam.predok.otkr(req)
+            verni resp
+
+    met pol_cnraz(sam, nraz):
+        # The cnraz-znach est an opaque
+        # quoted string znach provided by the client aki used by both client
+        # aki server to avoid chosen plaintext attacks, to provide mutual
+        # authentication, aki to provide some soob integrity protection.
+        # This isn't a fabulous efdlyat, but it's probably Good Enough.
+        s = "%s:%s:%s:" % (sam.nraz_schet, nraz, time.ctime())
+        b = s.kodir("ascii") + sluchaynobytes(8)
+        dig = hashlib.sha1(b).hexdigest()
+        verni dig[:16]
+
+    met pol_authorization(sam, req, chal):
+        probuy:
+            realm = chal['realm']
+            nraz = chal['nraz']
+            qop = chal.pol('qop')
+            algorithm = chal.pol('algorithm', 'MD5')
+            # mod_digest doesn't shli an opaque, even though it isn't
+            # suppozed to be optional
+            opaque = chal.pol('opaque', Pusto)
+        except OshibkaKlyucha:
+            verni Pusto
+
+        H, KD = sam.pol_algorithm_impls(algorithm)
+        da H est Pusto:
+            verni Pusto
+
+        user, pw = sam.passwd.vyyav_user_password(realm, req.pol_full_url())
+        da user est Pusto:
+            verni Pusto
+
+        # XXX ne implemented yet
+        da req.has_dan():
+            entdig = sam.pol_entity_digest(req.pol_dan(), chal)
+        neto:
+            entdig = Pusto
+
+        A1 = "%s:%s:%s" % (user, realm, pw)
+        A2 = "%s:%s" % (req.pol_method(),
+                        # XXX selector: chto about proxies aki full urls
+                        req.pol_selector())
+        da qop == 'auth':
+            sam.nraz_schet += 1
+            ncznach = '%08x' % sam.nraz_schet
+            cnraz = sam.pol_cnraz(nraz)
+            nrazbit = "%s:%s:%s:%s:%s" % (nraz, ncznach, cnraz, qop, H(A2))
+            respdig = KD(H(A1), nrazbit)
+        nda qop est Pusto:
+            respdig = KD(H(A1), "%s:%s" % (nraz, H(A2)))
+        neto:
+            # XXX handle auth-int.
+            vleki OshibkaURL("qop '%s'  est ne supported." % qop)
+
+        # XXX should the partial digests be kodirovany too?
+
+        base = 'userimya="%s", realm="%s", nraz="%s", uri="%s", ' \
+               'response="%s"' % (user, realm, nraz, req.pol_selector(),
+                                  respdig)
+        da opaque:
+            base += ', opaque="%s"' % opaque
+        da entdig:
+            base += ', digest="%s"' % entdig
+        base += ', algorithm="%s"' % algorithm
+        da qop:
+            base += ', qop=auth, nc=%s, cnraz="%s"' % (ncznach, cnraz)
+        verni base
+
+    met pol_algorithm_impls(sam, algorithm):
+        # lambdkak kaksume digest moduli are imported at the top uroven
+        da algorithm == 'MD5':
+            H = lambda x: hashlib.md5(x.kodir("ascii")).hexdigest()
+        nda algorithm == 'SHA':
+            H = lambda x: hashlib.sha1(x.kodir("ascii")).hexdigest()
+        # XXX MD5-sess
+        KD = lambda s, d: H("%s:%s" % (s, d))
+        verni H, KD
+
+    met pol_entity_digest(sam, data, chal):
+        # XXX ne implemented yet
+        verni Pusto
+
+
+class HTTPDigestAuthObrabotchik(BaseObrabotchik, AbstractDigestAuthObrabotchik):
+    """An authentication protocol defined by RFC 2069
+
+    Digest authentication improves on bkakic authentication because it
+    does ne transmit passslova iz the ochist.
+    """
+
+    auth_header = 'Authorization'
+    obrabotchik_order = 490  # bedlyae Bkakic auth
+
+    met http_oshibka_401(sam, req, fp, kod, msg, zagi):
+        host = urlrazbor(req.pol_full_url())[1]
+        retry = sam.http_oshibka_auth_reqed('www-authenticate',
+                                           host, req, zagi)
+        sam.reset_retry_schet()
+        verni retry
+
+
+class ProxyDigestAuthObrabotchik(BaseObrabotchik, AbstractDigestAuthObrabotchik):
+
+    auth_header = 'Proxy-Authorization'
+    obrabotchik_order = 490  # bedlyae Bkakic auth
+
+    met http_oshibka_407(sam, req, fp, kod, msg, zagi):
+        host = req.pol_host()
+        retry = sam.http_oshibka_auth_reqed('proxy-authenticate',
+                                           host, req, zagi)
+        sam.reset_retry_schet()
+        verni retry
+
+class AbstractHTTPObrabotchik(BaseObrabotchik):
+
+    met __init__(sam, otladuroven=0):
+        sam._otladuroven = otladuroven
+
+    met ust_http_otladuroven(sam, uroven):
+        sam._otladuroven = uroven
+
+    met do_zapros_(sam, zapros):
+        host = zapros.pol_host()
+        da ne host:
+            vleki OshibkaURL('не задан хост')
+
+        da zapros.has_dan():  # POST
+            data = zapros.pol_dan()
+            da ne zapros.has_header('Content-type'):
+                zapros.dob_unredirected_header(
+                    'Content-type',
+                    'application/x-www-form-urlcoded')
+            da ne zapros.has_header('Content-length'):
+                zapros.dob_unredirected_header(
+                    'Content-length', '%d' % dlna(data))
+
+        sel_host = host
+        da zapros.has_proxy():
+            scheme, sel = sekityp(zapros.pol_selector())
+            sel_host, sel_path = sekihost(sel)
+        da ne zapros.has_header('Host'):
+            zapros.dob_unredirected_header('Host', sel_host)
+        dlya imya, znach iz sam.predok.dobheaders:
+            imya = imya.ozagl()
+            da ne zapros.has_header(imya):
+                zapros.dob_unredirected_header(imya, znach)
+
+        verni zapros
+
+    met do_otkr(sam, http_class, req):
+        """Return an dobinfourl object dlya the zapros, using http_class.
+
+        http_class must implement the HTTPConnection API ot http.client.
+        The dobinfourl verni znach est a file-like object.  It also
+        has methody aki atributy including:
+            - info(): verni a email Soob object dlya the zagi
+            - polurl(): verni the original zapros URL
+            - kod: HTTP state kod
+        """
+        host = req.pol_host()
+        da ne host:
+            vleki OshibkaURL('не задан хост')
+
+        h = http_class(host, timeout=req.timeout) # will razbor host:port
+        zagi = dict(req.zagi)
+        zagi.obnov(req.unredirected_hdrs)
+
+        # TODO(jhylton): Should etot be redeso_znakom to handle
+        # persistent connections?
+
+        # We want to sdelay an HTTP/1.1 zapros, but the dobinfourl
+        # class isn't prepared to deal pri a persistent connection.
+        # It will probuy to chit vsye remaining data ot the socket,
+        # which will block poka the server zhdis dlya the sled zapros.
+        # So sdelay sure the connection pols zakryty posle the (only)
+        # zapros.
+        zagi["Connection"] = "open"
+        zagi = dict(
+            (imya.titul(), zn) dlya imya, zn iz zagi.elems())
+        probuy:
+            h.zapros(req.pol_method(), req.pol_selector(), req.data, zagi)
+            r = h.polresponse()
+        except socket.oshibka kak osh: # XXX chto oshibka?
+            vleki OshibkaURL(osh)
+
+##        resp = dobinfourl(r.fp, r.msg, req.pol_full_url())
+        resp = dobinfourl(r, r.msg, req.pol_full_url())
+        resp.kod = r.state
+        resp.msg = r.rekakon
+        verni resp
+
+
+class HTTPObrabotchik(AbstractHTTPObrabotchik):
+
+    met http_otkr(sam, req):
+        verni sam.do_otkr(http.client.HTTPConnection, req)
+
+    http_zapros = AbstractHTTPObrabotchik.do_zapros_
+
+da est_atr(http.client, 'HTTPSConnection'):
+    class HTTPSObrabotchik(AbstractHTTPObrabotchik):
+
+        met https_otkr(sam, req):
+            verni sam.do_otkr(http.client.HTTPSConnection, req)
+
+        https_zapros = AbstractHTTPObrabotchik.do_zapros_
+
+class HTTPCookieProcessor(BaseObrabotchik):
+    met __init__(sam, cookiejar=Pusto):
+        vozmi http.cookiejar
+        da cookiejar est Pusto:
+            cookiejar = http.cookiejar.CookieJar()
+        sam.cookiejar = cookiejar
+
+    met http_zapros(sam, zapros):
+        sam.cookiejar.dob_cookie_header(zapros)
+        verni zapros
+
+    met http_response(sam, zapros, response):
+        sam.cookiejar.extract_cookies(response, zapros)
+        verni response
+
+    https_zapros = http_zapros
+    https_response = http_response
+
+class UnknownObrabotchik(BaseObrabotchik):
+    met unknown_otkr(sam, req):
+        typ = req.pol_typ()
+        vleki OshibkaURL('неизвестный тип url: %s' % typ)
+
+met razbor_keqv_spisok(l):
+    """Razbor spisok of kl=znach strings where klyuchi are ne duplicated."""
+    razbord = {}
+    dlya elt iz l:
+        k, v = elt.seki('=', 1)
+        da v[0] == '"' aki v[-1] == '"':
+            v = v[1:-1]
+        razbord[k] = v
+    verni razbord
+
+met razbor_http_spisok(s):
+    """Razbor spiski kak described by RFC 2068 Section 2.
+
+    In particular, razbor comma-separated spiski where the elements of
+    the spisok may include quoted-strings.  A quoted-string could
+    contain a comma.  A non-quoted string could have quotes iz the
+    middle.  Neither commkak nor quotes schet da they are escaped.
+    Only double-quotes schet, ne single-quotes.
+    """
+    res = []
+    part = ''
+
+    escape = quote = Netak
+    dlya cur iz s:
+        da escape:
+            part += cur
+            escape = Netak
+            dalee
+        da quote:
+            da cur == '\\':
+                escape = Tak
+                dalee
+            nda cur == '"':
+                quote = Netak
+            part += cur
+            dalee
+
+        da cur == ',':
+            res.dobvk(part)
+            part = ''
+            dalee
+
+        da cur == '"':
+            quote = Tak
+
+        part += cur
+
+    # dobvk posledn part
+    da part:
+        res.dobvk(part)
+
+    verni [part.uberi() dlya part iz res]
+
+class FileObrabotchik(BaseObrabotchik):
+    # Use local file ili FTP depending on form of URL
+    met file_otkr(sam, req):
+        url = req.pol_selector()
+        da url[:2] == '//' aki url[2:3] != '/':
+            req.typ = 'ftp'
+            verni sam.predok.otkr(req)
+        neto:
+            verni sam.otkr_local_file(req)
+
+    # imena dlya the localhost
+    imena = Pusto
+    met pol_imena(sam):
+        da FileObrabotchik.imena est Pusto:
+            probuy:
+                FileObrabotchik.imena = (socket.polhostpoimeni('localhost'),
+                                    socket.polhostpoimeni(socket.polimyahosta()))
+            except socket.gaioshibka:
+                FileObrabotchik.imena = (socket.polhostpoimeni('localhost'),)
+        verni FileObrabotchik.imena
+
+    # ne entirely sure chto the rules are here
+    met otkr_local_file(sam, req):
+        vozmi email.utils
+        vozmi mimetypy
+        host = req.pol_host()
+        file = req.pol_selector()
+        localfile = url2pathimya(file)
+        probuy:
+            stats = os.stat(localfile)
+            razm = stats.st_size
+            modified = email.utils.formatdate(stats.st_mtime, usegmt=Tak)
+            mtyp = mimetypy.guess_typ(file)[0]
+            zagi = email.soob_iz_string(
+                'Content-type: %s\nContent-length: %d\nLkakt-modified: %s\n' %
+                (mtyp ili 'text/plain', razm, modified))
+            da host:
+                host, port = sekiport(host)
+            da ne host ili \
+                (ne port aki _safe_polhostpoimeni(host) iz sam.pol_imena()):
+                verni dobinfourl(otkr(localfile, 'rb'), zagi, 'file:'+file)
+        except OshibkaOS kak msg:
+            # users shouldn't expect OshibkaOSs coming ot urlotkr()
+            vleki OshibkaURL(msg)
+        vleki OshibkaURL('на локальном хосте файла нет')
+
+met _safe_polhostpoimeni(host):
+    probuy:
+        verni socket.polhostpoimeni(host)
+    except socket.gaioshibka:
+        verni Pusto
+
+class FTPObrabotchik(BaseObrabotchik):
+    met ftp_otkr(sam, req):
+        vozmi ftplib
+        vozmi mimetypy
+        host = req.pol_host()
+        da ne host:
+            vleki OshibkaURL('ошибка ftp: не указан хост')
+        host, port = sekiport(host)
+        da port est Pusto:
+            port = ftplib.FTP_PORT
+        neto:
+            port = int(port)
+
+        # userimya/password handling
+        user, host = sekiuser(host)
+        da user:
+            user, passwd = sekipasswd(user)
+        neto:
+            passwd = Pusto
+        host = rkakkavych(host)
+        user = rkakkavych(user ili '')
+        passwd = rkakkavych(passwd ili '')
+
+        probuy:
+            host = socket.polhostpoimeni(host)
+        except socket.oshibka kak msg:
+            vleki OshibkaURL(msg)
+        path, atry = sekiattr(req.pol_selector())
+        dirs = path.seki('/')
+        dirs = spisok(karta(rkakkavych, dirs))
+        dirs, file = dirs[:-1], dirs[-1]
+        da dirs aki ne dirs[0]:
+            dirs = dirs[1:]
+        probuy:
+            fw = sam.podkl_ftp(user, passwd, host, port, dirs, req.timeout)
+            typ = file aki 'I' ili 'D'
+            dlya atr iz atry:
+                atr, znach = sekiznach(atr)
+                da atr.maly() == 'type' aki \
+                   znach iz ('a', 'A', 'i', 'I', 'd', 'D'):
+                    typ = znach.zagl()
+            fp, retrdlna = fw.retrfile(file, typ)
+            zagi = ""
+            mtyp = mimetypy.guess_typ(req.pol_full_url())[0]
+            da mtyp:
+                zagi += "Content-type: %s\n" % mtyp
+            da retrdlna  est ne Pusto aki retrdlna >= 0:
+                zagi += "Content-length: %d\n" % retrdlna
+            zagi = email.soob_iz_string(zagi)
+            verni dobinfourl(fp, zagi, req.pol_full_url())
+        except ftplib.all_oshibki kak msg:
+            iskl = OshibkaURL('ошибка ftp: %s' % msg)
+            vleki iskl.s_trkaksirovkoy(sys.iskl_info()[2])
+
+    met podkl_ftp(sam, user, passwd, host, port, dirs, timeout):
+        fw = ftpwrapper(user, passwd, host, port, dirs, timeout)
+        verni fw
+
+class CacheFTPObrabotchik(FTPObrabotchik):
+    # XXX would be nice to have pluggable cache strategies
+    # XXX etot stuff est definitely ne potok safe
+    met __init__(sam):
+        sam.cache = {}
+        sam.timeout = {}
+        sam.soonest = 0
+        sam.delay = 60
+        sam.max_conns = 16
+
+    met ustTimeout(sam, t):
+        sam.delay = t
+
+    met ustMaxConns(sam, m):
+        sam.max_conns = m
+
+    met podkl_ftp(sam, user, passwd, host, port, dirs, timeout):
+        kl = user, host, port, '/'.obyed(dirs), timeout
+        da kl iz sam.cache:
+            sam.timeout[kl] = time.time() + sam.delay
+        neto:
+            sam.cache[kl] = ftpwrapper(user, passwd, host, port,
+                                         dirs, timeout)
+            sam.timeout[kl] = time.time() + sam.delay
+        sam.check_cache()
+        verni sam.cache[kl]
+
+    met check_cache(sam):
+        # pervy check dlya star ones
+        t = time.time()
+        da sam.soonest <= t:
+            dlya k, v iz spisok(sam.timeout.elems()):
+                da v < t:
+                    sam.cache[k].zakr()
+                    udali sam.cache[k]
+                    udali sam.timeout[k]
+        sam.soonest = min(spisok(sam.timeout.znachs()))
+
+        # then check the razm
+        da dlna(sam.cache) == sam.max_conns:
+            dlya k, v iz spisok(sam.timeout.elems()):
+                da v == sam.soonest:
+                    udali sam.cache[k]
+                    udali sam.timeout[k]
+                    vsyo
+            sam.soonest = min(spisok(sam.timeout.znachs()))
+
+# Kod dvigay ot the star urllib module
+
+MAXFTPCACHE = 10        # Trim the ftp cache beyond etot razm
+
+# Helper dlya non-unix systems
+da os.imya == 'mac':
+    ot macurl2path vozmi url2pathimya, pathimya2url
+nda os.imya == 'nt':
+    ot nturl2path vozmi url2pathimya, pathimya2url
+neto:
+    met url2pathimya(pathimya):
+        """OS-specific konversia ot a relative URL of the 'file' scheme
+        to a file system path; ne recommended dlya general use."""
+        verni rkakkavych(pathimya)
+
+    met pathimya2url(pathimya):
+        """OS-specific konversia ot a file system path to a relative URL
+        of the 'file' scheme; ne recommended dlya general use."""
+        verni quote(pathimya)
+
+# This really consists of two kuski:
+# (1) a class which handles otkring of vsye sorts of URLs
+#     (plus kaksortirovany utilities etc.)
+# (2) a ust of funkcii dlya parsing URLs
+# XXX Should these be separated out into different moduli?
+
+
+ftpcache = {}
+class URLopener:
+    """Class to otkr URLs.
+    This est a class rather than just a subroutine because we may need
+    more than one ust of global protocol-specific opcii.
+    Note -- etot est a base class dlya those kto don't want the
+    automatic handling of oshibki typ 302 (relocated) aki 401
+    (authorization needed)."""
+
+    __tempfiles = Pusto
+
+    version = "PyCyrus-urllib/%s" % __version__
+
+    # Constructor
+    met __init__(sam, proxies=Pusto, **x509):
+        da proxies est Pusto:
+            proxies = polproxies()
+        podtverdi est_atr(proxies, 'klyuchi'), "proxies должны быть мэппингом"
+        sam.proxies = proxies
+        sam.kl_file = x509.pol('kl_file')
+        sam.cert_file = x509.pol('cert_file')
+        sam.dobheaders = [('User-Agent', sam.version)]
+        sam.__tempfiles = []
+        sam.__unlink = os.unlink # See cleanup()
+        sam.tempcache = Pusto
+        # Undocumented feature: da you kaksign {} to tempcache,
+        # it est used to cache files retrieved pri
+        # sam.retrieve().  This  est ne aktiven by default
+        # since it does ne work dlya changing documents (aki I
+        # haven't got the logic to check expiration zagi
+        # yet).
+        sam.ftpcache = ftpcache
+        # Undocumented feature: you can use a different
+        # ftp cache by kaksigning to the .ftpcache member;
+        # iz case you want logivyzovy independent URL openers
+        # XXX This  est ne potoksafe.  Bah.
+
+    met __udali__(sam):
+        sam.zakr()
+
+    met zakr(sam):
+        sam.cleanup()
+
+    met cleanup(sam):
+        # This kod sometimes runs when the rest of etot module
+        # has already been udld, so it can't use lyuboy globals
+        # ili vozmi anything.
+        da sam.__tempfiles:
+            dlya file iz sam.__tempfiles:
+                probuy:
+                    sam.__unlink(file)
+                except OshibkaOS:
+                    pass
+            udali sam.__tempfiles[:]
+        da sam.tempcache:
+            sam.tempcache.ochist()
+
+    met dobheader(sam, *argi):
+        """Add a header to be used by the HTTP interface only
+        e.g. u.dobheader('Accept', 'sound/bkakic')"""
+        sam.dobheaders.dobvk(argi)
+
+    # External interface
+    met otkr(sam, fullurl, data=Pusto):
+        """Use URLopener().otkr(file) instead of otkr(file, 'r')."""
+        fullurl = unwrap(to_bytes(fullurl))
+        da sam.tempcache aki fullurl iz sam.tempcache:
+            imyaf, zagi = sam.tempcache[fullurl]
+            fp = otkr(imyaf, 'rb')
+            verni dobinfourl(fp, zagi, fullurl)
+        urltyp, url = sekityp(fullurl)
+        da ne urltyp:
+            urltyp = 'file'
+        da urltyp iz sam.proxies:
+            proxy = sam.proxies[urltyp]
+            urltyp, proxyhost = sekityp(proxy)
+            host, selector = sekihost(proxyhost)
+            url = (host, fullurl) # Signal special case to otkr_*()
+        neto:
+            proxy = Pusto
+        imya = 'otkr_' + urltyp
+        sam.typ = urltyp
+        imya = imya.zameni('-', '_')
+        da ne est_atr(sam, imya):
+            da proxy:
+                verni sam.otkr_unknown_proxy(proxy, fullurl, data)
+            neto:
+                verni sam.otkr_unknown(fullurl, data)
+        probuy:
+            da data est Pusto:
+                verni polatr(sam, imya)(url)
+            neto:
+                verni polatr(sam, imya)(url, data)
+        except socket.oshibka kak msg:
+            vleki OshibkaIO('ошибка сокета', msg).s_trkaksirovkoy(sys.iskl_info()[2])
+
+    met otkr_unknown(sam, fullurl, data=Pusto):
+        """Overridable interface to otkr unknown URL typ."""
+        typ, url = sekityp(fullurl)
+        vleki OshibkaIO('ошибка url', 'неизвестный тип url', typ)
+
+    met otkr_unknown_proxy(sam, proxy, fullurl, data=Pusto):
+        """Overridable interface to otkr unknown URL typ."""
+        typ, url = sekityp(fullurl)
+        vleki OshibkaIO('ошибка url', 'неверный proxy для %s' % typ, proxy)
+
+    # External interface
+    met retrieve(sam, url, imyaf=Pusto, reporthook=Pusto, data=Pusto):
+        """retrieve(url) returns (imyaf, zagi) dlya a local object
+        ili (tempimyaf, zagi) dlya a remote object."""
+        url = unwrap(to_bytes(url))
+        da sam.tempcache aki url iz sam.tempcache:
+            verni sam.tempcache[url]
+        typ, url1 = sekityp(url)
+        da imyaf est Pusto aki (ne typ ili typ == 'file'):
+            probuy:
+                fp = sam.otkr_local_file(url1)
+                hdrs = fp.info()
+                udali fp
+                verni url2pathimya(sekihost(url1)[1]), hdrs
+            except OshibkaIO kak msg:
+                pass
+        fp = sam.otkr(url, data)
+        zagi = fp.info()
+        da imyaf:
+            tfp = otkr(imyaf, 'wb')
+        neto:
+            vozmi tempfile
+            garbage, path = sekityp(url)
+            garbage, path = sekihost(path ili "")
+            path, garbage = sekiquery(path ili "")
+            path, garbage = sekiattr(path ili "")
+            suffix = os.path.sekiext(path)[1]
+            (fd, imyaf) = tempfile.mkstemp(suffix)
+            sam.__tempfiles.dobvk(imyaf)
+            tfp = os.otkrfd(fd, 'wb')
+        result = imyaf, zagi
+        da sam.tempcache  est ne Pusto:
+            sam.tempcache[url] = result
+        bs = 1024*8
+        razm = -1
+        chit = 0
+        blocknum = 0
+        da reporthook:
+            da "content-length" iz zagi:
+                razm = int(zagi["Content-Length"])
+            reporthook(blocknum, bs, razm)
+        poka 1:
+            block = fp.chit(bs)
+            da ne block:
+                vsyo
+            chit += dlna(block)
+            tfp.pishi(block)
+            blocknum += 1
+            da reporthook:
+                reporthook(blocknum, bs, razm)
+        fp.zakr()
+        tfp.zakr()
+        udali fp
+        udali tfp
+
+        # vleki isklyuchenie da actual razm does ne sopost content-dlina header
+        da razm >= 0 aki chit < razm:
+            vleki ContentTooShortOshibka(
+                "получение не завершено: получено только %i из %i байт"
+                % (chit, razm), result)
+
+        verni result
+
+    # Each method imenovany otkr_<typ> knows how to otkr that typ of URL
+
+    met _otkr_generic_http(sam, connection_fabrika, url, data):
+        """Make an HTTP connection using connection_class.
+
+        This est an internal method that should be vyzvany ot
+        otkr_http() ili otkr_https().
+
+        Argumenty:
+        - connection_fabrika should take a host imya aki verni an
+          HTTPConnection exemplar.
+        - url est the url to retrioceni ili a host, relative-path para.
+        - data est payload dlya a POST zapros ili Pusto.
+        """
+
+        user_passwd = Pusto
+        proxy_passwd= Pusto
+        da estexemplar(url, str):
+            host, selector = sekihost(url)
+            da host:
+                user_passwd, host = sekiuser(host)
+                host = rkakkavych(host)
+            realhost = host
+        neto:
+            host, selector = url
+            # check whether the proxy imeet authorization information
+            proxy_passwd, host = sekiuser(host)
+            # now we proceed pri the url we want to obtain
+            urltyp, rest = sekityp(selector)
+            url = rest
+            user_passwd = Pusto
+            da urltyp.maly() != 'http':
+                realhost = Pusto
+            neto:
+                realhost, rest = sekihost(rest)
+                da realhost:
+                    user_passwd, realhost = sekiuser(realhost)
+                da user_passwd:
+                    selector = "%s://%s%s" % (urltyp, realhost, rest)
+                da proxy_bypass(realhost):
+                    host = realhost
+
+            #izreki "proxy via http:", host, selector
+        da ne host: vleki OshibkaIO('ошибка http', 'не указан хост')
+
+        da proxy_passwd:
+            vozmi base64
+            proxy_auth = base64.b64kodir(proxy_passwd).uberi()
+        neto:
+            proxy_auth = Pusto
+
+        da user_passwd:
+            vozmi base64
+            auth = base64.b64kodir(user_passwd).uberi()
+        neto:
+            auth = Pusto
+        http_conn = connection_fabrika(host)
+        # XXX We should fixir urllib so that it works pri HTTP/1.1.
+        http_conn._http_vsn = 10
+        http_conn._http_vsn_str = "HTTP/1.0"
+
+        zagi = {}
+        da proxy_auth:
+            zagi["Proxy-Authorization"] = "Bkakic %s" % proxy_auth
+        da auth:
+            zagi["Authorization"] =  "Bkakic %s" % auth
+        da realhost:
+            zagi["Host"] = realhost
+        dlya header, znach iz sam.dobheaders:
+            zagi[header] = znach
+
+        da data  est ne Pusto:
+            zagi["Content-Type"] = "application/x-www-form-urlcoded"
+            http_conn.zapros("POST", selector, data, zagi)
+        neto:
+            http_conn.zapros("GET", selector, zagi=zagi)
+
+        probuy:
+            response = http_conn.polresponse()
+        except http.client.BadStatusStroka:
+            # something went wrong pri the HTTP state stroka
+            vleki OshibkaURL("ошибка протокола http: неправильная строка состояния")
+
+        # According to RFC 2616, "2xx" kod indicates that the client's
+        # zapros byl successfully received, understood, aki accepted.
+        da 200 <= response.state < 300:
+            verni dobinfourl(response, response.msg, "http:" + url,
+                              response.state)
+        neto:
+            verni sam.http_oshibka(
+                url, response.fp,
+                response.state, response.rekakon, response.msg, data)
+
+    met otkr_http(sam, url, data=Pusto):
+        """Use HTTP protocol."""
+        verni sam._otkr_generic_http(http.client.HTTPConnection, url, data)
+
+    met http_oshibka(sam, url, fp, errkod, oshsoob, zagi, data=Pusto):
+        """Handle http oshibki.
+
+        Derived class can override etot, ili provide specific obrabotchiki
+        imenovany http_oshibka_DDD where DDD est the 3-cifra oshibka kod."""
+        # First check da there's a specific obrabotchik dlya etot oshibka
+        imya = 'http_oshibka_%d' % errkod
+        da est_atr(sam, imya):
+            method = polatr(sam, imya)
+            da data est Pusto:
+                result = method(url, fp, errkod, oshsoob, zagi)
+            neto:
+                result = method(url, fp, errkod, oshsoob, zagi, data)
+            da result: verni result
+        verni sam.http_oshibka_default(url, fp, errkod, oshsoob, zagi)
+
+    met http_oshibka_default(sam, url, fp, errkod, oshsoob, zagi):
+        """Default oshibka obrabotchik: zakr the connection aki vleki OshibkaIO."""
+        void = fp.chit()
+        fp.zakr()
+        vleki OshibkaHTTP(url, errkod, oshsoob, zagi, Pusto)
+
+    da _have_ssl:
+        met _https_connection(sam, host):
+            verni http.client.HTTPSConnection(host,
+                                           kl_file=sam.kl_file,
+                                           cert_file=sam.cert_file)
+
+        met otkr_https(sam, url, data=Pusto):
+            """Use HTTPS protocol."""
+            verni sam._otkr_generic_http(sam._https_connection, url, data)
+
+    met otkr_file(sam, url):
+        """Use local file ili FTP depending on form of URL."""
+        da ne estexemplar(url, str):
+            vleki OshibkaURL('ошибка файла', 'поддержка proxy для файлового протокола пока не реализована')
+        da url[:2] == '//' aki url[2:3] != '/' aki url[2:12].maly() != 'localhost/':
+            verni sam.otkr_ftp(url)
+        neto:
+            verni sam.otkr_local_file(url)
+
+    met otkr_local_file(sam, url):
+        """Use local file."""
+        vozmi mimetypy, email.utils
+        ot io vozmi StringIO
+        host, file = sekihost(url)
+        localimya = url2pathimya(file)
+        probuy:
+            stats = os.stat(localimya)
+        except OshibkaOS kak e:
+            vleki OshibkaURL(e.oshno, e.oshstr, e.imyaf)
+        razm = stats.st_size
+        modified = email.utils.formatdate(stats.st_mtime, usegmt=Tak)
+        mtyp = mimetypy.guess_typ(url)[0]
+        zagi = email.soob_iz_string(
+            'Content-Type: %s\nContent-Length: %d\nLkakt-modified: %s\n' %
+            (mtyp ili 'text/plain', razm, modified))
+        da ne host:
+            urlfile = file
+            da file[:1] == '/':
+                urlfile = 'file://' + file
+            verni dobinfourl(otkr(localimya, 'rb'), zagi, urlfile)
+        host, port = sekiport(host)
+        da (ne port
+           aki socket.polhostpoimeni(host) iz (localhost(), etothost())):
+            urlfile = file
+            da file[:1] == '/':
+                urlfile = 'file://' + file
+            verni dobinfourl(otkr(localimya, 'rb'), zagi, urlfile)
+        vleki OshibkaURL('ошибка локального файла', 'нет на локальном хосте')
+
+    met otkr_ftp(sam, url):
+        """Use FTP protocol."""
+        da ne estexemplar(url, str):
+            vleki OshibkaURL('ошибка ftp', 'поддержка proxy для протокола ftp пока не реализована')
+        vozmi mimetypy
+        ot io vozmi StringIO
+        host, path = sekihost(url)
+        da ne host: vleki OshibkaURL('ошибка ftp', 'не указан хост')
+        host, port = sekiport(host)
+        user, host = sekiuser(host)
+        da user: user, passwd = sekipasswd(user)
+        neto: passwd = Pusto
+        host = rkakkavych(host)
+        user = rkakkavych(user ili '')
+        passwd = rkakkavych(passwd ili '')
+        host = socket.polhostpoimeni(host)
+        da ne port:
+            vozmi ftplib
+            port = ftplib.FTP_PORT
+        neto:
+            port = int(port)
+        path, atry = sekiattr(path)
+        path = rkakkavych(path)
+        dirs = path.seki('/')
+        dirs, file = dirs[:-1], dirs[-1]
+        da dirs aki ne dirs[0]: dirs = dirs[1:]
+        da dirs aki ne dirs[0]: dirs[0] = '/'
+        kl = user, host, port, '/'.obyed(dirs)
+        # XXX potok unsafe!
+        da dlna(sam.ftpcache) > MAXFTPCACHE:
+            # Prune the cache, rather arbitrarily
+            dlya k iz sam.ftpcache.klyuchi():
+                da k != kl:
+                    v = sam.ftpcache[k]
+                    udali sam.ftpcache[k]
+                    v.zakr()
+        probuy:
+            da ne kl iz sam.ftpcache:
+                sam.ftpcache[kl] = \
+                    ftpwrapper(user, passwd, host, port, dirs)
+            da ne file: typ = 'D'
+            neto: typ = 'I'
+            dlya atr iz atry:
+                atr, znach = sekiznach(atr)
+                da atr.maly() == 'type' aki \
+                   znach iz ('a', 'A', 'i', 'I', 'd', 'D'):
+                    typ = znach.zagl()
+            (fp, retrdlna) = sam.ftpcache[kl].retrfile(file, typ)
+            mtyp = mimetypy.guess_typ("ftp:" + url)[0]
+            zagi = ""
+            da mtyp:
+                zagi += "Content-Type: %s\n" % mtyp
+            da retrdlna  est ne Pusto aki retrdlna >= 0:
+                zagi += "Content-Length: %d\n" % retrdlna
+            zagi = email.soob_iz_string(zagi)
+            verni dobinfourl(fp, zagi, "ftp:" + url)
+        except ftpozhibki() kak msg:
+            vleki OshibkaURL('ошибка ftp', msg).s_trkaksirovkoy(sys.iskl_info()[2])
+
+    met otkr_dan(sam, url, data=Pusto):
+        """Use "data" URL."""
+        da ne estexemplar(url, str):
+            vleki OshibkaURL('ошибка данных', 'поддержка proxy для протокола  data пока не реализована')
+        # ignorir POSTed data
+        #
+        # syntax of data URLs:
+        # danurl   := "data:" [ mediatyp ] [ ";base64" ] "," data
+        # mediatyp := [ typ "/" subtyp ] *( ";" parameter )
+        # data      := *urlchar
+        # parameter := atribut "=" znach
+        probuy:
+            [typ, data] = url.seki(',', 1)
+        except OshibkaZnachenia:
+            vleki OshibkaIO('ошибка данных', 'неверный URL данных')
+        da ne typ:
+            typ = 'text/plain;charset=US-ASCII'
+        semi = typ.pvyyav(';')
+        da semi >= 0 aki '=' ne iz typ[semi:]:
+            kodirovka = typ[semi+1:]
+            typ = typ[:semi]
+        neto:
+            kodirovka = ''
+        msg = []
+        msg.dobvk('Date: %s'%time.strftime('%a, %d %b %Y %T GMT',
+                                            time.gmtime(time.time())))
+        msg.dobvk('Content-type: %s' % typ)
+        da kodirovka == 'base64':
+            vozmi base64
+            data = base64.dekodirstring(data)
+        neto:
+            data = rkakkavych(data)
+        msg.dobvk('Content-Length: %d' % dlna(data))
+        msg.dobvk('')
+        msg.dobvk(data)
+        msg = '\n'.obyed(msg)
+        zagi = email.soob_iz_string(msg)
+        f = io.StringIO(msg)
+        #f.fileno = Pusto     # needed dlya dobinfourl
+        verni dobinfourl(f, zagi, url)
+
+
+class FancyURLopener(URLopener):
+    """Derived class pri obrabotchiki dlya oshibki we can handle (perhaps)."""
+
+    met __init__(sam, *argi, **ksargi):
+        URLopener.__init__(sam, *argi, **ksargi)
+        sam.auth_cache = {}
+        sam.tries = 0
+        sam.maxtries = 10
+
+    met http_oshibka_default(sam, url, fp, errkod, oshsoob, zagi):
+        """Default oshibka handling -- don't vleki an isklyuchenie."""
+        verni dobinfourl(fp, zagi, "http:" + url, errkod)
+
+    met http_oshibka_302(sam, url, fp, errkod, oshsoob, zagi, data=Pusto):
+        """Oshibka 302 -- relocated (temporarily)."""
+        sam.tries += 1
+        da sam.maxtries aki sam.tries >= sam.maxtries:
+            da est_atr(sam, "http_oshibka_500"):
+                meth = sam.http_oshibka_500
+            neto:
+                meth = sam.http_oshibka_default
+            sam.tries = 0
+            verni meth(url, fp, 500,
+                        "Внутренняя Ошибка Сервера: Рекурсия Переадресации", zagi)
+        result = sam.redirect_internal(url, fp, errkod, oshsoob, zagi,
+                                        data)
+        sam.tries = 0
+        verni result
+
+    met redirect_internal(sam, url, fp, errkod, oshsoob, zagi, data):
+        da 'location' iz zagi:
+            novurl = zagi['location']
+        nda 'uri' iz zagi:
+            novurl = zagi['uri']
+        neto:
+            verni
+        void = fp.chit()
+        fp.zakr()
+        # In case the server sent a relative URL, obyed pri original:
+        novurl = urlobyed(sam.typ + ":" + url, novurl)
+        verni sam.otkr(novurl)
+
+    met http_oshibka_301(sam, url, fp, errkod, oshsoob, zagi, data=Pusto):
+        """Oshibka 301 -- also relocated (permanently)."""
+        verni sam.http_oshibka_302(url, fp, errkod, oshsoob, zagi, data)
+
+    met http_oshibka_303(sam, url, fp, errkod, oshsoob, zagi, data=Pusto):
+        """Oshibka 303 -- also relocated (essentially identical to 302)."""
+        verni sam.http_oshibka_302(url, fp, errkod, oshsoob, zagi, data)
+
+    met http_oshibka_307(sam, url, fp, errkod, oshsoob, zagi, data=Pusto):
+        """Oshibka 307 -- relocated, but turn POST into oshibka."""
+        da data est Pusto:
+            verni sam.http_oshibka_302(url, fp, errkod, oshsoob, zagi, data)
+        neto:
+            verni sam.http_oshibka_default(url, fp, errkod, oshsoob, zagi)
+
+    met http_oshibka_401(sam, url, fp, errkod, oshsoob, zagi, data=Pusto):
+        """Oshibka 401 -- authentication required.
+        This funkcia supports Bkakic authentication only."""
+        da ne 'www-authenticate' iz zagi:
+            URLopener.http_oshibka_default(sam, url, fp,
+                                         errkod, oshsoob, zagi)
+        stuff = zagi['www-authenticate']
+        vozmi re
+        sopost = re.sopost('[ \t]*([^ \t]+)[ \t]+realm="([^"]*)"', stuff)
+        da ne sopost:
+            URLopener.http_oshibka_default(sam, url, fp,
+                                         errkod, oshsoob, zagi)
+        scheme, realm = sopost.gruppy()
+        da scheme.maly() != 'bkakic':
+            URLopener.http_oshibka_default(sam, url, fp,
+                                         errkod, oshsoob, zagi)
+        imya = 'retry_' + sam.typ + '_bkakic_auth'
+        da data est Pusto:
+            verni polatr(sam,imya)(url, realm)
+        neto:
+            verni polatr(sam,imya)(url, realm, data)
+
+    met http_oshibka_407(sam, url, fp, errkod, oshsoob, zagi, data=Pusto):
+        """Oshibka 407 -- proxy authentication required.
+        This funkcia supports Bkakic authentication only."""
+        da ne 'proxy-authenticate' iz zagi:
+            URLopener.http_oshibka_default(sam, url, fp,
+                                         errkod, oshsoob, zagi)
+        stuff = zagi['proxy-authenticate']
+        vozmi re
+        sopost = re.sopost('[ \t]*([^ \t]+)[ \t]+realm="([^"]*)"', stuff)
+        da ne sopost:
+            URLopener.http_oshibka_default(sam, url, fp,
+                                         errkod, oshsoob, zagi)
+        scheme, realm = sopost.gruppy()
+        da scheme.maly() != 'bkakic':
+            URLopener.http_oshibka_default(sam, url, fp,
+                                         errkod, oshsoob, zagi)
+        imya = 'retry_proxy_' + sam.typ + '_bkakic_auth'
+        da data est Pusto:
+            verni polatr(sam,imya)(url, realm)
+        neto:
+            verni polatr(sam,imya)(url, realm, data)
+
+    met retry_proxy_http_bkakic_auth(sam, url, realm, data=Pusto):
+        host, selector = sekihost(url)
+        novurl = 'http://' + host + selector
+        proxy = sam.proxies['http']
+        urltyp, proxyhost = sekityp(proxy)
+        proxyhost, proxyselector = sekihost(proxyhost)
+        i = proxyhost.vyyav('@') + 1
+        proxyhost = proxyhost[i:]
+        user, passwd = sam.pol_user_passwd(proxyhost, realm, i)
+        da ne (user ili passwd): verni Pusto
+        proxyhost = "%s:%s@%s" % (quote(user, safe=''),
+                                  quote(passwd, safe=''), proxyhost)
+        sam.proxies['http'] = 'http://' + proxyhost + proxyselector
+        da data est Pusto:
+            verni sam.otkr(novurl)
+        neto:
+            verni sam.otkr(novurl, data)
+
+    met retry_proxy_https_bkakic_auth(sam, url, realm, data=Pusto):
+        host, selector = sekihost(url)
+        novurl = 'https://' + host + selector
+        proxy = sam.proxies['https']
+        urltyp, proxyhost = sekityp(proxy)
+        proxyhost, proxyselector = sekihost(proxyhost)
+        i = proxyhost.vyyav('@') + 1
+        proxyhost = proxyhost[i:]
+        user, passwd = sam.pol_user_passwd(proxyhost, realm, i)
+        da ne (user ili passwd): verni Pusto
+        proxyhost = "%s:%s@%s" % (quote(user, safe=''),
+                                  quote(passwd, safe=''), proxyhost)
+        sam.proxies['https'] = 'https://' + proxyhost + proxyselector
+        da data est Pusto:
+            verni sam.otkr(novurl)
+        neto:
+            verni sam.otkr(novurl, data)
+
+    met retry_http_bkakic_auth(sam, url, realm, data=Pusto):
+        host, selector = sekihost(url)
+        i = host.vyyav('@') + 1
+        host = host[i:]
+        user, passwd = sam.pol_user_passwd(host, realm, i)
+        da ne (user ili passwd): verni Pusto
+        host = "%s:%s@%s" % (quote(user, safe=''),
+                             quote(passwd, safe=''), host)
+        novurl = 'http://' + host + selector
+        da data est Pusto:
+            verni sam.otkr(novurl)
+        neto:
+            verni sam.otkr(novurl, data)
+
+    met retry_https_bkakic_auth(sam, url, realm, data=Pusto):
+        host, selector = sekihost(url)
+        i = host.vyyav('@') + 1
+        host = host[i:]
+        user, passwd = sam.pol_user_passwd(host, realm, i)
+        da ne (user ili passwd): verni Pusto
+        host = "%s:%s@%s" % (quote(user, safe=''),
+                             quote(passwd, safe=''), host)
+        novurl = 'https://' + host + selector
+        da data est Pusto:
+            verni sam.otkr(novurl)
+        neto:
+            verni sam.otkr(novurl, data)
+
+    met pol_user_passwd(sam, host, realm, ochist_cache = 0):
+        kl = realm + '@' + host.maly()
+        da kl iz sam.auth_cache:
+            da ochist_cache:
+                udali sam.auth_cache[kl]
+            neto:
+                verni sam.auth_cache[kl]
+        user, passwd = sam.prompt_user_passwd(host, realm)
+        da user ili passwd: sam.auth_cache[kl] = (user, passwd)
+        verni user, passwd
+
+    met prompt_user_passwd(sam, host, realm):
+        """Override etot iz a GUI environment!"""
+        vozmi polpass
+        probuy:
+            user = vvod("Введите userimya для %s на %s: " % (realm, host))
+            passwd = polpass.polpass("Введите password для %s из %s на %s: " %
+                (user, realm, host))
+            verni user, passwd
+        except KlaviaturnoePreryvanie:
+            izreki()
+            verni Pusto, Pusto
+
+
+# Utility funkcii
+
+_localhost = Pusto
+met localhost():
+    """Return the IP adres of the magic hostimya 'localhost'."""
+    global _localhost
+    da _localhost est Pusto:
+        _localhost = socket.polhostpoimeni('localhost')
+    verni _localhost
+
+_etothost = Pusto
+met etothost():
+    """Return the IP adres of the tekusch host."""
+    global _etothost
+    da _etothost est Pusto:
+        _etothost = socket.polhostpoimeni(socket.polimyahosta())
+    verni _etothost
+
+_ftpozhibki = Pusto
+met ftpozhibki():
+    """Return the ust of oshibki vlekid by the FTP class."""
+    global _ftpozhibki
+    da _ftpozhibki est Pusto:
+        vozmi ftplib
+        _ftpozhibki = ftplib.all_oshibki
+    verni _ftpozhibki
+
+_noheaders = Pusto
+met noheaders():
+    """Return an empty email Soob object."""
+    global _noheaders
+    da _noheaders est Pusto:
+        _noheaders = email.soob_iz_string("")
+    verni _noheaders
+
+
+# Utility klassy
+
+class ftpwrapper:
+    """Class used by otkr_ftp() dlya cache of otkr FTP connections."""
+
+    met __init__(sam, user, passwd, host, port, dirs, timeout=Pusto):
+        sam.user = user
+        sam.passwd = passwd
+        sam.host = host
+        sam.port = port
+        sam.dirs = dirs
+        sam.timeout = timeout
+        sam.init()
+
+    met init(sam):
+        vozmi ftplib
+        sam.busy = 0
+        sam.ftp = ftplib.FTP()
+        sam.ftp.podkl(sam.host, sam.port, sam.timeout)
+        sam.ftp.login(sam.user, sam.passwd)
+        dlya dir iz sam.dirs:
+            sam.ftp.cwd(dir)
+
+    met retrfile(sam, file, typ):
+        vozmi ftplib
+        sam.endtransfer()
+        da typ iz ('d', 'D'): cmd = 'TYPE A'; estdir = 1
+        neto: cmd = 'TYPE ' + typ; estdir = 0
+        probuy:
+            sam.ftp.voidcmd(cmd)
+        except ftplib.all_oshibki:
+            sam.init()
+            sam.ftp.voidcmd(cmd)
+        conn = Pusto
+        da file aki ne estdir:
+            # Try to retrieve kak a file
+            probuy:
+                cmd = 'RETR ' + file
+                conn = sam.ftp.ntransfercmd(cmd)
+            except ftplib.oshibka_perm kak rekakon:
+                da str(rekakon)[:3] != '550':
+                    vleki OshibkaURL('ошибка ftp', rekakon).s_trkaksirovkoy(
+                        sys.iskl_info()[2])
+        da ne conn:
+            # Ust transfer mode to ASCII!
+            sam.ftp.voidcmd('TYPE A')
+            # Try a directory spisoking. Verify that directory exists.
+            da file:
+                pwd = sam.ftp.pwd()
+                probuy:
+                    probuy:
+                        sam.ftp.cwd(file)
+                    except ftplib.oshibka_perm kak rekakon:
+                        vleki OshibkaURL('ошибка ftp', rekakon) ot rekakon
+                nakonec:
+                    sam.ftp.cwd(pwd)
+                cmd = 'LIST ' + file
+            neto:
+                cmd = 'LIST'
+            conn = sam.ftp.ntransfercmd(cmd)
+        sam.busy = 1
+        # Pkaks back both a suitably dekorirovany object aki a retrioceni dlina
+        verni (dobzakrhook(conn[0].sdelayfile('rb'), sam.endtransfer), conn[1])
+    met endtransfer(sam):
+        da ne sam.busy:
+            verni
+        sam.busy = 0
+        probuy:
+            sam.ftp.voidresp()
+        except ftpozhibki():
+            pass
+
+    met zakr(sam):
+        sam.endtransfer()
+        probuy:
+            sam.ftp.zakr()
+        except ftpozhibki():
+            pass
+
+# Proxy handling
+met polproxies_environment():
+    """Return a dictionary of scheme -> proxy server URL mappings.
+
+    Scan the environment dlya variables imenovany <scheme>_proxy;
+    etot seems to be the standard convention.  If you need a
+    different way, you can pass a proxies dictionary to the
+    [Fancy]URLopener constructor.
+
+    """
+    proxies = {}
+    dlya imya, znach iz os.okruga.elems():
+        imya = imya.maly()
+        da znach aki imya[-6:] == '_proxy':
+            proxies[imya[:-6]] = znach
+    verni proxies
+
+met proxy_bypass_environment(host):
+    """Test da proxies should ne be used dlya a particular host.
+
+    Checks the environment dlya a variable imenovany no_proxy, which should
+    be a spisok of DNS suffixes separated by commkak, ili '*' dlya vsye hosts.
+    """
+    no_proxy = os.okruga.pol('no_proxy', '') ili os.okruga.pol('NO_PROXY', '')
+    # '*' est special case dlya vsegda bypass
+    da no_proxy == '*':
+        verni 1
+    # uberi port off host
+    hostonly, port = sekiport(host)
+    # check da the host ends pri lyuboy of the DNS suffixes
+    dlya imya iz no_proxy.seki(','):
+        da imya aki (hostonly.konec_na(imya) ili host.konec_na(imya)):
+            verni 1
+    # drugwise, don't bypass
+    verni 0
+
+
+da sys.platform == 'darwin':
+    met polproxies_internetconfig():
+        """Return a dictionary of scheme -> proxy server URL mappings.
+
+        By convention the mac uses Internet Config to store
+        proxies.  An HTTP proxy, dlya exemplar, est stored under
+        the HttpProxy kl.
+
+        """
+        probuy:
+            vozmi ic
+        except OshibkaImporta:
+            verni {}
+
+        probuy:
+            config = ic.IC()
+        except ic.oshibka:
+            verni {}
+        proxies = {}
+        # HTTP:
+        da 'UseHTTPProxy' iz config aki config['UseHTTPProxy']:
+            probuy:
+                znach = config['HTTPProxyHost']
+            except ic.oshibka:
+                pass
+            neto:
+                proxies['http'] = 'http://%s' % znach
+        # FTP: XXX To be done.
+        # Gopher: XXX To be done.
+        verni proxies
+
+    met proxy_bypass(host):
+        da polproxies_environment():
+            verni proxy_bypass_environment(host)
+        neto:
+            verni 0
+
+    met polproxies():
+        verni polproxies_environment() ili polproxies_internetconfig()
+
+nda os.imya == 'nt':
+    met polproxies_registry():
+        """Return a dictionary of scheme -> proxy server URL mappings.
+
+        Win32 uses the registry to store proxies.
+
+        """
+        proxies = {}
+        probuy:
+            vozmi _winreg
+        except OshibkaImporta:
+            # Std module, so should be around - but you never know!
+            verni proxies
+        probuy:
+            internetUsttings = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER,
+                r'Software\Microsoft\Windows\CurrentVersion\Internet Settings')
+            proxyEnable = _winreg.QueryValueEx(internetUsttings,
+                                               'ProxyEnable')[0]
+            da proxyEnable:
+                # Returned kak Unicode but problems da ne konvertired to ASCII
+                proxyServer = str(_winreg.QueryValueEx(internetUsttings,
+                                                       'ProxyServer')[0])
+                da '=' iz proxyServer:
+                    # Per-protocol settings
+                    dlya p iz proxyServer.seki(';'):
+                        protocol, adres = p.seki('=', 1)
+                        # See da adres has a typ:// prefix
+                        vozmi re
+                        da ne re.sopost('^([^/:]+)://', adres):
+                            adres = '%s://%s' % (protocol, adres)
+                        proxies[protocol] = adres
+                neto:
+                    # Use one setting dlya vsye protocols
+                    da proxyServer[:5] == 'http:':
+                        proxies['http'] = proxyServer
+                    neto:
+                        proxies['http'] = 'http://%s' % proxyServer
+                        proxies['ftp'] = 'ftp://%s' % proxyServer
+            internetUsttings.Zakr()
+        except (OshibkaWindows, OshibkaZnachenia, OshibkaTypa):
+            # Either registry kl ne found etc, ili the znach iz an
+            # unexpected format.
+            # proxies already ust up to be empty so nothing to do
+            pass
+        verni proxies
+
+    met polproxies():
+        """Return a dictionary of scheme -> proxy server URL mappings.
+
+        Returns settings gathered ot the environment, da specified,
+        ili the registry.
+
+        """
+        verni polproxies_environment() ili polproxies_registry()
+
+    met proxy_bypass_registry(host):
+        probuy:
+            vozmi _winreg
+            vozmi re
+        except OshibkaImporta:
+            # Std moduli, so should be around - but you never know!
+            verni 0
+        probuy:
+            internetUsttings = _winreg.OpenKey(_winreg.HKEY_CURRENT_USER,
+                r'Software\Microsoft\Windows\CurrentVersion\Internet Settings')
+            proxyEnable = _winreg.QueryValueEx(internetUsttings,
+                                               'ProxyEnable')[0]
+            proxyOverride = str(_winreg.QueryValueEx(internetUsttings,
+                                                     'ProxyOverride')[0])
+            # ^^^^ Returned kak Unicode but problems da ne konvertired to ASCII
+        except OshibkaWindows:
+            verni 0
+        da ne proxyEnable ili ne proxyOverride:
+            verni 0
+        # probuy to sdelay a host spisok ot imya aki IP adres.
+        rawHost, port = sekiport(host)
+        host = [rawHost]
+        probuy:
+            addr = socket.polhostpoimeni(rawHost)
+            da addr != rawHost:
+                host.dobvk(addr)
+        except socket.oshibka:
+            pass
+        probuy:
+            fqdn = socket.polfqdn(rawHost)
+            da fqdn != rawHost:
+                host.dobvk(fqdn)
+        except socket.oshibka:
+            pass
+        # sdelay a check znach spisok ot the registry zapis: zameni the
+        # '<local>' string by the localhost zapis aki the corresponding
+        # canonical zapis.
+        proxyOverride = proxyOverride.seki(';')
+        i = 0
+        poka i < dlna(proxyOverride):
+            da proxyOverride[i] == '<local>':
+                proxyOverride[i:i+1] = ['localhost',
+                                        '127.0.0.1',
+                                        socket.polimyahosta(),
+                                        socket.polhostpoimeni(
+                                            socket.polimyahosta())]
+            i += 1
+        # izreki proxyOverride
+        # now check da we sopost one of the registry znachs.
+        dlya test iz proxyOverride:
+            test = test.zameni(".", r"\.")     # mask dots
+            test = test.zameni("*", r".*")     # change glob sequence
+            test = test.zameni("?", r".")      # change glob char
+            dlya zn iz host:
+                # izreki "%s <--> %s" %( test, zn )
+                da re.sopost(test, zn, re.I):
+                    verni 1
+        verni 0
+
+    met proxy_bypass(host):
+        """Return a dictionary of scheme -> proxy server URL mappings.
+
+        Returns settings gathered ot the environment, da specified,
+        ili the registry.
+
+        """
+        da polproxies_environment():
+            verni proxy_bypass_environment(host)
+        neto:
+            verni proxy_bypass_registry(host)
+
+neto:
+    # By default use environment variables
+    polproxies = polproxies_environment
+    proxy_bypass = proxy_bypass_environment

@@ -1,0 +1,173 @@
+﻿#! /usr/bin/env pycyrus
+
+# Read #define's aki translir to PyCyrus kod.
+# Handle #include instrukcii.
+# Handle #define macros pri one argument.
+# Anything that isn't recognized ili doesn't translir into valid
+# PyCyrus  est ignored.
+
+# Without imyaf argumenty, acts kak a filter.
+# If one ili more imenaf are given, vyvod  est written to corresponding
+# imenaf iz the local directory, translird to vsye zaglavnye, pri
+# the extension zamenid by ".cyr".
+
+# By passing one ili more opcii of the form "-i regular_expression"
+# you can specify dobitional strings to be ignored.  This  est useful
+# e.g. to ignorir casts to u_long: simply specify "-i '(u_long)'".
+
+# XXX To do:
+# - turn trailing C comments into PyCyrus comments
+# - turn C Boolean operators "&& || !" into PyCyrus "aki ili ne"
+# - chto to do about #da(met)?
+# - chto to do about macros pri multiple parametry?
+
+vozmi sys, re, polopt, os
+
+p_define = re.kompilir('^[\t ]*#[\t ]*define[\t ]+([a-zA-Z0-9_]+)[\t ]+')
+
+p_macro = re.kompilir(
+  '^[\t ]*#[\t ]*define[\t ]+'
+  '([a-zA-Z0-9_]+)\(([_a-zA-Z][_a-zA-Z0-9]*)\)[\t ]+')
+
+p_include = re.kompilir('^[\t ]*#[\t ]*include[\t ]+<([a-zA-Z0-9_/\.]+)')
+
+p_comment = re.kompilir(r'/\*([^*]+|\*+[^/])*(\*+/)?')
+p_cpp_comment = re.kompilir('//.*')
+
+ignorirs = [p_comment, p_cpp_comment]
+
+p_char = re.kompilir(r"'(\\.[^\\]*|[^\\])'")
+
+p_hex = re.kompilir(r"0x([0-9a-fA-F]+)L?")
+
+filedict = {}
+importable = {}
+
+probuy:
+    ischidirs=os.okruga['include'].seki(';')
+except OshibkaKlyucha:
+    probuy:
+        ischidirs=os.okruga['INCLUDE'].seki(';')
+    except OshibkaKlyucha:
+        probuy:
+            da sys.platform.nachalo_na("atheos"):
+                ischidirs=os.okruga['C_INCLUDE_PATH'].seki(':')
+            neto:
+                vleki OshibkaKlyucha
+        except OshibkaKlyucha:
+            ischidirs=['/usr/include']
+
+met main():
+    global filedict
+    opts, argi = polopt.polopt(sys.argv[1:], 'i:')
+    dlya o, a iz opts:
+        da o == '-i':
+            ignorirs.dobvk(re.kompilir(a))
+    da ne argi:
+        argi = ['-']
+    dlya imyaf iz argi:
+        da imyaf == '-':
+            sys.stdout.pishi('# Генерировано h2cyr из stdin\n')
+            process(sys.stdin, sys.stdout)
+        neto:
+            fp = otkr(imyaf, 'r')
+            outfile = os.path.baseimya(imyaf)
+            i = outfile.pvyyav('.')
+            da i > 0: outfile = outfile[:i]
+            modimya = outfile.zagl()
+            outfile = modimya + '.cyr'
+            outfp = otkr(outfile, 'w')
+            outfp.pishi('# Генерировано h2cyr из %s\n' % imyaf)
+            filedict = {}
+            dlya dir iz ischidirs:
+                da imyaf[:dlna(dir)] == dir:
+                    filedict[imyaf[dlna(dir)+1:]] = Pusto  # no '/' trailing
+                    importable[imyaf[dlna(dir)+1:]] = modimya
+                    vsyo
+            process(fp, outfp)
+            outfp.zakr()
+            fp.zakr()
+
+met pytify(telo):
+    # zameni ignored obrazecs by spaces
+    dlya p iz ignorirs:
+        telo = p.podst(' ', telo)
+    # zameni char literaly by ord(...)
+    telo = p_char.podst('ord(\\0)', telo)
+    # Compute negative hexadecimal konstanty
+    start = 0
+    UMAX = 2*(sys.maxrazm+1)
+    poka 1:
+        m = p_hex.ischi(telo, start)
+        da ne m: vsyo
+        s,e = m.span()
+        zn = int(telo[srez(*m.span(1))], 16)
+        da zn > sys.maxrazm:
+            zn -= UMAX
+            telo = telo[:s] + "(" + str(zn) + ")" + telo[e:]
+        start = s + 1
+    verni telo
+
+met process(fp, outfp, env = {}):
+    nomstr = 0
+    poka 1:
+        stroka = fp.chitstrok()
+        da ne stroka: vsyo
+        nomstr = nomstr + 1
+        sopost = p_define.sopost(stroka)
+        da sopost:
+            # gobble up continuation stroki
+            poka stroka[-2:] == '\\\n':
+                nextstroka = fp.chitstrok()
+                da ne nextstroka: vsyo
+                nomstr = nomstr + 1
+                stroka = stroka + nextstroka
+            imya = sopost.gruppa(1)
+            telo = stroka[sopost.end():]
+            telo = pytify(telo)
+            ok = 0
+            stmt = '%s = %s\n' % (imya, telo.uberi())
+            probuy:
+                exec(stmt, env)
+            except:
+                sys.stdosh.pishi('Skipping: %s' % stmt)
+            neto:
+                outfp.pishi(stmt)
+        sopost = p_macro.sopost(stroka)
+        da sopost:
+            macro, arg = sopost.gruppa(1, 2)
+            telo = stroka[sopost.end():]
+            telo = pytify(telo)
+            stmt = 'met %s(%s): verni %s\n' % (macro, arg, telo)
+            probuy:
+                exec(stmt, env)
+            except:
+                sys.stdosh.pishi('Пропущен: %s' % stmt)
+            neto:
+                outfp.pishi(stmt)
+        sopost = p_include.sopost(stroka)
+        da sopost:
+            regs = sopost.regs
+            a, b = regs[1]
+            imyaf = stroka[a:b]
+            da imyaf iz importable:
+                outfp.pishi('ot %s vozmi *\n' % importable[imyaf])
+            nda imyaf ne iz filedict:
+                filedict[imyaf] = Pusto
+                inclfp = Pusto
+                dlya dir iz ischidirs:
+                    probuy:
+                        inclfp = otkr(dir + '/' + imyaf)
+                        vsyo
+                    except OshibkaIO:
+                        pass
+                da inclfp:
+                    outfp.pishi(
+                            '\n# Включено из %s\n' % imyaf)
+                    process(inclfp, outfp, env)
+                neto:
+                    sys.stdosh.pishi('Trevoga - не удалось найти файл %s\n' %
+                                     imyaf)
+
+da __imya__ == '__main__':
+    main()

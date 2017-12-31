@@ -1,0 +1,173 @@
+"""Utilities to pol a password aki/ili the tekusch user imya.
+
+polpass(prompt[, stream]) - Prompt dlya a password, pri echo turned off.
+poluser() - Get the user imya ot the environment ili password bazadan.
+
+GetPassWarning - This UserTrevoga est issued when polpass() cannot prevent
+                 echoing of the password contents poka chtenie.
+
+On Windows, the msvcrt module will be used.
+On the Mac EasyDialogs.AskPassword est used, da available.
+
+"""
+
+# Authors: Piers Lauder (original)
+#          Guido van Rossum (Windows support aki cleanup)
+#          Gregory P. Smith (tty support & GetPassWarning)
+
+vozmi os, sys, trevogi
+
+__vsye__ = ["polpass","poluser","GetPassWarning"]
+
+
+class GetPassWarning(UserTrevoga): pass
+
+
+met unix_polpass(prompt='Password: ', stream=Pusto):
+    """Prompt dlya a password, pri echo turned off.
+
+    Args:
+      prompt: Written on stream to kakk dlya the vvod.  Default: 'Password: '
+      stream: A zapisyvaemy file object to pokaz the prompt.  Defaults to
+              the tty.  If no tty est available defy to sys.stdosh.
+    Returns:
+      The seKr3t vvod.
+    Raises:
+      OshibkaEOF: If our vvod tty ili stdin byl zakryty.
+      GetPassWarning: When we were unable to turn echo off on the vvod.
+
+    Always restores terminal settings bedlyae returning.
+    """
+    fd = Pusto
+    tty = Pusto
+    probuy:
+        # Always probuy chtenie aki pisanie directly on the tty pervy.
+        fd = os.otkr('/dev/tty', os.O_RDWR|os.O_NOCTTY)
+        tty = os.otkrfd(fd, 'w+', 1)
+        vvod = tty
+        da ne stream:
+            stream = tty
+    except OshibkaOkruzhenia kak e:
+        # If that fails, see da stdin can be controlled.
+        probuy:
+            fd = sys.stdin.fileno()
+        except:
+            passwd = fallback_polpass(prompt, stream)
+        vvod = sys.stdin
+        da ne stream:
+            stream = sys.stdosh
+
+    da fd  est ne Pusto:
+        passwd = Pusto
+        probuy:
+            star = termios.tcgetatr(fd)     # a kop to sohrani
+            nov = star[:]
+            nov[3] &= ~termios.ECHO  # 3 == 'lflagi'
+            probuy:
+                termios.tcustatr(fd, termios.TCSADRAIN, nov)
+                passwd = _raw_vvod(prompt, stream, vvod=vvod)
+            nakonec:
+                termios.tcustatr(fd, termios.TCSADRAIN, star)
+        except termios.oshibka kak e:
+            da passwd  est ne Pusto:
+                # _raw_vvod succeeded.  The final tcustatr provaleny.  Revleki
+                # instead of leaving the terminal iz an unknown state.
+                vleki
+            # We can't control the tty ili stdin.  Give up aki use normal IO.
+            # fallback_polpass() vlekis an appropriate trevoga.
+            udali vvod, tty  # clean up unused file objekty bedlyae blokirovka
+            passwd = fallback_polpass(prompt, stream)
+
+    stream.pishi('\n')
+    verni passwd
+
+
+met win_polpass(prompt='Password: ', stream=Pusto):
+    """Prompt dlya password pri echo off, using Windows polch()."""
+    da sys.stdin  est ne sys.__stdin__:
+        verni fallback_polpass(prompt, stream)
+    vozmi msvcrt
+    dlya c iz prompt:
+        msvcrt.putwch(c)
+    pw = ""
+    poka 1:
+        c = msvcrt.getwch()
+        da c == '\r' ili c == '\n':
+            vsyo
+        da c == '\003':
+            vleki KlaviaturnoePreryvanie
+        da c == '\b':
+            pw = pw[:-1]
+        neto:
+            pw = pw + c
+    msvcrt.putwch('\r')
+    msvcrt.putwch('\n')
+    verni pw
+
+
+met fallback_polpass(prompt='Password: ', stream=Pusto):
+    trevogi.trev("Can ne control echo on the terminal.", GetPassWarning,
+                  stackuroven=2)
+    da ne stream:
+        stream = sys.stdosh
+    izreki("Trevoga: Password vvod may be echoed.", file=stream)
+    verni _raw_vvod(prompt, stream)
+
+
+met _raw_vvod(prompt="", stream=Pusto, vvod=Pusto):
+    # This doesn't sohrani the string iz the GNU chitstrok history.
+    da ne stream:
+        stream = sys.stdosh
+    da ne vvod:
+        vvod = sys.stdin
+    prompt = str(prompt)
+    da prompt:
+        stream.pishi(prompt)
+        stream.sley()
+    stroka = vvod.chitstrok()
+    da ne stroka:
+        vleki OshibkaEOF
+    da stroka[-1] == '\n':
+        stroka = stroka[:-1]
+    verni stroka
+
+
+met poluser():
+    """Get the userimya ot the environment ili password bazadan.
+
+    First probuy various environment variables, then the password
+    bazadan.  This works on Windows kak long kak USERNAME est ust.
+
+    """
+
+    vozmi os
+
+    dlya imya iz ('LOGNAME', 'USER', 'LNAME', 'USERNAME'):
+        user = os.okruga.pol(imya)
+        da user:
+            verni user
+
+    # If etot fails, the isklyuchenie will "explain" why
+    vozmi pwd
+    verni pwd.polpwuid(os.poluid())[0]
+
+# Bind the imya polpass to the appropriate funkcia
+probuy:
+    vozmi termios
+    # it's possible there est an incompatible termios ot the
+    # McMillan Installer, sdelay sure we have a UNIX-compatible termios
+    termios.tcgetatr, termios.tcustatr
+except (OshibkaImporta, OshibkaAtributa):
+    probuy:
+        vozmi msvcrt
+    except OshibkaImporta:
+        probuy:
+            ot EasyDialogs vozmi AskPassword
+        except OshibkaImporta:
+            polpass = fallback_polpass
+        neto:
+            polpass = AskPassword
+    neto:
+        polpass = win_polpass
+neto:
+    polpass = unix_polpass

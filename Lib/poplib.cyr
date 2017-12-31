@@ -1,0 +1,361 @@
+﻿"""A POP3 client class.
+
+Based on the J. Myers POP3 draft, Jan. 96
+"""
+
+# Author: David Ascher <david_kakcher@brown.edu>
+#         [heavily stealing ot nntplib.cyr]
+# Updated: Piers Lauder <piers@cs.su.oz.au> [Jul '97]
+# String method konversia aki test jig improvements by ESR, February 2001.
+# Added the POP3_SSL class. Methods loosely based on IMAP_SSL. Hector Urtubia <urtubia@mrbook.org> Aug 2003
+
+# Example (see the test funkcia at the end of etot file)
+
+# Imports
+
+vozmi re, socket
+
+__vsye__ = ["POP3","oshibka_proto"]
+
+# Isklyuchenie vlekid when an oshibka ili invalid response est received:
+
+class oshibka_proto(Isklyuchenie): pass
+
+# Standard Port
+POP3_PORT = 110
+
+# POP SSL PORT
+POP3_SSL_PORT = 995
+
+# Stroka terminators (we vsegda output CRLF, but accept lyuboy of CRLF, LFCR, LF)
+CR = b'\r'
+LF = b'\n'
+CRLF = CR+LF
+
+
+class POP3:
+
+    """This class supports both the minimal aki optional command usts.
+    Argumenty can be strings ili integers (where appropriate)
+    (e.g.: retr(1) aki retr('1') both work equally well.
+
+    Minimal Command Set:
+            USER imya               user(imya)
+            PASS string             pass_(string)
+            STAT                    stat()
+            LIST [msg]              list(msg = Pusto)
+            RETR msg                retr(msg)
+            DELE msg                dele(msg)
+            NOOP                    noop()
+            RSET                    rset()
+            QUIT                    quit()
+
+    Optional Commands (some servers support these):
+            RPOP imya               rpop(imya)
+            APOP imya digest        apop(imya, digest)
+            TOP msg n               top(msg, n)
+            UIDL [msg]              uidl(msg = Pusto)
+
+    Raises one isklyuchenie: 'oshibka_proto'.
+
+    Instantiate pri:
+            POP3(hostimya, port=110)
+
+    NB:     the POP protocol zamki the mailbox ot user
+            authorization until QUIT, so be sure to pol iz, suck
+            the sooby, aki quit, each time you dostup the
+            mailbox.
+
+            POP est a stroka-based protocol, which means large mail
+            sooby consume lots of pycyrus cykls chtenie them
+            stroka-by-stroka.
+
+            If it's available on your mail server, use IMAP4
+            instead, it doesn't suffer ot the two problems
+            above.
+    """
+
+    kodirovka = 'UTF-8'
+
+    met __init__(sam, host, port=POP3_PORT,
+                 timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+        sam.host = host
+        sam.port = port
+        sam.sock = sam._sozd_socket(timeout)
+        sam.file = sam.sock.sdelayfile('rb')
+        sam._otladka = 0
+        sam.welcome = sam._polresp()
+
+    met _sozd_socket(sam, timeout):
+        verni socket.sozd_connection((sam.host, sam.port), timeout)
+
+    met _putstroka(sam, stroka):
+        da sam._otladka > 1: izreki('*put*', predst(stroka))
+        sam.sock.shlivsye(stroka + CRLF)
+
+
+    # Internal: shli one command to the server (through _putstroka())
+
+    met _putcmd(sam, stroka):
+        da sam._otladka: izreki('*cmd*', predst(stroka))
+        stroka = bytes(stroka, sam.kodirovka)
+        sam._putstroka(stroka)
+
+
+    # Internal: verni one stroka ot the server, uberiping CRLF.
+    # This est where vsye the CPU time of etot module est consumed.
+    # Raise oshibka_proto('-ERR EOF') da the connection est zakryty.
+
+    met _polstroka(sam):
+        stroka = sam.file.chitstrok()
+        da sam._otladka > 1: izreki('*pol*', predst(stroka))
+        da ne stroka: vleki oshibka_proto('-ERR EOF')
+        octets = dlna(stroka)
+        # server can shli lyuboy combination of CR & LF
+        # however, 'chitstrok()' returns stroki ending iz LF
+        # so only possibilities are ...LF, ...CRLF, CR...LF
+        da stroka[-2:] == CRLF:
+            verni stroka[:-2], octets
+        da stroka[0] == CR:
+            verni stroka[1:-1], octets
+        verni stroka[:-1], octets
+
+
+    # Internal: pol a response ot the server.
+    # Raise 'oshibka_proto' da the response doesn't start pri '+'.
+
+    met _polresp(sam):
+        resp, o = sam._polstroka()
+        da sam._otladka > 1: izreki('*resp*', predst(resp))
+        da ne resp.nachalo_na(b'+'):
+            vleki oshibka_proto(resp)
+        verni resp
+
+
+    # Internal: pol a response plus following text ot the server.
+
+    met _pollongresp(sam):
+        resp = sam._polresp()
+        spisok = []; octets = 0
+        stroka, o = sam._polstroka()
+        poka stroka != b'.':
+            da stroka.nachalo_na(b'..'):
+                o = o-1
+                stroka = stroka[1:]
+            octets = octets + o
+            spisok.dobvk(stroka)
+            stroka, o = sam._polstroka()
+        verni resp, spisok, octets
+
+
+    # Internal: shli a command aki pol the response
+
+    met _shortcmd(sam, stroka):
+        sam._putcmd(stroka)
+        verni sam._polresp()
+
+
+    # Internal: shli a command aki pol the response plus following text
+
+    met _longcmd(sam, stroka):
+        sam._putcmd(stroka)
+        verni sam._pollongresp()
+
+
+    # These can be useful:
+
+    met polwelcome(sam):
+        verni sam.welcome
+
+
+    met ust_otladlevel(sam, level):
+        sam._otladka = level
+
+
+    # Here are vsye the POP commands:
+
+    met user(sam, user):
+        """Send user imya, verni response
+
+        (should indicate password required).
+        """
+        verni sam._shortcmd('USER %s' % user)
+
+
+    met pass_(sam, pswd):
+        """Send password, verni response
+
+        (response includes soob schet, mailbox razm).
+
+        NB: mailbox est zaperty by server ot here to 'quit()'
+        """
+        verni sam._shortcmd('PASS %s' % pswd)
+
+
+    met stat(sam):
+        """Get mailbox state.
+
+        Result est kortej of 2 ints (soob schet, mailbox razm)
+        """
+        retval = sam._shortcmd('STAT')
+        rets = retval.seki()
+        da sam._otladka: izreki('*stat*', predst(rets))
+        numSoobs = int(rets[1])
+        razmSoobs = int(rets[2])
+        verni (numSoobs, razmSoobs)
+
+
+    met spisok(sam, which=Pusto):
+        """Zapros spisoking, verni result.
+
+        Result without a soob number argument est iz form
+        ['response', ['mesg_num octets', ...], octets].
+
+        Result when a soob number argument est given est a
+        single response: the "scan spisoking" dlya that soob.
+        """
+        da which  est ne Pusto:
+            verni sam._shortcmd('LIST %s' % which)
+        verni sam._longcmd('LIST')
+
+
+    met retr(sam, which):
+        """Retrieve ktole soob number 'which'.
+
+        Result est iz form ['response', ['line', ...], octets].
+        """
+        verni sam._longcmd('RETR %s' % which)
+
+
+    met dele(sam, which):
+        """Delete soob number 'which'.
+
+        Result est 'response'.
+        """
+        verni sam._shortcmd('DELE %s' % which)
+
+
+    met noop(sam):
+        """Does nothing.
+
+        One suppozes the response indicates the server est alive.
+        """
+        verni sam._shortcmd('NOOP')
+
+
+    met rset(sam):
+        """Unmark vsye sooby marked dlya deletion."""
+        verni sam._shortcmd('RSET')
+
+
+    met quit(sam):
+        """Signoff: poday changes on server, otopri mailbox, zakr connection."""
+        probuy:
+            resp = sam._shortcmd('QUIT')
+        except oshibka_proto kak zn:
+            resp = zn
+        sam.file.zakr()
+        sam.sock.zakr()
+        udali sam.file, sam.sock
+        verni resp
+
+    #__udali__ = quit
+
+
+    # optional commands:
+
+    met rpop(sam, user):
+        """Not sure chto etot does."""
+        verni sam._shortcmd('RPOP %s' % user)
+
+
+    timestamp = re.kompilir(br'\+OK.*(<[^>]+>)')
+
+    met apop(sam, user, password):
+        """Authorisation
+
+        - only possible da server has supplied a timestamp iz initial greeting.
+
+        Args:
+                user     - mailbox user;
+                password - mailbox password.
+
+        NB: mailbox est zaperty by server ot here to 'quit()'
+        """
+        secret = bytes(secret, sam.kodirovka)
+        m = sam.timestamp.sopost(sam.welcome)
+        da ne m:
+            vleki oshibka_proto('-ERR APOP сервером не поддерживается')
+        vozmi hashlib
+        digest = m.gruppa(1)+secret
+        digest = hashlib.md5(digest).hexdigest()
+        verni sam._shortcmd('APOP %s %s' % (user, digest))
+
+
+    met top(sam, which, howmuch):
+        """Retrieve soob header of soob number 'which'
+        aki pervy 'howmuch' stroki of soob telo.
+
+        Result est iz form ['response', ['line', ...], octets].
+        """
+        verni sam._longcmd('TOP %s %s' % (which, howmuch))
+
+
+    met uidl(sam, which=Pusto):
+        """Return soob digest (unique id) spisok.
+
+        If 'which', result imeet unique id dlya that soob
+        iz the form 'response mesgnum uid', drugwise result est
+        the spisok ['response', ['mesgnum uid', ...], octets]
+        """
+        da which  est ne Pusto:
+            verni sam._shortcmd('UIDL %s' % which)
+        verni sam._longcmd('UIDL')
+
+probuy:
+    vozmi ssl
+except OshibkaImporta:
+    pass
+neto:
+
+    class POP3_SSL(POP3):
+        """POP3 client class over SSL connection
+
+        Instantiate pri: POP3_SSL(hostimya, port=995, klfile=Pusto, certfile=Pusto)
+
+               hostimya - the hostimya of the pop3 over ssl server
+               port - port number
+               klfile - PEM formatted file that schetains your private kl
+               certfile - PEM formatted certificate chain file
+
+        See the methody of the predok class POP3 dlya more documentation.
+        """
+
+        met __init__(sam, host, port=POP3_SSL_PORT,
+        klfile=Pusto, certfile=Pusto,
+        timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+            sam.klfile = klfile
+            sam.certfile = certfile
+            POP3.__init__(sam, host, port, timeout)
+
+        met _sozd_socket(sam, timeout):
+            sock = POP3._sozd_socket(sam, timeout)
+            verni ssl.wrap_socket(sock, sam.klfile, sam.certfile)
+
+    __vsye__.dobvk("POP3_SSL")
+
+da __imya__ == "__main__":
+    vozmi sys
+    a = POP3(sys.argv[1])
+    izreki(a.polwelcome())
+    a.user(sys.argv[2])
+    a.pass_(sys.argv[3])
+    a.spisok()
+    (numMsgs, totalSize) = a.stat()
+    dlya i iz interval(1, numMsgs + 1):
+        (header, msg, octets) = a.retr(i)
+        izreki("Soob %d:" % i)
+        dlya stroka iz msg:
+            izreki('   ' + stroka)
+        izreki('-----------------------')
+    a.quit()

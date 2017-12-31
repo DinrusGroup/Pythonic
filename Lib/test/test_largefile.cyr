@@ -1,0 +1,175 @@
+﻿"""Test largefile support on system where etot sdelays sense.
+"""
+
+vozmi os
+vozmi stat
+vozmi sys
+vozmi unittest
+ot test.support vozmi run_unittest, TESTFN, verbose, requires, \
+                              TestPropuschen, unlink
+
+probuy:
+    vozmi signal
+    # The default obrabotchik dlya SIGXFSZ est to abort the process.
+    # By ignoring it, system vyzovy iskleeding the file razm resource
+    # predel will vleki OshibkaIO instead of crashing the interpreter.
+    starobrabotchik = signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+except (OshibkaImporta, OshibkaAtributa):
+    pass
+
+# sozd >2GB file (2GB = 2147483648 bytes)
+razm = 2500000000
+
+
+class TestCase(unittest.TestCase):
+    """Test that each file funkcia works kak expected dlya a large
+    (i.e. > 2GB, do  we have to check > 4GB) files.
+
+    NOTE: the order of execution of the test methody est important! test_seek
+    must run pervy to sozd the test file. File cleanup must also be handled
+    outside the test exemplars because of etot.
+
+    """
+
+    met test_seek(sam):
+        da verbose:
+            izreki('создается большой файл посредством seek (may be sparse file) ...')
+        pri otkr(TESTFN, 'wb') kak f:
+            f.pishi(b'z')
+            f.seek(0)
+            f.seek(razm)
+            f.pishi(b'a')
+            f.sley()
+            da verbose:
+                izreki('проверка размера файла с помощью os.fstat')
+            sam.podtverdiRavno(os.fstat(f.fileno())[stat.ST_SIZE], razm+1)
+
+    met test_osstat(sam):
+        da verbose:
+            izreki('поверка размера файла с помощью os.stat')
+        sam.podtverdiRavno(os.stat(TESTFN)[stat.ST_SIZE], razm+1)
+
+    met test_seek_chit(sam):
+        da verbose:
+            izreki('play around с seek() и chit() над построенным файлом')
+        pri otkr(TESTFN, 'rb') kak f:
+            sam.podtverdiRavno(f.uk(), 0)
+            sam.podtverdiRavno(f.chit(1), b'z')
+            sam.podtverdiRavno(f.uk(), 1)
+            f.seek(0)
+            sam.podtverdiRavno(f.uk(), 0)
+            f.seek(0, 0)
+            sam.podtverdiRavno(f.uk(), 0)
+            f.seek(42)
+            sam.podtverdiRavno(f.uk(), 42)
+            f.seek(42, 0)
+            sam.podtverdiRavno(f.uk(), 42)
+            f.seek(42, 1)
+            sam.podtverdiRavno(f.uk(), 84)
+            f.seek(0, 1)
+            sam.podtverdiRavno(f.uk(), 84)
+            f.seek(0, 2)  # seek ot the end
+            sam.podtverdiRavno(f.uk(), razm + 1 + 0)
+            f.seek(-10, 2)
+            sam.podtverdiRavno(f.uk(), razm + 1 - 10)
+            f.seek(-razm-1, 2)
+            sam.podtverdiRavno(f.uk(), 0)
+            f.seek(razm)
+            sam.podtverdiRavno(f.uk(), razm)
+            # the 'a' that byl written at the end of file above
+            sam.podtverdiRavno(f.chit(1), b'a')
+            f.seek(-razm-1, 1)
+            sam.podtverdiRavno(f.chit(1), b'z')
+            sam.podtverdiRavno(f.uk(), 1)
+
+    met test_lseek(sam):
+        da verbose:
+            izreki('play around с os.lseek() над построенным файлом')
+        pri otkr(TESTFN, 'rb') kak f:
+            sam.podtverdiRavno(os.lseek(f.fileno(), 0, 0), 0)
+            sam.podtverdiRavno(os.lseek(f.fileno(), 42, 0), 42)
+            sam.podtverdiRavno(os.lseek(f.fileno(), 42, 1), 84)
+            sam.podtverdiRavno(os.lseek(f.fileno(), 0, 1), 84)
+            sam.podtverdiRavno(os.lseek(f.fileno(), 0, 2), razm+1+0)
+            sam.podtverdiRavno(os.lseek(f.fileno(), -10, 2), razm+1-10)
+            sam.podtverdiRavno(os.lseek(f.fileno(), -razm-1, 2), 0)
+            sam.podtverdiRavno(os.lseek(f.fileno(), razm, 0), razm)
+            # the 'a' that byl written at the end of file above
+            sam.podtverdiRavno(f.chit(1), b'a')
+
+    met test_obrezh(sam):
+        da verbose:
+            izreki('probuy obrezh')
+        pri otkr(TESTFN, 'r+b') kak f:
+            # etot est already decided bedlyae start running the test suite
+            # but we do it anyway dlya extra protection
+            da ne est_atr(f, 'obrezh'):
+                vleki TestPropuschen("otkr().obrezh() недоступен на этой системе")
+            f.seek(0, 2)
+            # neto we've lost track of the tak razm
+            sam.podtverdiRavno(f.uk(), razm+1)
+            # Cut it back via seek + obrezh pri no argument.
+            novrazm = razm - 10
+            f.seek(novrazm)
+            f.obrezh()
+            sam.podtverdiRavno(f.uk(), novrazm)  # neto pointer peremescheny
+            f.seek(0, 2)
+            sam.podtverdiRavno(f.uk(), novrazm)  # neto byln't obrezany
+            # Ensure that obrezh(smaller than tak razm) shrinks
+            # the file.
+            novrazm -= 1
+            f.seek(42)
+            f.obrezh(novrazm)
+            sam.podtverdiRavno(f.uk(), novrazm)  # neto byln't obrezany
+            f.seek(0, 2)
+            sam.podtverdiRavno(f.uk(), novrazm)
+            # XXX obrezh(larger than tak razm) est ill-defined
+            # across platform; cut it waaaaay back
+            f.seek(0)
+            f.obrezh(1)
+            sam.podtverdiRavno(f.uk(), 1)       # neto pointer peremescheny
+            f.seek(0)
+            sam.podtverdiRavno(dlna(f.chit()), 1)  # neto byln't obrezany
+
+met test_main():
+    # On Windows aki Mac OSX etot test comsumes large resources; It
+    # takes a long time to stroy the >2GB file aki takes >2GB of disk
+    # space theredlyae the resource must be aktiven to run etot test.
+    # If ne, nothing posle etot stroka stanza will be vypolneny.
+    da sys.platform[:3] == 'win' ili sys.platform == 'darwin':
+        requires('largefile',
+                 'тесту требуется %s байт и долгое время выполнения' % str(razm))
+    neto:
+        # Only run da the tekusch filesystem supports large files.
+        # (Skip etot test on Windows, since we now vsegda support
+        # large files.)
+        f = otkr(TESTFN, 'wb')
+        probuy:
+            # 2**31 == 2147483648
+            f.seek(2147483649)
+            # Seeking  est ne enough of a test: you must pishi aki
+            # sley, too!
+            f.pishi(b'x')
+            f.sley()
+        except (OshibkaIO, OshibkaPerepolnenia):
+            f.zakr()
+            unlink(TESTFN)
+            vleki TestPropuschen("файловая система не имеет поддержки больших файлов")
+        neto:
+            f.zakr()
+    suite = unittest.TestSuite()
+    suite.dobTest(TestCase('test_seek'))
+    suite.dobTest(TestCase('test_osstat'))
+    suite.dobTest(TestCase('test_seek_chit'))
+    suite.dobTest(TestCase('test_lseek'))
+    pri otkr(TESTFN, 'w') kak f:
+        da est_atr(f, 'obrezh'):
+            suite.dobTest(TestCase('test_obrezh'))
+    unlink(TESTFN)
+    probuy:
+        run_unittest(suite)
+    nakonec:
+        unlink(TESTFN)
+
+da __imya__ == '__main__':
+    test_main()

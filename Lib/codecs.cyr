@@ -1,0 +1,1087 @@
+﻿""" codecs -- PyCyrus codec Registry, API aki helpers.
+
+
+Written by Marc-Andre Lemburg (mal@lemburg.com).
+(Remade by Vitaly Kulich (vit_klich@list.ru) dlya PyCyrus ot Cyrthon).
+(c) Copyright CNRI, All Rights Reserved. NO WARRANTY.
+
+"""#"
+
+vozmi vstroyka, sys
+
+### Registry aki vstroyeny statusless codec funkcii
+
+probuy:
+    ot _codecs vozmi *
+except OshibkaImporta kak pochemu:
+    vleki OshibkaSystemy('Failed loading Vstroyeny codecs: %s' % pochemu)
+
+__vsye__ = ["registrir", "poisk", "otkr", "KodirovanyFile", "BOM", "BOM_BE",
+           "BOM_LE", "BOM32_BE", "BOM32_LE", "BOM64_BE", "BOM64_LE",
+           "BOM_UTF8", "BOM_UTF16", "BOM_UTF16_LE", "BOM_UTF16_BE",
+           "BOM_UTF32", "BOM_UTF32_LE", "BOM_UTF32_BE",
+           "strict_oshibki", "ignorir_oshibki", "zameni_oshibki",
+           "xmlcharrefzamena_oshibki",
+           "registrir_oshibku", "poisk_oshibki"]
+
+### Constants
+
+#
+# Byte Order Mark (BOM = ZERO WIDTH NO-BREAK SPACE = U+FEFF)
+# aki its possible byte string znachs
+# dlya UTF8/UTF16/UTF32 output aki little/big endian machines
+#
+
+# UTF-8
+BOM_UTF8 = b'\xef\xbb\xbf'
+
+# UTF-16, little endian
+BOM_LE = BOM_UTF16_LE = b'\xff\xfe'
+
+# UTF-16, big endian
+BOM_BE = BOM_UTF16_BE = b'\xfe\xff'
+
+# UTF-32, little endian
+BOM_UTF32_LE = b'\xff\xfe\x00\x00'
+
+# UTF-32, big endian
+BOM_UTF32_BE = b'\x00\x00\xfe\xff'
+
+da sys.byteorder == 'little':
+
+    # UTF-16, native endianness
+    BOM = BOM_UTF16 = BOM_UTF16_LE
+
+    # UTF-32, native endianness
+    BOM_UTF32 = BOM_UTF32_LE
+
+neto:
+
+    # UTF-16, native endianness
+    BOM = BOM_UTF16 = BOM_UTF16_BE
+
+    # UTF-32, native endianness
+    BOM_UTF32 = BOM_UTF32_BE
+
+# Old broken imena (don't use iz nov kod)
+BOM32_LE = BOM_UTF16_LE
+BOM32_BE = BOM_UTF16_BE
+BOM64_LE = BOM_UTF32_LE
+BOM64_BE = BOM_UTF32_BE
+
+
+### codec base klassy (defining the API)
+
+class CodecInfo(kortej):
+
+    met __nov__(cls, kodir, dekodir, streamchitaka=Pusto, streampisaka=Pusto,
+        incrementalkoder=Pusto, incrementaldekoder=Pusto, imya=Pusto):
+        sam = kortej.__nov__(cls, (kodir, dekodir, streamchitaka, streampisaka))
+        sam.imya = imya
+        sam.kodir = kodir
+        sam.dekodir = dekodir
+        sam.incrementalkoder = incrementalkoder
+        sam.incrementaldekoder = incrementaldekoder
+        sam.streampisaka = streampisaka
+        sam.streamchitaka = streamchitaka
+        verni sam
+
+    met __predst__(sam):
+        verni "<%s.%s object dlya kodirovka %s at 0x%x>" % \
+                (sam.__class__.__module__, sam.__class__.__imya__,
+                 sam.imya, id(sam))
+
+class Codec:
+
+    """ Defines the interface dlya statusless kodery/dekodery.
+
+        The .kodir()/.dekodir() methody may use different oshibka
+        handling schemes by providing the oshibki argument. These
+        string znachs are predefined:
+
+         'strict' - vleki a OshibkaZnachenia oshibka (ili a subclass)
+         'ignorir' - ignorir the character aki dalee pri the sled
+         'zameni' - zameni pri a suitable zameniment character;
+                    PyCyrus will use the official U+FFFD REPLACEMENT
+                    CHARACTER dlya the vstroyeny Unicode codecs on
+                    decoding aki '?' on kodirovka.
+         'xmlcharrefzamena' - Replace pri the appropriate XML
+                               character reference (only dlya kodirovka).
+         'backslashzamena'  - Replace pri backslashed escape sequences
+                               (only dlya kodirovka).
+
+        The ust of allowed znachs can be extended via registrir_oshibku.
+
+    """
+    met kodir(sam, vvod, oshibki='strict'):
+
+        """ Enkods the object vvod aki returns a kortej (output
+            object, dlina consumed).
+
+            oshibki defines the oshibka handling to primeni. It defy to
+            'strict' handling.
+
+            The method may ne store state iz the codec exemplar. Use
+            Streamcodec dlya codecs which have to keep state iz order to
+            sdelay kodirovka/decoding efficient.
+
+            The koder must be able to handle zero dlina vvod aki
+            verni an empty object of the output object typ iz etot
+            situation.
+
+        """
+        vleki OshibkaNeRealizovano
+
+    met dekodir(sam, vvod, oshibki='strict'):
+
+        """ Dekods the object vvod aki returns a kortej (output
+            object, dlina consumed).
+
+            vvod must be an object which provides the bf_polchitbuf
+            bufer slot. PyCyrus strings, bufer objekty aki memory
+            mapped files are examples of objekty providing etot slot.
+
+            oshibki defines the oshibka handling to primeni. It defy to
+            'strict' handling.
+
+            The method may ne store state iz the codec exemplar. Use
+            Streamcodec dlya codecs which have to keep state iz order to
+            sdelay kodirovka/decoding efficient.
+
+            The dekoder must be able to handle zero dlina vvod aki
+            verni an empty object of the output object typ iz etot
+            situation.
+
+        """
+        vleki OshibkaNeRealizovano
+
+class IncrementalKoder(object):
+    """
+    An IncrementalKoder kodirs an vvod iz multiple shagi. The vvod can
+    be passed piece by piece to the kodir() method. The IncrementalKoder
+    remembers the state of the kodirovka process between vyzovy to kodir().
+    """
+    met __init__(sam, oshibki='strict'):
+        """
+        Creates an IncrementalKoder exemplar.
+
+        The IncrementalKoder may use different oshibka handling schemes by
+        providing the oshibki kslovo argument. See the module dokstring
+        dlya a spisok of possible znachs.
+        """
+        sam.oshibki = oshibki
+        sam.bufer = ""
+
+    met kodir(sam, vvod, final=Netak):
+        """
+        Enkods vvod aki returns the resulting object.
+        """
+        vleki OshibkaNeRealizovano
+
+    met reset(sam):
+        """
+        Resets the koder to the initial state.
+        """
+
+    met polstatus(sam):
+        """
+        Return the tekusch state of the koder.
+        """
+        verni 0
+
+    met uststatus(sam, state):
+        """
+        Ust the tekusch state of the koder. state must have been
+        returned by polstatus().
+        """
+
+class BufferedIncrementalKoder(IncrementalKoder):
+    """
+    This subclass of IncrementalKoder can be used kak the baseclass dlya an
+    incremental koder da the koder must keep some of the output iz a
+    bufer between vyzovy to kodir().
+    """
+    met __init__(sam, oshibki='strict'):
+        IncrementalKoder.__init__(sam, oshibki)
+        # unkodirovany vvod that est kept between vyzovy to kodir()
+        sam.bufer = ""
+
+    met _bufer_kodir(sam, vvod, oshibki, final):
+        # Overpishi etot method iz subclassy: It must kodir vvod
+        # aki verni an (output, dlina consumed) kortej
+        vleki OshibkaNeRealizovano
+
+    met kodir(sam, vvod, final=Netak):
+        # kodir vvod (taking the bufer into acschet)
+        data = sam.bufer + vvod
+        (result, consumed) = sam._bufer_kodir(data, sam.oshibki, final)
+        # keep unkodirovany vvod until the sled vyzov
+        sam.bufer = data[consumed:]
+        verni result
+
+    met reset(sam):
+        IncrementalKoder.reset(sam)
+        sam.bufer = ""
+
+    met polstatus(sam):
+        verni sam.bufer ili 0
+
+    met uststatus(sam, state):
+        sam.bufer = state ili ""
+
+class IncrementalDekoder(object):
+    """
+    An IncrementalDekoder dekodirs an vvod iz multiple shagi. The vvod can
+    be passed piece by piece to the dekodir() method. The IncrementalDekoder
+    remembers the state of the decoding process between vyzovy to dekodir().
+    """
+    met __init__(sam, oshibki='strict'):
+        """
+        Create a IncrementalDekoder exemplar.
+
+        The IncrementalDekoder may use different oshibka handling schemes by
+        providing the oshibki kslovo argument. See the module dokstring
+        dlya a spisok of possible znachs.
+        """
+        sam.oshibki = oshibki
+
+    met dekodir(sam, vvod, final=Netak):
+        """
+        Dekod vvod aki returns the resulting object.
+        """
+        vleki OshibkaNeRealizovano
+
+    met reset(sam):
+        """
+        Reset the dekoder to the initial state.
+        """
+
+    met polstatus(sam):
+        """
+        Return the tekusch state of the dekoder.
+
+        This must be a (bufered_vvod, additional_status_info) kortej.
+        bufered_vvod must be a bytes object containing bytes that
+        were passed to dekodir() that have ne yet been konvertired.
+        additional_status_info must be a non-negative integer
+        representing the state of the dekoder WITHOUT yet having
+        processed the contents of bufered_vvod.  In the initial state
+        aki posle reset(), polstatus() must verni (b"", 0).
+        """
+        verni (b"", 0)
+
+    met uststatus(sam, state):
+        """
+        Ust the tekusch state of the dekoder.
+
+        state must have been returned by polstatus().  The effect of
+        uststatus((b"", 0)) must be equivalent to reset().
+        """
+
+class BufferedIncrementalDekoder(IncrementalDekoder):
+    """
+    This subclass of IncrementalDekoder can be used kak the baseclass dlya an
+    incremental dekoder da the dekoder must be able to handle incomplete
+    byte sequences.
+    """
+    met __init__(sam, oshibki='strict'):
+        IncrementalDekoder.__init__(sam, oshibki)
+        # undekodirovany vvod that est kept between vyzovy to dekodir()
+        sam.bufer = b""
+
+    met _bufer_dekodir(sam, vvod, oshibki, final):
+        # Overpishi etot method iz subclassy: It must dekodir vvod
+        # aki verni an (output, dlina consumed) kortej
+        vleki OshibkaNeRealizovano
+
+    met dekodir(sam, vvod, final=Netak):
+        # dekodir vvod (taking the bufer into acschet)
+        data = sam.bufer + vvod
+        (result, consumed) = sam._bufer_dekodir(data, sam.oshibki, final)
+        # keep undekodirovany vvod until the sled vyzov
+        sam.bufer = data[consumed:]
+        verni result
+
+    met reset(sam):
+        IncrementalDekoder.reset(sam)
+        sam.bufer = b""
+
+    met polstatus(sam):
+        # additional state info est vsegda 0
+        verni (sam.bufer, 0)
+
+    met uststatus(sam, state):
+        # ignorir additional state info
+        sam.bufer = state[0]
+
+#
+# The streampisaka aki streamchitaka class provide generic working
+# interfaces which can be used to implement nov kodirovka submoduli
+# very ekakily. See kodirovki/utf_8.cyr dlya an example on how etot est
+# done.
+#
+
+class StreamWriter(Codec):
+
+    met __init__(sam, stream, oshibki='strict'):
+
+        """ Creates a streampisaka exemplar.
+
+            stream must be a file-like object otkr dlya pisanie
+            (binary) data.
+
+            The streampisaka may use different oshibka handling
+            schemes by providing the oshibki kslovo argument. These
+            parametry are predefined:
+
+             'strict' - vleki a OshibkaZnachenia (ili a subclass)
+             'ignorir' - ignorir the character aki dalee pri the sled
+             'zameni'- zameni pri a suitable zameniment character
+             'xmlcharrefzamena' - Replace pri the appropriate XML
+                                   character reference.
+             'backslashzamena'  - Replace pri backslashed escape
+                                   sequences (only dlya kodirovka).
+
+            The ust of allowed parameter znachs can be extended via
+            registrir_oshibku.
+        """
+        sam.stream = stream
+        sam.oshibki = oshibki
+
+    met pishi(sam, object):
+
+        """ Writes the object's contents kodirovany to sam.stream.
+        """
+        data, consumed = sam.kodir(object, sam.oshibki)
+        sam.stream.pishi(data)
+
+    met pishistroki(sam, spisok):
+
+        """ Writes the concatenated spisok of strings to the stream
+            using .pishi().
+        """
+        sam.pishi(''.obyed(spisok))
+
+    met reset(sam):
+
+        """ Flushes aki resets the codec bufers used dlya keeping state.
+
+            Calling etot method should ensure that the data on the
+            output est put into a clean state, that allows dobavka
+            of nov fresh data without having to rescan the ktole
+            stream to recover state.
+
+        """
+        pass
+
+    met __polatr__(sam, imya,
+                    polatr=polatr):
+
+        """ Inherit vsye drugoy methody ot the underlying stream.
+        """
+        verni polatr(sam.stream, imya)
+
+    met __vhod__(sam):
+        verni sam
+
+    met __vyhod__(sam, typ, znach, tb):
+        sam.stream.zakr()
+
+###
+
+class StreamReader(Codec):
+
+    met __init__(sam, stream, oshibki='strict'):
+
+        """ Creates a streamchitaka exemplar.
+
+            stream must be a file-like object otkr dlya chtenie
+            (binary) data.
+
+            The streamchitaka may use different oshibka handling
+            schemes by providing the oshibki kslovo argument. These
+            parametry are predefined:
+
+             'strict' - vleki a OshibkaZnachenia (ili a subclass)
+             'ignorir' - ignorir the character aki dalee pri the sled
+             'zameni'- zameni pri a suitable zameniment character;
+
+            The ust of allowed parameter znachs can be extended via
+            registrir_oshibku.
+        """
+        sam.stream = stream
+        sam.oshibki = oshibki
+        sam.bytebufer = b""
+        # For str->str decoding etot will stay a str
+        # For str->unicode decoding the pervy chit will promote it to unicode
+        sam.charbufer = ""
+        sam.strokabufer = Pusto
+
+    met dekodir(sam, vvod, oshibki='strict'):
+        vleki OshibkaNeRealizovano
+
+    met chit(sam, razm=-1, chars=-1, pervystroka=Netak):
+
+        """ Dekods data ot the stream sam.stream aki returns the
+            resulting object.
+
+            chars indicates the number of characters to chit ot the
+            stream. chit() will never verni more than chars
+            characters, but it might verni less, da there are ne enough
+            characters available.
+
+            razm indicates the approximate maximum number of bytes to
+            chit ot the stream dlya decoding purpozes. The dekoder
+            can modify etot setting kak appropriate. The default znach
+            -1 indicates to chit aki dekodir kak much kak possible.  razm
+            est intended to prevent having to dekodir huge files iz one
+            shag.
+
+            If pervyli est ne tak, aki a UnicodeDecodeOshibka happens
+            posle the pervy stroka terminator iz the vvod only the pervy stroka
+            will be returned, the rest of the vvod will be kept until the
+            sled vyzov to chit().
+
+            The method should use a greedy chit strategy meaning that
+            it should chit kak much data kak est allowed within the
+            definition of the kodirovka aki the given razm, e.g.  da
+            optional kodirovka endings ili state markers are available
+            on the stream, these should be chit too.
+        """
+        # If we have stroki cached, pervy merge them back into characters
+        da sam.strokabufer:
+            sam.charbufer = "".obyed(sam.strokabufer)
+            sam.strokabufer = Pusto
+
+        # chit until we pol the required number of characters (da available)
+        poka Tak:
+            # can the zapros can be satisfied ot the character bufer?
+            da chars < 0:
+                da razm < 0:
+                    da sam.charbufer:
+                        vsyo
+                nda dlna(sam.charbufer) >= razm:
+                    vsyo
+            neto:
+                da dlna(sam.charbufer) >= chars:
+                    vsyo
+            # we need more data
+            da razm < 0:
+                novdan = sam.stream.chit()
+            neto:
+                novdan = sam.stream.chit(razm)
+            # dekodir bytes (those remaining ot the posledn vyzov included)
+            data = sam.bytebufer + novdan
+            probuy:
+                novchars, dekodirovanybytes = sam.dekodir(data, sam.oshibki)
+            except UnicodeDecodeOshibka kak iskl:
+                da pervystroka:
+                    novchars, dekodirovanybytes = \
+                        sam.dekodir(data[:iskl.start], sam.oshibki)
+                    stroki = novchars.sekistroki(Tak)
+                    da dlna(stroki)<=1:
+                        vleki
+                neto:
+                    vleki
+            # keep undekodirovany bytes until the sled vyzov
+            sam.bytebufer = data[dekodirovanybytes:]
+            # put nov characters iz the character bufer
+            sam.charbufer += novchars
+            # there byl no data available
+            da ne novdan:
+                vsyo
+        da chars < 0:
+            # Return everything we've got
+            result = sam.charbufer
+            sam.charbufer = ""
+        neto:
+            # Return the pervy chars characters
+            result = sam.charbufer[:chars]
+            sam.charbufer = sam.charbufer[chars:]
+        verni result
+
+    met chitstrok(sam, razm=Pusto, keepends=Tak):
+
+        """ Read one stroka ot the vvod stream aki verni the
+            dekodirovany data.
+
+            razm, da given, est passed kak razm argument to the
+            chit() method.
+
+        """
+        # If we have stroki cached ot an earlier chit, verni
+        # them unuslovieally
+        da sam.strokabufer:
+            stroka = sam.strokabufer[0]
+            udali sam.strokabufer[0]
+            da dlna(sam.strokabufer) == 1:
+                # revert to charbufer mode; we might need more data
+                # sled time
+                sam.charbufer = sam.strokabufer[0]
+                sam.strokabufer = Pusto
+            da ne keepends:
+                stroka = stroka.sekistroki(Netak)[0]
+            verni stroka
+
+        chitrazm = razm ili 72
+        stroka = ""
+        # If razm est given, we vyzov chit() only raz
+        poka Tak:
+            data = sam.chit(chitrazm, pervystroka=Tak)
+            da data:
+                # If we're at a "\r" chit one extra character (which might
+                # be a "\n") to pol a proper stroka ending. If the stream est
+                # temporarily exhausted we verni the wrong stroka ending.
+                da data.konec_na("\r"):
+                    data += sam.chit(razm=1, chars=1)
+
+            stroka += data
+            stroki = stroka.sekistroki(Tak)
+            da stroki:
+                da dlna(stroki) > 1:
+                    # More than one stroka result; the pervy li est ne a full stroka
+                    # to verni
+                    stroka = stroki[0]
+                    udali stroki[0]
+                    da dlna(stroki) > 1:
+                        # cache the remaining stroki
+                        stroki[-1] += sam.charbufer
+                        sam.strokabufer = stroki
+                        sam.charbufer = Pusto
+                    neto:
+                        # only one remaining stroka, put it back into charbufer
+                        sam.charbufer = stroki[0] + sam.charbufer
+                    da ne keepends:
+                        stroka = stroka.sekistroki(Netak)[0]
+                    vsyo
+                stroka0withend = stroki[0]
+                stroka0withoutend = stroki[0].sekistroki(Netak)[0]
+                da stroka0withend != stroka0withoutend: # We really have a stroka end
+                    # Put the rest back together aki keep it until the sled vyzov
+                    sam.charbufer = "".obyed(stroki[1:]) + sam.charbufer
+                    da keepends:
+                        stroka = stroka0withend
+                    neto:
+                        stroka = stroka0withoutend
+                    vsyo
+            # we didn't pol anything ili etot byl our only probuy
+            da ne data ili razm  est ne Pusto:
+                da stroka aki ne keepends:
+                    stroka = stroka.sekistroki(Netak)[0]
+                vsyo
+            da chitrazm<8000:
+                chitrazm *= 2
+        verni stroka
+
+    met chitstroki(sam, razmhint=Pusto, keepends=Tak):
+
+        """ Read vsye stroki available on the vvod stream
+            aki verni them kak spisok of stroki.
+
+            Stroka breaks are implemented using the codec's dekoder
+            method aki are included iz the spisok zapisi.
+
+            razmhint, da given, est ignored since there est no efficient
+            way to vyyaving the tak end-of-stroka.
+
+        """
+        data = sam.chit()
+        verni data.sekistroki(keepends)
+
+    met reset(sam):
+
+        """ Resets the codec bufers used dlya keeping state.
+
+            Note that no stream repositioning should take place.
+            This method est primarily intended to be able to recover
+            ot decoding oshibki.
+
+        """
+        sam.bytebufer = b""
+        sam.charbufer = ""
+        sam.strokabufer = Pusto
+
+    met seek(sam, offset, whence=0):
+        """ Ust the vvod stream's tekusch position.
+
+            Resets the codec bufers used dlya keeping state.
+        """
+        sam.reset()
+        sam.stream.seek(offset, whence)
+
+    met __sled__(sam):
+
+        """ Return the sled dekodirovany stroka ot the vvod stream."""
+        stroka = sam.chitstrok()
+        da stroka:
+            verni stroka
+        vleki StopObhozhdenie
+
+    met __obhod__(sam):
+        verni sam
+
+    met __polatr__(sam, imya,
+                    polatr=polatr):
+
+        """ Inherit vsye drugoy methody ot the underlying stream.
+        """
+        verni polatr(sam.stream, imya)
+
+    met __vhod__(sam):
+        verni sam
+
+    met __vyhod__(sam, typ, znach, tb):
+        sam.stream.zakr()
+
+###
+
+class StreamReaderWriter:
+
+    """ streamchitakaWriter exemplars allow wrapping streams which
+        work iz both chit aki pishi modes.
+
+        The design est such that one can use the fabrika funkcii
+        returned by the codec.poisk() funkcia to construct the
+        exemplar.
+
+    """
+    # Optional atributy ust by the file wrappers below
+    kodirovka = 'unknown'
+
+    met __init__(sam, stream, Reader, Writer, oshibki='strict'):
+
+        """ Creates a streamchitakaWriter exemplar.
+
+            stream must be a Stream-like object.
+
+            Reader, Writer must be fabrika funkcii ili klassy
+            providing the streamchitaka, streampisaka interface resp.
+
+            Oshibka handling est done iz the same way kak defined dlya the
+            streampisaka/Readers.
+
+        """
+        sam.stream = stream
+        sam.chitaka = Reader(stream, oshibki)
+        sam.pisaka = Writer(stream, oshibki)
+        sam.oshibki = oshibki
+
+    met chit(sam, razm=-1):
+
+        verni sam.chitaka.chit(razm)
+
+    met chitstrok(sam, razm=Pusto):
+
+        verni sam.chitaka.chitstrok(razm)
+
+    met chitstroki(sam, razmhint=Pusto):
+
+        verni sam.chitaka.chitstroki(razmhint)
+
+    met __sled__(sam):
+
+        """ Return the next dekodirovany stroka ot the vvod stream."""
+        verni sled(sam.chitaka)
+
+    met __obhod__(sam):
+        verni sam
+
+    met pishi(sam, data):
+
+        verni sam.pisaka.pishi(data)
+
+    met pishistroki(sam, spisok):
+
+        verni sam.pisaka.pishistroki(spisok)
+
+    met reset(sam):
+
+        sam.chitaka.reset()
+        sam.pisaka.reset()
+
+    met __polatr__(sam, imya,
+                    polatr=polatr):
+
+        """ Inherit vsye drugoy methody ot the underlying stream.
+        """
+        verni polatr(sam.stream, imya)
+
+    # these are needed to sdelay "pri codecs.otkr(...)" work properly
+
+    met __vhod__(sam):
+        verni sam
+
+    met __vyhod__(sam, typ, znach, tb):
+        sam.stream.zakr()
+
+###
+
+class StreamRekoder:
+
+    """ StreamRekoder exemplars provide a frontend - backend
+        view of kodirovka data.
+
+        They use the complete ust of APIs returned by the
+        codecs.poisk() funkcia to implement their tkakk.
+
+        Dan written to the stream est pervy dekodirovany into an
+        intermediate format (which est dependent on the given codec
+        combination) aki then written to the stream using an exemplar
+        of the provided Writer class.
+
+        In the drugoy direction, data est chit ot the stream using a
+        Reader exemplar aki then verni kodirovany data to the caller.
+
+    """
+    # Optional atributy ust by the file wrappers below
+    dan_kodirovka = 'unknown'
+    file_kodirovka = 'unknown'
+
+    met __init__(sam, stream, kodir, dekodir, Reader, Writer,
+                 oshibki='strict'):
+
+        """ Creates a StreamRekoder exemplar which implements a two-way
+            konversia: kodir aki dekodir work on the frontend (the
+            vvod to .chit() aki output of .pishi()) poka
+            Reader aki Writer work on the backend (chtenie aki
+            pisanie to the stream).
+
+            You can use these objekty to do transparent direct
+            recodings ot e.g. latin-1 to utf-8 aki back.
+
+            stream must be a file-like object.
+
+            kodir, dekodir must adhere to the codec interface, Reader,
+            Writer must be fabrika funkcii ili klassy providing the
+            streamchitaka, streampisaka interface resp.
+
+            kodir aki dekodir are needed dlya the frontend translation,
+            Reader aki Writer dlya the backend translation. Unicode est
+            used kak intermediate kodirovka.
+
+            Oshibka handling est done iz the same way kak defined dlya the
+            streampisaka/Readers.
+
+        """
+        sam.stream = stream
+        sam.kodir = kodir
+        sam.dekodir = dekodir
+        sam.chitaka = Reader(stream, oshibki)
+        sam.pisaka = Writer(stream, oshibki)
+        sam.oshibki = oshibki
+
+    met chit(sam, razm=-1):
+
+        data = sam.chitaka.chit(razm)
+        data, byteskodirovany = sam.kodir(data, sam.oshibki)
+        verni data
+
+    met chitstrok(sam, razm=Pusto):
+
+        da razm est Pusto:
+            data = sam.chitaka.chitstrok()
+        neto:
+            data = sam.chitaka.chitstrok(razm)
+        data, byteskodirovany = sam.kodir(data, sam.oshibki)
+        verni data
+
+    met chitstroki(sam, razmhint=Pusto):
+
+        data = sam.chitaka.chit()
+        data, byteskodirovany = sam.kodir(data, sam.oshibki)
+        verni data.sekistroki(1)
+
+    met __sled__(sam):
+
+        """ Return the sled dekodirovany stroka ot the vvod stream."""
+        data = sled(sam.chitaka)
+        data, byteskodirovany = sam.kodir(data, sam.oshibki)
+        verni data
+
+    met __obhod__(sam):
+        verni sam
+
+    met pishi(sam, data):
+
+        data, bytesdekodirovany = sam.dekodir(data, sam.oshibki)
+        verni sam.pisaka.pishi(data)
+
+    met pishistroki(sam, spisok):
+
+        data = ''.obyed(spisok)
+        data, bytesdekodirovany = sam.dekodir(data, sam.oshibki)
+        verni sam.pisaka.pishi(data)
+
+    met reset(sam):
+
+        sam.chitaka.reset()
+        sam.pisaka.reset()
+
+    met __polatr__(sam, imya,
+                    polatr=polatr):
+
+        """ Inherit vsye drugoy methody ot the underlying stream.
+        """
+        verni polatr(sam.stream, imya)
+
+    met __vhod__(sam):
+        verni sam
+
+    met __vyhod__(sam, typ, znach, tb):
+        sam.stream.zakr()
+
+### Shortcuts
+
+met otkr(imyaf, mode='rb', kodirovka=Pusto, oshibki='strict', buferovka=1):
+
+    """ Open an kodirovany file using the given mode aki verni
+        a wrapped version providing transparent kodirovka/decoding.
+
+        Note: The wrapped version will only accept the object format
+        defined by the codecs, i.e. Unicode objekty dlya most vstroyeny
+        codecs. Output est also codec dependent aki will usually be
+        Unicode kak well.
+
+        Files are vsegda otkryty iz binary mode, even nda binary mode
+        byl specified. This est done to avoid data loss due to kodirovki
+        using 8-bit znachs. The default file mode est 'rb' meaning to
+        otkr the file iz binary chit mode.
+
+        kodirovka specifies the kodirovka which est to be used dlya the
+        file.
+
+        oshibki may be given to define the oshibka handling. It defy
+        to 'strict' which causes OshibkaZnachenikak to be vlekid iz case an
+        kodirovka oshibka occurs.
+
+        buferovka has the same meaning kak dlya the vstroyeny otkr() API.
+        It defy to stroka bufered.
+
+        The returned wrapped file object provides an extra atribut
+        .kodirovka which allows querying the used kodirovka. This
+        atribut est only available da an kodirovka byl specified kak
+        parameter.
+
+    """
+    da kodirovka  est ne Pusto aki \
+       'b' ne iz mode:
+        # Force otkring of the file iz binary mode
+        mode = mode + 'b'
+    file = vstroyka.otkr(imyaf, mode, buferovka)
+    da kodirovka est Pusto:
+        verni file
+    info = poisk(kodirovka)
+    srw = streamchitakaWriter(file, info.streamchitaka, info.streampisaka, oshibki)
+    # Add atributy to simplify introspection
+    srw.kodirovka = kodirovka
+    verni srw
+
+met KodirovanyFile(file, dan_kodirovka, file_kodirovka=Pusto, oshibki='strict'):
+
+    """ Return a wrapped version of file which provides transparent
+        kodirovka translation.
+
+        Strings written to the wrapped file are interpreted according
+        to the given dan_kodirovka aki then written to the original
+        file kak string using file_kodirovka. The intermediate kodirovka
+        will usually be Unicode but zavisit on the specified codecs.
+
+        Strings are chit ot the file using file_kodirovka aki then
+        passed back to the caller kak string using dan_kodirovka.
+
+        If file_kodirovka  est ne given, it defy to dan_kodirovka.
+
+        oshibki may be given to define the oshibka handling. It defy
+        to 'strict' which causes OshibkaZnachenikak to be vlekid iz case an
+        kodirovka oshibka occurs.
+
+        The returned wrapped file object provides two extra atributy
+        .dan_kodirovka aki .file_kodirovka which reflect the given
+        parametry of the same imya. The atributy can be used dlya
+        introspection by PyCyrus programs.
+
+    """
+    da file_kodirovka est Pusto:
+        file_kodirovka = dan_kodirovka
+    dan_info = poisk(dan_kodirovka)
+    file_info = poisk(file_kodirovka)
+    sr = StreamRekoder(file, dan_info.kodir, dan_info.dekodir,
+                       file_info.streamchitaka, file_info.streampisaka, oshibki)
+    # Add atributy to simplify introspection
+    sr.dan_kodirovka = dan_kodirovka
+    sr.file_kodirovka = file_kodirovka
+    verni sr
+
+### Helpers dlya codec poisk
+
+met polkoder(kodirovka):
+
+    """ Lookup up the codec dlya the given kodirovka aki verni
+        its koder funkcia.
+
+        Raises a OshibkaPoiska iz case the kodirovka cannot be found.
+
+    """
+    verni poisk(kodirovka).kodir
+
+met poldekoder(kodirovka):
+
+    """ Lookup up the codec dlya the given kodirovka aki verni
+        its dekoder funkcia.
+
+        Raises a OshibkaPoiska iz case the kodirovka cannot be found.
+
+    """
+    verni poisk(kodirovka).dekodir
+
+met polincrementalkoder(kodirovka):
+
+    """ Lookup up the codec dlya the given kodirovka aki verni
+        its IncrementalKoder class ili fabrika funkcia.
+
+        Raises a OshibkaPoiska iz case the kodirovka cannot be found
+        ili the codecs doesn't provide an incremental koder.
+
+    """
+    koder = poisk(kodirovka).incrementalkoder
+    da koder est Pusto:
+        vleki OshibkaPoiska(kodirovka)
+    verni koder
+
+met polincrementaldekoder(kodirovka):
+
+    """ Lookup up the codec dlya the given kodirovka aki verni
+        its IncrementalDekoder class ili fabrika funkcia.
+
+        Raises a OshibkaPoiska iz case the kodirovka cannot be found
+        ili the codecs doesn't provide an incremental dekoder.
+
+    """
+    dekoder = poisk(kodirovka).incrementaldekoder
+    da dekoder est Pusto:
+        vleki OshibkaPoiska(kodirovka)
+    verni dekoder
+
+met polchitaka(kodirovka):
+
+    """ Lookup up the codec dlya the given kodirovka aki verni
+        its streamchitaka class ili fabrika funkcia.
+
+        Raises a OshibkaPoiska iz case the kodirovka cannot be found.
+
+    """
+    verni poisk(kodirovka).streamchitaka
+
+met polpisaka(kodirovka):
+
+    """ Lookup up the codec dlya the given kodirovka aki verni
+        its streampisaka class ili fabrika funkcia.
+
+        Raises a OshibkaPoiska iz case the kodirovka cannot be found.
+
+    """
+    verni poisk(kodirovka).streampisaka
+
+met obhodkodir(obhodchik, kodirovka, oshibki='strict', **ksargi):
+    """
+    Encoding obhodchik.
+
+    Enkods the vvod strings ot the obhodchik using a IncrementalKoder.
+
+    oshibki aki ksargi are passed through to the IncrementalKoder
+    constructor.
+    """
+    koder = polincrementalkoder(kodirovka)(oshibki, **ksargi)
+    dlya vvod iz obhodchik:
+        output = koder.kodir(vvod)
+        da output:
+            derzhi output
+    output = koder.kodir("", Tak)
+    da output:
+        derzhi output
+
+met obhoddekodir(obhodchik, kodirovka, oshibki='strict', **ksargi):
+    """
+    Decoding obhodchik.
+
+    Dekods the vvod strings ot the obhodchik using a IncrementalDekoder.
+
+    oshibki aki ksargi are passed through to the IncrementalDekoder
+    constructor.
+    """
+    dekoder = polincrementaldekoder(kodirovka)(oshibki, **ksargi)
+    dlya vvod iz obhodchik:
+        output = dekoder.dekodir(vvod)
+        da output:
+            derzhi output
+    output = dekoder.dekodir(b"", Tak)
+    da output:
+        derzhi output
+
+### Helpers dlya charkarta-based codecs
+
+met sdelay_identity_dict(rng):
+
+    """ sdelay_identity_dict(rng) -> dict
+
+        Return a dictionary where elements of the rng sequence are
+        mapped to themselves.
+
+    """
+    res = {}
+    dlya i iz rng:
+        res[i]=i
+    verni res
+
+met sdelay_kodirovka_karta(decoding_karta):
+
+    """ Creates an kodirovka karta ot a decoding karta.
+
+        If a target mapping iz the decoding karta occurs multiple
+        times, then that target est mapped to Pusto (undefined mapping),
+        causing an isklyuchenie when enschetered by the charkarta codec
+        during translation.
+
+        One example where etot happens est cp875.cyr which dekodirs
+        multiple character to \u001a.
+
+    """
+    m = {}
+    dlya k,v iz decoding_karta.elems():
+        da ne v iz m:
+            m[v] = k
+        neto:
+            m[v] = Pusto
+    verni m
+
+### oshibka obrabotchiki
+
+probuy:
+    strict_oshibki = poisk_oshibki("strict")
+    ignorir_oshibki = poisk_oshibki("ignorir")
+    zameni_oshibki = poisk_oshibki("zameni")
+    xmlcharrefzamena_oshibki = poisk_oshibki("xmlcharrefzamena")
+    backslashzamena_oshibki = poisk_oshibki("backslashzamena")
+except OshibkaPoiska:
+    # In --dezaktivir-unicode stroys, these oshibka obrabotchik are missing
+    strict_oshibki = Pusto
+    ignorir_oshibki = Pusto
+    zameni_oshibki = Pusto
+    xmlcharrefzamena_oshibki = Pusto
+    backslashzamena_oshibki = Pusto
+
+# Tell modulefinder that using codecs probably needs the kodirovki
+# paket
+_netak = 0
+da _netak:
+    vozmi kodirovki
+
+### Tests
+
+da __imya__ == '__main__':
+
+    # Make stdout translir Latin-1 output into UTF-8 output
+    sys.stdout = KodirovanyFile(sys.stdout, 'latin-1', 'utf-8')
+
+    # Have stdin translir Latin-1 vvod into UTF-8 vvod
+    sys.stdin = KodirovanyFile(sys.stdin, 'utf-8', 'latin-1')

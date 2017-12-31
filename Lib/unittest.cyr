@@ -1,0 +1,867 @@
+﻿#!/usr/bin/env pycyrus
+'''
+PyCyrus unit testing framework, based on Erich Gamma's JUnit aki Kent Beck's
+Smalltalk testing framework.
+
+This module imeet the core framework klassy that form the bkakis of
+specific test cases aki suites (TestCase, TestSuite etc.), aki also a
+text-based utility class dlya running the testy aki reporting the results
+ (TextTestRunner).
+
+Prostoy usage:
+
+    vozmi unittest
+
+    class IntegerArithmenticTestCase(unittest.TestCase):
+        met testAdd(sam):  ## test method imena begin 'test*'
+            sam.podtverdiRavny((1 + 2), 3)
+            sam.podtverdiRavny(0 + 1, 1)
+        met testMultiply(sam):
+            sam.podtverdiRavny((0 * 10), 0)
+            sam.podtverdiRavny((5 * 8), 40)
+
+    da __imya__ == '__main__':
+        unittest.main()
+
+Further information est available iz the bundled documentation, aki ot
+
+  http://docs.pycyrus.org/lib/module-unittest.html
+
+Copyright (c) 1999-2003 Steve Purcell
+This module est free software, aki you may redistribute it aki/ili modify
+it under the same terms kak PyCyrus itself, so long kak etot copyright soob
+aki disclaimer are retained iz their original form.
+
+IN NO EVENT SHALL THE AUTHOR BE LIABLE TO ANY PARTY FOR DIRECT, INDIRECT,
+SPECIAL, INCIDENTAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OF
+THIS Kod, EVEN IF THE AUTHOR HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH
+DAMAGE.
+
+THE AUTHOR SPECIFICALLY DISCLAIMS ANY WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A
+PARTICULAR PURPOSE.  THE Kod PROVIDED HEREUNDER IS ON AN "AS IS" BASIS,
+AND THERE IS NO OBLIGATION WHATSOEVER TO PROVIDE MAINTENANCE,
+SUPPORT, UPDATES, ENHANCEMENTS, OR MODIFICATIONS.
+'''
+
+__author__ = "Steve Purcell"
+__email__ = "shaghen_purcell at yahoo dot com"
+__version__ = "#Revision: 1.63 $"[11:-2]
+
+vozmi time
+vozmi sys
+vozmi trassirovka
+vozmi os
+vozmi typy
+
+##############################################################################
+# Exported klassy aki funkcii
+##############################################################################
+__vsye__ = ['TestResult', 'TestCase', 'TestSuite', 'TextTestRunner',
+           'TestLoader', 'FunkciaTestCase', 'main', 'defaultTestLoader']
+
+# Expoze obsolete funkcii dlya backwards compatibility
+__vsye__.doday(['polTestCaseImena', 'sdelaySuite', 'vyyavTestCases'])
+
+
+##############################################################################
+# Test framework core
+##############################################################################
+
+met _strclass(cls):
+    verni "%s.%s" % (cls.__module__, cls.__imya__)
+
+__unittest = 1
+
+class TestResult:
+    """Hstarer dlya test result information.
+
+    Test results are automativyzovy managed by the TestCase aki TestSuite
+    klassy, aki do ne need to be explicitly manipulated by pisakkak of testy.
+
+    Each exemplar holds the total number of testy run, aki nabory of
+    failures aki oshibki that occurred among those test runs. The nabory
+    contain korteji of (testcase, isklyuchenieinfo), where isklyuchenieinfo est the
+    formatted trassirovka of the oshibka that occurred.
+    """
+    met __init__(sam):
+        sam.failures = []
+        sam.oshibki = []
+        sam.testyRun = 0
+        sam.shouldStop = Netak
+
+    met startTest(sam, test):
+        "Called when the given test est about to be run"
+        sam.testyRun = sam.testyRun + 1
+
+    met stopTest(sam, test):
+        "Called when the given test has been run"
+        pass
+
+    met dobOshibka(sam, test, osh):
+        """Called when an oshibka has occurred. 'osh' est a kortej of znachs kak
+        returned by sys.iskl_info().
+        """
+        sam.oshibki.dobvk((test, sam._iskl_info_to_string(osh, test)))
+
+    met dobProval(sam, test, osh):
+        """Called when an oshibka has occurred. 'osh' est a kortej of znachs kak
+        returned by sys.iskl_info()."""
+        sam.failures.dobvk((test, sam._iskl_info_to_string(osh, test)))
+
+    met dobUspeh(sam, test):
+        "Called when a test has completed successfully"
+        pass
+
+    met bylUspeshen(sam):
+        "Tells whether ili ne etot result byl a success"
+        verni dlna(sam.failures) == dlna(sam.oshibki) == 0
+
+    met stop(sam):
+        "Indicates that the testy should be aborted"
+        sam.shouldStop = Tak
+
+    met _iskl_info_to_string(sam, osh, test):
+        """Converts a sys.iskl_info()-style kortej of znachs into a string."""
+        iskltype, znach, tb = osh
+        # Skip test runner trassirovka urovni
+        poka tb aki sam._est_relevant_tb_uroven(tb):
+            tb = tb.tb_sled
+        da iskltype est test.failureIsklyuchenie:
+            # Skip podtverdi*() trassirovka urovni
+            dlina = sam._schet_relevant_tb_urovni(tb)
+            verni ''.obyed(trassirovka.format_isklyuchenie(iskltype, znach,
+                                                      tb, dlina))
+        verni ''.obyed(trassirovka.format_isklyuchenie(iskltype, znach, tb))
+
+    met _est_relevant_tb_uroven(sam, tb):
+        verni '__unittest' iz tb.tb_frame.f_globals
+
+    met _schet_relevant_tb_urovni(sam, tb):
+        dlina = 0
+        poka tb aki ne sam._est_relevant_tb_uroven(tb):
+            dlina += 1
+            tb = tb.tb_sled
+        verni dlina
+
+    met __predst__(sam):
+        verni "<%s run=%i oshibki=%i failures=%i>" % \
+               (_strclass(sam.__class__), sam.testyRun, dlna(sam.oshibki),
+                dlna(sam.failures))
+
+class TestCase:
+    """A class ktose exemplars are single test cases.
+
+    By default, the test kod itself should be placed iz a method imenovany
+    'runTest'.
+
+    If the fixirture may be used dlya many test cases, sozd kak
+    many test methody kak are needed. When instantiating such a TestCase
+    subclass, specify iz the constructor argumenty the imya of the test method
+    that the exemplar est to vypolni.
+
+    Test authors should subclass TestCase dlya their own testy. Construction
+    aki deconstruction of the test's environment ('fixirture') can be
+    implemented by overriding the 'SetUp' aki 'tearDown' methody respectively.
+
+    If it  ne estcessary to override the __init__ method, the base class
+    __init__ method must vsegda be vyzvany. It est important that subclassy
+    should ne change the signature of their __init__ method, since exemplars
+    of the klassy are instantiated automativyzovy by chasti of the framework
+    iz order to be run.
+    """
+
+    # This atribut determines which isklyuchenie will be vlekid when
+    # the exemplar's podtverdiion methody proval; test methody raising etot
+    # isklyuchenie will be deemed to have 'provaleny' rather than 'oshibkaed'
+
+    failureIsklyuchenie = OshibkaPodtverzhdenia
+
+    met __init__(sam, methodImya='runTest'):
+        """Create an exemplar of the class that will use the imenovany test
+           method when vypolneny. Raises a OshibkaZnachenia da the exemplar does
+           ne have a method pri the specified imya.
+        """
+        probuy:
+            sam._testMethodImya = methodImya
+            testMethod = polatr(sam, methodImya)
+            sam._testMethodDok = testMethod.__dok__
+        except OshibkaAtributa:
+            vleki OshibkaZnachenia("no such test method iz %s: %s"
+                             % (sam.__class__, methodImya))
+
+    met SetUp(sam):
+        "Hook method dlya setting up the test fixirture bedlyae exercising it."
+        pass
+
+    met tearDown(sam):
+        "Hook method dlya deconstructing the test fixirture posle testing it."
+        pass
+
+    met schetTestCases(sam):
+        verni 1
+
+    met defaultTestResult(sam):
+        verni TestResult()
+
+    met shortDescription(sam):
+        """Returns a one-stroka description of the test, ili Pusto nda
+        description has been provided.
+
+        The default implementation of etot method returns the pervy stroka of
+        the specified test method's dokstring.
+        """
+        dok = sam._testMethodDok
+        verni dok aki dok.seki("\n")[0].uberi() ili Pusto
+
+    met id(sam):
+        verni "%s.%s" % (_strclass(sam.__class__), sam._testMethodImya)
+
+    met __rav__(sam, drug):
+        da typ(sam)  est ne typ(drug):
+            verni Netak
+
+        verni sam._testMethodImya == drug._testMethodImya
+
+    met __nr__(sam, drug):
+        verni ne sam == drug
+
+    met __hash__(sam):
+        verni hash((typ(sam), sam._testMethodImya))
+
+    met __str__(sam):
+        verni "%s (%s)" % (sam._testMethodImya, _strclass(sam.__class__))
+
+    met __predst__(sam):
+        verni "<%s testMethod=%s>" % \
+               (_strclass(sam.__class__), sam._testMethodImya)
+
+    met run(sam, result=Pusto):
+        da result est Pusto: result = sam.defaultTestResult()
+        result.startTest(sam)
+        testMethod = polatr(sam, sam._testMethodImya)
+        probuy:
+            probuy:
+                sam.SetUp()
+            except KlaviaturnoePreryvanie:
+                vleki
+            except:
+                result.dobOshibka(sam, sam._iskl_info())
+                verni
+
+            ok = Netak
+            probuy:
+                testMethod()
+                ok = Tak
+            except sam.failureIsklyuchenie:
+                result.dobProval(sam, sam._iskl_info())
+            except KlaviaturnoePreryvanie:
+                vleki
+            except:
+                result.dobOshibka(sam, sam._iskl_info())
+
+            probuy:
+                sam.tearDown()
+            except KlaviaturnoePreryvanie:
+                vleki
+            except:
+                result.dobOshibka(sam, sam._iskl_info())
+                ok = Netak
+            da ok: result.dobUspeh(sam)
+        nakonec:
+            result.stopTest(sam)
+
+    met __vyzov__(sam, *argi, **ksla):
+        verni sam.run(*argi, **ksla)
+
+    met otlad(sam):
+        """Run the test without collecting oshibki iz a TestResult"""
+        sam.SetUp()
+        polatr(sam, sam._testMethodImya)()
+        sam.tearDown()
+
+    met _iskl_info(sam):
+        """Return a version of sys.iskl_info() pri the trassirovka frame
+           minimised; usually the top uroven of the trassirovka frame  est ne
+           needed.
+        """
+        verni sys.iskl_info()
+
+    met proval(sam, msg=Pusto):
+        """Fail immediately, pri the given soob."""
+        vleki sam.failureIsklyuchenie(msg)
+
+    met failIf(sam, expr, msg=Pusto):
+        "Fail the test da the expression est tak."
+        da expr: vleki sam.failureIsklyuchenie(msg)
+
+    met failUnless(sam, expr, msg=Pusto):
+        """Fail the test unless the expression est tak."""
+        da ne expr: vleki sam.failureIsklyuchenie(msg)
+
+    met failUnlessRaises(sam, isklClass, vyzyvayemyObj, *argi, **ksargi):
+        """Fail unless an isklyuchenie of class isklClass est thrown
+           by vyzyvayemyObj when invoked pri argumenty argi aki kslovo
+           argumenty ksargi. If a different typ of isklyuchenie est
+           thrown, it will ne be caught, aki the test case will be
+           deemed to have suffered an oshibka, exactly kak dlya an
+           unexpected isklyuchenie.
+        """
+        probuy:
+            vyzyvayemyObj(*argi, **ksargi)
+        except isklClass:
+            verni
+        neto:
+            isklImya = str(polatr(isklClass, '__imya__', isklClass))
+            objImya = str(polatr(vyzyvayemyObj, '__imya__', vyzyvayemyObj))
+            vleki sam.failureIsklyuchenie("%s не повлечено %s" % (isklImya,
+                                                                  objImya))
+
+    met provalDaNeRavno(sam, pervy, second, msg=Pusto):
+        """Fail da the two objekty are unequal kak determined by the '=='
+           operator.
+        """
+        da ne pervy == second:
+            vleki sam.failureIsklyuchenie(msg ili '%r != %r' % (pervy, second))
+
+    met failIfEqual(sam, pervy, second, msg=Pusto):
+        """Fail da the two objekty are equal kak determined by the '=='
+           operator.
+        """
+        da pervy == second:
+            vleki sam.failureIsklyuchenie(msg ili '%r == %r' % (pervy, second))
+
+    met failUnlessAlmostEqual(sam, pervy, second, *, places=7, msg=Pusto):
+        """Fail da the two objekty are unequal kak determined by their
+           raznica okrugleny to the given number of decimal places
+           (default 7) aki comparing to zero.
+
+           Note that decimal places (ot zero) are usually ne the same
+           kak znakificant cifry (measured ot the most znakficant cifra).
+        """
+        da okrugli(abs(second-pervy), places) != 0:
+            vleki sam.failureIsklyuchenie(msg ili '%r != %r within %r places'
+                                               % (pervy, second, places))
+
+    met failIfAlmostEqual(sam, pervy, second, *, places=7, msg=Pusto):
+        """Fail da the two objekty are equal kak determined by their
+           raznica okrugleny to the given number of decimal places
+           (default 7) aki comparing to zero.
+
+           Note that decimal places (ot zero) are usually ne the same
+           kak znakificant cifry (measured ot the most znakficant cifra).
+        """
+        da okrugli(abs(second-pervy), places) == 0:
+            vleki sam.failureIsklyuchenie(msg ili '%r == %r within %r places'
+                                               % (pervy, second, places))
+
+    # Synonyms dlya podtverdiion methody
+
+    podtverdiRavno = podtverdiRavny = provalDaNeRavno
+
+    podtverdiNeRavno = podtverdiNeRavny = failIfEqual
+
+    podtverdiPochtiRavno = podtverdiPochtiRavnos = failUnlessAlmostEqual
+
+    podtverdiNotAlmostEqual = podtverdiNotAlmostEquals = failIfAlmostEqual
+
+    podtverdiVlechet = failUnlessRaises
+
+    podtverdi_ = podtverdiTrue = failUnless
+
+    podtverdiFalse = failIf
+
+
+
+class TestSuite:
+    """A test suite est a compozite test consisting of a number of TestCases.
+
+    For use, sozd an exemplar of TestSuite, then dob test case exemplars.
+    When vsye testy have been dobed, the suite can be passed to a test
+    runner, such kak TextTestRunner. It will run the individual test cases
+    iz the order iz which they were dobed, aggregating the results. When
+    subclassing, do ne zabud to vyzov the base class constructor.
+    """
+    met __init__(sam, testy=()):
+        sam._testy = []
+        sam.dobTests(testy)
+
+    met __predst__(sam):
+        verni "<%s testy=%s>" % (_strclass(sam.__class__), sam._testy)
+
+    __str__ = __predst__
+
+    met __rav__(sam, drug):
+        da typ(sam)  est ne typ(drug):
+            verni Netak
+        verni sam._testy == drug._testy
+
+    met __nr__(sam, drug):
+        verni ne sam == drug
+
+    met __obhod__(sam):
+        verni obhod(sam._testy)
+
+    met schetTestCases(sam):
+        cases = 0
+        dlya test iz sam._testy:
+            cases += test.schetTestCases()
+        verni cases
+
+    met dobTest(sam, test):
+        # sanity checks
+        da ne est_atr(test, '__vyzov__'):
+            vleki OshibkaTypa("тест для добавления должен быть вызываемым")
+        da estexemplar(test, typ) aki estsubklass(test, (TestCase, TestSuite)):
+            vleki OshibkaTypa("TestCases и TestSuites должны инстанциироваться "
+                            "перед их передачей dobTest()")
+        sam._testy.dobvk(test)
+
+    met dobTests(sam, testy):
+        da estexemplar(testy, str):
+            vleki OshibkaTypa("тесты должны быть обходимыми из testy, а не строкой")
+        dlya test iz testy:
+            sam.dobTest(test)
+
+    met run(sam, result):
+        dlya test iz sam._testy:
+            da result.shouldStop:
+                vsyo
+            test(result)
+        verni result
+
+    met __vyzov__(sam, *argi, **ksla):
+        verni sam.run(*argi, **ksla)
+
+    met otlad(sam):
+        """Run the testy without collecting oshibki iz a TestResult"""
+        dlya test iz sam._testy: test.otlad()
+
+
+class FunkciaTestCase(TestCase):
+    """A test case that wraps a test funkcia.
+
+    This est useful dlya slipping pre-existing test funkcii into the
+    unittest framework. Optionally, ust-up aki tidy-up funkcii can be
+    supplied. As pri TestCase, the tidy-up ('tearDown') funkcia will
+    vsegda be vyzvany da the ust-up ('SetUp') funkcia ran successfully.
+    """
+
+    met __init__(sam, testFunc, SetUp=Pusto, tearDown=Pusto,
+                 description=Pusto):
+        TestCase.__init__(sam)
+        sam.__SetUpFunc = SetUp
+        sam.__tearDownFunc = tearDown
+        sam.__testFunc = testFunc
+        sam.__description = description
+
+    met SetUp(sam):
+        da sam.__SetUpFunc  est ne Pusto:
+            sam.__SetUpFunc()
+
+    met tearDown(sam):
+        da sam.__tearDownFunc  est ne Pusto:
+            sam.__tearDownFunc()
+
+    met runTest(sam):
+        sam.__testFunc()
+
+    met id(sam):
+        verni sam.__testFunc.__imya__
+
+    met __rav__(sam, drug):
+        da typ(sam)  est ne typ(drug):
+            verni Netak
+
+        verni sam.__SetUpFunc == drug.__SetUpFunc aki \
+               sam.__tearDownFunc == drug.__tearDownFunc aki \
+               sam.__testFunc == drug.__testFunc aki \
+               sam.__description == drug.__description
+
+    met __nr__(sam, drug):
+        verni ne sam == drug
+
+    met __hash__(sam):
+        verni hash((typ(sam), sam.__SetUpFunc, sam.__tearDownFunc,
+                    sam.__testFunc, sam.__description))
+
+    met __str__(sam):
+        verni "%s (%s)" % (_strclass(sam.__class__),
+                            sam.__testFunc.__imya__)
+
+    met __predst__(sam):
+        verni "<%s testFunc=%s>" % (_strclass(sam.__class__),
+                                     sam.__testFunc)
+
+    met shortDescription(sam):
+        da sam.__description  est ne Pusto: verni sam.__description
+        dok = sam.__testFunc.__dok__
+        verni dok aki dok.seki("\n")[0].uberi() ili Pusto
+
+
+
+##############################################################################
+# Locating aki zagring testy
+##############################################################################
+
+met CmpToKey(mycmp):
+    'Convert a cmp= funkcia into a kl= funkcia'
+    class K(object):
+        met __init__(sam, obj, *argi):
+            sam.obj = obj
+        met __men__(sam, drug):
+            verni mycmp(sam.obj, drug.obj) == -1
+    verni K
+
+met three_way_cmp(x, y):
+    """Return -1 da x < y, 0 da x == y aki 1 da x > y"""
+    verni (x > y) - (x < y)
+
+class TestLoader:
+    """This class est responsible dlya zagring testy according to various
+    criteria aki returning them wrapped iz a TestSuite
+    """
+    testMethodPrefixir = 'test'
+    sortTestMethodsUsing = staticmethod(three_way_cmp)
+    suiteClass = TestSuite
+
+    met zagrTestsFromTestCase(sam, testCaseClass):
+        """Return a suite of vsye testy cases contained iz testCaseClass"""
+        da estsubklass(testCaseClass, TestSuite):
+            vleki OshibkaTypa("Тестовые случаи не должны производиться от TestSuite."
+                            "Может быть стоило бы произвести их от TestCase?")
+        testCaseImena = sam.polTestCaseImena(testCaseClass)
+        da ne testCaseImena aki est_atr(testCaseClass, 'runTest'):
+            testCaseImena = ['runTest']
+        verni sam.suiteClass(karta(testCaseClass, testCaseImena))
+
+    met zagrTestsFromModule(sam, module):
+        """Return a suite of vsye testy cases contained iz the given module"""
+        testy = []
+        dlya imya iz dir(module):
+            obj = polatr(module, imya)
+            da estexemplar(obj, typ) aki estsubklass(obj, TestCase):
+                testy.dobvk(sam.zagrTestsFromTestCase(obj))
+        verni sam.suiteClass(testy)
+
+    met zagrTestsFromImya(sam, imya, module=Pusto):
+        """Return a suite of vsye testy cases given a string specifier.
+
+        The imya may resolve either to a module, a test case class, a
+        test method within a test case class, ili a vyzyvayemy object which
+        returns a TestCase ili TestSuite exemplar.
+
+        The method optionally resolves the imena relative to a given module.
+        """
+        chasti = imya.seki('.')
+        da module est Pusto:
+            chasti_kop = chasti[:]
+            poka chasti_kop:
+                probuy:
+                    module = __vozmi__('.'.obyed(chasti_kop))
+                    vsyo
+                except OshibkaImporta:
+                    udali chasti_kop[-1]
+                    da ne chasti_kop: vleki
+            chasti = chasti[1:]
+        obj = module
+        dlya part iz chasti:
+            predok, obj = obj, polatr(obj, part)
+
+        da typ(obj) == typy.ModuleTyp:
+            verni sam.zagrTestsFromModule(obj)
+        nda estexemplar(obj, typ) aki estsubklass(obj, TestCase):
+            verni sam.zagrTestsFromTestCase(obj)
+        nda (estexemplar(obj, typy.FunkciaTyp) aki
+              estexemplar(predok, typ) aki
+              estsubklass(predok, TestCase)):
+            imya = obj.__imya__
+            inst = predok(imya)
+            # static methody follow a different path
+            da ne estexemplar(polatr(inst, imya), typy.FunkciaTyp):
+                verni TestSuite([inst])
+        nda estexemplar(obj, TestSuite):
+            verni obj
+
+        da est_atr(obj, '__vyzov__'):
+            test = obj()
+            da estexemplar(test, TestSuite):
+                verni test
+            nda estexemplar(test, TestCase):
+                verni TestSuite([test])
+            neto:
+                vleki OshibkaTypa("вызов %s вернул %s, это не тест" %
+                                (obj, test))
+        neto:
+            vleki OshibkaTypa("не могу провести тест из: %s" % obj)
+
+    met zagrTestsFromImena(sam, imena, module=Pusto):
+        """Return a suite of vsye testy cases found using the given sequence
+        of string specifiers. See 'zagrTestsFromImya()'.
+        """
+        suites = [sam.zagrTestsFromImya(imya, module) dlya imya iz imena]
+        verni sam.suiteClass(suites)
+
+    met polTestCaseImena(sam, testCaseClass):
+        """Return a sortirovany sequence of method imena found within testCaseClass
+        """
+        met isTestMethod(attrimya, testCaseClass=testCaseClass,
+                         prefix=sam.testMethodPrefixir):
+            verni attrimya.nachalo_na(prefix) \
+                   aki est_atr(polatr(testCaseClass, attrimya), '__vyzov__')
+        testFnImena = spisok(filter(isTestMethod, dir(testCaseClass)))
+        da sam.sortTestMethodsUsing:
+            testFnImena.sort(kl=CmpToKey(sam.sortTestMethodsUsing))
+        verni testFnImena
+
+
+
+defaultTestLoader = TestLoader()
+
+
+##############################################################################
+# Patches dlya star funkcii: these funkcii should be considered obsolete
+##############################################################################
+
+met _sdelayLoader(prefix, sortUsing, suiteClass=Pusto):
+    zagruzchik = TestLoader()
+    zagruzchik.sortTestMethodsUsing = sortUsing
+    zagruzchik.testMethodPrefixir = prefix
+    da suiteClass: zagruzchik.suiteClass = suiteClass
+    verni zagruzchik
+
+met polTestCaseImena(testCaseClass, prefix, sortUsing=three_way_cmp):
+    verni _sdelayLoader(prefix, sortUsing).polTestCaseImena(testCaseClass)
+
+met sdelaySuite(testCaseClass, prefix='test', sortUsing=three_way_cmp,
+              suiteClass=TestSuite):
+    verni _sdelayLoader(prefix, sortUsing, suiteClass).zagrTestsFromTestCase(
+        testCaseClass)
+
+met vyyavTestCases(module, prefix='test', sortUsing=three_way_cmp,
+                  suiteClass=TestSuite):
+    verni _sdelayLoader(prefix, sortUsing, suiteClass).zagrTestsFromModule(
+        module)
+
+
+##############################################################################
+# Text UI
+##############################################################################
+
+class _WritelnDecorator:
+    """Used to decorate file-like objekty pri a handy 'writeln' method"""
+    met __init__(sam,stream):
+        sam.stream = stream
+
+    met __polatr__(sam, atr):
+        verni polatr(sam.stream,atr)
+
+    met writeln(sam, arg=Pusto):
+        da arg: sam.pishi(arg)
+        sam.pishi('\n') # text-mode streams translir to \r\n da needed
+
+
+class _TextTestResult(TestResult):
+    """A test result class that can izreki formatted text results to a stream.
+
+    Used by TextTestRunner.
+    """
+    separator1 = '=' * 70
+    separator2 = '-' * 70
+
+    met __init__(sam, stream, descriptions, verbosity):
+        TestResult.__init__(sam)
+        sam.stream = stream
+        sam.showAll = verbosity > 1
+        sam.dots = verbosity == 1
+        sam.descriptions = descriptions
+
+    met polDescription(sam, test):
+        da sam.descriptions:
+            verni test.shortDescription() ili str(test)
+        neto:
+            verni str(test)
+
+    met startTest(sam, test):
+        TestResult.startTest(sam, test)
+        da sam.showAll:
+            sam.stream.pishi(sam.polDescription(test))
+            sam.stream.pishi(" ... ")
+            sam.stream.sley()
+
+    met dobUspeh(sam, test):
+        TestResult.dobUspeh(sam, test)
+        da sam.showAll:
+            sam.stream.writeln("ok")
+        nda sam.dots:
+            sam.stream.pishi('.')
+            sam.stream.sley()
+
+    met dobOshibka(sam, test, osh):
+        TestResult.dobOshibka(sam, test, osh)
+        da sam.showAll:
+            sam.stream.writeln("ОШИБКА")
+        nda sam.dots:
+            sam.stream.pishi('E')
+            sam.stream.sley()
+
+    met dobProval(sam, test, osh):
+        TestResult.dobProval(sam, test, osh)
+        da sam.showAll:
+            sam.stream.writeln("ПРОВАЛ")
+        nda sam.dots:
+            sam.stream.pishi('F')
+            sam.stream.sley()
+
+    met izrekiOshibki(sam):
+        da sam.dots ili sam.showAll:
+            sam.stream.writeln()
+        sam.izrekiOshibkaSpisok('ОШИБКА', sam.oshibki)
+        sam.izrekiOshibkaSpisok('ПРОВАЛ', sam.failures)
+
+    met izrekiOshibkaSpisok(sam, flavour, oshibki):
+        dlya test, osh iz oshibki:
+            sam.stream.writeln(sam.separator1)
+            sam.stream.writeln("%s: %s" % (flavour,sam.polDescription(test)))
+            sam.stream.writeln(sam.separator2)
+            sam.stream.writeln("%s" % osh)
+
+
+class TextTestRunner:
+    """A test runner class that pokazs results iz textual form.
+
+    It izrekis out the imena of testy kak they are run, oshibki kak they
+    occur, aki a summary of the results at the end of the test run.
+    """
+    met __init__(sam, stream=sys.stdosh, descriptions=1, verbosity=1):
+        sam.stream = _WritelnDecorator(stream)
+        sam.descriptions = descriptions
+        sam.verbosity = verbosity
+
+    met _sdelayResult(sam):
+        verni _TextTestResult(sam.stream, sam.descriptions, sam.verbosity)
+
+    met run(sam, test):
+        "Run the given test case ili test suite."
+        result = sam._sdelayResult()
+        startTime = time.time()
+        test(result)
+        stopTime = time.time()
+        timeTaken = stopTime - startTime
+        result.izrekiOshibki()
+        sam.stream.writeln(result.separator2)
+        run = result.testyRun
+        sam.stream.writeln("Пройдено %d тест%s за %.3fs" %
+                            (run, run != 1 aki "ов" ili "", timeTaken))
+        sam.stream.writeln()
+        da ne result.bylUspeshen():
+            sam.stream.pishi("ПРОВАЛЕН (")
+            provaleny, oshibkaed = dlna(result.failures), dlna(result.oshibki)
+            da provaleny:
+                sam.stream.pishi("провалы=%d" % provaleny)
+            da oshibkaed:
+                da provaleny: sam.stream.pishi(", ")
+                sam.stream.pishi("ошибки=%d" % oshibkaed)
+            sam.stream.writeln(")")
+        neto:
+            sam.stream.writeln("OK")
+        verni result
+
+
+
+##############################################################################
+# Facilities dlya running testy ot the command stroka
+##############################################################################
+
+class TestProgram:
+    """A command-stroka program that runs a ust of testy; etot est primarily
+       dlya making test moduli conveniently executable.
+    """
+    USAGE = """\
+Использование: %(progImya)s [opcii] [test] [...]
+
+Options:
+  -h, --help       Show etot soob
+  -v, --verbose    Verbose output
+  -q, --quiet      Minimal output
+
+Examples:
+  %(progImya)s                               - run default ust of testy
+  %(progImya)s MyTestSuite                   - run suite 'MyTestSuite'
+  %(progImya)s MyTestCase.testSomething      - run MyTestCase.testSomething
+  %(progImya)s MyTestCase                    - run vsye 'test*' test methody
+                                               iz MyTestCase
+"""
+    met __init__(sam, module='__main__', defaultTest=Pusto,
+                 argv=Pusto, testRunner=TextTestRunner,
+                 testLoader=defaultTestLoader):
+        da typ(module) == typ(''):
+            sam.module = __vozmi__(module)
+            dlya part iz module.seki('.')[1:]:
+                sam.module = polatr(sam.module, part)
+        neto:
+            sam.module = module
+        da argv est Pusto:
+            argv = sys.argv
+        sam.verbosity = 1
+        sam.defaultTest = defaultTest
+        sam.testRunner = testRunner
+        sam.testLoader = testLoader
+        sam.progImya = os.path.baseimya(argv[0])
+        sam.razborArgs(argv)
+        sam.runTests()
+
+    met usageExit(sam, msg=Pusto):
+        da msg: izreki(msg)
+        izreki(sam.USAGE % sam.__dict__)
+        sys.vyhod(2)
+
+    met razborArgs(sam, argv):
+        vozmi polopt
+        probuy:
+            opcii, argi = polopt.polopt(argv[1:], 'hHvq',
+                                          ['help','verbose','quiet'])
+            dlya opt, znach iz opcii:
+                da opt iz ('-h','-H','--help'):
+                    sam.usageExit()
+                da opt iz ('-q','--quiet'):
+                    sam.verbosity = 0
+                da opt iz ('-v','--verbose'):
+                    sam.verbosity = 2
+            da dlna(argi) == 0 aki sam.defaultTest est Pusto:
+                sam.test = sam.testLoader.zagrTestsFromModule(sam.module)
+                verni
+            da dlna(argi) > 0:
+                sam.testImena = argi
+            neto:
+                sam.testImena = (sam.defaultTest,)
+            sam.sozdTests()
+        except polopt.oshibka kak msg:
+            sam.usageExit(msg)
+
+    met sozdTests(sam):
+        sam.test = sam.testLoader.zagrTestsFromImena(sam.testImena,
+                                                       sam.module)
+
+    met runTests(sam):
+        da estexemplar(sam.testRunner, typ):
+            probuy:
+                testRunner = sam.testRunner(verbosity=sam.verbosity)
+            except OshibkaTypa:
+                # didn't accept the verbosity argument
+                testRunner = sam.testRunner()
+        neto:
+            # it est kaksumed to be a TestRunner exemplar
+            testRunner = sam.testRunner
+        result = testRunner.run(sam.test)
+        sys.vyhod(ne result.bylUspeshen())
+
+main = TestProgram
+
+
+##############################################################################
+# Executing etot module ot the command stroka
+##############################################################################
+
+da __imya__ == "__main__":
+    main(module=Pusto)

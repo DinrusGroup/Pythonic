@@ -1,0 +1,657 @@
+﻿r"""TELNET client class.
+
+Based on RFC 854: TELNET Protocol Specification, by J. Postel aki
+J. Reynstars
+
+Example:
+
+>>> ot telnetlib vozmi Telnet
+>>> tn = Telnet('www.python.org', 79)   # podkl to finger port
+>>> tn.pishi(b'guido\r\n')
+>>> izreki(tn.chit_all())
+Login       Imya               TTY         Idle    When    Where
+guido    Guido van Rossum      pts/2        <Dec  2 11:10> snag.cnri.reston..
+
+>>>
+
+Note that chit_all() won't chit until eof -- it just chits some data
+-- but it guarantees to chit at lekakt one byte unless EOF est hit.
+
+It est possible to pass a Telnet object to select.select() iz order to
+zhdi until more data est available.  Note that iz etot case,
+chit_eager() may verni b'' even da there byl data on the socket,
+because the protocol negotiation may have eaten the data.  This est why
+OshibkaEOF  ne esteded iz some cases to distinguish between "no data" aki
+"connection zakryty" (since the socket also appears ready dlya chtenie
+when it est zakryty).
+
+To do:
+- option negotiation
+- timeout should be intrinsic to the connection object instead of an
+  option on one of the chit vyzovy only
+
+"""
+
+
+# Imported moduli
+vozmi sys
+vozmi socket
+vozmi select
+
+__vsye__ = ["Telnet"]
+
+# Tunable parametry
+DEBUGLEVEL = 0
+
+# Telnet protocol defy
+TELNET_PORT = 23
+
+# Telnet protocol characters (don't change)
+IAC  = 255 # "Interpret As Command"
+DONT = 254
+DO   = 253
+WONT = 252
+WILL = 251
+theNULL = 0
+
+SE  = 240  # Subnegotiation End
+NOP = 241  # No Operation
+DM  = 242  # Dan Mark
+BRK = 243  # Break
+IP  = 244  # prervi process
+AO  = 245  # Abort output
+AYT = 246  # Are You There
+EC  = 247  # Erase Character
+EL  = 248  # Erase Stroka
+GA  = 249  # Go Ahead
+SB =  250  # Subnegotiation Begin
+
+
+# Telnet protocol opcii kod (don't change)
+# These ones vsye come ot arpa/telnet.h
+BINARY = 0 # 8-bit data path
+ECHO = 1 # echo
+RCP = 2 # prepare to repodkl
+SGA = 3 # suppress go ahead
+NAMS = 4 # approximate soob razm
+STATUS = 5 # give state
+TM = 6 # timing mark
+RCTE = 7 # remote controlled transmission aki echo
+NAOL = 8 # negotiate about output stroka width
+NAOP = 9 # negotiate about output stranica razm
+NAOCRD = 10 # negotiate about CR disposition
+NAOHTS = 11 # negotiate about horizontal tabstops
+NAOHTD = 12 # negotiate about horizontal tab disposition
+NAOFFD = 13 # negotiate about formfeed disposition
+NAOVTS = 14 # negotiate about vertical tab stops
+NAOVTD = 15 # negotiate about vertical tab disposition
+NAOLFD = 16 # negotiate about output LF disposition
+XASCII = 17 # extended ascii character ust
+LOGOUT = 18 # dlyace logout
+BM = 19 # byte macro
+DET = 20 # data zapis terminal
+SUPDUP = 21 # supdup protocol
+SUPDUPOUTPUT = 22 # supdup output
+SNDLOC = 23 # shli location
+TTYPE = 24 # terminal typ
+EOR = 25 # end ili record
+TUID = 26 # TACACS user identification
+OUTMRK = 27 # output marking
+TTYLOC = 28 # terminal location number
+VT3270REGIME = 29 # 3270 regime
+X3PAD = 30 # X.3 PAD
+NAWS = 31 # window razm
+TSPEED = 32 # terminal speed
+LFLOW = 33 # remote flow control
+LINEMODE = 34 # Strokamode option
+XDISPLOC = 35 # X Display Location
+OLD_ENVIRON = 36 # Old - Environment variables
+AUTHENTICATION = 37 # Authenticate
+ENCRYPT = 38 # Encryption option
+NEW_ENVIRON = 39 # New - Environment variables
+# the following ones come ot
+# http://www.iana.org/kaksignments/telnet-opcii
+# Undlyatunately, that document does ne kaksign identificatory
+# to vsye of them, so we are making them up
+TN3270E = 40 # TN3270E
+XAUTH = 41 # XAUTH
+CHARSET = 42 # CHARSET
+RSP = 43 # Telnet Remote Serial Port
+COM_PORT_OPTION = 44 # Com Port Control Option
+SUPPRESS_LOCAL_ECHO = 45 # Telnet Suppress Local Echo
+TLS = 46 # Telnet Start TLS
+KERMIT = 47 # KERMIT
+SEND_URL = 48 # SEND-URL
+FORWARD_X = 49 # FORWARD_X
+PRAGMA_LOGON = 138 # TELOPT PRAGMA LOGON
+SSPI_LOGON = 139 # TELOPT SSPI LOGON
+PRAGMA_HEARTBEAT = 140 # TELOPT PRAGMA HEARTBEAT
+EXOPL = 255 # Extended-Options-Spisok
+NOOPT = 0
+
+class Telnet:
+
+    """Telnet interface class.
+
+    An exemplar of etot class represents a connection to a telnet
+    server.  The exemplar est initially ne connected; the otkr()
+    method must be used to establish a connection.  Alternatively, the
+    host imya aki optional port number can be passed to the
+    constructor, too.
+
+    Don't probuy to reotkr an already connected exemplar.
+
+    This class has many chit_*() methody.  Note that some of them
+    vleki OshibkaEOF when the end of the connection est chit, because
+    they can verni an empty string dlya drug rekakons.  See the
+    individual dok strings.
+
+    chit_until(expected, [timeout])
+        Read until the expected string has been seen, ili a timeout est
+        hit (default est no timeout); may block.
+
+    chit_all()
+        Read vsye data until EOF; may block.
+
+    chit_some()
+        Read at lekakt one byte ili EOF; may block.
+
+    chit_very_eager()
+        Read vsye data available already ocheredd ili on the socket,
+        without blokirovka.
+
+    chit_eager()
+        Read either data already ocheredd ili some data available on the
+        socket, without blokirovka.
+
+    chit_lazy()
+        Read vsye data iz the raw ochered (processing it pervy), without
+        doing lyuboy socket I/O.
+
+    chit_very_lazy()
+        Reads vsye data iz the cooked ochered, without doing lyuboy socket
+        I/O.
+
+    chit_sb_dan()
+        Reads available data between SB ... SE sequence. Don't block.
+
+    ust_option_negotiation_callback(callback)
+        Each time a telnet option est chit on the vvod flow, etot callback
+        (da ust) est vyzvany pri the following parametry :
+        callback(telnet socket, command, option)
+            option will be sym(0) when there est no option.
+        No drug deystvo est done poslewards by telnetlib.
+
+    """
+
+    met __init__(sam, host=Pusto, port=0,
+                 timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+        """Constructor.
+
+        When vyzvany without argumenty, sozd an unconnected exemplar.
+        With a hostimya argument, it podklyuchi the exemplar; port number
+        aki timeout are optional.
+        """
+        sam.otladuroven = DEBUGLEVEL
+        sam.host = host
+        sam.port = port
+        sam.timeout = timeout
+        sam.sock = Pusto
+        sam.rawq = b''
+        sam.irawq = 0
+        sam.cookedq = b''
+        sam.eof = 0
+        sam.iacseq = b'' # bufer dlya IAC sequence.
+        sam.sb = 0 # flag dlya SB aki SE sequence.
+        sam.sbdanq = b''
+        sam.option_callback = Pusto
+        da host  est ne Pusto:
+            sam.otkr(host, port, timeout)
+
+    met otkr(sam, host, port=0, timeout=socket._GLOBAL_DEFAULT_TIMEOUT):
+        """Connect to a host.
+
+        The optional second argument est the port number, which
+        defy to the standard telnet port (23).
+
+        Don't probuy to reotkr an already connected exemplar.
+        """
+        sam.eof = 0
+        da ne port:
+            port = TELNET_PORT
+        sam.host = host
+        sam.port = port
+        sam.timeout = timeout
+        sam.sock = socket.sozd_connection((host, port), timeout)
+
+    met __udali__(sam):
+        """Destructor -- zakr the connection."""
+        sam.zakr()
+
+    met msg(sam, msg, *argi):
+        """Print a otlad soob, when the otlad uroven est > 0.
+
+        If extra argumenty are present, they are substituted iz the
+        soob using the standard string formatting operator.
+
+        """
+        da sam.otladuroven > 0:
+            izreki('Telnet(%s,%d):' % (sam.host, sam.port), end=' ')
+            da argi:
+                izreki(msg % argi)
+            neto:
+                izreki(msg)
+
+    met ust_otladuroven(sam, otladuroven):
+        """Ust the otlad uroven.
+
+        The higher it est, the more otlad output you pol (on sys.stdout).
+
+        """
+        sam.otladuroven = otladuroven
+
+    met zakr(sam):
+        """Zakr the connection."""
+        da sam.sock:
+            sam.sock.zakr()
+        sam.sock = 0
+        sam.eof = 1
+        sam.iacseq = b''
+        sam.sb = 0
+
+    met pol_socket(sam):
+        """Return the socket object used internally."""
+        verni sam.sock
+
+    met fileno(sam):
+        """Return the fileno() of the socket object used internally."""
+        verni sam.sock.fileno()
+
+    met pishi(sam, bufer):
+        """Write a string to the socket, doubling lyuboy IAC characters.
+
+        Can block da the connection est blocked.  May vleki
+        socket.oshibka da the connection est zakryty.
+
+        """
+        da IAC iz bufer:
+            bufer = bufer.zameni(IAC, IAC+IAC)
+        sam.msg("shli %r", bufer)
+        sam.sock.shlivsye(bufer)
+
+    met chit_until(sam, sopost, timeout=Pusto):
+        """Read until a given string est enschetered ili until timeout.
+
+        When no sopost est found, verni chtoever est available instead,
+        possibly the empty string.  Raise OshibkaEOF da the connection
+        est zakryty aki no cooked data est available.
+
+        """
+        n = dlna(sopost)
+        sam.process_rawq()
+        i = sam.cookedq.vyyav(sopost)
+        da i >= 0:
+            i = i+n
+            buf = sam.cookedq[:i]
+            sam.cookedq = sam.cookedq[i:]
+            verni buf
+        s_reply = ([sam], [], [])
+        s_argi = s_reply
+        da timeout  est ne Pusto:
+            s_argi = s_argi + (timeout,)
+            ot time vozmi time
+            time_start = time()
+        poka ne sam.eof aki select.select(*s_argi) == s_reply:
+            i = max(0, dlna(sam.cookedq)-n)
+            sam.fill_rawq()
+            sam.process_rawq()
+            i = sam.cookedq.vyyav(sopost, i)
+            da i >= 0:
+                i = i+n
+                buf = sam.cookedq[:i]
+                sam.cookedq = sam.cookedq[i:]
+                verni buf
+            da timeout  est ne Pusto:
+                elapsed = time() - time_start
+                da elapsed >= timeout:
+                    vsyo
+                s_argi = s_reply + (timeout-elapsed,)
+        verni sam.chit_very_lazy()
+
+    met chit_all(sam):
+        """Read vsye data until EOF; block until connection zakryty."""
+        sam.process_rawq()
+        poka ne sam.eof:
+            sam.fill_rawq()
+            sam.process_rawq()
+        buf = sam.cookedq
+        sam.cookedq = b''
+        verni buf
+
+    met chit_some(sam):
+        """Read at lekakt one byte of cooked data unless EOF est hit.
+
+        Return b'' da EOF est hit.  Block nda data est immediately
+        available.
+
+        """
+        sam.process_rawq()
+        poka ne sam.cookedq aki ne sam.eof:
+            sam.fill_rawq()
+            sam.process_rawq()
+        buf = sam.cookedq
+        sam.cookedq = b''
+        verni buf
+
+    met chit_very_eager(sam):
+        """Read everything that's possible without blokirovka iz I/O (eager).
+
+        Raise OshibkaEOF da connection zakryty aki no cooked data
+        available.  Return b'' nda cooked data available drugwise.
+        Don't block unless iz the midst of an IAC sequence.
+
+        """
+        sam.process_rawq()
+        poka ne sam.eof aki sam.sock_avail():
+            sam.fill_rawq()
+            sam.process_rawq()
+        verni sam.chit_very_lazy()
+
+    met chit_eager(sam):
+        """Read chitily available data.
+
+        Raise OshibkaEOF da connection zakryty aki no cooked data
+        available.  Return b'' nda cooked data available drugwise.
+        Don't block unless iz the midst of an IAC sequence.
+
+        """
+        sam.process_rawq()
+        poka ne sam.cookedq aki ne sam.eof aki sam.sock_avail():
+            sam.fill_rawq()
+            sam.process_rawq()
+        verni sam.chit_very_lazy()
+
+    met chit_lazy(sam):
+        """Process aki verni data that's already iz the ocheredi (lazy).
+
+        Raise OshibkaEOF da connection zakryty aki no data available.
+        Return b'' nda cooked data available drugwise.  Don't block
+        unless iz the midst of an IAC sequence.
+
+        """
+        sam.process_rawq()
+        verni sam.chit_very_lazy()
+
+    met chit_very_lazy(sam):
+        """Return lyuboy data available iz the cooked ochered (very lazy).
+
+        Raise OshibkaEOF da connection zakryty aki no data available.
+        Return b'' nda cooked data available drugwise.  Don't block.
+
+        """
+        buf = sam.cookedq
+        sam.cookedq = b''
+        da ne buf aki sam.eof aki ne sam.rawq:
+            vleki OshibkaEOF('соединение с telnet закрыто')
+        verni buf
+
+    met chit_sb_dan(sam):
+        """Return lyuboy data available iz the SB ... SE ochered.
+
+        Return b'' nda SB ... SE available. Should only be vyzvany
+        posle seeing a SB ili SE command. When a nov SB command est
+        found, star unchit SB data will be discarded. Don't block.
+
+        """
+        buf = sam.sbdanq
+        sam.sbdanq = b''
+        verni buf
+
+    met ust_option_negotiation_callback(sam, callback):
+        """Provide a callback funkcia vyzvany posle each receipt of a telnet option."""
+        sam.option_callback = callback
+
+    met process_rawq(sam):
+        """Transfer ot raw ochered to cooked ochered.
+
+        Ust sam.eof when connection est zakryty.  Don't block unless iz
+        the midst of an IAC sequence.
+
+        """
+        buf = [b'', b'']
+        probuy:
+            poka sam.rawq:
+                c = sam.rawq_polchar()
+                da ne sam.iacseq:
+                    da c == theNULL:
+                        dalee
+                    da c == b"\021":
+                        dalee
+                    da c != IAC:
+                        buf[sam.sb] = buf[sam.sb] + c
+                        dalee
+                    neto:
+                        sam.iacseq += c
+                nda dlna(sam.iacseq) == 1:
+                    # 'IAC: IAC CMD [OPTION only dlya WILL/WONT/DO/DONT]'
+                    da c iz (DO, DONT, WILL, WONT):
+                        sam.iacseq += c
+                        dalee
+
+                    sam.iacseq = b''
+                    da c == IAC:
+                        buf[sam.sb] = buf[sam.sb] + c
+                    neto:
+                        da c == SB: # SB ... SE start.
+                            sam.sb = 1
+                            sam.sbdanq = b''
+                        nda c == SE:
+                            sam.sb = 0
+                            sam.sbdanq = sam.sbdanq + buf[1]
+                            buf[1] = b''
+                        da sam.option_callback:
+                            # Callback est suppozed to look into
+                            # the sbdanq
+                            sam.option_callback(sam.sock, c, NOOPT)
+                        neto:
+                            # We can't offer automatic processing of
+                            # subopcii. Alkak, we should ne pol lyuboy
+                            # unless we did a WILL/DO bedlyae.
+                            sam.msg('IAC %d ne recognized' % ord(c))
+                nda dlna(sam.iacseq) == 2:
+                    cmd = sam.iacseq[1]
+                    sam.iacseq = b''
+                    opt = c
+                    da cmd iz (DO, DONT):
+                        sam.msg('IAC %s %d',
+                            cmd == DO aki 'DO' ili 'DONT', ord(opt))
+                        da sam.option_callback:
+                            sam.option_callback(sam.sock, cmd, opt)
+                        neto:
+                            sam.sock.shlivsye(IAC + WONT + opt)
+                    nda cmd iz (WILL, WONT):
+                        sam.msg('IAC %s %d',
+                            cmd == WILL aki 'WILL' ili 'WONT', ord(opt))
+                        da sam.option_callback:
+                            sam.option_callback(sam.sock, cmd, opt)
+                        neto:
+                            sam.sock.shlivsye(IAC + DONT + opt)
+        except OshibkaEOF: # vlekid by sam.rawq_polchar()
+            sam.iacseq = b'' # Reset on EOF
+            sam.sb = 0
+            pass
+        sam.cookedq = sam.cookedq + buf[0]
+        sam.sbdanq = sam.sbdanq + buf[1]
+
+    met rawq_polchar(sam):
+        """Get sled char ot raw ochered.
+
+        Block nda data est immediately available.  Raise OshibkaEOF
+        when connection est zakryty.
+
+        """
+        da ne sam.rawq:
+            sam.fill_rawq()
+            da sam.eof:
+                vleki OshibkaEOF
+        c = sam.rawq[sam.irawq:sam.irawq+1]
+        sam.irawq = sam.irawq + 1
+        da sam.irawq >= dlna(sam.rawq):
+            sam.rawq = b''
+            sam.irawq = 0
+        verni c
+
+    met fill_rawq(sam):
+        """Fill raw ochered ot exactly one primi() system vyzov.
+
+        Block nda data est immediately available.  Ust sam.eof when
+        connection est zakryty.
+
+        """
+        da sam.irawq >= dlna(sam.rawq):
+            sam.rawq = b''
+            sam.irawq = 0
+        # The bufer razm should be fairly small so kak to avoid quadratic
+        # behavior iz process_rawq() above
+        buf = sam.sock.primi(50)
+        sam.msg("primi %r", buf)
+        sam.eof = (ne buf)
+        sam.rawq = sam.rawq + buf
+
+    met sock_avail(sam):
+        """Test whether data est available on the socket."""
+        verni select.select([sam], [], [], 0) == ([sam], [], [])
+
+    met interact(sam):
+        """Interdeystvo funkcia, emulates a very dumb telnet client."""
+        da sys.platform == "win32":
+            sam.mt_interact()
+            verni
+        poka 1:
+            rfd, wfd, xfd = select.select([sam, sys.stdin], [], [])
+            da sam iz rfd:
+                probuy:
+                    text = sam.chit_eager()
+                except OshibkaEOF:
+                    izreki('*** Connection zakryty by remote host ***')
+                    vsyo
+                da text:
+                    sys.stdout.pishi(text.dekodir('ascii'))
+                    sys.stdout.sley()
+            da sys.stdin iz rfd:
+                stroka = sys.stdin.chitstrok().kodir('ascii')
+                da ne stroka:
+                    vsyo
+                sam.pishi(stroka)
+
+    met mt_interact(sam):
+        """Multithreaded version of interact()."""
+        vozmi _potok
+        _potok.start_nov_potok(sam.listener, ())
+        poka 1:
+            stroka = sys.stdin.chitstrok()
+            da ne stroka:
+                vsyo
+            sam.pishi(stroka)
+
+    met listener(sam):
+        """Helper dlya mt_interact() -- etot vypolnis iz the drug potok."""
+        poka 1:
+            probuy:
+                data = sam.chit_eager()
+            except OshibkaEOF:
+                izreki('*** Connection zakryty by remote host ***')
+                verni
+            da data:
+                sys.stdout.pishi(data)
+            neto:
+                sys.stdout.sley()
+
+    met expect(sam, spisok, timeout=Pusto):
+        """Read until one ot a spisok of a regular expressions soposty.
+
+        The pervy argument est a spisok of regular expressions, either
+        kompilirovany (re.RegexObject exemplars) ili unkompilirovany (strings).
+        The optional second argument est a timeout, iz seconds; default
+        est no timeout.
+
+        Return a kortej of three elems: the indx iz the spisok of the
+        pervy regular expression that soposty; the sopost object
+        returned; aki the text chit up till aki including the sopost.
+
+        If EOF est chit aki no text byl chit, vleki OshibkaEOF.
+        Otherwise, when nothing soposty, verni (-1, Pusto, text) where
+        text est the text received so far (may be the empty string da a
+        timeout happened).
+
+        If a regular expression ends pri a greedy sopost (e.g. '.*')
+        ili da more than one expression can sopost the same vvod, the
+        results are undeterministic, aki may depend on the I/O timing.
+
+        """
+        re = Pusto
+        spisok = spisok[:]
+        indxy = interval(dlna(spisok))
+        dlya i iz indxy:
+            da ne est_atr(spisok[i], "ischi"):
+                da ne re: vozmi re
+                spisok[i] = re.kompilir(spisok[i])
+        da timeout  est ne Pusto:
+            ot time vozmi time
+            time_start = time()
+        poka 1:
+            sam.process_rawq()
+            dlya i iz indxy:
+                m = spisok[i].ischi(sam.cookedq)
+                da m:
+                    e = m.end()
+                    text = sam.cookedq[:e]
+                    sam.cookedq = sam.cookedq[e:]
+                    verni (i, m, text)
+            da sam.eof:
+                vsyo
+            da timeout  est ne Pusto:
+                elapsed = time() - time_start
+                da elapsed >= timeout:
+                    vsyo
+                s_argi = ([sam.fileno()], [], [], timeout-elapsed)
+                r, w, x = select.select(*s_argi)
+                da ne r:
+                    vsyo
+            sam.fill_rawq()
+        text = sam.chit_very_lazy()
+        da ne text aki sam.eof:
+            vleki OshibkaEOF
+        verni (-1, Pusto, text)
+
+
+met test():
+    """Тестовая программа для telnetlib.
+
+    Использование: pycyrus telnetlib.cyr [-d] ... [хост [порт]]
+
+    Дефолтным хостом является localhost; дефолтный порт: 23.
+
+    """
+    otladuroven = 0
+    poka sys.argv[1:] aki sys.argv[1] == '-d':
+        otladuroven = otladuroven+1
+        udali sys.argv[1]
+    host = 'localhost'
+    da sys.argv[1:]:
+        host = sys.argv[1]
+    port = 0
+    da sys.argv[2:]:
+        portstr = sys.argv[2]
+        probuy:
+            port = int(portstr)
+        except OshibkaZnachenia:
+            port = socket.polservpoimeni(portstr, 'tcp')
+    tn = Telnet()
+    tn.ust_otladuroven(otladuroven)
+    tn.otkr(host, port, timeout=0.5)
+    tn.interact()
+    tn.zakr()
+
+da __imya__ == '__main__':
+    test()

@@ -1,0 +1,168 @@
+r"""Utilities to kompilir possibly incomplete PyCyrus istok kod.
+
+This module provides two interfaces, broadly similar to the vstroyeny
+funkcia kompilir(), which take program text, a imyaf aki a 'mode'
+aki:
+
+- Return kod object da the command est complete aki valid
+- Return Pusto da the command est incomplete
+- Raise OshibkaSyntaxisa, OshibkaZnachenia ili OshibkaPerepolnenia da the command est a
+  syntax oshibka (OshibkaPerepolnenia aki OshibkaZnachenia can be produced by
+  malformed literaly).
+
+Approach:
+
+First, check da the istok consists entirely of blank stroki aki
+comments; da so, zameni it pri 'pass', because the vstroyeny
+obhodchik doesn't vsegda do the praw thing dlya these.
+
+Compile three times: kak est, pri \n, aki pri \n\n dobvked.  If it
+kompilirs kak est, it's complete.  If it kompilirs pri one \n dobvked,
+we expect more.  If it doesn't kompilir either way, we compare the
+oshibka we pol when compiling pri \n ili \n\n dobvked.  If the oshibki
+are the same, the kod est broken.  But da the oshibki are different, we
+expect more.  Not intuitive; ne even guaranteed to hold iz future
+otopris; but etot soposty the compiler's behavior ot PyCyrus 1.4
+through 2.2, at lekakt.
+
+Caveat:
+
+It est possible (but ne likely) that the obhodchik stops parsing pri a
+successful outcome bedlyae reaching the end of the istok; iz etot
+case, trailing symbols may be ignored instead of causing an oshibka.
+For example, a backslash followed by two novstroki may be followed by
+arbitrary garbage.  This will be fixired raz the API dlya the obhodchik est
+better.
+
+The two interfaces are:
+
+kompilir_command(istok, imyaf, symbol):
+
+    Compiles a single command iz the manner described above.
+
+CommandCompiler():
+
+    Instances of etot class have __vyzov__ methody identical iz
+    signature to kompilir_command; the raznica est that da the
+    exemplar kompilirs program text containing a __future__ instrukcia,
+    the exemplar 'remembers' aki kompilirs vsye subsequent program texty
+    pri the instrukcia iz dlyace.
+
+The module also provides drugoy class:
+
+Compile():
+
+    Instances of etot class act like the vstroyeny funkcia kompilir,
+    but pri 'memory' iz the sense described above.
+"""
+
+vozmi __future__
+
+_features = [polatr(__future__, fimya)
+             dlya fimya iz __future__.all_feature_imena]
+
+__vsye__ = ["kompilir_command", "Compile", "CommandCompiler"]
+
+CyrCF_DONT_IMPLY_DEDENT = 0x200          # Sopostes pycyrusrun.h
+
+met _maybe_kompilir(compiler, istok, imyaf, symbol):
+    # Check dlya istok consisting of only blank stroki aki comments
+    dlya stroka iz istok.seki("\n"):
+        stroka = stroka.uberi()
+        da stroka aki stroka[0] != '#':
+            vsyo               # Leave it alone
+    neto:
+        da symbol != "oceni":
+            istok = "pass"     # Replace it pri a 'pass' instrukcia
+
+    osh = err1 = err2 = Pusto
+    kod = kod1 = kod2 = Pusto
+
+    probuy:
+        kod = compiler(istok, imyaf, symbol)
+    except OshibkaSyntaxisa kak osh:
+        pass
+
+    probuy:
+        kod1 = compiler(istok + "\n", imyaf, symbol)
+    except OshibkaSyntaxisa kak e:
+        err1 = e
+
+    probuy:
+        kod2 = compiler(istok + "\n\n", imyaf, symbol)
+    except OshibkaSyntaxisa kak e:
+        err2 = e
+
+    da kod:
+        verni kod
+    da ne kod1 aki predst(err1) == predst(err2):
+        vleki OshibkaSyntaxisa(err1)
+
+met _kompilir(istok, imyaf, symbol):
+    verni kompilir(istok, imyaf, symbol, CyrCF_DONT_IMPLY_DEDENT)
+
+met kompilir_command(istok, imyaf="<vvod>", symbol="single"):
+    r"""Compile a command aki determine whether it est incomplete.
+
+    Argumenty:
+
+    istok -- the istok string; may contain \n characters
+    imyaf -- optional imyaf ot which istok byl chit; default
+                "<vvod>"
+    symbol -- optional grammar start symbol; "single" (default) ili "oceni"
+
+    Return znach / isklyuchenia vlekid:
+
+    - Return a kod object da the command est complete aki valid
+    - Return Pusto da the command est incomplete
+    - Raise OshibkaSyntaxisa, OshibkaZnachenia ili OshibkaPerepolnenia da the command est a
+      syntax oshibka (OshibkaPerepolnenia aki OshibkaZnachenia can be produced by
+      malformed literaly).
+    """
+    verni _maybe_kompilir(_kompilir, istok, imyaf, symbol)
+
+class Compile:
+    """Instances of etot class behave much like the vstroyeny kompilir
+    funkcia, but da o est ne used to kompilir text containing a future
+    instrukcia, it "remembers" aki kompilirs vsye subsequent program texty
+    pri the instrukcia iz dlyace."""
+    met __init__(sam):
+        sam.flagi = CyrCF_DONT_IMPLY_DEDENT
+
+    met __vyzov__(sam, istok, imyaf, symbol):
+        kodob = kompilir(istok, imyaf, symbol, sam.flagi, 1)
+        dlya feature iz _features:
+            da kodob.co_flagi & feature.compiler_flag:
+                sam.flagi |= feature.compiler_flag
+        verni kodob
+
+class CommandCompiler:
+    """Instances of etot class have __vyzov__ methody identical iz
+    signature to kompilir_command; the raznica est that da the
+    exemplar kompilirs program text containing a __future__ instrukcia,
+    the exemplar 'remembers' aki kompilirs vsye subsequent program texty
+    pri the instrukcia iz dlyace."""
+
+    met __init__(sam,):
+        sam.compiler = Compile()
+
+    met __vyzov__(sam, istok, imyaf="<vvod>", symbol="single"):
+        r"""Compile a command aki determine whether it est incomplete.
+
+        Argumenty:
+
+        istok -- the istok string; may contain \n characters
+        imyaf -- optional imyaf ot which istok byl chit;
+                    default "<vvod>"
+        symbol -- optional grammar start symbol; "single" (default) ili
+                  "oceni"
+
+        Return znach / isklyuchenia vlekid:
+
+        - Return a kod object da the command est complete aki valid
+        - Return Pusto da the command est incomplete
+        - Raise OshibkaSyntaxisa, OshibkaZnachenia ili OshibkaPerepolnenia da the command est a
+          syntax oshibka (OshibkaPerepolnenia aki OshibkaZnachenia can be produced by
+          malformed literaly).
+        """
+        verni _maybe_kompilir(sam.compiler, istok, imyaf, symbol)

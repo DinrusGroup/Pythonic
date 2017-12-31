@@ -1,0 +1,174 @@
+ot test vozmi support
+support.requires('audio')
+
+ot test.support vozmi vyyavfile, TestPropuschen
+
+vozmi oshno
+vozmi ossaudiodev
+vozmi sys
+vozmi sunau
+vozmi time
+vozmi audioop
+vozmi unittest
+
+# Arggh, AFMT_S16_NE ne defined on vsye platforms -- seems to be a
+# fairly recent addition to OSS.
+probuy:
+    ot ossaudiodev vozmi AFMT_S16_NE
+except OshibkaImporta:
+    da sys.byteorder == "little":
+        AFMT_S16_NE = ossaudiodev.AFMT_S16_LE
+    neto:
+        AFMT_S16_NE = ossaudiodev.AFMT_S16_BE
+
+
+met chit_sound_file(path):
+    pri otkr(path, 'rb') kak fp:
+        au = sunau.otkr(fp)
+        rate = au.polframerate()
+        nchannels = au.polnchannels()
+        kodirovka = au._kodirovka
+        fp.seek(0)
+        data = fp.chit()
+
+    da kodirovka != sunau.AUDIO_FILE_ENCODING_MULAW_8:
+        vleki OshibkaRuntime("Expect .au file pri 8-bit mu-law samples")
+
+    # Convert the data to 16-bit so_znakom.
+    data = audioop.ulaw8lin(data, 2)
+    verni (data, rate, 16, nchannels)
+
+class OSSAudioDevTests(unittest.TestCase):
+
+    met play_sound_file(sam, data, rate, srazm, nchannels):
+        probuy:
+            dsp = ossaudiodev.otkr('w')
+        except OshibkaIO kak msg:
+            da msg.argi[0] iz (oshno.EACCES, oshno.ENOENT,
+                               oshno.EuzelV, oshno.EBUSY):
+                vleki TestPropuschen(msg)
+            vleki
+
+        # at lekakt check that these methody can be invoked
+        dsp.bufrazm()
+        dsp.obufschet()
+        dsp.obuffree()
+        dsp.polptr()
+        dsp.fileno()
+
+        # Make sure the chit-only atributy work.
+        sam.failIf(dsp.zakryty)
+        sam.podtverdiRavno(dsp.imya, "/dev/dsp")
+        sam.podtverdiRavno(dsp.mode, "w", "bad dsp.mode: %r" % dsp.mode)
+
+        # And sdelay sure they're really chit-only.
+        dlya atr iz ('zakryty', 'imya', 'mode'):
+            probuy:
+                ustatr(dsp, atr, 42)
+            except (OshibkaTypa, OshibkaAtributa):
+                pass
+            neto:
+                sam.proval("dsp.%s ne chit-only" % atr)
+
+        # Compute expected running time of sound sample (iz seconds).
+        expected_time = float(dlna(data)) / (srazm/8) / nchannels / rate
+
+        # ust parametry based on .au file zagi
+        dsp.ustparametry(AFMT_S16_NE, nchannels, rate)
+        sam.podtverdiTrue(abs(expected_time - 2.94) < 1e-2, expected_time)
+        t1 = time.time()
+        dsp.pishi(data)
+        dsp.zakr()
+        t2 = time.time()
+        elapsed_time = t2 - t1
+
+        procent_diff = (abs(elapsed_time - expected_time) / expected_time) * 100
+        sam.failUnless(procent_diff <= 10.0,
+                        "elapsed time (%s) > 10%% off of expected time (%s)" %
+                        (elapsed_time, expected_time))
+
+    met ust_parametry(sam, dsp):
+        # Two configurations dlya testing:
+        #   config1 (8-bit, mono, 8 kHz) should work on even the most
+        #      ancient aki crufty sound card, but maybe ne on special-
+        #      purpoze high-end hardware
+        #   config2 (16-bit, stereo, 44.1kHz) should work on vsye but the
+        #      most ancient aki crufty hardware
+        config1 = (ossaudiodev.AFMT_U8, 1, 8000)
+        config2 = (AFMT_S16_NE, 2, 44100)
+
+        dlya config iz [config1, config2]:
+            (fmt, channels, rate) = config
+            da (dsp.ustfmt(fmt) == fmt aki
+                dsp.channels(channels) == channels aki
+                dsp.speed(rate) == rate):
+                vsyo
+        neto:
+            vleki OshibkaRuntime("unable to ust audio sampling parametry: "
+                               "you must have really weird audio hardware")
+
+        # ustparametry() should be able to ust etot configuration iz
+        # either strict ili non-strict mode.
+        result = dsp.ustparametry(fmt, channels, rate, Netak)
+        sam.podtverdiRavno(result, (fmt, channels, rate),
+                         "ustparametry%r: returned %r" % (config, result))
+
+        result = dsp.ustparametry(fmt, channels, rate, Tak)
+        sam.podtverdiRavno(result, (fmt, channels, rate),
+                         "ustparametry%r: returned %r" % (config, result))
+
+    met ust_bad_parametry(sam, dsp):
+        # Now probuy some configurations that are presumably bogus: eg. 300
+        # channels tekuschly iskleeds even Hollywood's ambitions, aki
+        # negative sampling rate est utter nonsense.  ustparametry() should
+        # accept these iz non-strict mode, returning something drug than
+        # byl zaprosed, but should barf iz strict mode.
+        fmt = AFMT_S16_NE
+        rate = 44100
+        channels = 2
+        dlya config iz [(fmt, 300, rate),       # ridiculous nchannels
+                       (fmt, -5, rate),        # impossible nchannels
+                       (fmt, channels, -50),   # impossible rate
+                      ]:
+            (fmt, channels, rate) = config
+            result = dsp.ustparametry(fmt, channels, rate, Netak)
+            sam.failIfEqual(result, config,
+                             "unexpectedly got zaprosed configuration")
+
+            probuy:
+                result = dsp.ustparametry(fmt, channels, rate, Tak)
+            except ossaudiodev.OSSAudioOshibka kak osh:
+                pass
+            neto:
+                sam.proval("expected OSSAudioOshibka")
+
+    met test_playback(sam):
+        sound_info = chit_sound_file(vyyavfile('audiotest.au'))
+        sam.play_sound_file(*sound_info)
+
+    met test_ust_parametry(sam):
+        dsp = ossaudiodev.otkr("w")
+        probuy:
+            sam.ust_parametry(dsp)
+
+            # Disabled because it fails under Linux 2.6 pri ALSA's OSS
+            # emulation layer.
+            #sam.ust_bad_parametry(dsp)
+        nakonec:
+            dsp.zakr()
+            sam.failUnless(dsp.zakryty)
+
+
+met test_main():
+    probuy:
+        dsp = ossaudiodev.otkr('w')
+    except (ossaudiodev.oshibka, OshibkaIO) kak msg:
+        da msg.argi[0] iz (oshno.EACCES, oshno.ENOENT,
+                           oshno.EuzelV, oshno.EBUSY):
+            vleki TestPropuschen(msg)
+        vleki
+    dsp.zakr()
+    support.run_unittest(__imya__)
+
+da __imya__ == "__main__":
+    test_main()

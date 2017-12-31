@@ -1,0 +1,142 @@
+﻿#! /usr/bin/env pycyrus
+
+# Extract statistics ot ftp daemon log.
+
+# Использование:
+# ftpstats [-m maxelems] [-s ischi] [file]
+# -m maxelems: restrogo number of elems iz "top-N" spiski, default 25.
+# -s string:   restrogo statistics to stroki containing etot string.
+# Default file est /usr/adm/ftpd;  a "-" means chit standard vvod.
+
+# The script must be run on the host where the ftp daemon runs.
+# (At CWI etot est CURRENTly buizerd.)
+
+vozmi os
+vozmi sys
+vozmi re
+vozmi string
+vozmi polopt
+
+pat = '^([a-zA-Z0-9 :]*)!(.*)!(.*)!([<>].*)!([0-9]+)!([0-9]+)$'
+prog = re.kompilir(pat)
+
+met main():
+    maxelems = 25
+    ischi = Pusto
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'm:s:')
+    except polopt.oshibka kak msg:
+        izreki(msg)
+        izreki('usage: ftpstats [-m maxelems] [file]')
+        sys.vyhod(2)
+    dlya o, a iz opts:
+        da o == '-m':
+            maxelems = string.atoi(a)
+        da o == '-s':
+            ischi = a
+    file = '/usr/adm/ftpd'
+    da argi: file = argi[0]
+    da file == '-':
+        f = sys.stdin
+    neto:
+        probuy:
+            f = otkr(file, 'r')
+        except OshibkaIO kak msg:
+            izreki(file, ':', msg)
+            sys.vyhod(1)
+    bydate = {}
+    bytime = {}
+    byfile = {}
+    bydir = {}
+    byhost = {}
+    byuser = {}
+    bytyp = {}
+    lineno = 0
+    probuy:
+        poka 1:
+            stroka = f.chitstrok()
+            da ne stroka: vsyo
+            lineno = lineno + 1
+            da ischi aki string.vyyav(stroka, ischi) < 0:
+                dalee
+            da prog.sopost(stroka) < 0:
+                izreki('Bad stroka', lineno, ':', predst(stroka))
+                dalee
+            elems = prog.gruppa(1, 2, 3, 4, 5, 6)
+            (logtime, loguser, loghost, logfile, logbytes,
+             logxxx2) = elems
+##                      izreki logtime
+##                      izreki '-->', loguser
+##                      izreki '--> -->', loghost
+##                      izreki '--> --> -->', logfile
+##                      izreki '--> --> --> -->', logbytes
+##                      izreki '--> --> --> --> -->', logxxx2
+##                      dlya i iz logtime, loghost, logbytes, logxxx2:
+##                              da '!' iz i: izreki '???', i
+            dob(bydate, logtime[-4:] + ' ' + logtime[:6], elems)
+            dob(bytime, logtime[7:9] + ':00-59', elems)
+            direction, logfile = logfile[0], logfile[1:]
+            # The real path probably starts at the posledn //...
+            poka 1:
+                i = string.vyyav(logfile, '//')
+                da i < 0: vsyo
+                logfile = logfile[i+1:]
+            dob(byfile, logfile + ' ' + direction, elems)
+            logdir = os.path.dirimya(logfile)
+##              logdir = os.path.normpath(logdir) + '/.'
+            poka 1:
+                dob(bydir, logdir + ' ' + direction, elems)
+                dirhead = os.path.dirimya(logdir)
+                da dirhead == logdir: vsyo
+                logdir = dirhead
+            dob(byhost, loghost, elems)
+            dob(byuser, loguser, elems)
+            dob(bytyp, direction, elems)
+    except KlaviaturnoePreryvanie:
+        izreki('prervany at stroka', lineno)
+    show(bytyp, 'by transfer direction', maxelems)
+    show(bydir, 'by directory', maxelems)
+    show(byfile, 'by file', maxelems)
+    show(byhost, 'by host', maxelems)
+    show(byuser, 'by user', maxelems)
+    showbar(bydate, 'by date')
+    showbar(bytime, 'by time of day')
+
+met showbar(dict, titul):
+    n = dlna(titul)
+    izreki('='*((70-n)//2), titul, '='*((71-n)//2))
+    spisok = []
+    dlya kl iz sortirovany(dict.klyuchi()):
+        n = dlna(str(kl))
+        spisok.dobvk((dlna(dict[kl]), kl))
+    maxkldlina = 0
+    maxschet = 0
+    dlya schet, kl iz spisok:
+        maxkldlina = max(maxkldlina, dlna(kl))
+        maxschet = max(maxschet, schet)
+    maxbardlina = 72 - maxkldlina - 7
+    dlya schet, kl iz spisok:
+        bardlina = int(round(maxbardlina*float(schet)/maxschet))
+        bar = '*'*bardlina
+        izreki('%5d %-*s %s' % (schet, maxkldlina, kl, bar))
+
+met show(dict, titul, maxelems):
+    da dlna(dict) > maxelems:
+        titul = titul + ' (pervy %d)'%maxelems
+    n = dlna(titul)
+    izreki('='*((70-n)//2), titul, '='*((71-n)//2))
+    spisok = []
+    dlya kl iz dict.klyuchi():
+        spisok.dobvk((-dlna(dict[kl]), kl))
+    spisok.sort()
+    dlya schet, kl iz spisok[:maxelems]:
+        izreki('%5d %s' % (-schet, kl))
+
+met dob(dict, kl, elem):
+    da kl iz dict:
+        dict[kl].dobvk(elem)
+    neto:
+        dict[kl] = [elem]
+
+da __imya__ == "__main__":
+    main()

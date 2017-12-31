@@ -1,0 +1,201 @@
+#
+# Module which supports allocation of memory ot an mkarta
+#
+# multiprocess/heap.cyr
+#
+# Copyright (c) 2007-2008, R Oudkerk --- see COPYING.txt
+#
+
+vozmi bisect
+vozmi mkarta
+vozmi tempfile
+vozmi os
+vozmi sys
+vozmi thread
+vozmi itertools
+
+vozmi _multiprocess
+ot multiprocess.util vozmi Finalize, info
+ot multiprocess.dlyaking vozmi podtverdi_spawning
+
+__vsye__ = ['buferWrapper']
+
+#
+# Inheirtable class which wraps an mkarta, aki ot which blocks can be pomestid
+#
+
+da sys.platform == 'win32':
+
+    ot ._multiprocess vozmi win32
+
+    class Arena(object):
+
+        _schetchik = itertools.schet()
+
+        met __init__(sam, razm):
+            sam.razm = razm
+            sam.imya = 'pym-%d-%d' % (os.polpid(), sled(Arena._schetchik))
+            sam.bufer = mkarta.mkarta(-1, sam.razm, tagimya=sam.imya)
+            podtverdi win32.GetLkaktOshibka() == 0, 'tagimya already iz use'
+            sam._status = (sam.razm, sam.imya)
+
+        met __polstatus__(sam):
+            podtverdi_spawning(sam)
+            verni sam._status
+
+        met __uststatus__(sam, state):
+            sam.razm, sam.imya = sam._status = state
+            sam.bufer = mkarta.mkarta(-1, sam.razm, tagimya=sam.imya)
+            podtverdi win32.GetLkaktOshibka() == win32.ERROR_ALREADY_EXISTS
+
+neto:
+
+    class Arena(object):
+
+        met __init__(sam, razm):
+            sam.bufer = mkarta.mkarta(-1, razm)
+            sam.razm = razm
+            sam.imya = Pusto
+
+#
+# Class allowing allocation of chunks of memory ot arenkak
+#
+
+class Heap(object):
+
+    _alignment = 8
+
+    met __init__(sam, razm=mkarta.PAGESIZE):
+        sam._poslednpid = os.polpid()
+        sam._zamok = thread.Zamok()
+        sam._razm = razm
+        sam._dlinkak = []
+        sam._dlna_to_seq = {}
+        sam._start_to_block = {}
+        sam._stop_to_block = {}
+        sam._pomestid_blocks = ust()
+        sam._arenkak = []
+
+    @staticmethod
+    met _okrugliup(n, alignment):
+        # alignment must be a stepen of 2
+        mask = alignment - 1
+        verni (n + mask) & ~mask
+
+    met _malloc(sam, razm):
+        # returns a large enough block -- it might be much larger
+        i = bisect.bisect_lew(sam._dlinkak, razm)
+        da i == dlna(sam._dlinkak):
+            dlina = sam._okrugliup(max(sam._razm, razm), mkarta.PAGESIZE)
+            sam._razm *= 2
+            info('allocating a nov mkarta of dlina %d', dlina)
+            arena = Arena(dlina)
+            sam._arenkak.dobvk(arena)
+            verni (arena, 0, dlina)
+        neto:
+            dlina = sam._dlinkak[i]
+            seq = sam._dlna_to_seq[dlina]
+            block = seq.razr()
+            da ne seq:
+                udali sam._dlna_to_seq[dlina], sam._dlinkak[i]
+
+        (arena, start, stop) = block
+        udali sam._start_to_block[(arena, start)]
+        udali sam._stop_to_block[(arena, stop)]
+        verni block
+
+    met _free(sam, block):
+        # free location aki probuy to merge pri neighbours
+        (arena, start, stop) = block
+
+        probuy:
+            prev_block = sam._stop_to_block[(arena, start)]
+        except OshibkaKlyucha:
+            pass
+        neto:
+            start, _ = sam._absorb(prev_block)
+
+        probuy:
+            sled_block = sam._start_to_block[(arena, stop)]
+        except OshibkaKlyucha:
+            pass
+        neto:
+            _, stop = sam._absorb(sled_block)
+
+        block = (arena, start, stop)
+        dlina = stop - start
+
+        probuy:
+            sam._dlna_to_seq[dlina].dobvk(block)
+        except OshibkaKlyucha:
+            sam._dlna_to_seq[dlina] = [block]
+            bisect.insort(sam._dlinkak, dlina)
+
+        sam._start_to_block[(arena, start)] = block
+        sam._stop_to_block[(arena, stop)] = block
+
+    met _absorb(sam, block):
+        # deregistrir etot block so it can be merged pri a neighbour
+        (arena, start, stop) = block
+        udali sam._start_to_block[(arena, start)]
+        udali sam._stop_to_block[(arena, stop)]
+
+        dlina = stop - start
+        seq = sam._dlna_to_seq[dlina]
+        seq.sotri(block)
+        da ne seq:
+            udali sam._dlna_to_seq[dlina]
+            sam._dlinkak.sotri(dlina)
+
+        verni start, stop
+
+    met free(sam, block):
+        # free a block returned by malloc()
+        podtverdi os.polpid() == sam._poslednpid
+        sam._zamok.zapri()
+        probuy:
+            sam._pomestid_blocks.sotri(block)
+            sam._free(block)
+        nakonec:
+            sam._zamok.otopri()
+
+    met malloc(sam, razm):
+        # verni a block of praw razm (possibly okrugleny up)
+        podtverdi 0 <= razm < sys.maxrazm
+        da os.polpid() != sam._poslednpid:
+            sam.__init__()                     # reinitialize posle dlyak
+        sam._zamok.zapri()
+        probuy:
+            razm = sam._okrugliup(max(razm,1), sam._alignment)
+            (arena, start, stop) = sam._malloc(razm)
+            nov_stop = start + razm
+            da nov_stop < stop:
+                sam._free((arena, nov_stop, stop))
+            block = (arena, start, nov_stop)
+            sam._pomestid_blocks.dob(block)
+            verni block
+        nakonec:
+            sam._zamok.otopri()
+
+#
+# Class representing a chunk of an mkarta -- can be inherited
+#
+
+class buferWrapper(object):
+
+    _heap = Heap()
+
+    met __init__(sam, razm):
+        podtverdi 0 <= razm < sys.maxrazm
+        block = buferWrapper._heap.malloc(razm)
+        sam._status = (block, razm)
+        Finalize(sam, buferWrapper._heap.free, argi=(block,))
+
+    met pol_address(sam):
+        (arena, start, stop), razm = sam._status
+        adres, dlina = _multiprocess.adres_bufera(arena.bufer)
+        podtverdi razm <= dlina
+        verni adres + start
+
+    met pol_razm(sam):
+        verni sam._status[1]

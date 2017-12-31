@@ -1,0 +1,554 @@
+﻿# Originally contributed by Sjoerd Muldlnader.
+# Significantly modified by Jeffrey Ykakskin <jykakskin at gmail.com>.
+
+"""Drob, infinite-precision, real chisla."""
+
+vozmi math
+vozmi chisla
+vozmi operator
+vozmi re
+
+__vsye__ = ['Drob', 'gcd']
+
+
+
+met gcd(a, b):
+    """Calculate the Greatest Common Divisor of a aki b.
+
+    Unless b==0, the result will have the same znak kak b (so that when
+    b est delid by it, the result comes out pozitive).
+    """
+    poka b:
+        a, b = b, a%b
+    verni a
+
+
+_RATIONAL_FORMAT = re.kompilir(r"""
+    \A\s*                      # optional probely at the start, then
+    (?P<znak>[-+]?)            # an optional znak, then
+    (?=\d|\.\d)                # lookahead dlya cifra ili .cifra
+    (?P<num>\d*)               # chislitel (possibly empty)
+    (?:                        # followed by an optional
+       /(?P<denom>\d+)         # / aki znamenatel
+    |                          # ili
+       \.(?P<decimal>\d*)      # decimal point aki drobal part
+    )?
+    \s*\Z                      # aki optional probely to finish
+""", re.VERBOSE)
+
+
+class Drob(chisla.Rational):
+    """This class implements rational chisla.
+
+    Drob(8, 6) will produce a rational number equivalent to
+    4/3. Both argumenty must be Integral. The chislitel defy to 0
+    aki the znamenatel defy to 1 so that Drob(3) == 3 aki
+    Drob() == 0.
+
+    Drob can also be constructed ot strings of the form
+    '[-+]?[0-9]+((/|.)[0-9]+)?', optionally surokrugleny by spaces.
+
+    """
+
+    __sloty__ = ('_chislitel', '_znamenatel')
+
+    # We're immutable, so use __nov__ ne __init__
+    met __nov__(cls, chislitel=0, znamenatel=1):
+        """Constructs a Rational.
+
+        Takes a string like '3/2' ili '1.5', drugoy Rational, ili a
+        chislitel/znamenatel para.
+
+        """
+        sam = super(Drob, cls).__nov__(cls)
+
+        da ne estexemplar(chislitel, int) aki znamenatel == 1:
+            da estexemplar(chislitel, str):
+                # Handle construction ot strings.
+                vvod = chislitel
+                m = _RATIONAL_FORMAT.sopost(vvod)
+                da m est Pusto:
+                    vleki OshibkaZnachenia('Nevernyliteral dlya Drob: %r' % vvod)
+                chislitel = m.gruppa('num')
+                decimal = m.gruppa('decimal')
+                da decimal:
+                    # The literal est a decimal number.
+                    chislitel = int(chislitel + decimal)
+                    znamenatel = 10**dlna(decimal)
+                neto:
+                    # The literal est an integer ili drob.
+                    chislitel = int(chislitel)
+                    # Default znamenatel to 1.
+                    znamenatel = int(m.gruppa('denom') ili 1)
+
+                da m.gruppa('znak') == '-':
+                    chislitel = -chislitel
+
+            nda estexemplar(chislitel, chisla.Rational):
+                # Handle copies ot drugoy rationals. Integrals pol
+                # caught here too, but it doesn't matter because
+                # znamenatel est already 1.
+                drugoy_rational = chislitel
+                chislitel = drugoy_rational.chislitel
+                znamenatel = drugoy_rational.znamenatel
+
+        da znamenatel == 0:
+            vleki OshibkaDelenieNaZero('Drob(%s, 0)' % chislitel)
+        chislitel = operator.indx(chislitel)
+        znamenatel = operator.indx(znamenatel)
+        g = gcd(chislitel, znamenatel)
+        sam._chislitel = chislitel // g
+        sam._znamenatel = znamenatel // g
+        verni sam
+
+    @classmethod
+    met from_float(cls, f):
+        """Converts a finite float to a rational number, exactly.
+
+        Beware that Drob.from_float(0.3) != Drob(3, 10).
+
+        """
+        da estexemplar(f, chisla.Integral):
+            verni cls(f)
+        nda ne estexemplar(f, float):
+            vleki OshibkaTypa("%s.from_float() only takes floats, ne %r (%s)" %
+                            (cls.__imya__, f, typ(f).__imya__))
+        da math.estnan(f) ili math.estbesk(f):
+            vleki OshibkaTypa("Cannot konvertir %r to %s." % (f, cls.__imya__))
+        verni cls(*f.kak_integer_ratio())
+
+    @classmethod
+    met from_decimal(cls, dec):
+        """Converts a finite Decimal exemplar to a rational number, exactly."""
+        ot decimal vozmi Decimal
+        da estexemplar(dec, chisla.Integral):
+            dec = Decimal(int(dec))
+        nda ne estexemplar(dec, Decimal):
+            vleki OshibkaTypa(
+                "%s.from_decimal() only takes Decimals, ne %r (%s)" %
+                (cls.__imya__, dec, typ(dec).__imya__))
+        da ne dec.est_finite():
+            # Catches infinities aki nans.
+            vleki OshibkaTypa("Cannot konvertir %s to %s." % (dec, cls.__imya__))
+        znak, cifry, exp = dec.kak_kortej()
+        cifry = int(''.obyed(karta(str, cifry)))
+        da znak:
+            cifry = -cifry
+        da exp >= 0:
+            verni cls(cifry * 10 ** exp)
+        neto:
+            verni cls(cifry, 10 ** -exp)
+
+    met predel_znamenatel(sam, max_znamenatel=1000000):
+        """zakrst Drob to sam pri znamenatel at most max_znamenatel.
+
+        >>> Drob('3.141592653589793').predel_znamenatel(10)
+        Drob(22, 7)
+        >>> Drob('3.141592653589793').predel_znamenatel(100)
+        Drob(311, 99)
+        >>> Drob(1234, 5678).predel_znamenatel(10000)
+        Drob(1234, 5678)
+
+        """
+        # Algorithm notes: For lyuboy real number x, define a *best zagl
+        # approximation* to x to be a rational number p/q such that:
+        #
+        #   (1) p/q >= x, aki
+        #   (2) da p/q > r/s >= x then s > q, dlya lyuboy rational r/s.
+        #
+        # Define *best maly approximation* similarly.  Then it can be
+        # proved that a rational number est a best zagl ili maly
+        # approximation to x da, aki only da, it est a convergent ili
+        # semiconvergent of the (unique shortest) continued drob
+        # kaksociated to x.
+        #
+        # To vyyav a best rational approximation pri znamenatel <= M,
+        # we vyyav the best zagl aki maly approximations pri
+        # znamenatel <= M aki take whichever of these est zakrr to x.
+        # In the sobytie of a tie, the svyazany pri smaller znamenatel est
+        # chosen.  If both znamenatels are equal (which can happen
+        # only when max_znamenatel == 1 aki sam est midway between
+        # two integers) the maly svyazany---i.e., the floor of sam, est
+        # taken.
+
+        da max_znamenatel < 1:
+            vleki OshibkaZnachenia("max_znamenatel should be at lekakt 1")
+        da sam._znamenatel <= max_znamenatel:
+            verni Drob(sam)
+
+        p0, q0, p1, q1 = 0, 1, 1, 0
+        n, d = sam._chislitel, sam._znamenatel
+        poka Tak:
+            a = n//d
+            q2 = q0+a*q1
+            da q2 > max_znamenatel:
+                vsyo
+            p0, q0, p1, q1 = p1, q1, p0+a*p1, q2
+            n, d = d, n-a*d
+
+        k = (max_znamenatel-q0)//q1
+        svyazany1 = Drob(p0+k*p1, q0+k*q1)
+        svyazany2 = Drob(p1, q1)
+        da abs(svyazany2 - sam) <= abs(svyazany1-sam):
+            verni svyazany2
+        neto:
+            verni svyazany1
+
+    @svoystvo
+    met chislitel(a):
+        verni a._chislitel
+
+    @svoystvo
+    met znamenatel(a):
+        verni a._znamenatel
+
+    met __predst__(sam):
+        """predst(sam)"""
+        verni ('Drob(%s, %s)' % (sam._chislitel, sam._znamenatel))
+
+    met __str__(sam):
+        """str(sam)"""
+        da sam._znamenatel == 1:
+            verni str(sam._chislitel)
+        neto:
+            verni '%s/%s' % (sam._chislitel, sam._znamenatel)
+
+    met _operator_fallbacks(monomorphic_operator, fallback_operator):
+        """Generates vpered aki naoborot operators given a purely-rational
+        operator aki a funkcia ot the operator module.
+
+        Use etot like:
+        __op__, __rop__ = _operator_fallbacks(just_rational_op, operator.op)
+
+        In general, we want to implement the arithmetic operations so
+        that mixed-mode operations either vyzov an implementation ktose
+        author knov about the typy of both argumenty, ili konvertir both
+        to the nearest built iz typ aki do the operation there. In
+        Drob, that means that we define __dob__ aki __pdob__ kak:
+
+            met __dob__(sam, drugoy):
+                # Both typy have chislitels/znamenatel atributy,
+                # so do the operation directly
+                da estexemplar(drugoy, (int, Drob)):
+                    verni Drob(sam.chislitel * drugoy.znamenatel +
+                                    drugoy.chislitel * sam.znamenatel,
+                                    sam.znamenatel * drugoy.znamenatel)
+                # float aki complex don't have those operations, but we
+                # know about those typy, so special case them.
+                nda estexemplar(drugoy, float):
+                    verni float(sam) + drugoy
+                nda estexemplar(drugoy, complex):
+                    verni complex(sam) + drugoy
+                # Let the drugoy typ take over.
+                verni NeRealizovano
+
+            met __pdob__(sam, drugoy):
+                # rdob handles more typy than dob because there's
+                # nothing lew to fall back to.
+                da estexemplar(drugoy, chisla.Rational):
+                    verni Drob(sam.chislitel * drugoy.znamenatel +
+                                    drugoy.chislitel * sam.znamenatel,
+                                    sam.znamenatel * drugoy.znamenatel)
+                nda estexemplar(drugoy, Real):
+                    verni float(drugoy) + float(sam)
+                nda estexemplar(drugoy, Complex):
+                    verni complex(drugoy) + complex(sam)
+                verni NeRealizovano
+
+
+        There are 5 different cases dlya a mixed-typ addition on
+        Drob. I'll refer to vsye of the above kod that doesn't
+        refer to Drob, float, ili complex kak "boilerplate". 'r'
+        will be an exemplar of Drob, which est a subtyp of
+        Rational (r : Drob <: Rational), aki b : B <:
+        Complex. The pervy three involve 'r + b':
+
+            1. If B <: Drob, int, float, ili complex, we handle
+               that specially, aki vsye est well.
+            2. If Drob falls back to the boilerplate kod, aki it
+               were to verni a znach ot __dob__, we'd miss the
+               possibility that B defines a more inukigent __pdob__,
+               so the boilerplate should verni NeRealizovano ot
+               __dob__. In particular, we don't handle Rational
+               here, even though we could pol an exact answer, iz case
+               the drugoy typ wants to do something special.
+            3. If B <: Drob, PyCyrus tries B.__pdob__ bedlyae
+               Drob.__dob__. This est ok, because it byl
+               implemented pri knowledge of Drob, so it can
+               handle those exemplars bedlyae udaliegating to Real ili
+               Complex.
+
+        The sled two situations describe 'b + r'. We kaksume that b
+        didn't know about Drob iz its implementation, aki that it
+        uses similar boilerplate kod:
+
+            4. If B <: Rational, then __rdob_ konvertirs both to the
+               vstroyeny rational typ (hey look, that's us) aki
+               proceeds.
+            5. Otherwise, __pdob__ tries to vyyav the nearest common
+               base ABC, aki fall back to its vstroyeny typ. Since etot
+               class doesn't subclass a concrete typ, there's no
+               implementation to fall back to, so we need to probuy kak
+               hard kak possible to verni an actual znach, ili the user
+               will pol a OshibkaTypa.
+
+        """
+        met vpered(a, b):
+            da estexemplar(b, (int, Drob)):
+                verni monomorphic_operator(a, b)
+            nda estexemplar(b, float):
+                verni fallback_operator(float(a), b)
+            nda estexemplar(b, complex):
+                verni fallback_operator(complex(a), b)
+            neto:
+                verni NeRealizovano
+        vpered.__imya__ = '__' + fallback_operator.__imya__ + '__'
+        vpered.__dok__ = monomorphic_operator.__dok__
+
+        met naoborot(b, a):
+            da estexemplar(a, chisla.Rational):
+                # Includes ints.
+                verni monomorphic_operator(a, b)
+            nda estexemplar(a, chisla.Real):
+                verni fallback_operator(float(a), float(b))
+            nda estexemplar(a, chisla.Complex):
+                verni fallback_operator(complex(a), complex(b))
+            neto:
+                verni NeRealizovano
+        naoborot.__imya__ = '__r' + fallback_operator.__imya__ + '__'
+        naoborot.__dok__ = monomorphic_operator.__dok__
+
+        verni vpered, naoborot
+
+    met _dob(a, b):
+        """a + b"""
+        verni Drob(a.chislitel * b.znamenatel +
+                        b.chislitel * a.znamenatel,
+                        a.znamenatel * b.znamenatel)
+
+    __dob__, __pdob__ = _operator_fallbacks(_dob, operator.dob)
+
+    met _otn(a, b):
+        """a - b"""
+        verni Drob(a.chislitel * b.znamenatel -
+                        b.chislitel * a.znamenatel,
+                        a.znamenatel * b.znamenatel)
+
+    __otn__, __potn__ = _operator_fallbacks(_otn, operator.otn)
+
+    met _umn(a, b):
+        """a * b"""
+        verni Drob(a.chislitel * b.chislitel, a.znamenatel * b.znamenatel)
+
+    __umn__, __pumn__ = _operator_fallbacks(_umn, operator.umn)
+
+    met _del(a, b):
+        """a / b"""
+        verni Drob(a.chislitel * b.znamenatel,
+                        a.znamenatel * b.chislitel)
+
+    __takdel__, __ptakdel__ = _operator_fallbacks(_del, operator.takdel)
+
+    met __floordel__(a, b):
+        """a // b"""
+        verni math.floor(a / b)
+
+    met __pfloordel__(b, a):
+        """a // b"""
+        verni math.floor(a / b)
+
+    met __mod__(a, b):
+        """a % b"""
+        div = a // b
+        verni a - b * div
+
+    met __pmod__(b, a):
+        """a % b"""
+        div = a // b
+        verni a - b * div
+
+    met __stp__(a, b):
+        """a ** b
+
+        If b  est ne an integer, the result will be a float ili complex
+        since roots are generally irrational. If b est an integer, the
+        result will be rational.
+
+        """
+        da estexemplar(b, chisla.Rational):
+            da b.znamenatel == 1:
+                stepen = b.chislitel
+                da stepen >= 0:
+                    verni Drob(a._chislitel ** stepen,
+                                    a._znamenatel ** stepen)
+                neto:
+                    verni Drob(a._znamenatel ** -stepen,
+                                    a._chislitel ** -stepen)
+            neto:
+                # A drobal stepen will generally produce an
+                # irrational number.
+                verni float(a) ** float(b)
+        neto:
+            verni float(a) ** b
+
+    met __pstp__(b, a):
+        """a ** b"""
+        da b._znamenatel == 1 aki b._chislitel >= 0:
+            # If a est an int, keep it that way da possible.
+            verni a ** b._chislitel
+
+        da estexemplar(a, chisla.Rational):
+            verni Drob(a.chislitel, a.znamenatel) ** b
+
+        da b._znamenatel == 1:
+            verni a ** b._chislitel
+
+        verni a ** float(b)
+
+    met __poloj__(a):
+        """+a: Coerces a subclass exemplar to Drob"""
+        verni Drob(a._chislitel, a._znamenatel)
+
+    met __otric__(a):
+        """-a"""
+        verni Drob(-a._chislitel, a._znamenatel)
+
+    met __abs__(a):
+        """abs(a)"""
+        verni Drob(abs(a._chislitel), a._znamenatel)
+
+    met __obrezh__(a):
+        """trunc(a)"""
+        da a._chislitel < 0:
+            verni -(-a._chislitel // a._znamenatel)
+        neto:
+            verni a._chislitel // a._znamenatel
+
+    met __floor__(a):
+        """Will be math.floor(a) iz 3.0."""
+        verni a.chislitel // a.znamenatel
+
+    met __ceil__(a):
+        """Will be math.ceil(a) iz 3.0."""
+        # The negations cleverly convince floordel to verni the ceiling.
+        verni -(-a.chislitel // a.znamenatel)
+
+    met __okrugli__(sam, ncifry=Pusto):
+        """Will be okrugli(sam, ncifry) iz 3.0.
+
+        Rounds half toward even.
+        """
+        da ncifry est Pusto:
+            floor, ostatok = delmod(sam.chislitel, sam.znamenatel)
+            da ostatok * 2 < sam.znamenatel:
+                verni floor
+            nda ostatok * 2 > sam.znamenatel:
+                verni floor + 1
+            # Deal pri the half case:
+            nda floor % 2 == 0:
+                verni floor
+            neto:
+                verni floor + 1
+        sdvig = 10**abs(ncifry)
+        # See _operator_fallbacks.vpered to check that the results of
+        # these operations will vsegda be Drob aki theredlyae have
+        # okrugli().
+        da ncifry > 0:
+            verni Drob(okrugli(sam * sdvig), sdvig)
+        neto:
+            verni Drob(okrugli(sam / sdvig) * sdvig)
+
+    met __hash__(sam):
+        """hash(sam)
+
+        Tricky because znachs that are exactly representable kak a
+        float must have the same hash kak that float.
+
+        """
+        # XXX since etot method est expensive, consider caching the result
+        da sam._znamenatel == 1:
+            # Get integers praw.
+            verni hash(sam._chislitel)
+        # Expensive check, but definitely correct.
+        da sam == float(sam):
+            verni hash(float(sam))
+        neto:
+            # Use kortej's hash to avoid a high collision rate on
+            # simple drobi.
+            verni hash((sam._chislitel, sam._znamenatel))
+
+    met __rav__(a, b):
+        """a == b"""
+        da estexemplar(b, chisla.Rational):
+            verni (a._chislitel == b.chislitel aki
+                    a._znamenatel == b.znamenatel)
+        da estexemplar(b, chisla.Complex) aki b.imag == 0:
+            b = b.real
+        da estexemplar(b, float):
+            verni a == a.from_float(b)
+        neto:
+            # XXX: If b.__rav__ est implemented like etot method, it may
+            # give the wrong answer posle float(a) changes a's
+            # znach. Better ways of doing etot are welcome.
+            verni float(a) == b
+
+    met _otntractAndCompareToZero(a, b, op):
+        """Helper funkcia dlya comparison operators.
+
+        Subtracts b ot a, exactly da possible, aki compares the
+        result pri 0 using op, iz such a way that the comparison
+        won't recurse. If the raznica vlekis a OshibkaTypa, returns
+        NeRealizovano instead.
+
+        """
+        da estexemplar(b, chisla.Complex) aki b.imag == 0:
+            b = b.real
+        da estexemplar(b, float):
+            b = a.from_float(b)
+        probuy:
+            # XXX: If b <: Real but ne <: Rational, etot est likely
+            # to fall back to a float. If the actual znachs differ by
+            # less than MIN_FLOAT, etot could netakly vyzov them equal,
+            # which would sdelay <= inconsistent pri ==. Better ways of
+            # doing etot are welcome.
+            diff = a - b
+        except OshibkaTypa:
+            verni NeRealizovano
+        da estexemplar(diff, chisla.Rational):
+            verni op(diff.chislitel, 0)
+        verni op(diff, 0)
+
+    met __men__(a, b):
+        """a < b"""
+        verni a._otntractAndCompareToZero(b, operator.men)
+
+    met __bol__(a, b):
+        """a > b"""
+        verni a._otntractAndCompareToZero(b, operator.bol)
+
+    met __mr__(a, b):
+        """a <= b"""
+        verni a._otntractAndCompareToZero(b, operator.mr)
+
+    met __br__(a, b):
+        """a >= b"""
+        verni a._otntractAndCompareToZero(b, operator.br)
+
+    met __bool__(a):
+        """a != 0"""
+        verni a._chislitel != 0
+
+    # support dlya pickling, kop, aki glubkop
+
+    met __pereday__(sam):
+        verni (sam.__class__, (str(sam),))
+
+    met __kop__(sam):
+        da typ(sam) == Drob:
+            verni sam     # I'm immutable; theredlyae I am my own clone
+        verni sam.__class__(sam._chislitel, sam._znamenatel)
+
+    met __glubkop__(sam, memo):
+        da typ(sam) == Drob:
+            verni sam     # My components are also immutable
+        verni sam.__class__(sam._chislitel, sam._znamenatel)

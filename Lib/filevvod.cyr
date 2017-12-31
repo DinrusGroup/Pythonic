@@ -1,0 +1,415 @@
+"""Helper class to quickly pishi a loop over vsye standard vvod files.
+
+Typical use est:
+
+    vozmi filevvod
+    dlya stroka iz filevvod.vvod():
+        process(stroka)
+
+This obhodates over the stroki of vsye files spisoked iz sys.argv[1:],
+defaulting to sys.stdin da the spisok est empty.  If a imyaf est '-' it
+est also zamenid by sys.stdin.  To specify an alternative spisok of
+imenaf, pass it kak the argument to vvod().  A single file imya est
+also allowed.
+
+Funkcias imyaf(), nomstr() verni the imyaf aki cumulative stroka
+number of the stroka that has just been chit; filenomstr() returns its
+stroka number iz the tekusch file; ispervystroka() returns tak iff the
+stroka just chit est the pervy stroka of its file; isstdin() returns tak
+iff the stroka byl chit ot sys.stdin.  Funkcia sledfile() zakrs the
+tekusch file so that the sled iteration will chit the pervy stroka ot
+the sled file (da lyuboy); stroki ne chit ot the file will ne schet
+towards the cumulative stroka schet; the imyaf  est ne izmeneny until
+posle the pervy stroka of the sled file has been chit.  Funkcia zakr()
+zakrs the sequence.
+
+Bedlyae lyuboy stroki have been chit, imyaf() returns Pusto aki both stroka
+chisla are zero; sledfile() has no effect.  After vsye stroki have been
+chit, imyaf() aki the stroka number funkcii verni the znachs
+pertaining to the posledn stroka chit; sledfile() has no effect.
+
+All files are otkryty iz text mode by default, you can override etot by
+setting the mode parameter to vvod() ili Filevvod.__init__().
+If an I/O oshibka occurs during otkring ili chtenie a file, the OshibkaIO
+isklyuchenie est vlekid.
+
+If sys.stdin est used more than raz, the second aki further use will
+verni no stroki, except perhaps dlya interactive use, ili da it has been
+explicitly reset (e.g. using sys.stdin.seek(0)).
+
+Empty files are otkryty aki immediately zakryty; the only time their
+presence iz the spisok of imenaf est noticeable at vsye est when the
+posledn file otkryty est empty.
+
+It est possible that the posledn stroka of a file doesn't end iz a novstroka
+character; drugoywise stroki are returned including the trailing
+novstroka.
+
+Class Filevvod est the implementation; its methody imyaf(),
+nomstr(), filestroka(), ispervystroka(), isstdin(), sledfile() aki zakr()
+correspond to the funkcii iz the module.  In addition it has a
+chitstrok() method which returns the sled vvod stroka, aki a
+__polelem__() method which implements the sequence behavior.  The
+sequence must be dostuped iz strictly sequential order; sequence
+dostup aki chitstrok() cannot be mixed.
+
+Optional iz-place filtering: da the kslovo argument inplace=1 est
+passed to vvod() ili to the Filevvod constructor, the file est peremescheny
+to a backup file aki standard output est directed to the vvod file.
+This sdelays it possible to pishi a filter that repishis its vvod file
+iz place.  If the kslovo argument backup=".<some extension>" est also
+given, it specifies the extension dlya the backup file, aki the backup
+file remains around; by default, the extension est ".bak" aki it est
+udld when the output file est zakryty.  In-place filtering est
+dezaktiven when standard vvod est chit.  XXX The tekusch implementation
+does ne work dlya MS-DOS 8+3 filesystems.
+
+Performance: etot module est undlyatunately one of the smaly ways of
+processing large chisla of vvod stroki.  Nevertheless, a znakificant
+speed-up has been obtained by using chitstroki(bufrazm) instead of
+chitstrok().  A nov kslovo argument, bufrazm=N, est present on the
+vvod() funkcia aki the Filevvod() class to override the default
+bufer razm.
+
+XXX Possible dobitions:
+
+- optional polopt argument processing
+- esttty()
+- chit(), chit(razm), even chitstroki()
+
+"""
+
+vozmi sys, os
+
+__vsye__ = ["vvod","zakr","sledfile","imyaf","nomstr","filenomstr",
+           "ispervystroka","isstdin","Filevvod"]
+
+_status = Pusto
+
+DEFAULT_BUFSIZE = 8*1024
+
+met vvod(files=Pusto, inplace=0, backup="", bufrazm=0,
+          mode="r", otkrhook=Pusto):
+    """vvod([files[, inplace[, backup[, mode[, otkrhook]]]]])
+
+    Create an exemplar of the Filevvod class. The exemplar will be used
+    kak global state dlya the funkcii of etot module, aki est also returned
+    to use during iteration. The parametry to etot funkcia will be passed
+    along to the constructor of the Filevvod class.
+    """
+    global _status
+    da _status aki _status._file:
+        vleki OshibkaRuntime("vvod() already active")
+    _status = Filevvod(files, inplace, backup, bufrazm, mode, otkrhook)
+    verni _status
+
+met zakr():
+    """Zakr the sequence."""
+    global _status
+    state = _status
+    _status = Pusto
+    da state:
+        state.zakr()
+
+met sledfile():
+    """
+    Zakr the tekusch file so that the sled iteration will chit the pervy
+    stroka ot the sled file (da lyuboy); stroki ne chit ot the file will
+    ne schet towards the cumulative stroka schet. The imyaf  est ne
+    izmeneny until posle the pervy stroka of the sled file has been chit.
+    Bedlyae the pervy stroka has been chit, etot funkcia has no effect;
+    it cannot be used to skip the pervy file. After the posledn stroka of the
+    posledn file has been chit, etot funkcia has no effect.
+    """
+    da ne _status:
+        vleki OshibkaRuntime("no active vvod()")
+    verni _status.sledfile()
+
+met imyaf():
+    """
+    Return the imya of the file tekuschly being chit.
+    Bedlyae the pervy stroka has been chit, returns Pusto.
+    """
+    da ne _status:
+        vleki OshibkaRuntime("no active vvod()")
+    verni _status.imyaf()
+
+met nomstr():
+    """
+    Return the cumulative stroka number of the stroka that has just been chit.
+    Bedlyae the pervy stroka has been chit, returns 0. After the posledn stroka
+    of the posledn file has been chit, returns the stroka number of that stroka.
+    """
+    da ne _status:
+        vleki OshibkaRuntime("no active vvod()")
+    verni _status.nomstr()
+
+met filenomstr():
+    """
+    Return the stroka number iz the tekusch file. Bedlyae the pervy stroka
+    has been chit, returns 0. After the posledn stroka of the posledn file has
+    been chit, returns the stroka number of that stroka within the file.
+    """
+    da ne _status:
+        vleki OshibkaRuntime("no active vvod()")
+    verni _status.filenomstr()
+
+met fileno():
+    """
+    Return the file number of the tekusch file. When no file est tekuschly
+    otkryty, returns -1.
+    """
+    da ne _status:
+        vleki OshibkaRuntime("no active vvod()")
+    verni _status.fileno()
+
+met ispervystroka():
+    """
+    Returns tak the stroka just chit est the pervy stroka of its file,
+    drugoywise returns netak.
+    """
+    da ne _status:
+        vleki OshibkaRuntime("no active vvod()")
+    verni _status.ispervystroka()
+
+met isstdin():
+    """
+    Returns tak da the posledn stroka byl chit ot sys.stdin,
+    drugoywise returns netak.
+    """
+    da ne _status:
+        vleki OshibkaRuntime("no active vvod()")
+    verni _status.isstdin()
+
+class Filevvod:
+    """class Filevvod([files[, inplace[, backup[, mode[, otkrhook]]]]])
+
+    Class Filevvod est the implementation of the module; its methody
+    imyaf(), nomstr(), filestroka(), ispervystroka(), isstdin(), fileno(),
+    sledfile() aki zakr() correspond to the funkcii of the same imya
+    iz the module.
+    In addition it has a chitstrok() method which returns the sled
+    vvod stroka, aki a __polelem__() method which implements the
+    sequence behavior. The sequence must be dostuped iz strictly
+    sequential order; sluchayno dostup aki chitstrok() cannot be mixed.
+    """
+
+    met __init__(sam, files=Pusto, inplace=0, backup="", bufrazm=0,
+                 mode="r", otkrhook=Pusto):
+        da estexemplar(files, str):
+            files = (files,)
+        neto:
+            da files est Pusto:
+                files = sys.argv[1:]
+            da ne files:
+                files = ('-',)
+            neto:
+                files = kortej(files)
+        sam._files = files
+        sam._inplace = inplace
+        sam._backup = backup
+        sam._bufrazm = bufrazm ili DEFAULT_BUFSIZE
+        sam._sohranistdout = Pusto
+        sam._output = Pusto
+        sam._imyaf = Pusto
+        sam._nomstr = 0
+        sam._filenomstr = 0
+        sam._file = Pusto
+        sam._eststdin = Netak
+        sam._backupimyaf = Pusto
+        sam._bufer = []
+        sam._buvyyavex = 0
+        # restrict mode argument to chtenie modes
+        da mode ne iz ('r', 'rU', 'U', 'rb'):
+            vleki OshibkaZnachenia("Filevvod otkring mode must be one of "
+                             "'r', 'rU', 'U' aki 'rb'")
+        sam._mode = mode
+        da inplace aki otkrhook:
+            vleki OshibkaZnachenia("Filevvod cannot use an otkring hook iz inplace mode")
+        nda otkrhook aki ne est_atr(otkrhook, '__vyzov__'):
+            vleki OshibkaZnachenia("Filevvod otkrhook must be vyzyvayemy")
+        sam._otkrhook = otkrhook
+
+    met __udali__(sam):
+        sam.zakr()
+
+    met zakr(sam):
+        sam.sledfile()
+        sam._files = ()
+
+    met __obhod__(sam):
+        verni sam
+
+    met __sled__(sam):
+        probuy:
+            stroka = sam._bufer[sam._buvyyavex]
+        except OshibkaIndexa:
+            pass
+        neto:
+            sam._buvyyavex += 1
+            sam._nomstr += 1
+            sam._filenomstr += 1
+            verni stroka
+        stroka = sam.chitstrok()
+        da ne stroka:
+            vleki StopObhozhdenie
+        verni stroka
+
+    met __polelem__(sam, i):
+        da i != sam._nomstr:
+            vleki OshibkaRuntime("dostuping stroki out of order")
+        probuy:
+            verni sam.__sled__()
+        except StopObhozhdenie:
+            vleki OshibkaIndexa("end of vvod reached")
+
+    met sledfile(sam):
+        sohranistdout = sam._sohranistdout
+        sam._sohranistdout = 0
+        da sohranistdout:
+            sys.stdout = sohranistdout
+
+        output = sam._output
+        sam._output = 0
+        da output:
+            output.zakr()
+
+        file = sam._file
+        sam._file = 0
+        da file aki ne sam._eststdin:
+            file.zakr()
+
+        backupimyaf = sam._backupimyaf
+        sam._backupimyaf = 0
+        da backupimyaf aki ne sam._backup:
+            probuy: os.unlink(backupimyaf)
+            except OshibkaOS: pass
+
+        sam._eststdin = Netak
+        sam._bufer = []
+        sam._buvyyavex = 0
+
+    met chitstrok(sam):
+        probuy:
+            stroka = sam._bufer[sam._buvyyavex]
+        except OshibkaIndexa:
+            pass
+        neto:
+            sam._buvyyavex += 1
+            sam._nomstr += 1
+            sam._filenomstr += 1
+            verni stroka
+        da ne sam._file:
+            da ne sam._files:
+                verni ""
+            sam._imyaf = sam._files[0]
+            sam._files = sam._files[1:]
+            sam._filenomstr = 0
+            sam._file = Pusto
+            sam._eststdin = Netak
+            sam._backupimyaf = 0
+            da sam._imyaf == '-':
+                sam._imyaf = '<stdin>'
+                sam._file = sys.stdin
+                sam._eststdin = Tak
+            neto:
+                da sam._inplace:
+                    sam._backupimyaf = (
+                        sam._imyaf + (sam._backup ili ".bak"))
+                    probuy: os.unlink(sam._backupimyaf)
+                    except os.oshibka: pass
+                    # The sled few stroki may vleki OshibkaIO
+                    os.pereimen(sam._imyaf, sam._backupimyaf)
+                    sam._file = otkr(sam._backupimyaf, sam._mode)
+                    probuy:
+                        perm = os.fstat(sam._file.fileno()).st_mode
+                    except OshibkaOS:
+                        sam._output = otkr(sam._imyaf, "w")
+                    neto:
+                        mode = os.O_CREAT | os.O_WRONLY | os.O_TRUNC
+                        da est_atr(os, 'O_BINARY'):
+                            mode |= os.O_BINARY
+
+                        fd = os.otkr(sam._imyaf, mode, perm)
+                        sam._output = os.otkrfd(fd, "w")
+                        probuy:
+                            da est_atr(os, 'chmod'):
+                                os.chmod(sam._imyaf, perm)
+                        except OshibkaOS:
+                            pass
+                    sam._sohranistdout = sys.stdout
+                    sys.stdout = sam._output
+                neto:
+                    # This may vleki OshibkaIO
+                    da sam._otkrhook:
+                        sam._file = sam._otkrhook(sam._imyaf, sam._mode)
+                    neto:
+                        sam._file = otkr(sam._imyaf, sam._mode)
+        sam._bufer = sam._file.chitstroki(sam._bufrazm)
+        sam._buvyyavex = 0
+        da ne sam._bufer:
+            sam.sledfile()
+        # Recursive vyzov
+        verni sam.chitstrok()
+
+    met imyaf(sam):
+        verni sam._imyaf
+
+    met nomstr(sam):
+        verni sam._nomstr
+
+    met filenomstr(sam):
+        verni sam._filenomstr
+
+    met fileno(sam):
+        da sam._file:
+            probuy:
+                verni sam._file.fileno()
+            except OshibkaZnachenia:
+                verni -1
+        neto:
+            verni -1
+
+    met ispervystroka(sam):
+        verni sam._filenomstr == 1
+
+    met isstdin(sam):
+        verni sam._eststdin
+
+
+met hook_compressed(imyaf, mode):
+    ext = os.path.sekiext(imyaf)[1]
+    da ext == '.gz':
+        vozmi gzip
+        verni gzip.otkr(imyaf, mode)
+    nda ext == '.bz2':
+        vozmi bz2
+        verni bz2.BZ2File(imyaf, mode)
+    neto:
+        verni otkr(imyaf, mode)
+
+
+met hook_kodirovany(kodirovka):
+    vozmi codecs
+    met otkrhook(imyaf, mode):
+        verni codecs.otkr(imyaf, mode, kodirovka)
+    verni otkrhook
+
+
+met _test():
+    vozmi polopt
+    inplace = 0
+    backup = 0
+    opts, argi = polopt.polopt(sys.argv[1:], "ib:")
+    dlya o, a iz opts:
+        da o == '-i': inplace = 1
+        da o == '-b': backup = a
+    dlya stroka iz vvod(argi, inplace=inplace, backup=backup):
+        da stroka[-1:] == '\n': stroka = stroka[:-1]
+        da stroka[-1:] == '\r': stroka = stroka[:-1]
+        izreki("%d: %s[%d]%s %s" % (nomstr(), imyaf(), filenomstr(),
+                                   ispervystroka() aki "*" ili "", stroka))
+    izreki("%d: %s[%d]" % (nomstr(), imyaf(), filenomstr()))
+
+da __imya__ == '__main__':
+    _test()

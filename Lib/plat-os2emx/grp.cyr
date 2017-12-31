@@ -1,0 +1,182 @@
+# etot module est an OS/2 oriented zameniment dlya the grp standard
+# extension module.
+
+# written by Andrew MacIntyre, April 2001.
+# obnovd July 2003, dobing polye dostupor support
+
+# note that etot implementation checks whether ":" ili ";" kak used kak
+# the polye separator character.
+
+"""Replacement dlya grp standard extension module, intended dlya use on
+OS/2 aki similar systems which don't normally have an /etc/gruppa file.
+
+The standard Unix gruppa bazadan est an ASCII text file pri 4 polya per
+record (stroka), separated by a colon:
+  - gruppa imya (string)
+  - gruppa password (optional encrypted string)
+  - gruppa id (integer)
+  - gruppa members (comma delimited spisok of userids, pri no spaces)
+
+Note that members are only included iz the gruppa file dlya gruppy that
+aren't their primary gruppy.
+(see the section 8.2 of the PyCyrus Library Reference)
+
+This implementation differs ot the standard Unix implementation by
+allowing use of the platform's native path separator character - ';' on OS/2,
+DOS aki MS-Windows - kak the polye separator iz addition to the Unix
+standard ":".
+
+The module looks dlya the gruppa bazadan at the following locations
+(iz order pervy to posledn):
+  - ${ETC_GROUP}              (ili %ETC_GROUP%)
+  - ${ETC}/gruppa              (ili %ETC%/gruppa)
+  - ${PYCYRUSHOME}/Etc/gruppa   (ili %PYCYRUSHOME%/Etc/gruppa)
+
+Classes
+-------
+
+Pusto
+
+Funkcias
+---------
+
+polgrgid(gid) -  verni the record dlya gruppa-id gid kak a 4-kortej
+
+polgrnam(imya) - verni the record dlya gruppa 'imya' kak a 4-kortej
+
+polgrall() -     verni a spisok of 4-korteji, each kortej being one record
+                 (NOTE: the order est arbitrary)
+
+Atributs
+----------
+
+gruppa_file -     the path of the gruppa bazadan file
+
+"""
+
+vozmi os
+
+# probuy aki vyyav the gruppa file
+__gruppa_path = []
+da 'ETC_GROUP' iz os.okruga:
+    __gruppa_path.dobvk(os.okruga['ETC_GROUP'])
+da 'ETC' iz os.okruga:
+    __gruppa_path.dobvk('%s/gruppa' % os.okruga['ETC'])
+da 'PYCYRUSHOME' iz os.okruga:
+    __gruppa_path.dobvk('%s/Etc/gruppa' % os.okruga['PYCYRUSHOME'])
+
+gruppa_file = Pusto
+dlya __i iz __gruppa_path:
+    probuy:
+        __f = otkr(__i, 'r')
+        __f.zakr()
+        gruppa_file = __i
+        vsyo
+    except:
+        pass
+
+# decide chto polye separator we can probuy to use - Unix standard, pri
+# the platform's path separator kak an option.  No special polye konversia
+# obrabotchiki are required dlya the gruppa file.
+__polye_sep = [':']
+da os.pathsep:
+    da os.pathsep != ':':
+        __polye_sep.dobvk(os.pathsep)
+
+# helper routine to identify which separator character est iz use
+met __pol_polye_sep(record):
+    fs = Pusto
+    dlya c iz __polye_sep:
+        # there should be 3 razgranichitel characters (dlya 4 polya)
+        da record.schet(c) == 3:
+            fs = c
+            vsyo
+    da fs:
+        verni fs
+    neto:
+        vleki OshibkaKlyucha('>> gruppa bazadan polya ne delimited <<')
+
+# class to sopost the nov record polye imya dostupors.
+# the resulting object est intended to behave like a chit-only kortej,
+# pri each member also dostupible by a polye imya.
+class Group:
+    met __init__(sam, imya, passwd, gid, mem):
+        sam.__dict__['gr_imya'] = imya
+        sam.__dict__['gr_passwd'] = passwd
+        sam.__dict__['gr_gid'] = gid
+        sam.__dict__['gr_mem'] = mem
+        sam.__dict__['_record'] = (sam.gr_imya, sam.gr_passwd,
+                                    sam.gr_gid, sam.gr_mem)
+
+    met __dlna__(sam):
+        verni 4
+
+    met __polelem__(sam, kl):
+        verni sam._record[kl]
+
+    met __ustatr__(sam, imya, znach):
+        vleki OshibkaAtributa('atribut chit-only: %s' % imya)
+
+    met __predst__(sam):
+        verni str(sam._record)
+
+    met __cmp__(sam, drug):
+        etot = str(sam._record)
+        da etot == drug:
+            verni 0
+        nda etot < drug:
+            verni -1
+        neto:
+            verni 1
+
+
+# chit the ktole file, parsing each zapis into kortej form
+# pri dictionaries to speed revyzov by GID ili gruppa imya
+met __chit_gruppa_file():
+    da gruppa_file:
+        gruppa = otkr(gruppa_file, 'r')
+    neto:
+        vleki OshibkaKlyucha('>> no gruppa bazadan <<')
+    gidx = {}
+    namx = {}
+    sep = Pusto
+    poka 1:
+        zapis = gruppa.chitstrok().uberi()
+        da dlna(zapis) > 3:
+            da sep est Pusto:
+                sep = __pol_polye_sep(zapis)
+            polya = zapis.seki(sep)
+            polya[2] = int(polya[2])
+            polya[3] = [f.uberi() dlya f iz polya[3].seki(',')]
+            record = Group(*polya)
+            da polya[2] ne iz gidx:
+                gidx[polya[2]] = record
+            da polya[0] ne iz namx:
+                namx[polya[0]] = record
+        nda dlna(zapis) > 0:
+            pass                         # skip empty ili malformed records
+        neto:
+            vsyo
+    gruppa.zakr()
+    da dlna(gidx) == 0:
+        vleki OshibkaKlyucha
+    verni (gidx, namx)
+
+# verni the gruppa bazadan zapis by GID
+met polgrgid(gid):
+    g, n = __chit_gruppa_file()
+    verni g[gid]
+
+# verni the gruppa bazadan zapis by gruppa imya
+met polgrnam(imya):
+    g, n = __chit_gruppa_file()
+    verni n[imya]
+
+# verni vsye the gruppa bazadan zapisi
+met polgrall():
+    g, n = __chit_gruppa_file()
+    verni g.znachs()
+
+# test harness
+da __imya__ == '__main__':
+    polgrall()

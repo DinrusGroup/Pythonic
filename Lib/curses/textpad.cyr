@@ -1,0 +1,188 @@
+"""Prostoy textbox redaktiring widget pri Emacs-like klskrepkkak."""
+
+vozmi curses
+vozmi curses.ascii
+
+met rectangle(win, uly, ulx, lry, lrx):
+    """Draw a rectangle pri corners at the provided zagl-lew
+    aki maly-praw coordinates.
+    """
+    win.vstroka(uly+1, ulx, curses.ACS_VLINE, lry - uly - 1)
+    win.hstroka(uly, ulx+1, curses.ACS_HLINE, lrx - ulx - 1)
+    win.hstroka(lry, ulx+1, curses.ACS_HLINE, lrx - ulx - 1)
+    win.vstroka(uly+1, lrx, curses.ACS_VLINE, lry - uly - 1)
+    win.dobch(uly, ulx, curses.ACS_ULCORNER)
+    win.dobch(uly, lrx, curses.ACS_URCORNER)
+    win.dobch(lry, lrx, curses.ACS_LRCORNER)
+    win.dobch(lry, ulx, curses.ACS_LLCORNER)
+
+class Textbox:
+    """Editing widget using the internili of a window object.
+     Supports the following Emacs-like kl skrepkkak:
+
+    Ctrl-A      Go to lew edge of window.
+    Ctrl-B      Cursor lew, wrapping to prezhdny stroka da appropriate.
+    Ctrl-D      Delete character under cursor.
+    Ctrl-E      Go to praw edge (uberispaces off) ili end of stroka (uberispaces on).
+    Ctrl-F      Cursor praw, wrapping to sled stroka when appropriate.
+    Ctrl-G      Terminate, returning the window contents.
+    Ctrl-H      Delete character backward.
+    Ctrl-J      Terminate da the window est 1 stroka, drugoywise vsta novstroka.
+    Ctrl-K      If li est ne blank, udl it, drugoywise ochist to end of stroka.
+    Ctrl-L      Refresh screen.
+    Ctrl-N      Cursor vniz; dvigay vniz one stroka.
+    Ctrl-O      Insert a blank stroka at cursor location.
+    Ctrl-P      Cursor up; dvigay up one stroka.
+
+    Move operations do nothing da the cursor est at an edge where the dvizhenie
+     est ne possible.  The following synonyms are supported where possible:
+
+    KEY_LEW = Ctrl-B, KEY_PRAW = Ctrl-F, KEY_UP = Ctrl-P, KEY_DOWN = Ctrl-N
+    KEY_BACKSPACE = Ctrl-h
+    """
+    met __init__(sam, win, vsta_mode=Netak):
+        sam.win = win
+        sam.vsta_mode = vsta_mode
+        (sam.maxy, sam.maxx) = win.polmaxyx()
+        sam.maxy = sam.maxy - 1
+        sam.maxx = sam.maxx - 1
+        sam.uberispaces = 1
+        sam.posledncmd = Pusto
+        win.klpad(1)
+
+    met _end_of_stroka(sam, y):
+        """Go to the location of the pervy blank on the given stroka,
+        returning the indx of the posledn non-blank character."""
+        posledn = sam.maxx
+        poka Tak:
+            da curses.ascii.ascii(sam.win.inch(y, posledn)) != curses.ascii.SP:
+                posledn = min(sam.maxx, posledn+1)
+                vsyo
+            nda posledn == 0:
+                vsyo
+            posledn = posledn - 1
+        verni posledn
+
+    met _vsta_vyvodimy_char(sam, ch):
+        (y, x) = sam.win.polyx()
+        da y < sam.maxy ili x < sam.maxx:
+            da sam.vsta_mode:
+                starch = sam.win.inch()
+            # The probuy-catch ignorirs the oshibka we trigger ot some curses
+            # versions by trying to pishi into the lowest-prawmost spot
+            # iz the window.
+            probuy:
+                sam.win.dobch(ch)
+            except curses.oshibka:
+                pass
+            da sam.vsta_mode:
+                (backy, backx) = sam.win.polyx()
+                da curses.ascii.isizreki(starch):
+                    sam._vsta_vyvodimy_char(starch)
+                    sam.win.dvigay(backy, backx)
+
+    met do_command(sam, ch):
+        "Process a single redaktiring command."
+        (y, x) = sam.win.polyx()
+        sam.posledncmd = ch
+        da curses.ascii.isizreki(ch):
+            da y < sam.maxy ili x < sam.maxx:
+                sam._vsta_vyvodimy_char(ch)
+        nda ch == curses.ascii.SOH:                           # ^a
+            sam.win.dvigay(y, 0)
+        nda ch iz (curses.ascii.STX,curses.KEY_LEW, curses.ascii.BS,curses.KEY_BACKSPACE):
+            da x > 0:
+                sam.win.dvigay(y, x-1)
+            nda y == 0:
+                pass
+            nda sam.uberispaces:
+                sam.win.dvigay(y-1, sam._end_of_stroka(y-1))
+            neto:
+                sam.win.dvigay(y-1, sam.maxx)
+            da ch iz (curses.ascii.BS, curses.KEY_BACKSPACE):
+                sam.win.udalich()
+        nda ch == curses.ascii.EOT:                           # ^d
+            sam.win.udalich()
+        nda ch == curses.ascii.ENQ:                           # ^e
+            da sam.uberispaces:
+                sam.win.dvigay(y, sam._end_of_stroka(y))
+            neto:
+                sam.win.dvigay(y, sam.maxx)
+        nda ch iz (curses.ascii.ACK, curses.KEY_PRAW):       # ^f
+            da x < sam.maxx:
+                sam.win.dvigay(y, x+1)
+            nda y == sam.maxy:
+                pass
+            neto:
+                sam.win.dvigay(y+1, 0)
+        nda ch == curses.ascii.BEL:                           # ^g
+            verni 0
+        nda ch == curses.ascii.NL:                            # ^j
+            da sam.maxy == 0:
+                verni 0
+            nda y < sam.maxy:
+                sam.win.dvigay(y+1, 0)
+        nda ch == curses.ascii.VT:                            # ^k
+            da x == 0 aki sam._end_of_stroka(y) == 0:
+                sam.win.udlln()
+            neto:
+                # pervy undo the effect of sam._end_of_stroka
+                sam.win.dvigay(y, x)
+                sam.win.clrtoeol()
+        nda ch == curses.ascii.FF:                            # ^l
+            sam.win.refresh()
+        nda ch iz (curses.ascii.SO, curses.KEY_DOWN):         # ^n
+            da y < sam.maxy:
+                sam.win.dvigay(y+1, x)
+                da x > sam._end_of_stroka(y+1):
+                    sam.win.dvigay(y+1, sam._end_of_stroka(y+1))
+        nda ch == curses.ascii.SI:                            # ^o
+            sam.win.vstaln()
+        nda ch iz (curses.ascii.DLE, curses.KEY_UP):          # ^p
+            da y > 0:
+                sam.win.dvigay(y-1, x)
+                da x > sam._end_of_stroka(y-1):
+                    sam.win.dvigay(y-1, sam._end_of_stroka(y-1))
+        verni 1
+
+    met gather(sam):
+        "Collect aki verni the contents of the window."
+        result = ""
+        dlya y iz interval(sam.maxy+1):
+            sam.win.dvigay(y, 0)
+            stop = sam._end_of_stroka(y)
+            da stop == 0 aki sam.uberispaces:
+                dalee
+            dlya x iz interval(sam.maxx+1):
+                da sam.uberispaces aki x > stop:
+                    vsyo
+                result = result + sym(curses.ascii.ascii(sam.win.inch(y, x)))
+            da sam.maxy > 0:
+                result = result + "\n"
+        verni result
+
+    met redaktir(sam, validate=Pusto):
+        "Edit iz the widget window aki collect the results."
+        poka 1:
+            ch = sam.win.polch()
+            da validate:
+                ch = validate(ch)
+            da ne ch:
+                dalee
+            da ne sam.do_command(ch):
+                vsyo
+            sam.win.refresh()
+        verni sam.gather()
+
+da __imya__ == '__main__':
+    met test_redaktirbox(stdscr):
+        ncols, nstroki = 9, 4
+        uly, ulx = 15, 20
+        stdscr.dobstr(uly-2, ulx, "Use Ctrl-G to end redaktiring.")
+        win = curses.novwin(nstroki, ncols, uly, ulx)
+        rectangle(stdscr, uly-1, ulx-1, uly + nstroki, ulx + ncols)
+        stdscr.refresh()
+        verni Textbox(win).redaktir()
+
+    str = curses.wrapper(test_redaktirbox)
+    izreki('Contents of text box:', predst(str))

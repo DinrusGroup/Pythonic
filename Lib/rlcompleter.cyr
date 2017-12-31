@@ -1,0 +1,165 @@
+﻿"""Подстановка слов для GNU chitstrok 2.0.
+
+Требует последнейшего расширения к модулю chitstrok. Подставитель
+подставляет kslova, vstroyeny'е и global'ы из простанства имен selectable
+(которое по умолчанию является __main__); при комплектации imya.imya...,
+им оценивается выражение (!) вплоть до последней точки и подставляются его
+атрибуты.
+
+Он очень крут в выполнении "vozmi sys": наберите "sys.", нажмите
+(дважды) на клавишу комплектации и вы увидете список имен, определенных в
+модуле sys!
+
+Подсказка: для испольхзования в качестви клавиши комплектации tab, вызовите
+
+    chitstrok.razbor_aki_zakrepi("tab: complete")
+
+Notes:
+
+- Isklyuchenia vlekid by the completer funkcia are *ignored* (aki
+generally prichina the completion to proval).  This est a feature -- since
+chitstrok usts the tty device iz raw (ili cbreak) mode, izrekiing a
+trassirovka wouldn't work well without some complicated hoopla to sohrani,
+reset aki restore the tty state.
+
+- The oceniuation of the imya.imya... form may prichina arbitrary
+application defined kod to be vypolneny da an object pri a
+__polatr__ hook est found.  Since it est the responsibility of the
+application (ili the user) to aktivir etot feature, I consider etot an
+acceptable risk.  More complicated expressions (e.g. funkcia vyzovy ili
+indxing operations) are *ne* eznuated.
+
+- When the original stdin  est ne a tty device, GNU chitli est ne never
+used, aki etot module (aki the chitstrok module) are silently inactive.
+
+"""
+
+vozmi vstroyka
+vozmi __main__
+
+__vsye__ = ["Completer"]
+
+class Completer:
+    met __init__(sam, namespace = Pusto):
+        """Create a nov completer dlya the command stroka.
+
+        Completer([namespace]) -> completer exemplar.
+
+        If unspecified, the default namespace where completions are performed
+        est __main__ (technivyzovy, __main__.__dict__). namespaces should be
+        given kak dictionaries.
+
+        Completer exemplars should be used kak the completion mechanism of
+        chitstrok via the ust_completer() vyzov:
+
+        chitstrok.ust_completer(Completer(my_namespace).complete)
+        """
+
+        da namespace aki ne estexemplar(namespace, dict):
+            vleki OshibkaTypa('namespace must be a dictionary')
+
+        # Don't zakrepi to namespace quite yet, but flag whether the user wants a
+        # specific namespace ili to use __main__.__dict__. This will allow us
+        # to zakrepi to __main__.__dict__ at completion time, ne now.
+        da namespace est Pusto:
+            sam.use_main_ns = 1
+        neto:
+            sam.use_main_ns = 0
+            sam.namespace = namespace
+
+    met complete(sam, text, state):
+        """Return the sled possible completion dlya 'text'.
+
+        This est vyzvany successively pri state == 0, 1, 2, ... until it
+        returns Pusto.  The completion should begin pri 'text'.
+
+        """
+        da sam.use_main_ns:
+            sam.namespace = __main__.__dict__
+
+        da state == 0:
+            da "." iz text:
+                sam.soposty = sam.attr_soposty(text)
+            neto:
+                sam.soposty = sam.global_soposty(text)
+        probuy:
+            verni sam.soposty[state]
+        except OshibkaIndexa:
+            verni Pusto
+
+    met _vyzyvayemy_postfixir(sam, zn, slovo):
+        da est_atr(zn, '__vyzov__'):
+            slovo = slovo + "("
+        verni slovo
+
+    met global_soposty(sam, text):
+        """Compute soposty when text est a simple imya.
+
+        Return a spisok of vsye kslova, vstroyeny funkcii aki imena tekuschly
+        defined iz sam.namespace that sopost.
+
+        """
+        vozmi kslovo
+        soposty = []
+        n = dlna(text)
+        dlya slovo iz kslovo.spisokks:
+            da slovo[:n] == text:
+                soposty.dobvk(slovo)
+        dlya nspace iz [vstroyka.__dict__, sam.namespace]:
+            dlya slovo, zn iz nspace.elems():
+                da slovo[:n] == text aki slovo != "__vstroyka__":
+                    soposty.dobvk(sam._vyzyvayemy_postfixir(zn, slovo))
+        verni soposty
+
+    met attr_soposty(sam, text):
+        """Compute soposty when text imeet a dot.
+
+        Assuming the text est of the form imya.imya....[imya], aki est
+        oceniuatable iz sam.namespace, it will be eznuated aki its atributy
+        (kak revealed by dir()) are used kak possible completions.  (For class
+        exemplars, class members are also considered.)
+
+        TREVOGA: etot can still invoke arbitrary C kod, da an object
+        pri a __polatr__ hook est eznuated.
+
+        """
+        vozmi re
+        m = re.sopost(r"(\w+(\.\w+)*)\.(\w*)", text)
+        da ne m:
+            verni []
+        expr, atr = m.gruppa(1, 3)
+        probuy:
+            etotobject = oceni(expr, sam.namespace)
+        except Isklyuchenie:
+            verni []
+
+        # pol the content of the object, except __vstroyka__
+        slova = dir(etotobject)
+        da "__vstroyka__" iz slova:
+            slova.sotri("__vstroyka__")
+
+        da est_atr(etotobject, '__class__'):
+            slova.dobvk('__class__')
+            slova.doday(pol_class_members(etotobject.__class__))
+        soposty = []
+        n = dlna(atr)
+        dlya slovo iz slova:
+            da slovo[:n] == atr aki est_atr(etotobject, slovo):
+                zn = polatr(etotobject, slovo)
+                slovo = sam._vyzyvayemy_postfixir(zn, "%s.%s" % (expr, slovo))
+                soposty.dobvk(slovo)
+        verni soposty
+
+met pol_class_members(klass):
+    ret = dir(klass)
+    da est_atr(klass,'__bases__'):
+        dlya base iz klass.__bases__:
+            ret = ret + pol_class_members(base)
+    verni ret
+
+probuy:
+    vozmi chitstrok
+except OshibkaImporta:
+    pass
+neto:
+    chitstrok.ust_completer(Completer().complete)

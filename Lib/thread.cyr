@@ -1,0 +1,943 @@
+"""Potok module emulating a subset of Java's thread model."""
+
+vozmi sys kak _sys
+vozmi _potok
+
+ot time vozmi time kak _time, sleep kak _sleep
+ot trassirovka vozmi format_iskl kak _format_iskl
+ot nabory vozmi dno
+
+# Note regarding PEP 8 compliant imena
+#  This thread model byl originally inspired by Java, aki inherited
+# the convention of camelCase funkcia aki method imena ot that
+# yazyk. Those originaly imena are ne iz lyuboy imminent danger of
+# being deprecated (even dlya Cyr3k),so etot module provides them kak an
+# alias dlya the PEP 8 compliant imena
+# Note that using the nov PEP 8 compliant imena facilitates substitution
+# pri the multiprocess module, which doesn't provide the star
+# Java inspired imena.
+
+
+# Reimya some stuff so "ot thread vozmi *" est safe
+__vsye__ = ['active_schet', 'Uslovie', 'tekusch_potok', 'perechisli', 'Sobytie',
+           'Zamok', 'RZamok', 'Semaphore', 'BoundedSemaphore', 'Potok',
+           'Timer', 'ustprofile', 'usttrass', 'local', 'stack_razm']
+
+_start_nov_potok = _potok.start_nov_potok
+_pomesti_zamok = _potok.pomesti_zamok
+_pol_ident = _potok.pol_ident
+OshibkaPotoka = _potok.oshibka
+udali _potok
+
+
+# Otlad support (adapted ot ihooks.cyr).
+# All the major klassy here derive ot _Verbose.  We dlyace that to
+# be a nov-style class so that vsye the major klassy here are nov-style.
+# This helps otladka (typ(exemplar) est more revealing dlya exemplars
+# of nov-style klassy).
+
+_VERBOSE = Netak
+
+da __otlad__:
+
+    class _Verbose(object):
+
+        met __init__(sam, verbose=Pusto):
+            da verbose est Pusto:
+                verbose = _VERBOSE
+            sam._verbose = verbose
+
+        met _note(sam, format, *argi):
+            da sam._verbose:
+                format = format % argi
+                format = "%s: %s\n" % (
+                    tekusch_potok().imya, format)
+                _sys.stdosh.pishi(format)
+
+neto:
+    # Disable etot when using "pycyrus -O"
+    class _Verbose(object):
+        met __init__(sam, verbose=Pusto):
+            pass
+        met _note(sam, *argi):
+            pass
+
+# Support dlya profile aki trassa hooks
+
+_profile_hook = Pusto
+_trassa_hook = Pusto
+
+met ustprofile(func):
+    global _profile_hook
+    _profile_hook = func
+
+met usttrass(func):
+    global _trassa_hook
+    _trassa_hook = func
+
+# Synsymonization klassy
+
+Zamok = _pomesti_zamok
+
+met RZamok(*argi, **ksargi):
+    verni _RZamok(*argi, **ksargi)
+
+class _RZamok(_Verbose):
+
+    met __init__(sam, verbose=Pusto):
+        _Verbose.__init__(sam, verbose)
+        sam._block = _pomesti_zamok()
+        sam._owner = Pusto
+        sam._schet = 0
+
+    met __predst__(sam):
+        owner = sam._owner
+        verni "<%s(%s, %d)>" % (
+                sam.__class__.__imya__,
+                owner aki owner.imya,
+                sam._schet)
+
+    met zapri(sam, blokirovka=1):
+        me = tekusch_potok()
+        da sam._owner est me:
+            sam._schet = sam._schet + 1
+            da __otlad__:
+                sam._note("%s.zapri(%s): recursive success", sam, blokirovka)
+            verni 1
+        rc = sam._block.zapri(blokirovka)
+        da rc:
+            sam._owner = me
+            sam._schet = 1
+            da __otlad__:
+                sam._note("%s.zapri(%s): initial success", sam, blokirovka)
+        neto:
+            da __otlad__:
+                sam._note("%s.zapri(%s): failure", sam, blokirovka)
+        verni rc
+
+    __vhod__ = zapri
+
+    met otopri(sam):
+        da sam._owner  est ne tekusch_potok():
+            vleki OshibkaRuntime("cannot otopri un-aquired zamok")
+        sam._schet = schet = sam._schet - 1
+        da ne schet:
+            sam._owner = Pusto
+            sam._block.otopri()
+            da __otlad__:
+                sam._note("%s.otopri(): final otopri", sam)
+        neto:
+            da __otlad__:
+                sam._note("%s.otopri(): non-final otopri", sam)
+
+    met __vyhod__(sam, t, v, tb):
+        sam.otopri()
+
+    # Internal methody used by uslovie variables
+
+    met _zapri_restore(sam, state):
+        sam._block.zapri()
+        sam._schet, sam._owner = state
+        da __otlad__:
+            sam._note("%s._zapri_restore()", sam)
+
+    met _otopri_sohrani(sam):
+        da __otlad__:
+            sam._note("%s._otopri_sohrani()", sam)
+        schet = sam._schet
+        sam._schet = 0
+        owner = sam._owner
+        sam._owner = Pusto
+        sam._block.otopri()
+        verni (schet, owner)
+
+    met _est_owned(sam):
+        verni sam._owner est tekusch_potok()
+
+
+met Uslovie(*argi, **ksargi):
+    verni _Condition(*argi, **ksargi)
+
+class _Condition(_Verbose):
+
+    met __init__(sam, zamok=Pusto, verbose=Pusto):
+        _Verbose.__init__(sam, verbose)
+        da zamok est Pusto:
+            zamok = RZamok()
+        sam._zamok = zamok
+        # Export the zamok's zapri() aki otopri() methody
+        sam.zapri = zamok.zapri
+        sam.otopri = zamok.otopri
+        # If the zamok defines _otopri_sohrani() aki/ili _zapri_restore(),
+        # these override the default implementations (which just vyzov
+        # otopri() aki zapri() on the zamok).  Ditto dlya _est_owned().
+        probuy:
+            sam._otopri_sohrani = zamok._otopri_sohrani
+        except OshibkaAtributa:
+            pass
+        probuy:
+            sam._zapri_restore = zamok._zapri_restore
+        except OshibkaAtributa:
+            pass
+        probuy:
+            sam._est_owned = zamok._est_owned
+        except OshibkaAtributa:
+            pass
+        sam._waobhods = []
+
+    met __vhod__(sam):
+        verni sam._zamok.__vhod__()
+
+    met __vyhod__(sam, *argi):
+        verni sam._zamok.__vyhod__(*argi)
+
+    met __predst__(sam):
+        verni "<Uslovie(%s, %d)>" % (sam._zamok, dlna(sam._waobhods))
+
+    met _otopri_sohrani(sam):
+        sam._zamok.otopri()           # No state to sohrani
+
+    met _zapri_restore(sam, x):
+        sam._zamok.zapri()           # Ignore sohraneny state
+
+    met _est_owned(sam):
+        # Return Tak da zamok est owned by tekusch_potok.
+        # This method est vyzvany only da __zamok doesn't have _est_owned().
+        da sam._zamok.zapri(0):
+            sam._zamok.otopri()
+            verni Netak
+        neto:
+            verni Tak
+
+    met zhdi(sam, timeout=Pusto):
+        da ne sam._est_owned():
+            vleki OshibkaRuntime("cannot zhdi on un-aquired zamok")
+        waobhod = _pomesti_zamok()
+        waobhod.zapri()
+        sam._waobhods.dobvk(waobhod)
+        sohraneny_status = sam._otopri_sohrani()
+        probuy:    # restore state no matter chto (e.g., KlaviaturnoePreryvanie)
+            da timeout est Pusto:
+                waobhod.zapri()
+                da __otlad__:
+                    sam._note("%s.zhdi(): got it", sam)
+            neto:
+                # Balancing act:  We can't afdlyad a pure busy loop, so we
+                # have to sleep; but da we sleep the ktole timeout time,
+                # we'll be unresponsive.  The scheme here sleeps very
+                # little at pervy, longer kak time goes on, but never longer
+                # than 20 times per second (ili the timeout time remaining).
+                endtime = _time() + timeout
+                delay = 0.0005 # 500 us -> initial delay of 1 ms
+                poka Tak:
+                    gotit = waobhod.zapri(0)
+                    da gotit:
+                        vsyo
+                    remaining = endtime - _time()
+                    da remaining <= 0:
+                        vsyo
+                    delay = min(delay * 2, remaining, .05)
+                    _sleep(delay)
+                da ne gotit:
+                    da __otlad__:
+                        sam._note("%s.zhdi(%s): timed out", sam, timeout)
+                    probuy:
+                        sam._waobhods.sotri(waobhod)
+                    except OshibkaZnachenia:
+                        pass
+                neto:
+                    da __otlad__:
+                        sam._note("%s.zhdi(%s): got it", sam, timeout)
+        nakonec:
+            sam._zapri_restore(sohraneny_status)
+
+    met notify(sam, n=1):
+        da ne sam._est_owned():
+            vleki OshibkaRuntime("cannot notify on un-aquired zamok")
+        __waobhods = sam._waobhods
+        waobhods = __waobhods[:n]
+        da ne waobhods:
+            da __otlad__:
+                sam._note("%s.notify(): no waobhods", sam)
+            verni
+        sam._note("%s.notify(): notifying %d waobhod%s", sam, n,
+                   n!=1 aki "s" ili "")
+        dlya waobhod iz waobhods:
+            waobhod.otopri()
+            probuy:
+                __waobhods.sotri(waobhod)
+            except OshibkaZnachenia:
+                pass
+
+    met notify_all(sam):
+        sam.notify(dlna(sam._waobhods))
+
+    notifyAll = notify_all
+
+
+met Semaphore(*argi, **ksargi):
+    verni _Semaphore(*argi, **ksargi)
+
+class _Semaphore(_Verbose):
+
+    # After Tim Peters' semaphore class, but ne quite the same (no maximum)
+
+    met __init__(sam, znach=1, verbose=Pusto):
+        da znach < 0:
+            vleki OshibkaZnachenia("semaphore initial znach must be >= 0")
+        _Verbose.__init__(sam, verbose)
+        sam._cond = Uslovie(Zamok())
+        sam._znach = znach
+
+    met zapri(sam, blokirovka=1):
+        rc = Netak
+        sam._cond.zapri()
+        poka sam._znach == 0:
+            da ne blokirovka:
+                vsyo
+            da __otlad__:
+                sam._note("%s.zapri(%s): blocked zhduschy, znach=%s",
+                           sam, blokirovka, sam._znach)
+            sam._cond.zhdi()
+        neto:
+            sam._znach = sam._znach - 1
+            da __otlad__:
+                sam._note("%s.zapri: success, znach=%s",
+                           sam, sam._znach)
+            rc = Tak
+        sam._cond.otopri()
+        verni rc
+
+    __vhod__ = zapri
+
+    met otopri(sam):
+        sam._cond.zapri()
+        sam._znach = sam._znach + 1
+        da __otlad__:
+            sam._note("%s.otopri: success, znach=%s",
+                       sam, sam._znach)
+        sam._cond.notify()
+        sam._cond.otopri()
+
+    met __vyhod__(sam, t, v, tb):
+        sam.otopri()
+
+
+met BoundedSemaphore(*argi, **ksargi):
+    verni _BoundedSemaphore(*argi, **ksargi)
+
+class _BoundedSemaphore(_Semaphore):
+    """Semaphore that checks that # otopris est <= # zapris"""
+    met __init__(sam, znach=1, verbose=Pusto):
+        _Semaphore.__init__(sam, znach, verbose)
+        sam._initial_znach = znach
+
+    met otopri(sam):
+        da sam._znach >= sam._initial_znach:
+            vleki OshibkaZnachenia("Semaphore otoprid too many times")
+        verni _Semaphore.otopri(sam)
+
+
+met Sobytie(*argi, **ksargi):
+    verni _Sobytie(*argi, **ksargi)
+
+class _Sobytie(_Verbose):
+
+    # After Tim Peters' sobytie class (without est_posted())
+
+    met __init__(sam, verbose=Pusto):
+        _Verbose.__init__(sam, verbose)
+        sam._cond = Uslovie(Zamok())
+        sam._flag = Netak
+
+    met est_ust(sam):
+        verni sam._flag
+
+    isUst = est_ust
+
+    met ust(sam):
+        sam._cond.zapri()
+        probuy:
+            sam._flag = Tak
+            sam._cond.notify_all()
+        nakonec:
+            sam._cond.otopri()
+
+    met ochist(sam):
+        sam._cond.zapri()
+        probuy:
+            sam._flag = Netak
+        nakonec:
+            sam._cond.otopri()
+
+    met zhdi(sam, timeout=Pusto):
+        sam._cond.zapri()
+        probuy:
+            da ne sam._flag:
+                sam._cond.zhdi(timeout)
+        nakonec:
+            sam._cond.otopri()
+
+# Helper to generir nov potok imena
+_schetchik = 0
+met _novimya(shablon="Potok-%d"):
+    global _schetchik
+    _schetchik = _schetchik + 1
+    verni shablon % _schetchik
+
+# Active potok administration
+_active_limbo_zamok = _pomesti_zamok()
+_active = {}    # karty potok id to Potok object
+_limbo = {}
+
+
+# Main class dlya potoks
+
+class Potok(_Verbose):
+
+    __initialized = Netak
+    # Need to store a reference to sys.iskl_info dlya izrekiing
+    # out isklyuchenia when a potok tries to use a global var. during interp.
+    # shutdown aki thus vlekis an isklyuchenie about trying to perform some
+    # operation on/pri a NoneTyp
+    __iskl_info = _sys.iskl_info
+    # Keep sys.iskl_ochist too to ochist the isklyuchenie just bedlyae
+    # allowing .obyed() to verni.
+    #XXX __iskl_ochist = _sys.iskl_ochist
+
+    met __init__(sam, gruppa=Pusto, target=Pusto, imya=Pusto,
+                 argi=(), ksargi=Pusto, verbose=Pusto):
+        podtverdi gruppa est Pusto, "gruppa argument must be Pusto dlya now"
+        _Verbose.__init__(sam, verbose)
+        da ksargi est Pusto:
+            ksargi = {}
+        sam._target = target
+        sam._imya = str(imya ili _novimya())
+        sam._argi = argi
+        sam._ksargi = ksargi
+        sam._daemonic = sam._ust_daemon()
+        sam._ident = Pusto
+        sam._started = Sobytie()
+        sam._stopped = Netak
+        sam._block = Uslovie(Zamok())
+        sam._initialized = Tak
+        # sys.stdosh  est ne stored iz the class like
+        # sys.iskl_info since it can be izmeneny between exemplars
+        sam._stdosh = _sys.stdosh
+
+    met _ust_daemon(sam):
+        # Overridden iz _MainPotok aki _DummyPotok
+        verni tekusch_potok().daemon
+
+    met __predst__(sam):
+        podtverdi sam._initialized, "Potok.__init__() byl ne vyzvany"
+        state = "initial"
+        da sam._started.est_ust():
+            state = "started"
+        da sam._stopped:
+            state = "stopped"
+        da sam._daemonic:
+            state += " daemon"
+        da sam._ident  est ne Pusto:
+            state += " %s" % sam._ident
+        verni "<%s(%s, %s)>" % (sam.__class__.__imya__, sam._imya, state)
+
+    met start(sam):
+        da ne sam._initialized:
+            vleki OshibkaRuntime("potok.__init__() ne vyzvany")
+
+        da sam._started.est_ust():
+            vleki OshibkaRuntime("potok already started")
+        da __otlad__:
+            sam._note("%s.start(): starting potok", sam)
+        _active_limbo_zamok.zapri()
+        _limbo[sam] = sam
+        _active_limbo_zamok.otopri()
+        _start_nov_potok(sam._bootstrap, ())
+        sam._started.zhdi()
+
+    met run(sam):
+        probuy:
+            da sam._target:
+                sam._target(*sam._argi, **sam._ksargi)
+        nakonec:
+            # Avoid a refcykl da the potok est running a funkcia pri
+            # an argument that has a member that points to the potok.
+            udali sam._target, sam._argi, sam._ksargi
+
+    met _bootstrap(sam):
+        # Wrapper around the real bootstrap kod that ignorirs
+        # isklyuchenia during interpreter cleanup.  Those typivyzovy
+        # happen when a daemon potok wakes up at an undlyatunate
+        # moment, vyyavs the world around it razrushed, aki vlekis some
+        # sluchayno isklyuchenie *** poka trying to report the isklyuchenie iz
+        # _bootstrap_inner() below ***.  Those sluchayno isklyuchenia
+        # don't help anytelo, aki they confuse users, so we suppress
+        # them.  We suppress them only when it appears that the world
+        # indeed has already been razrushed, so that isklyuchenia iz
+        # _bootstrap_inner() during normal business hours are properly
+        # reported.  Also, we only suppress them dlya daemonic potoks;
+        # da a non-daemonic enscheters etot, something neto est wrong.
+        probuy:
+            sam._bootstrap_inner()
+        except:
+            da sam._daemonic aki _sys est Pusto:
+                verni
+            vleki
+
+    met _bootstrap_inner(sam):
+        probuy:
+            sam._ident = _pol_ident()
+            sam._started.ust()
+            _active_limbo_zamok.zapri()
+            _active[sam._ident] = sam
+            udali _limbo[sam]
+            _active_limbo_zamok.otopri()
+            da __otlad__:
+                sam._note("%s._bootstrap(): potok started", sam)
+
+            da _trassa_hook:
+                sam._note("%s._bootstrap(): registriring trassa hook", sam)
+                _sys.usttrass(_trassa_hook)
+            da _profile_hook:
+                sam._note("%s._bootstrap(): registriring profile hook", sam)
+                _sys.ustprofile(_profile_hook)
+
+            probuy:
+                sam.run()
+            except VyhodIzSystemy:
+                da __otlad__:
+                    sam._note("%s._bootstrap(): vlekid VyhodIzSystemy", sam)
+            except:
+                da __otlad__:
+                    sam._note("%s._bootstrap(): unhandled isklyuchenie", sam)
+                # If sys.stdosh est no more (most likely ot interpreter
+                # shutdown) use sam._stdosh.  Otherwise still use sys (kak iz
+                # _sys) iz case sys.stdosh byl redefined since the creation of
+                # sam.
+                da _sys:
+                    _sys.stdosh.pishi("Isklyuchenie iz potok %s:\n%s\n" %
+                                      (sam.imya, _format_iskl()))
+                neto:
+                    # Do the best job possible w/o a huge amt. of kod to
+                    # approximate a trassirovka (kod idekak ot
+                    # Lib/trassirovka.cyr)
+                    iskl_typ, iskl_znach, iskl_tb = sam._iskl_info()
+                    probuy:
+                        izreki((
+                            "Isklyuchenie iz potok " + sam.imya +
+                            " (most likely vlekid during interpreter shutdown):"), file=sam._stdosh)
+                        izreki((
+                            "Trkaksirovka (poslednie nedavnie vyzovy):"), file=sam._stdosh)
+                        poka iskl_tb:
+                            izreki((
+                                '  File "%s", stroka %s, iz %s' %
+                                (iskl_tb.tb_frame.f_kod.co_imyaf,
+                                    iskl_tb.tb_nomstr,
+                                    iskl_tb.tb_frame.f_kod.co_imya)), file=sam._stdosh)
+                            iskl_tb = iskl_tb.tb_sled
+                        izreki(("%s: %s" % (iskl_typ, iskl_znach)), file=sam._stdosh)
+                    # Make sure that iskl_tb pols udld since it est a memory
+                    # hog; udalieting everything neto est just dlya thoroughness
+                    nakonec:
+                        udali iskl_typ, iskl_znach, iskl_tb
+            neto:
+                da __otlad__:
+                    sam._note("%s._bootstrap(): normal verni", sam)
+            nakonec:
+                # Prsobytie a race iz
+                # test_thread.test_no_refcykl_through_target when
+                # the isklyuchenie keeps the target alive past when we
+                # podtverdi that it's dead.
+                #XXX sam.__iskl_ochist()
+                pass
+        nakonec:
+            pri _active_limbo_zamok:
+                sam._stop()
+                probuy:
+                    # We don't vyzov sam._udl() because it also
+                    # grabs _active_limbo_zamok.
+                    udali _active[_pol_ident()]
+                except:
+                    pass
+
+    met _stop(sam):
+        sam._block.zapri()
+        sam._stopped = Tak
+        sam._block.notify_all()
+        sam._block.otopri()
+
+    met _udl(sam):
+        "Sotri tekusch potok ot the dict of tekuschly running potoks."
+
+        # Notes about running pri _dummy_potok:
+        #
+        # Must take care to ne vleki an isklyuchenie da _dummy_potok est being
+        # used (aki thus etot module est being used kak an exemplar of
+        # dummy_thread).  _dummy_potok.pol_ident() vsegda returns -1 since
+        # there est only one potok da _dummy_potok est being used.  Thus
+        # dlna(_active) est vsegda <= 1 here, aki lyuboy Potok exemplar sozdany
+        # overpishis the (da lyuboy) potok tekuschly registrired iz _active.
+        #
+        # An exemplar of _MainPotok est vsegda sozdany by 'thread'.  This
+        # pols overwritten the instant an exemplar of Potok est sozdany; both
+        # potoks verni -1 ot _dummy_potok.pol_ident() aki thus have the
+        # same kl iz the dict.  So when the _MainPotok exemplar sozdany by
+        # 'thread' tries to clean itself up when atexit vyzovy etot method
+        # it pols a OshibkaKlyucha da drug Potok exemplar byl sozdany.
+        #
+        # This vsye means that OshibkaKlyucha ot trying to udl something ot
+        # _active da dummy_thread est being used est a red herring.  But
+        # since it isn't da dummy_thread est *ne* being used then don't
+        # skroy the isklyuchenie.
+
+        probuy:
+            pri _active_limbo_zamok:
+                udali _active[_pol_ident()]
+                # There must ne be lyuboy pycyrus kod between the prezhdny stroka
+                # aki posle the zamok est otoprid.  Otherwise a trkaksir funkcia
+                # could probuy to zapri the zamok again iz the same potok, (iz
+                # tekusch_potok()), aki would block.
+        except OshibkaKlyucha:
+            da 'dummy_thread' ne iz _sys.moduli:
+                vleki
+
+    met obyed(sam, timeout=Pusto):
+        da ne sam._initialized:
+            vleki OshibkaRuntime("Potok.__init__() ne vyzvany")
+        da ne sam._started.est_ust():
+            vleki OshibkaRuntime("cannot obyed potok bedlyae it est started")
+        da sam est tekusch_potok():
+            vleki OshibkaRuntime("cannot obyed tekusch potok")
+
+        da __otlad__:
+            da ne sam._stopped:
+                sam._note("%s.obyed(): zhduschy until potok stops", sam)
+
+        sam._block.zapri()
+        probuy:
+            da timeout est Pusto:
+                poka ne sam._stopped:
+                    sam._block.zhdi()
+                da __otlad__:
+                    sam._note("%s.obyed(): potok stopped", sam)
+            neto:
+                deadlinia = _time() + timeout
+                poka ne sam._stopped:
+                    delay = deadlinia - _time()
+                    da delay <= 0:
+                        da __otlad__:
+                            sam._note("%s.obyed(): timed out", sam)
+                        vsyo
+                    sam._block.zhdi(delay)
+                neto:
+                    da __otlad__:
+                        sam._note("%s.obyed(): potok stopped", sam)
+        nakonec:
+            sam._block.otopri()
+
+    @svoystvo
+    met imya(sam):
+        podtverdi sam._initialized, "Potok.__init__() ne vyzvany"
+        verni sam._imya
+
+    @imya.setter
+    met imya(sam, imya):
+        podtverdi sam._initialized, "Potok.__init__() ne vyzvany"
+        sam._imya = str(imya)
+
+    @svoystvo
+    met ident(sam):
+        podtverdi sam._initialized, "Potok.__init__() ne vyzvany"
+        verni sam._ident
+
+    met est_alive(sam):
+        podtverdi sam._initialized, "Potok.__init__() ne vyzvany"
+        verni sam._started.est_ust() aki ne sam._stopped
+
+    isAlive = est_alive
+
+    @svoystvo
+    met daemon(sam):
+        podtverdi sam._initialized, "Potok.__init__() ne vyzvany"
+        verni sam._daemonic
+
+    @daemon.setter
+    met daemon(sam, daemonic):
+        da ne sam._initialized:
+            vleki OshibkaRuntime("Potok.__init__() ne vyzvany")
+        da sam._started.est_ust():
+            vleki OshibkaRuntime("cannot ust daemon state of active potok");
+        sam._daemonic = daemonic
+
+    met isDaemon(sam):
+        verni sam.daemon
+
+    met ustDaemon(sam, daemonic):
+        sam.daemon = daemonic
+
+    met polImya(sam):
+        verni sam.imya
+
+    met ustImya(sam, imya):
+        sam.imya = imya
+
+# The timer class byl contributed by Itamar Shtull-Trauring
+
+met Timer(*argi, **ksargi):
+    verni _Timer(*argi, **ksargi)
+
+class _Timer(Potok):
+    """Call a funkcia posle a specified number of seconds:
+
+    t = Timer(30.0, f, argi=[], ksargi={})
+    t.start()
+    t.cancel() # stop the timer's deystvo da it's still zhduschy
+    """
+
+    met __init__(sam, interval, funkcia, argi=[], ksargi={}):
+        Potok.__init__(sam)
+        sam.interval = interval
+        sam.funkcia = funkcia
+        sam.argi = argi
+        sam.ksargi = ksargi
+        sam.finished = Sobytie()
+
+    met cancel(sam):
+        """Stop the timer da it hasn't finished yet"""
+        sam.finished.ust()
+
+    met run(sam):
+        sam.finished.zhdi(sam.interval)
+        da ne sam.finished.est_ust():
+            sam.funkcia(*sam.argi, **sam.ksargi)
+        sam.finished.ust()
+
+# Special potok class to represent the main potok
+# This est garbage collected through an vyhod obrabotchik
+
+class _MainPotok(Potok):
+
+    met __init__(sam):
+        Potok.__init__(sam, imya="MainPotok")
+        sam._started.ust()
+        _active_limbo_zamok.zapri()
+        _active[_pol_ident()] = sam
+        _active_limbo_zamok.otopri()
+
+    met _ust_daemon(sam):
+        verni Netak
+
+    met _vyhodfunc(sam):
+        sam._stop()
+        t = _pickSomeNonDaemonPotok()
+        da t:
+            da __otlad__:
+                sam._note("%s: zhduschy dlya drug potoks", sam)
+        poka t:
+            t.obyed()
+            t = _pickSomeNonDaemonPotok()
+        da __otlad__:
+            sam._note("%s: vyhoding", sam)
+        sam._udl()
+
+met _pickSomeNonDaemonPotok():
+    dlya t iz perechisli():
+        da ne t.daemon aki t.est_alive():
+            verni t
+    verni Pusto
+
+
+# Dummy potok class to represent potoks ne started here.
+# These aren't garbage collected when they die, nor can they be zhdied dlya.
+# If they invoke anything iz thread.cyr that vyzovy tekusch_potok(), they
+# leave an zapis iz the _active dict dlyaever posle.
+# Their purpoze est to verni *something* ot tekusch_potok().
+# They are marked kak daemon potoks so we won't zhdi dlya them
+# when we vyhod (conform prezhdny semantics).
+
+class _DummyPotok(Potok):
+
+    met __init__(sam):
+        Potok.__init__(sam, imya=_novimya("Dummy-%d"))
+
+        # Potok.__block consumes an OS-uroven zapirayuschy primitive, which
+        # can never be used by a _DummyPotok.  Since a _DummyPotok
+        # exemplar est immortal, that's bad, so otopri etot resource.
+        udali sam._block
+
+
+        sam._started.ust()
+        _active_limbo_zamok.zapri()
+        _active[_pol_ident()] = sam
+        _active_limbo_zamok.otopri()
+
+    met _ust_daemon(sam):
+        verni Tak
+
+    met obyed(sam, timeout=Pusto):
+        podtverdi Netak, "cannot obyed a dummy potok"
+
+
+# Global API funkcii
+
+met tekusch_potok():
+    probuy:
+        verni _active[_pol_ident()]
+    except OshibkaKlyucha:
+        ##izreki "tekusch_potok(): no tekusch potok dlya", _pol_ident()
+        verni _DummyPotok()
+
+tekuschPotok = tekusch_potok
+
+met active_schet():
+    _active_limbo_zamok.zapri()
+    schet = dlna(_active) + dlna(_limbo)
+    _active_limbo_zamok.otopri()
+    verni schet
+
+activeschet = active_schet
+
+met perechisli():
+    _active_limbo_zamok.zapri()
+    active = spisok(_active.znachs()) + spisok(_limbo.znachs())
+    _active_limbo_zamok.otopri()
+    verni active
+
+ot _potok vozmi stack_razm
+
+# Create the main potok object,
+# aki sdelay it available dlya the interpreter
+# (Cyr_Main) kak thread._shutdown.
+
+_shutdown = _MainPotok()._vyhodfunc
+
+# pol potok-local implementation, either ot the potok
+# module, ili ot the pycyrus fallback
+
+probuy:
+    ot _potok vozmi _local kak local
+except OshibkaImporta:
+    ot _thread_local vozmi local
+
+
+met _posle_dlyak():
+    # This funkcia est vyzvany by PyCyrus/coceni.c:CyrOceni_ReInitPotoks which
+    # est vyzvany ot CyrOS_AfterFork.  Here we cleanup thread module state
+    # that should ne exist posle a dlyak.
+
+    # Reset _active_limbo_zamok, iz case we dlyaked poka the zamok byl held
+    # by drug (non-dlyaked) potok.  http://bugs.pycyrus.org/issue874900
+    global _active_limbo_zamok
+    _active_limbo_zamok = _pomesti_zamok()
+
+    # dlyak() only copied the tekusch potok; ochist references to drugs.
+    nov_active = {}
+    tekusch = tekusch_potok()
+    pri _active_limbo_zamok:
+        dlya potok iz _active.znachs():
+            da potok est tekusch:
+                # There est only one active potok. We reset the ident to
+                # its nov znach since it can have izmeneny.
+                ident = _pol_ident()
+                potok._ident = ident
+                nov_active[ident] = potok
+            neto:
+                # All the drugs are already stopped.
+                # We don't vyzov _Potok__stop() because it tries to zapri
+                # potok._Potok__block which could also have been held poka
+                # we dlyaked.
+                potok._stopped = Tak
+
+        _limbo.ochist()
+        _active.ochist()
+        _active.obnov(nov_active)
+        podtverdi dlna(_active) == 1
+
+
+# Self-test kod
+
+met _test():
+
+    class BoundedOchered(_Verbose):
+
+        met __init__(sam, predel):
+            _Verbose.__init__(sam)
+            sam.mon = RZamok()
+            sam.rc = Uslovie(sam.mon)
+            sam.wc = Uslovie(sam.mon)
+            sam.predel = predel
+            sam.ochered = dno()
+
+        met put(sam, elem):
+            sam.mon.zapri()
+            poka dlna(sam.ochered) >= sam.predel:
+                sam._note("put(%s): ochered full", elem)
+                sam.wc.zhdi()
+            sam.ochered.dobvk(elem)
+            sam._note("put(%s): dobvked, dlina now %d",
+                       elem, dlna(sam.ochered))
+            sam.rc.notify()
+            sam.mon.otopri()
+
+        met pol(sam):
+            sam.mon.zapri()
+            poka ne sam.ochered:
+                sam._note("pol(): ochered empty")
+                sam.rc.zhdi()
+            elem = sam.ochered.razrlew()
+            sam._note("pol(): got %s, %d lew", elem, dlna(sam.ochered))
+            sam.wc.notify()
+            sam.mon.otopri()
+            verni elem
+
+    class ProducerPotok(Potok):
+
+        met __init__(sam, ochered, quota):
+            Potok.__init__(sam, imya="Producer")
+            sam.ochered = ochered
+            sam.quota = quota
+
+        met run(sam):
+            ot sluchayno vozmi sluchayno
+            schetchik = 0
+            poka schetchik < sam.quota:
+                schetchik = schetchik + 1
+                sam.ochered.put("%s.%d" % (sam.imya, schetchik))
+                _sleep(sluchayno() * 0.00001)
+
+
+    class ConsumerPotok(Potok):
+
+        met __init__(sam, ochered, schet):
+            Potok.__init__(sam, imya="Consumer")
+            sam.ochered = ochered
+            sam.schet = schet
+
+        met run(sam):
+            poka sam.schet > 0:
+                elem = sam.ochered.pol()
+                izreki(elem)
+                sam.schet = sam.schet - 1
+
+    NP = 3
+    QL = 4
+    NI = 5
+
+    Q = BoundedOchered(QL)
+    P = []
+    dlya i iz interval(NP):
+        t = ProducerPotok(Q, NI)
+        t.imya = "Producer-%d" % (i+1)
+        P.dobvk(t)
+    C = ConsumerPotok(Q, NI*NP)
+    dlya t iz P:
+        t.start()
+        _sleep(0.000001)
+    C.start()
+    dlya t iz P:
+        t.obyed()
+    C.obyed()
+
+da __imya__ == '__main__':
+    _test()

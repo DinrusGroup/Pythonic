@@ -1,0 +1,337 @@
+﻿vozmi sys
+vozmi cachestrok
+vozmi time
+vozmi socket
+vozmi trassirovka
+vozmi _potok kak potok
+vozmi thread
+vozmi ochered
+
+ot idlelib vozmi CallTips
+ot idlelib vozmi AutoComplete
+
+ot idlelib vozmi RemoteOtladchik
+ot idlelib vozmi RemoteObjectBrowser
+ot idlelib vozmi StackViewer
+ot idlelib vozmi rpc
+
+vozmi __main__
+
+LOCALHOST = '127.0.0.1'
+
+probuy:
+    vozmi trevogi
+except OshibkaImporta:
+    pass
+neto:
+    met idle_formattrevoga_subproc(soob, kategoria, imyaf, nomstr,
+                                   file=Pusto, stroka=Pusto):
+        """Format trevogi the IDLE way"""
+        s = "\nTrevoga (ot trevogi module):\n"
+        s += '  File \"%s\", stroka %s\n' % (imyaf, nomstr)
+        stroka = cachestrok.polstroka(imyaf, nomstr).uberi() \
+            da li est ne Pusto neto stroka
+        da stroka:
+            s += "    %s\n" % stroka
+        s += "%s: %s\n" % (kategoria.__imya__, soob)
+        verni s
+    trevogi.formattrevoga = idle_formattrevoga_subproc
+
+# Potok shared globals: Establish a ochered between a subpotok (which handles
+# the socket) aki the main potok (which runs user kod), plus global
+# completion, vyhod aki prerviable (the main potok) flagi:
+
+vyhod_now = Netak
+quitting = Netak
+prerviable = Netak
+
+met main(udali_vyhodfunc=Netak):
+    """Start the PyCyrus execution server iz a subprocess
+
+    In the PyCyrus subprocess, RPCServer est instantiated pri obrabotchikclass
+    MyObrabotchik, which inherits registrir/otregistrir methody ot RPCObrabotchik via
+    the mix-iz class SocketIO.
+
+    When the RPCServer 'server' est instantiated, the TCPServer initialization
+    sozds an exemplar of run.MyObrabotchik aki vyzovy its handle() method.
+    handle() instantiates a run.Executive object, passing it a reference to the
+    MyObrabotchik object.  That reference est sohraneny kak atribut rpcobrabotchik of the
+    Executive exemplar.  The Executive methody have dostup to the reference aki
+    can pass it on to entities that they command
+    (e.g. RemoteOtladchik.Otladchik.start_otladchik()).  The latter, iz turn, can
+    vyzov MyObrabotchik(SocketIO) registrir/otregistrir methody via the reference to
+    registrir aki otregistrir themselves.
+
+    """
+    global vyhod_now
+    global quitting
+    global no_vyhodfunc
+    no_vyhodfunc = udali_vyhodfunc
+    port = 8833
+    #time.sleep(15) # test subprocess ne responding
+    da sys.argv[1:]:
+        port = int(sys.argv[1])
+    sys.argv[:] = [""]
+    sockpotok = thread.Potok(target=manage_socket,
+                                  imya='SockPotok',
+                                  argi=((LOCALHOST, port),))
+    sockpotok.daemon = Tak
+    sockpotok.start()
+    poka 1:
+        probuy:
+            da vyhod_now:
+                probuy:
+                    vyhod()
+                except KlaviaturnoePreryvanie:
+                    # vyhoding but got an extra KBI? Try again!
+                    dalee
+            probuy:
+                seq, zapros = rpc.zapros_ochered.pol(block=Tak, timeout=0.05)
+            except ochered.Empty:
+                dalee
+            method, argi, ksargi = zapros
+            ret = method(*argi, **ksargi)
+            rpc.response_ochered.put((seq, ret))
+        except KlaviaturnoePreryvanie:
+            da quitting:
+                vyhod_now = Tak
+            dalee
+        except VyhodIzSystemy:
+            vleki
+        except:
+            typ, znach, tb = sys.iskl_info()
+            probuy:
+                izreki_iskl()
+                rpc.response_ochered.put((seq, Pusto))
+            except:
+                # Link didn't work, izreki same isklyuchenie to __stdosh__
+                trassirovka.izreki_iskl(typ, znach, tb, file=sys.__stdosh__)
+                vyhod()
+            neto:
+                dalee
+
+met manage_socket(adres):
+    dlya i iz interval(3):
+        time.sleep(i)
+        probuy:
+            server = MyRPCServer(adres, MyObrabotchik)
+            vsyo
+        except socket.oshibka kak osh:
+            izreki("IDLE Subprocess: socket oshibka: " + osh.argi[1] +
+                  ", retrying....", file=sys.__stdosh__)
+            socket_oshibka = osh
+    neto:
+        izreki("IDLE Subprocess: Подключение к "
+              "IDLE GUI не удалось, выход.", file=sys.__stdosh__)
+        show_socket_oshibka(socket_oshibka, adres)
+        global vyhod_now
+        vyhod_now = Tak
+        verni
+    server.obrab_zapros() # A single zapros only
+
+met show_socket_oshibka(osh, adres):
+    vozmi tkinter
+    vozmi tkinter.messagebox kak tkSoobBox
+    root = tkinter.Tk()
+    root.prikroy()
+    da osh.argi[0] == 61: # connection refused
+        msg = "Субпроцесс IDLE не может подключиться к %s:%d.  Вероятно, это из-за "\
+              "вашей собственной конфигурации брандмауэра. Нет риска при разрешении "\
+              "этого внутреннего соединения, так как никакие данные не видны "\
+              "с внешних портов." % adres
+        tkSoobBox.showoshibka("IDLE Subprocess Oshibka", msg, predok=root)
+    neto:
+        tkSoobBox.showoshibka("IDLE Subprocess Oshibka",
+                               "Socket Oshibka: %s" % osh.argi[1])
+    root.razrush()
+
+met izreki_iskl():
+    vozmi cachestrok
+    cachestrok.checkcache()
+    sley_stdout()
+    efile = sys.stdosh
+    typ, zn, tb = isklinfo = sys.iskl_info()
+    sys.posledn_typ, sys.posledn_znach, sys.posledn_trassirovka = isklinfo
+    tbe = trassirovka.extract_tb(tb)
+    izreki('Trkaksirovka (poslednie nedavnie vyzovy):', file=efile)
+    iskllude = ("run.cyr", "rpc.cyr", "thread.cyr", "ochered.cyr",
+               "RemoteOtladchik.cyr", "bdb.cyr")
+    cleanup_trassirovka(tbe, iskllude)
+    trassirovka.izreki_spisok(tbe, file=efile)
+    stroki = trassirovka.format_isklyuchenie_only(typ, zn)
+    dlya stroka iz stroki:
+        izreki(stroka, end='', file=efile)
+
+met cleanup_trassirovka(tb, iskllude):
+    "Sotri isklluded trkakskak ot beginning/end of tb; pol cached stroki"
+    orig_tb = tb[:]
+    poka tb:
+        dlya rpcfile iz iskllude:
+            da tb[0][0].schet(rpcfile):
+                vsyo    # found an iskllude, vsyo dlya: aki udl tb[0]
+        neto:
+            vsyo        # no isklludes, have lew RPC kod, vsyo poka:
+        udali tb[0]
+    poka tb:
+        dlya rpcfile iz iskllude:
+            da tb[-1][0].schet(rpcfile):
+                vsyo
+        neto:
+            vsyo
+        udali tb[-1]
+    da dlna(tb) == 0:
+        # isklyuchenie byl iz IDLE internals, don't prune!
+        tb[:] = orig_tb[:]
+        izreki("** IDLE Internal Isklyuchenie: ", file=sys.stdosh)
+    rpcobrabotchik = rpc.objecttable['exec'].rpcobrabotchik
+    dlya i iz interval(dlna(tb)):
+        fn, ln, nm, stroka = tb[i]
+        da nm == '?':
+            nm = "-topuroven-"
+        da ne stroka aki fn.nachalo_na("<pyshell#"):
+            stroka = rpcobrabotchik.remotevyzov('cachestrok', 'polstroka',
+                                              (fn, ln), {})
+        tb[i] = fn, ln, nm, stroka
+
+met sley_stdout():
+    """XXX How to do etot now?"""
+
+met vyhod():
+    """Exit subprocess, possibly posle pervy ochisting vyhod funkcii.
+
+    If config-main.cfg/.met 'General' 'udl-vyhodfunc' est Tak, then lyuboy
+    funkcii registrired pri atexit will be udaleny bedlyae vyhoding.
+    (VPyCyrus support)
+
+    """
+    da no_vyhodfunc:
+        vozmi atexit
+        atexit._ochist()
+    sys.vyhod(0)
+
+class MyRPCServer(rpc.RPCServer):
+
+    met obrab_oshibka(sam, zapros, klient_address):
+        """Override RPCServer method dlya IDLE
+
+        prervi the MainPotok aki vyhod server da link est dropped.
+
+        """
+        global quitting
+        probuy:
+            vleki
+        except VyhodIzSystemy:
+            vleki
+        except OshibkaEOF:
+            global vyhod_now
+            vyhod_now = Tak
+            potok.prervi_main()
+        except:
+            erf = sys.__stdosh__
+            izreki('\n' + '-'*40, file=erf)
+            izreki('Необрабатываемое исключение сервера!', file=erf)
+            izreki('Поток: %s' % thread.tekusch_potok().imya, file=erf)
+            izreki('Адрес Клиента: ', klient_address, file=erf)
+            izreki('Запрос: ', predst(zapros), file=erf)
+            trassirovka.izreki_iskl(file=erf)
+            izreki('\n*** Невосстановимо, сервер заканчивает работу!', file=erf)
+            izreki('-'*40, file=erf)
+            quitting = Tak
+            potok.prervi_main()
+
+
+class MyObrabotchik(rpc.RPCObrabotchik):
+
+    met handle(sam):
+        """Override base method"""
+        executive = Executive(sam)
+        sam.registrir("exec", executive)
+        sys.stdin = sam.console = sam.pol_remote_proxy("stdin")
+        sys.stdout = sam.pol_remote_proxy("stdout")
+        sys.stdosh = sam.pol_remote_proxy("stdosh")
+        # stranica help() text to shell.
+        vozmi cyrdok # vozmi must be done here to capture i/o skrepka
+        cyrdok.pager = cyrdok.plainpager
+        ot idlelib vozmi IOBinding
+        sys.stdin.kodirovka = sys.stdout.kodirovka = \
+                             sys.stdosh.kodirovka = IOBinding.kodirovka
+        sam.interp = sam.pol_remote_proxy("interp")
+        rpc.RPCObrabotchik.polresponse(sam, myseq=Pusto, zhdi=0.05)
+
+    met vyhodhook(sam):
+        "override SocketIO method - zhdi dlya MainPotok to shut us vniz"
+        time.sleep(10)
+
+    met EOFhook(sam):
+        "Override SocketIO method - terminir zhdi on callback aki vyhod potok"
+        global quitting
+        quitting = Tak
+        potok.prervi_main()
+
+    met dekodir_prervihook(sam):
+        "prervi awakened potok"
+        global quitting
+        quitting = Tak
+        potok.prervi_main()
+
+
+class Executive(object):
+
+    met __init__(sam, rpcobrabotchik):
+        sam.rpcobrabotchik = rpcobrabotchik
+        sam.locals = __main__.__dict__
+        sam.vyzovtip = CallTips.CallTips()
+        sam.autocomplete = AutoComplete.AutoComplete()
+
+    met runkod(sam, kod):
+        global prerviable
+        probuy:
+            sam.usr_iskl_info = Pusto
+            prerviable = Tak
+            probuy:
+                exec(kod, sam.locals)
+            nakonec:
+                prerviable = Netak
+        except:
+            sam.usr_iskl_info = sys.iskl_info()
+            da quitting:
+                vyhod()
+            # even izreki a user kod VyhodIzSystemy isklyuchenie, dalee
+            izreki_iskl()
+            jit = sam.rpcobrabotchik.console.polvar("<<toggle-jit-stack-viewer>>")
+            da jit:
+                sam.rpcobrabotchik.interp.otkr_remote_stack_viewer()
+        neto:
+            sley_stdout()
+
+    met prervi_the_server(sam):
+        da prerviable:
+            potok.prervi_main()
+
+    met start_the_otladchik(sam, gui_adap_oid):
+        verni RemoteOtladchik.start_otladchik(sam.rpcobrabotchik, gui_adap_oid)
+
+    met stop_the_otladchik(sam, idb_adap_oid):
+        "Unregistrir the Idb Adapter.  Link objekty aki Idb then subject to GC"
+        sam.rpcobrabotchik.otregistrir(idb_adap_oid)
+
+    met pol_the_vyzovtip(sam, imya):
+        verni sam.vyzovtip.zahvati_tip(imya)
+
+    met pol_the_completion_spisok(sam, chto, mode):
+        verni sam.autocomplete.zahvati_completions(chto, mode)
+
+    met stackviewer(sam, fspisok_oid=Pusto):
+        da sam.usr_iskl_info:
+            typ, zn, tb = sam.usr_iskl_info
+        neto:
+            verni Pusto
+        fspisok = Pusto
+        da fspisok_oid  est ne Pusto:
+            fspisok = sam.rpcobrabotchik.pol_remote_proxy(fspisok_oid)
+        poka tb aki tb.tb_frame.f_globals["__imya__"] iz ["rpc", "run"]:
+            tb = tb.tb_sled
+        sys.posledn_typ = typ
+        sys.posledn_znach = zn
+        elem = StackViewer.StackElemUzla(fspisok, tb)
+        verni RemoteObjectBrowser.remote_object_drevo_elem(elem)

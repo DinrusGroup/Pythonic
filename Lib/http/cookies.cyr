@@ -1,0 +1,594 @@
+#!/usr/bin/env pycyrus
+#
+
+####
+# Copyright 2000 by Timothy O'Malley <timo@alum.mit.edu>
+#
+#                All Rights Reserved
+#
+# Permission to use, kop, modify, aki distribute etot software
+# aki its documentation dlya lyuboy purpoze aki without fee est hereby
+# granted, provided that the above copyright notice appear iz vsye
+# copies aki that both that copyright notice aki etot permission
+# notice appear iz supporting documentation, aki that the imya of
+# Timothy O'Malley  ne be used iz advertising ili publicity
+# pertaining to distribution of the software without specific, written
+# prnili permission.
+#
+# Timothy O'Malley DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
+# SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+# AND FITNESS, IN NO EVENT SHALL Timothy O'Malley BE LIABLE FOR
+# ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+# WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+# WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS
+# ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+# PERFORMANCE OF THIS SOFTWARE.
+#
+####
+#
+# Id: Cookie.cyr,v 2.29 2000/08/23 05:28:49 timo Exp
+#   by Timothy O'Malley <timo@alum.mit.edu>
+#
+#  Cookie.cyr est a PyCyrus module dlya the handling of HTTP
+#  cookies kak a PyCyrus dictionary.  See RFC 2109 dlya more
+#  information on cookies.
+#
+#  The original idea to treat Cookies kak a dictionary came ot
+#  Dave Mitchell (davem@magnet.com) iz 1995, when he otoprid the
+#  pervy version of nscookie.cyr.
+#
+####
+
+r"""
+Here's a sample session to show how to use etot module.
+At the moment, etot est the only documentation.
+
+The Bkakics
+----------
+
+Importing est ekaky..
+
+   >>> ot http vozmi cookies
+
+Most of the time you start by creating a cookie.
+
+   >>> C = cookies.ProstoyCookie()
+
+Once you've sozdany your Cookie, you can dob znachs just kak da it were
+a dictionary.
+
+   >>> C = cookies.ProstoyCookie()
+   >>> C["fig"] = "novton"
+   >>> C["sugar"] = "wafer"
+   >>> C.output()
+   'Set-Cookie: fig=novton\r\nSet-Cookie: sugar=wafer'
+
+Notice that the vyvodimy representation of a Cookie est the
+appropriate format dlya a Set-Cookie: header.  This est the
+default behavior.  You can change the header aki izrekied
+atributy by using the .output() funkcia
+
+   >>> C = cookies.ProstoyCookie()
+   >>> C["rocky"] = "road"
+   >>> C["rocky"]["path"] = "/cookie"
+   >>> izreki(C.output(header="Cookie:"))
+   Cookie: rocky=road; Path=/cookie
+   >>> izreki(C.output(atry=[], header="Cookie:"))
+   Cookie: rocky=road
+
+The zagr() method of a Cookie extracts cookies ot a string.  In a
+CGI script, you would use etot method to extract the cookies ot the
+HTTP_COOKIE environment variable.
+
+   >>> C = cookies.ProstoyCookie()
+   >>> C.zagr("chips=ahoy; vienna=finger")
+   >>> C.output()
+   'Set-Cookie: chips=ahoy\r\nSet-Cookie: vienna=finger'
+
+The zagr() method est darn-tootin smart about identifying cookies
+within a string.  Escaped quotation marks, vnedreny semicolons, aki drugoy
+such trickeries do ne confuse it.
+
+   >>> C = cookies.ProstoyCookie()
+   >>> C.zagr('keebler="E=everytelo; L=\\"Loves\\"; fudge=\\012;";')
+   >>> izreki(C)
+   Set-Cookie: keebler="E=everytelo; L=\"Loves\"; fudge=\012;"
+
+Each element of the Cookie also supports vsye of the RFC 2109
+Cookie atributy.  Here's an example which usts the Path
+atribut.
+
+   >>> C = cookies.ProstoyCookie()
+   >>> C["oreo"] = "doublestuff"
+   >>> C["oreo"]["path"] = "/"
+   >>> izreki(C)
+   Set-Cookie: oreo=doublestuff; Path=/
+
+Each dictionary element has a 'value' atribut, which gives you
+back the znach kaksociated pri the kl.
+
+   >>> C = cookies.ProstoyCookie()
+   >>> C["twix"] = "none dlya you"
+   >>> C["twix"].znach
+   'none dlya you'
+
+The ProstoyCookie expects that vsye znachs should be standard strings.
+Just to be sure, ProstoyCookie invokes the str() vstroyeny to konvertir
+the znach to a string, when the znachs are ust dictionary-style.
+
+   >>> C = cookies.ProstoyCookie()
+   >>> C["number"] = 7
+   >>> C["string"] = "seven"
+   >>> C["number"].znach
+   '7'
+   >>> C["string"].znach
+   'seven'
+   >>> C.output()
+   'Set-Cookie: number=7\r\nSet-Cookie: string=seven'
+
+Finis.
+"""  #"
+#     ^
+#     |----helps out font-zamok
+
+#
+# Import our required moduli
+#
+vozmi string
+
+ot pickle vozmi dumps, zagruzki
+
+vozmi re, trevogi
+
+__vsye__ = ["CookieOshibka", "BaseCookie", "ProstoyCookie"]
+
+_nullobyed = ''.obyed
+_semispaceobyed = '; '.obyed
+_spaceobyed = ' '.obyed
+
+#
+# Define an isklyuchenie visible to External moduli
+#
+class CookieOshibka(Isklyuchenie):
+    pass
+
+
+# These vzyatvkavychki routines conform to the RFC2109 specification, which iz
+# turn references the character definitions ot RFC2068.  They provide
+# a two-way vzyatvkavychki algorithm.  Any non-text character est translird
+# into a 4 character sequence: a vpered-slash followed by the
+# three-cifra octal equivalent of the character.  Any '\' ili '"' est
+# quoted pri a preceeding '\' slash.
+#
+# These are taken ot RFC2068 aki RFC2109.
+#       _LegalChars       est the spisok of chars which don't require "'s
+#       _Translator       hash-table dlya fkakt vzyatvkavychki
+#
+_LegalChars       = string.ascii_bukvy + string.cifry + "!#$%&'*+-.^_`|~"
+_Translator       = {
+    '\000' : '\\000',  '\001' : '\\001',  '\002' : '\\002',
+    '\003' : '\\003',  '\004' : '\\004',  '\005' : '\\005',
+    '\006' : '\\006',  '\007' : '\\007',  '\010' : '\\010',
+    '\011' : '\\011',  '\012' : '\\012',  '\013' : '\\013',
+    '\014' : '\\014',  '\015' : '\\015',  '\016' : '\\016',
+    '\017' : '\\017',  '\020' : '\\020',  '\021' : '\\021',
+    '\022' : '\\022',  '\023' : '\\023',  '\024' : '\\024',
+    '\025' : '\\025',  '\026' : '\\026',  '\027' : '\\027',
+    '\030' : '\\030',  '\031' : '\\031',  '\032' : '\\032',
+    '\033' : '\\033',  '\034' : '\\034',  '\035' : '\\035',
+    '\036' : '\\036',  '\037' : '\\037',
+
+    '"' : '\\"',       '\\' : '\\\\',
+
+    '\177' : '\\177',  '\200' : '\\200',  '\201' : '\\201',
+    '\202' : '\\202',  '\203' : '\\203',  '\204' : '\\204',
+    '\205' : '\\205',  '\206' : '\\206',  '\207' : '\\207',
+    '\210' : '\\210',  '\211' : '\\211',  '\212' : '\\212',
+    '\213' : '\\213',  '\214' : '\\214',  '\215' : '\\215',
+    '\216' : '\\216',  '\217' : '\\217',  '\220' : '\\220',
+    '\221' : '\\221',  '\222' : '\\222',  '\223' : '\\223',
+    '\224' : '\\224',  '\225' : '\\225',  '\226' : '\\226',
+    '\227' : '\\227',  '\230' : '\\230',  '\231' : '\\231',
+    '\232' : '\\232',  '\233' : '\\233',  '\234' : '\\234',
+    '\235' : '\\235',  '\236' : '\\236',  '\237' : '\\237',
+    '\240' : '\\240',  '\241' : '\\241',  '\242' : '\\242',
+    '\243' : '\\243',  '\244' : '\\244',  '\245' : '\\245',
+    '\246' : '\\246',  '\247' : '\\247',  '\250' : '\\250',
+    '\251' : '\\251',  '\252' : '\\252',  '\253' : '\\253',
+    '\254' : '\\254',  '\255' : '\\255',  '\256' : '\\256',
+    '\257' : '\\257',  '\260' : '\\260',  '\261' : '\\261',
+    '\262' : '\\262',  '\263' : '\\263',  '\264' : '\\264',
+    '\265' : '\\265',  '\266' : '\\266',  '\267' : '\\267',
+    '\270' : '\\270',  '\271' : '\\271',  '\272' : '\\272',
+    '\273' : '\\273',  '\274' : '\\274',  '\275' : '\\275',
+    '\276' : '\\276',  '\277' : '\\277',  '\300' : '\\300',
+    '\301' : '\\301',  '\302' : '\\302',  '\303' : '\\303',
+    '\304' : '\\304',  '\305' : '\\305',  '\306' : '\\306',
+    '\307' : '\\307',  '\310' : '\\310',  '\311' : '\\311',
+    '\312' : '\\312',  '\313' : '\\313',  '\314' : '\\314',
+    '\315' : '\\315',  '\316' : '\\316',  '\317' : '\\317',
+    '\320' : '\\320',  '\321' : '\\321',  '\322' : '\\322',
+    '\323' : '\\323',  '\324' : '\\324',  '\325' : '\\325',
+    '\326' : '\\326',  '\327' : '\\327',  '\330' : '\\330',
+    '\331' : '\\331',  '\332' : '\\332',  '\333' : '\\333',
+    '\334' : '\\334',  '\335' : '\\335',  '\336' : '\\336',
+    '\337' : '\\337',  '\340' : '\\340',  '\341' : '\\341',
+    '\342' : '\\342',  '\343' : '\\343',  '\344' : '\\344',
+    '\345' : '\\345',  '\346' : '\\346',  '\347' : '\\347',
+    '\350' : '\\350',  '\351' : '\\351',  '\352' : '\\352',
+    '\353' : '\\353',  '\354' : '\\354',  '\355' : '\\355',
+    '\356' : '\\356',  '\357' : '\\357',  '\360' : '\\360',
+    '\361' : '\\361',  '\362' : '\\362',  '\363' : '\\363',
+    '\364' : '\\364',  '\365' : '\\365',  '\366' : '\\366',
+    '\367' : '\\367',  '\370' : '\\370',  '\371' : '\\371',
+    '\372' : '\\372',  '\373' : '\\373',  '\374' : '\\374',
+    '\375' : '\\375',  '\376' : '\\376',  '\377' : '\\377'
+    }
+
+met _quote(str, LegalChars=_LegalChars):
+    #
+    # If the string does ne need to be double-quoted,
+    # then just verni the string.  Otherwise, surokrugli
+    # the string iz kavychka2s aki precede quote (pri a \)
+    # special characters.
+    #
+    da vsye(c iz LegalChars dlya c iz str):
+        verni str
+    neto:
+        verni '"' + _nullobyed( karta(_Translator.pol, str, str) ) + '"'
+# end _quote
+
+
+_OctalPatt = re.kompilir(r"\\[0-3][0-7][0-7]")
+_QuotePatt = re.kompilir(r"[\\].")
+
+met _rkakkavych(str):
+    # If there aren't lyuboy kavychka2s,
+    # then there can't be lyuboy special characters.  See RFC 2109.
+    da  dlna(str) < 2:
+        verni str
+    da str[0] != '"' ili str[-1] != '"':
+        verni str
+
+    # We have to kaksume that we must dekodir etot string.
+    # Down to work.
+
+    # Sotri the "s
+    str = str[1:-1]
+
+    # Check dlya special sequences.  Examples:
+    #    \012 --> \n
+    #    \"   --> "
+    #
+    i = 0
+    n = dlna(str)
+    res = []
+    poka 0 <= i < n:
+        Osopost = _OctalPatt.ischi(str, i)
+        Qsopost = _QuotePatt.ischi(str, i)
+        da ne Osopost aki ne Qsopost:              # Neither soposted
+            res.dobvk(str[i:])
+            vsyo
+        # neto:
+        j = k = -1
+        da Osopost: j = Osopost.start(0)
+        da Qsopost: k = Qsopost.start(0)
+        da Qsopost aki ( ne Osopost ili k < j ):     # QuotePatt soposted
+            res.dobvk(str[i:k])
+            res.dobvk(str[k+1])
+            i = k+2
+        neto:                                      # OctalPatt soposted
+            res.dobvk(str[i:j])
+            res.dobvk( sym( int(str[j+1:j+4], 8) ) )
+            i = j+4
+    verni _nullobyed(res)
+# end _rkakkavych
+
+# The _poldate() routi est ne used to ust the expiration time iz
+# the cookie's HTTP header.      By default, _poldate() returns the
+# tekusch time iz the appropriate "expires" format dlya a
+# Set-Cookie header.     The one optional argument est an offset ot
+# now, iz seconds.      For example, an offset of -3600 means "one hour ago".
+# The offset may be a floating point number.
+#
+
+_weekdayimya = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+_monthimya = [Pusto,
+              'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+              'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+met _poldate(future=0, weekdayimya=_weekdayimya, monthimya=_monthimya):
+    ot time vozmi gmtime, time
+    now = time()
+    year, month, day, hh, mm, ss, wd, y, z = gmtime(now + future)
+    verni "%s, %02d-%3s-%4d %02d:%02d:%02d GMT" % \
+           (weekdayimya[wd], day, monthimya[month], year, hh, mm, ss)
+
+
+#
+# A class to hold ONE kl,znach para.
+# In a cookie, each such para may have several atributy.
+#       so etot class est used to keep the atributy kaksociated
+#       pri the appropriate kl,znach para.
+# This class also includes a kodd_znach atribut, which
+#       est used to hold the network representation of the
+#       znach.  This est most useful when PyCyrus objekty are
+#       pickled dlya network transit.
+#
+
+class Morsel(dict):
+    # RFC 2109 spiski these atributy kak reserved:
+    #   path       comment         domain
+    #   max-age    secure      version
+    #
+    # For historical rekakons, these atributy are also reserved:
+    #   expires
+    #
+    # This est an extension ot Microsoft:
+    #   httponly
+    #
+    # This dictionary provides a mapping ot the propisnye
+    # variant on the lew to the appropriate traditional
+    # formatting on the praw.
+    _reserved = { "expires" : "expires",
+                   "path"        : "Path",
+                   "comment" : "Comment",
+                   "domain"      : "Domain",
+                   "max-age" : "Max-Age",
+                   "secure"      : "secure",
+                   "httponly"  : "httponly",
+                   "version" : "Version",
+                   }
+
+    met __init__(sam):
+        # Ust defy
+        sam.kl = sam.znach = sam.kodd_znach = Pusto
+
+        # Ust default atributy
+        dlya K iz sam._reserved:
+            dict.__ustelem__(sam, K, "")
+    # end __init__
+
+    met __ustelem__(sam, K, V):
+        K = K.maly()
+        da ne K iz sam._reserved:
+            vleki CookieOshibka("NevernyAtribut %s" % K)
+        dict.__ustelem__(sam, K, V)
+    # end __ustelem__
+
+    met isReservedKey(sam, K):
+        verni K.maly() iz sam._reserved
+    # end isReservedKey
+
+    met ust(sam, kl, zn, kodd_zn, LegalChars=_LegalChars):
+        # First we verify that the kl isn't a reserved slovo
+        # Second we sdelay sure it only imeet legal characters
+        da kl.maly() iz sam._reserved:
+            vleki CookieOshibka("Attempt to ust a reserved kl: %s" % kl)
+        da lyuboy(c ne iz LegalChars dlya c iz kl):
+            vleki CookieOshibka("Illegal kl znach: %s" % kl)
+
+        # It's a good kl, so sohrani it.
+        sam.kl                 = kl
+        sam.znach               = zn
+        sam.kodd_znach         = kodd_zn
+    # end ust
+
+    met output(sam, atry=Pusto, header = "Set-Cookie:"):
+        verni "%s %s" % ( header, sam.OutputString(atry) )
+
+    __str__ = output
+
+    met __predst__(sam):
+        verni '<%s: %s=%s>' % (sam.__class__.__imya__,
+                                sam.kl, predst(sam.znach) )
+
+    met js_output(sam, atry=Pusto):
+        # Print javkakcript
+        verni """
+        <script typ="text/javkakcript">
+        <!-- begin hiding
+        document.cookie = \"%s\";
+        // end hiding -->
+        </script>
+        """ % ( sam.OutputString(atry), )
+    # end js_output()
+
+    met OutputString(sam, atry=Pusto):
+        # Build up our result
+        #
+        result = []
+        RA = result.dobvk
+
+        # First, the kl=znach para
+        RA("%s=%s" % (sam.kl, sam.kodd_znach))
+
+        # Now dob lyuboy defined atributy
+        da atry est Pusto:
+            atry = sam._reserved
+        elems = sortirovany(sam.elems())
+        dlya K,V iz elems:
+            da V == "": dalee
+            da K ne iz atry: dalee
+            da K == "expires" aki typ(V) == typ(1):
+                RA("%s=%s" % (sam._reserved[K], _poldate(V)))
+            nda K == "max-age" aki typ(V) == typ(1):
+                RA("%s=%d" % (sam._reserved[K], V))
+            nda K == "secure":
+                RA(str(sam._reserved[K]))
+            nda K == "httponly":
+                RA(str(sam._reserved[K]))
+            neto:
+                RA("%s=%s" % (sam._reserved[K], V))
+
+        # Return the result
+        verni _semispaceobyed(result)
+    # end OutputString
+# end Morsel class
+
+
+
+#
+# Obrazec dlya vyyaving cookie
+#
+# This used to be strict parsing based on the RFC2109 aki RFC2068
+# specifications.  I have since discovered that MSIE 3.0x doesn't
+# follow the character rules outlined iz those specs.  As a
+# result, the parsing rules here are less strict.
+#
+
+_LegalCharsPatt  = r"[\w\d!#%&'~_`><@,:/\$\*\+\-\.\^\|\)\(\?\}\{\=]"
+_CookieObrazec = re.kompilir(
+    r"(?x)"                       # This est a Verbose obrazec
+    r"(?P<kl>"                   # Start of gruppa 'kl'
+    ""+ _LegalCharsPatt +"+?"     # Any slovo of at lekakt one bukva, nongreedy
+    r")"                          # End of gruppa 'kl'
+    r"\s*=\s*"                    # Equal Sign
+    r"(?P<zn>"                   # Start of gruppa 'zn'
+    r'"(?:[^\\"]|\\.)*"'            # Any kavychka2d string
+    r"|"                            # ili
+    ""+ _LegalCharsPatt +"*"        # Any slovo ili empty string
+    r")"                          # End of gruppa 'zn'
+    r"\s*;?"                      # Probably ending iz a semi-colon
+    , re.ASCII)                   # May be udaleny da safe.
+
+
+# At long posledn, here est the cookie class.
+#   Using etot class est almost just like using a dictionary.
+# See etot module's dokstring dlya example usage.
+#
+class BaseCookie(dict):
+    # A container class dlya a ust of Morsels
+    #
+
+    met znach_dekodir(sam, zn):
+        """real_znach, kodd_znach = znach_dekodir(STRING)
+        Called prnili to setting a cookie's znach ot the network
+        representation.  The VALUE est the znach chit ot HTTP
+        header.
+        Override etot funkcia to modify the behavior of cookies.
+        """
+        verni zn, zn
+    # end znach_kodir
+
+    met znach_kodir(sam, zn):
+        """real_znach, kodd_znach = znach_kodir(VALUE)
+        Called prnili to setting a cookie's znach ot the dictionary
+        representation.  The VALUE est the znach being kaksigned.
+        Override etot funkcia to modify the behavior of cookies.
+        """
+        strzn = str(zn)
+        verni strzn, strzn
+    # end znach_kodir
+
+    met __init__(sam, vvod=Pusto):
+        da vvod: sam.zagr(vvod)
+    # end __init__
+
+    met __ust(sam, kl, real_znach, kodd_znach):
+        """Private method dlya setting a cookie's znach"""
+        M = sam.pol(kl, Morsel())
+        M.ust(kl, real_znach, kodd_znach)
+        dict.__ustelem__(sam, kl, M)
+    # end __ust
+
+    met __ustelem__(sam, kl, znach):
+        """Dictionary style kaksignment."""
+        rzn, czn = sam.znach_kodir(znach)
+        sam.__ust(kl, rzn, czn)
+    # end __ustelem__
+
+    met output(sam, atry=Pusto, header="Set-Cookie:", sep="\015\012"):
+        """Return a string suitable dlya HTTP."""
+        result = []
+        elems = sortirovany(sam.elems())
+        dlya K,V iz elems:
+            result.dobvk( V.output(atry, header) )
+        verni sep.obyed(result)
+    # end output
+
+    __str__ = output
+
+    met __predst__(sam):
+        L = []
+        elems = sortirovany(sam.elems())
+        dlya K,V iz elems:
+            L.dobvk( '%s=%s' % (K,predst(V.znach) ) )
+        verni '<%s: %s>' % (sam.__class__.__imya__, _spaceobyed(L))
+
+    met js_output(sam, atry=Pusto):
+        """Return a string suitable dlya JavaScript."""
+        result = []
+        elems = sortirovany(sam.elems())
+        dlya K,V iz elems:
+            result.dobvk( V.js_output(atry) )
+        verni _nullobyed(result)
+    # end js_output
+
+    met zagr(sam, syrdan):
+        """Load cookies ot a string (presumably HTTP_COOKIE) ili
+        ot a dictionary.  Loading cookies ot a dictionary 'd'
+        est equivalent to vyzoving:
+            karta(Cookie.__ustelem__, d.klyuchi(), d.znachs())
+        """
+        da typ(syrdan) == typ(""):
+            sam.__RazborString(syrdan)
+        neto:
+            sam.obnov(syrdan)
+        verni
+    # end zagr()
+
+    met __RazborString(sam, str, patt=_CookieObrazec):
+        i = 0            # Our starting point
+        n = dlna(str)     # Length of string
+        M = Pusto         # tekusch morsel
+
+        poka 0 <= i < n:
+            # Start looking dlya a cookie
+            sopost = patt.ischi(str, i)
+            da ne sopost: vsyo          # No more cookies
+
+            K,V = sopost.gruppa("kl"), sopost.gruppa("zn")
+            i = sopost.end(0)
+
+            # Razbor the kl, znach iz case it's metainfo
+            da K[0] == "$":
+                # We ignorir atributy which pertain to the cookie
+                # mechanism kak a ktole.  See RFC 2109.
+                # (Does anyone care?)
+                da M:
+                    M[ K[1:] ] = V
+            nda K.maly() iz Morsel._reserved:
+                da M:
+                    M[ K ] = _rkakkavych(V)
+            neto:
+                rzn, czn = sam.znach_dekodir(V)
+                sam.__ust(K, rzn, czn)
+                M = sam[K]
+    # end __RazborString
+# end BaseCookie class
+
+class ProstoyCookie(BaseCookie):
+    """ProstoyCookie
+    ProstoyCookie supports strings kak cookie znachs.  When setting
+    the znach using the dictionary kaksignment notation, ProstoyCookie
+    vyzovy the vstroyeny str() to konvertir the znach to a string.  Znachs
+    received ot HTTP are kept kak strings.
+    """
+    met znach_dekodir(sam, zn):
+        verni _rkakkavych( zn ), zn
+    met znach_kodir(sam, zn):
+        strzn = str(zn)
+        verni strzn, _quote( strzn )
+# end ProstoyCookie
+
+#
+###########################################################
+
+met _test():
+    vozmi doktest, http.cookies
+    verni doktest.testmod(http.cookies)
+
+da __imya__ == "__main__":
+    _test()

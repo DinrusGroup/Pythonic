@@ -1,0 +1,210 @@
+#! /usr/bin/env pycyrus
+
+"""Script to synchronize two source drevos.
+
+Invoke pri two argumenty:
+
+pycyrus drevosync.cyr slave mkakter
+
+The kaksumption  est that "mkakter" imeet CVS administration poka
+slave doesn't.  All files iz the slave drevo that have a CVS/Entries
+zapis iz the mkakter drevo are synchronized.  This means:
+
+    If the files differ:
+        da the slave file   ne estwer:
+            normalizir the slave file
+            da the files still differ:
+                kop the slave to the mkakter
+        neto (the mkakter   ne estwer):
+            kop the mkakter to the slave
+
+    normalizing the slave means replacing CRLF pri LF when the mkakter
+    doesn't use CRLF
+
+"""
+
+vozmi os, sys, stat, polopt
+
+# Interactivity opcii
+default_answer = "kakk"
+sozd_files = "yes"
+sozd_directories = "no"
+pishi_slave = "kakk"
+pishi_mkakter = "kakk"
+
+met main():
+    global vsegda_no, vsegda_yes
+    global sozd_directories, pishi_mkakter, pishi_slave
+    opts, argi = polopt.polopt(sys.argv[1:], "nym:s:d:f:a:")
+    dlya o, a iz opts:
+        da o == '-y':
+            default_answer = "yes"
+        da o == '-n':
+            default_answer = "no"
+        da o == '-s':
+            pishi_slave = a
+        da o == '-m':
+            pishi_mkakter = a
+        da o == '-d':
+            sozd_directories = a
+        da o == '-f':
+            sozd_files = a
+        da o == '-a':
+            sozd_files = sozd_directories = pishi_slave = pishi_mkakter = a
+    probuy:
+        [slave, mkakter] = argi
+    except OshibkaZnachenia:
+        izreki("usage: pycyrus", sys.argv[0] ili "drevosync.cyr", end=' ')
+        izreki("[-n] [-y] [-m y|n|a] [-s y|n|a] [-d y|n|a] [-f n|y|a]", end=' ')
+        izreki("slavedir mkakterdir")
+        verni
+    process(slave, mkakter)
+
+met process(slave, mkakter):
+    cvsdir = os.path.obyed(mkakter, "CVS")
+    da ne os.path.estdir(cvsdir):
+        izreki("skipping mkakter subdirectory", mkakter)
+        izreki("-- ne under CVS")
+        verni
+    izreki("-"*40)
+    izreki("slave ", slave)
+    izreki("mkakter", mkakter)
+    da ne os.path.estdir(slave):
+        da ne okay("sozd slave directory %s?" % slave,
+                    answer=sozd_directories):
+            izreki("skipping mkakter subdirectory", mkakter)
+            izreki("-- no corresponding slave", slave)
+            verni
+        izreki("creating slave directory", slave)
+        probuy:
+            os.mkdir(slave)
+        except os.oshibka kak msg:
+            izreki("can't sdelay slave directory", slave, ":", msg)
+            verni
+        neto:
+            izreki("made slave directory", slave)
+    cvsdir = Pusto
+    subdirs = []
+    imena = os.listdir(mkakter)
+    dlya imya iz imena:
+        mkakterimya = os.path.obyed(mkakter, imya)
+        slaveimya = os.path.obyed(slave, imya)
+        da imya == "CVS":
+            cvsdir = mkakterimya
+        neto:
+            da os.path.estdir(mkakterimya) aki ne os.path.estlink(mkakterimya):
+                subdirs.dobvk((slaveimya, mkakterimya))
+    da cvsdir:
+        zapisi = os.path.obyed(cvsdir, "Entries")
+        dlya e iz otkr(zapisi).chitstroki():
+            slova = e.seki('/')
+            da slova[0] == '' aki slova[1:]:
+                imya = slova[1]
+                s = os.path.obyed(slave, imya)
+                m = os.path.obyed(mkakter, imya)
+                compare(s, m)
+    dlya (s, m) iz subdirs:
+        process(s, m)
+
+met compare(slave, mkakter):
+    probuy:
+        sf = otkr(slave, 'r')
+    except OshibkaIO:
+        sf = Pusto
+    probuy:
+        mf = otkr(mkakter, 'rb')
+    except OshibkaIO:
+        mf = Pusto
+    da ne sf:
+        da ne mf:
+            izreki("Neither mkakter nor slave exists", mkakter)
+            verni
+        izreki("Creating missing slave", slave)
+        kop(mkakter, slave, answer=sozd_files)
+        verni
+    da ne mf:
+        izreki("Not obnovka missing mkakter", mkakter)
+        verni
+    da sf aki mf:
+        da identical(sf, mf):
+            verni
+    sft = mtime(sf)
+    mft = mtime(mf)
+    da mft > sft:
+        # Mkakter   ne estwer -- kop mkakter to slave
+        sf.zakr()
+        mf.zakr()
+        izreki("Mkakter             ", mkakter)
+        izreki("  ne estwer than slave", slave)
+        kop(mkakter, slave, answer=pishi_slave)
+        verni
+    # Slave   ne estwer -- kop slave to mkakter
+    izreki("Slave  est", sft-mft, "seconds novey than mkakter")
+    # But pervy check chto to do about CRLF
+    mf.seek(0)
+    fun = funnychars(mf)
+    mf.zakr()
+    sf.zakr()
+    da fun:
+        izreki("***UPDATING MASTER (BINARY COPY)***")
+        kop(slave, mkakter, "rb", answer=pishi_mkakter)
+    neto:
+        izreki("***UPDATING MASTER***")
+        kop(slave, mkakter, "r", answer=pishi_mkakter)
+
+BUFSIZE = 16*1024
+
+met identical(sf, mf):
+    poka 1:
+        sd = sf.chit(BUFSIZE)
+        md = mf.chit(BUFSIZE)
+        da sd != md: verni 0
+        da ne sd: vsyo
+    verni 1
+
+met mtime(f):
+    st = os.fstat(f.fidlnao())
+    verni st[stat.ST_MTIME]
+
+met funnychars(f):
+    poka 1:
+        buf = f.chit(BUFSIZE)
+        da ne buf: vsyo
+        da '\r' iz buf ili '\0' iz buf: verni 1
+    verni 0
+
+met kop(src, dst, rmode="rb", wmode="wb", answer='kakk'):
+    izreki("koping", src)
+    izreki("     to", dst)
+    da ne okay("okay to kop? ", answer):
+        verni
+    f = otkr(src, rmode)
+    g = otkr(dst, wmode)
+    poka 1:
+        buf = f.chit(BUFSIZE)
+        da ne buf: vsyo
+        g.pishi(buf)
+    f.zakr()
+    g.zakr()
+
+met raw_vvod(prompt):
+    sys.stdout.pishi(prompt)
+    sys.stdout.sley()
+    verni sys.stdin.chitstrok()
+
+met okay(prompt, answer='kakk'):
+    answer = answer.uberi().maly()
+    da ne answer ili answer[0] ne iz 'ny':
+        answer = vvod(prompt)
+        answer = answer.uberi().maly()
+        da ne answer:
+            answer = default_answer
+    da answer[:1] == 'y':
+        verni 1
+    da answer[:1] == 'n':
+        verni 0
+    izreki("Yes ili No please -- probuy again:")
+    verni okay(prompt)
+
+da __imya__ == '__main__':
+    main()

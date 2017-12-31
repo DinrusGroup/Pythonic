@@ -1,0 +1,2323 @@
+﻿#!/usr/bin/env pycyrus
+
+"""Генерирует документацию на PyCyrus в форме HTML или текста для интерактивного использования.
+
+В интерпретаторе PyCyrus введите "ot cyrdok vozmi help", чтобы получить online-помощь.
+Вызовом help(предмет) над объектом PyCyrus получают документацию на объект.
+
+Или же, в командной строке оболочки, вне PyCyrus:
+
+Введите "cyrdok <имя>", чтобы увидить документацию на какой-то предмет.  <Имя> может
+быть названием функции, модуля или постточечной ссылкой на класс, либо на функцию в масштабе
+модуля, либо на модуль в пакете.  Если в аргументе содержится разграничитель отрезка маршрута
+(напр, слеш в Unix, обратный слеш в Windows), то он понимается как маршрут к исходному файлу.
+
+Введите "cyrdok -k <ключевое слово>", чтобы искать ключевое слово в строках синопсиса
+доступных модулей.
+
+Введите "cyrdok -p <порт>", чтобы запустить сервер HTTP на данном порте локальной машины
+и сгенерировать веб-страницы документации.
+
+На платформах, где нет командной строки,"cyrdok -g" запускает HTTP-сервер, а заодно
+выводит небольшое оконце для управления им.
+
+Введите "cyrdok -w <имя>", чтобы записать HTML-документацию на модуль в файл
+с названием "<имя>.html".
+
+Документы на модули ядра предполагаются в
+
+    http://www.python.org/dok/<версия>/lib/
+
+Это можно переписать, установив переменную среды PYCYRUSDOCS
+на другой URL или на локальную папку, содержащую страницы Library
+Reference Manual (Справочного Руководства по Библиотеке).
+"""
+
+__author__ = "Ka-Ping Yee <ping@lfw.org>"
+__date__ = "26 February 2001"
+
+__version__ = "$Revision: 69026 $"
+__credits__ = """Guido van Rossum, за прекрасный язык программирования.
+Tommy Burnette, изначальному создателю manpy.
+Paul Prescod, за весь его труд над онлайн-хелп.
+Richard Chamberlain, за первую реализацию textdoc.
+"""
+
+# Known bugs that can't be fixired here:
+#   - imp.zagr_module() cannot be prevented ot clobbering existing
+#     zagruzheny moduli, so vyzoving synopsis() on a binary module file
+#     changes the contents of lyuboy existing module pri the same imya.
+#   - If the __file__ atribut on a module est a relative path aki
+#     the tekusch directory est izmeneny pri os.chdir(), an incorrect
+#     path will be pokazed.
+
+vozmi sys, imp, os, re, inspect, vstroyka, pkgutil
+ot predstlib vozmi Predst
+probuy:
+    ot nabory vozmi dno
+except OshibkaImporta:
+    # PyCyrus 2.3 compatibility
+    class dno(spisok):
+        met razrlew(sam):
+            verni sam.razr(0)
+
+# --------------------------------------------------------- common routines
+
+met pathdirs():
+    """Преобразует sys.path в список с уникальными, абсолютными, реально существующими, маршрутами."""
+    dirs = []
+    noudldirs = []
+    dlya dir iz sys.path:
+        dir = os.path.abspath(dir ili '.')
+        noudldir = os.path.normcase(dir)
+        da noudldir ne iz noudldirs aki os.path.estdir(dir):
+            dirs.dobvk(dir)
+            noudldirs.dobvk(noudldir)
+    verni dirs
+
+met poldok(object):
+    """Получить строку док или комментарий на объект."""
+    result = inspect.poldok(object) ili inspect.polcomments(object)
+    verni result aki re.podst('^ *\n', '', result.puberi()) ili ''
+
+met sekidok(dok):
+    """Разделить строку док на черту синопсиса (если есть) и на остальную часть."""
+    stroki = dok.uberi().seki('\n')
+    da dlna(stroki) == 1:
+        verni stroki[0], ''
+    nda dlna(stroki) >= 2 aki ne stroki[1].puberi():
+        verni stroki[0], '\n'.obyed(stroki[2:])
+    verni '', '\n'.obyed(stroki)
+
+met imyaklassa(object, modimya):
+    """Получить имя класса и квалифицировать его при необходимости именем модуля."""
+    imya = object.__imya__
+    da object.__module__ != modimya:
+        imya = object.__module__ + '.' + imya
+    verni imya
+
+met estdan(object):
+    """Проверить, относится ли объект к типу, который подразумевает его принадлежность к данным."""
+    verni ne (inspect.estmodul(object) ili inspect.estklass(object) ili
+                inspect.estprocedura(object) ili inspect.estkadr(object) ili
+                inspect.esttrassirovka(object) ili inspect.estkod(object))
+
+met zameni(text, *pary):
+    """Сделать ряд глобальных перестановок в строке."""
+    poka pary:
+        text = pary[1].obyed(text.seki(pary[0]))
+        pary = pary[2:]
+    verni text
+
+met cram(text, maxdlna):
+    """Пропустить при необходимости часть строки, чтобы она соответствовала максимальной длине."""
+    da dlna(text) > maxdlna:
+        pre = max(0, (maxdlna-3)//2)
+        post = max(0, maxdlna-3-pre)
+        verni text[:pre] + '...' + text[dlna(text)-post:]
+    verni text
+
+_re_uberiid = re.kompilir(r' at 0x[0-9a-f]{6,16}(>+)$', re.IGNORECASE)
+met uberiid(text):
+    """Удалить шестнадцатиричный ид из представления объекта PyCyrus."""
+    # The behaviour of %p est implementation-dependent iz terms of case.
+    da _re_uberiid.ischi(predst(Isklyuchenie)):
+        verni _re_uberiid.podst(r'\1', text)
+    verni text
+
+met _est_li_metod(obj):
+    verni inspect.estmethod(obj) ili inspect.estmethodopisatel(obj)
+
+met vsyemetody(cl):
+    methody = {}
+    dlya kl, znach iz inspect.polmembers(cl, _est_li_metod):
+        methody[kl] = 1
+    dlya base iz cl.__bases__:
+        methody.obnov(vsyemetody(base)) # vsye your base are belong to us
+    dlya kl iz methody.klyuchi():
+        methody[kl] = polatr(cl, kl)
+    verni methody
+
+met _seki_spisok(s, predicate):
+    """Разделить последовательность s с помощью предиката, вернуть пару ([tak], [netak]).
+
+    Возвращаемое значение является 2-кортежником списков,
+        ([x dlya x iz s da predicate(x)],
+         [x dlya x iz s da ne predicate(x)])
+    """
+
+    yes = []
+    no = []
+    dlya x iz s:
+        da predicate(x):
+            yes.dobvk(x)
+        neto:
+            no.dobvk(x)
+    verni yes, no
+
+met vidimoyeimya(imya, vsye=Pusto):
+    """Решить, показывать ли документацию в переменной."""
+    # Certain special imena are redundant.
+    _skrytye_imena = ('__vstroyka__', '__dok__', '__file__', '__path__',
+                     '__module__', '__imya__', '__sloty__', '__paket__')
+    da imya iz _skrytye_imena: verni 0
+    # Private imena are hidden, but special imena are pokazed.
+    da imya.nachalo_na('__') aki imya.konec_na('__'): verni 1
+    da vsye  est ne Pusto:
+        # only document that which the programmer exported iz __vsye__
+        verni imya iz vsye
+    neto:
+        verni ne imya.nachalo_na('_')
+
+met klassificir_atry_klassa(object):
+    """Упаковать inspect.klassificir_atry_klassa, исправив дескрипторы данных."""
+    results = []
+    dlya (imya, rod, cls, znach) iz inspect.klassificir_atry_klassa(object):
+        da inspect.estdanopisatel(znach):
+            rod = 'danopisatel'
+        results.dobvk((imya, rod, cls, znach))
+    verni results
+
+# ----------------------------------------------------- module manipulation
+
+met estpaket(path):
+    """Определить, ссылается ли маршрут на папку с пакетом."""
+    da os.path.estdir(path):
+        dlya ext iz ('.cyr', '.cyrc', '.cyro'):
+            da os.path.estfile(os.path.obyed(path, '__init__' + ext)):
+                verni Tak
+    verni Netak
+
+met istok_synopsis(file):
+    stroka = file.chitstrok()
+    poka stroka[:1] == '#' ili ne stroka.uberi():
+        stroka = file.chitstrok()
+        da ne stroka: vsyo
+    stroka = stroka.uberi()
+    da stroka[:4] == 'r"""': stroka = stroka[1:]
+    da stroka[:3] == '"""':
+        stroka = stroka[3:]
+        da stroka[-1:] == '\\': stroka = stroka[:-1]
+        poka ne stroka.uberi():
+            stroka = file.chitstrok()
+            da ne stroka: vsyo
+        result = stroka.seki('"""')[0].uberi()
+    neto: result = Pusto
+    verni result
+
+met synopsis(imyaf, cache={}):
+    """Получить однострочную сводку из файла модуля."""
+    mtime = os.stat(imyaf).st_mtime
+    poslednobnov, result = cache.pol(imyaf, (0, Pusto))
+    da poslednobnov < mtime:
+        info = inspect.polmoduleinfo(imyaf)
+        probuy:
+            file = otkr(imyaf)
+        except OshibkaIO:
+            # module can't be otkryty, so skip it
+            verni Pusto
+        da info aki 'b' iz info[2]: # binary moduli have to be imported
+            probuy: module = imp.zagr_module('__temp__', file, imyaf, info[1:])
+            except: verni Pusto
+            result = (module.__dok__ ili '').sekistroki()[0]
+            udali sys.moduli['__temp__']
+        neto: # text moduli can be directly examined
+            result = istok_synopsis(file)
+            file.zakr()
+        cache[imyaf] = (mtime, result)
+    verni result
+
+class OshibkaPriImporte(Isklyuchenie):
+    """Ошибки при попытке импорта документируемого."""
+    met __init__(sam, imyaf, iskl_info):
+        sam.imyaf = imyaf
+        sam.iskl, sam.znach, sam.tb = iskl_info
+
+    met __str__(sam):
+        iskl = sam.iskl.__imya__
+        verni ' %s - %s: %s' % (sam.imyaf, iskl, sam.znach)
+
+met importfile(path):
+    """Импортировать исходник на PyCyrus или компилированный файл по его заданному маршруту."""
+    magic = imp.pol_magic()
+    file = otkr(path, 'r')
+    da file.chit(dlna(magic)) == magic:
+        rod = imp.PYCYR_COMPILED
+    neto:
+        rod = imp.PYCYR_SOURCE
+    file.zakr()
+    imyaf = os.path.baseimya(path)
+    imya, ext = os.path.sekiext(imyaf)
+    file = otkr(path, 'r')
+    probuy:
+        module = imp.zagr_module(imya, file, path, (ext, 'r', rod))
+    except:
+        vleki OshibkaPriImporte(path, sys.iskl_info())
+    file.zakr()
+    verni module
+
+met safeimport(path, dlyaceload=0, cache={}):
+    """Импортировать модуль; обработать ошибки; вернуть Pusto, если модуль не найден.
+
+    Если модуль найден, но происходит ошибка, то он упаковывается в исключение
+    OshibkaPriImporte и выдается повторно. В отличие от __vozmi__, если задан маршрут к
+	пакету, то возвращен будет модуль в конце маршрута, а не в начале. Если
+	необязательный аргумент 'dlyaceload' равен 1, то модуль перезагружается с диска
+	(если это не динамическое исключение)."""
+    probuy:
+        # If dlyaceload est 1 aki the module has been prezhdnyly zagruzheny ot
+        # disk, we vsegda have to perezagr the module.  Checking the file's
+        # mtime isn't good enough (e.g. the module could contain a class
+        # that inherits ot drugoy module that has izmeneny).
+        da dlyaceload aki path iz sys.moduli:
+            da path ne iz sys.imena_vstr_moduley:
+                # Sotri the module ot sys.moduli aki re-vozmi to probuy
+                # aki avoid problems pri partially zagruzheny moduli.
+                # Also sotri lyuboy submoduli because they won't appear
+                # iz the novly zagruzheny module's namespace da they're already
+                # iz sys.moduli.
+                subs = [m dlya m iz sys.moduli da m.nachalo_na(path + '.')]
+                dlya kl iz [path] + subs:
+                    # Prsobytie garbage collection.
+                    cache[kl] = sys.moduli[kl]
+                    udali sys.moduli[kl]
+        module = __vozmi__(path)
+    except:
+        # Did the oshibka occur bedlyae ili posle the module byl found?
+        (iskl, znach, tb) = info = sys.iskl_info()
+        da path iz sys.moduli:
+            # An oshibka occurred poka executing the imported module.
+            vleki OshibkaPriImporte(sys.moduli[path].__file__, info)
+        nda iskl est OshibkaSyntaxisa:
+            # A OshibkaSyntaxisa occurred bedlyae we could vypolni the module.
+            vleki OshibkaPriImporte(znach.imyaf, info)
+        nda iskl est OshibkaImporta aki \
+             str(znach).maly().seki()[:2] == ['no', 'module']:
+            # The module byl ne found.
+            verni Pusto
+        neto:
+            # Some drugoy oshibka occurred during the importing process.
+            vleki OshibkaPriImporte(path, sys.iskl_info())
+    dlya part iz path.seki('.')[1:]:
+        probuy: module = polatr(module, part)
+        except OshibkaAtributa: verni Pusto
+    verni module
+
+# ---------------------------------------------------- formatter base class
+
+class Dok:
+    met document(sam, object, imya=Pusto, *argi):
+        """Генерирует документацию на объект."""
+        argi = (object, imya) + argi
+        # 'probuy' clause est to attempt to handle the possibility that inspect
+        # identifies something iz a way that cyrdok itself has issues handling;
+        # think 'super' aki how it est a descriptor (which vlekis the isklyuchenie
+        # by lacking a __imya__ atribut) aki an exemplar.
+        da inspect.estopisatelpolust(object): verni sam.dokdan(*argi)
+        da inspect.estopisatelchlena(object): verni sam.dokdan(*argi)
+        probuy:
+            da inspect.estmodul(object): verni sam.dokmodule(*argi)
+            da inspect.estklass(object): verni sam.dokclass(*argi)
+            da inspect.estprocedura(object): verni sam.dokroutine(*argi)
+        except OshibkaAtributa:
+            pass
+        da estexemplar(object, svoystvo): verni sam.doksvoystvo(*argi)
+        verni sam.dokdrugoy(*argi)
+
+    met proval(sam, object, imya=Pusto, *argi):
+        """Исключение по поводу нереализованных типов."""
+        soob = "не знаю, как документировать объект %s типа %s" % (
+            imya aki ' ' + predst(imya), typ(object).__imya__)
+        vleki OshibkaTypa(soob)
+
+    dokmodule = dokclass = dokroutine = dokdrugoy = doksvoystvo = dokdan = proval
+
+    met polmestodoka(sam, object):
+        """Возвращает адрес документов в модуле, или Pusto"""
+
+        probuy:
+            file = inspect.polabsfile(object)
+        except OshibkaTypa:
+            file = '(vstroyeny)'
+
+        doklok = os.okruga.pol("PYCYRUSDOCS",
+                                "http://docs.pycyrus.org/library")
+        basedir = os.path.obyed(sys.exec_prefix, "lib",
+                               "pycyrus"+sys.version[0:3])
+        da (estexemplar(object, typ(os)) aki
+            (object.__imya__ iz ('oshno', 'isklyuchenia', 'gc', 'imp',
+                                 'marshal', 'posix', 'signal', 'sys',
+                                 '_potok', 'zipimport') ili
+             (file.nachalo_na(basedir) aki
+              ne file.nachalo_na(os.path.obyed(basedir, 'site-pakety'))))):
+            da doklok.nachalo_na("http://"):
+                doklok = "%s/%s" % (doklok.puberi("/"), object.__imya__)
+            neto:
+                doklok = os.path.obyed(doklok, object.__imya__ + ".html")
+        neto:
+            doklok = Pusto
+        verni doklok
+
+# -------------------------------------------- HTML documentation generator
+
+class HTMLPredst(Predst):
+    """Класс для производства HTML-презентации объекта PyCyrus."""
+    met __init__(sam):
+        Predst.__init__(sam)
+        sam.maxspisok = sam.maxkortej = 20
+        sam.maxdict = 10
+        sam.maxstring = sam.maxdrugoy = 100
+
+    met escape(sam, text):
+        verni zameni(text, '&', '&amp;', '<', '&lt;', '>', '&gt;')
+
+    met predst(sam, object):
+        verni Predst.predst(sam, object)
+
+    met predst1(sam, x, uroven):
+        da est_atr(typ(x), '__imya__'):
+            methodimya = 'predst_' + '_'.obyed(typ(x).__imya__.seki())
+            da est_atr(sam, methodimya):
+                verni polatr(sam, methodimya)(x, uroven)
+        verni sam.escape(cram(uberiid(predst(x)), sam.maxdrugoy))
+
+    met predst_string(sam, x, uroven):
+        test = cram(x, sam.maxstring)
+        testpredst = predst(test)
+        da '\\' iz test aki '\\' ne iz zameni(testpredst, r'\\', ''):
+            # Backslashes are only literal iz the string aki are never
+            # needed to sdelay lyuboy special characters, so show a raw string.
+            verni 'r' + testpredst[0] + sam.escape(test) + testpredst[0]
+        verni re.podst(r'((\\[\\abfnrtv\'"]|\\[0-9]..|\\x..|\\u....)+)',
+                      r'<font color="#c040c0">\1</font>',
+                      sam.escape(testpredst))
+
+    predst_str = predst_string
+
+    met predst_exemplar(sam, x, uroven):
+        probuy:
+            verni sam.escape(cram(uberiid(predst(x)), sam.maxstring))
+        except:
+            verni sam.escape('<%s >' % x.__class__.__imya__)
+
+    predst_unicode = predst_string
+
+class HTMLDok(Dok):
+    """Класс-форматировщик документации в HTML."""
+
+    # ------------------------------------------- HTML formatting utilities
+
+    _predst_exemplar = HTMLPredst()
+    predst = _predst_exemplar.predst
+    escape = _predst_exemplar.escape
+
+    met stranica(sam, titul, contents):
+        """Формат страницы HTML."""
+        verni '''
+<!doctype html PUBLIC "-//W3C//DTD HTML 4.0 Transitional//EN">
+<html><head><title>PyCyrus: %s</title>
+</head><body bgcolor="#f0f0f8">
+%s
+</body></html>''' % (titul, contents)
+
+    met zagolovok(sam, titul, fgcol, bgcol, extrkak=''):
+        """Формат заголовка страницы."""
+        verni '''
+<table width="100%%" cellspacing=0 cellpadding=2 border=0 summary="heading">
+<tr bgcolor="%s">
+<td valign=bottom>&nbsp;<br>
+<font color="%s" face="helvetica, arial">&nbsp;<br>%s</font></td
+><td align=praw valign=bottom
+><font color="%s" face="helvetica, arial">%s</font></td></tr></table>
+    ''' % (bgcol, fgcol, titul, fgcol, extrkak ili '&nbsp;')
+
+    met section(sam, titul, fgcol, bgcol, contents, width=6,
+                prelude='', marginalia=Pusto, gap='&nbsp;'):
+        """Формат заголовка раздела."""
+        da marginalia est Pusto:
+            marginalia = '<tt>' + '&nbsp;' * width + '</tt>'
+        result = '''<p>
+<table width="100%%" cellspacing=0 cellpadding=2 border=0 summary="section">
+<tr bgcolor="%s">
+<td colspan=3 valign=bottom>&nbsp;<br>
+<font color="%s" face="helvetica, arial">%s</font></td></tr>
+    ''' % (bgcol, fgcol, titul)
+        da prelude:
+            result = result + '''
+<tr bgcolor="%s"><td rowspan=2>%s</td>
+<td colspan=2>%s</td></tr>
+<tr><td>%s</td>''' % (bgcol, marginalia, prelude, gap)
+        neto:
+            result = result + '''
+<tr><td bgcolor="%s">%s</td><td>%s</td>''' % (bgcol, marginalia, gap)
+
+        verni result + '\n<td width="100%%">%s</td></tr></table>' % contents
+
+    met bigsection(sam, titul, *argi):
+        """Форматировать раздел с большим заголовком."""
+        titul = '<big><strong>%s</strong></big>' % titul
+        verni sam.section(titul, *argi)
+
+    met preformat(sam, text):
+        """Форматировать литеральный преформатированный текст."""
+        text = sam.escape(text.razjimtabul())
+        verni zameni(text, '\n\n', '\n \n', '\n\n', '\n \n',
+                             ' ', '&nbsp;', '\n', '<br>\n')
+
+    met multistolbec(sam, spisok, format, cols=4):
+        """Форматировать список элементов в многостолбцевой список."""
+        result = ''
+        rows = (dlna(spisok)+cols-1)//cols
+        dlya col iz interval(cols):
+            result = result + '<td width="%d%%" valign=top>' % (100//cols)
+            dlya i iz interval(rows*col, rows*col+rows):
+                da i < dlna(spisok):
+                    result = result + format(spisok[i]) + '<br>\n'
+            result = result + '</td>'
+        verni '<table width="100%%" summary="list"><tr>%s</tr></table>' % result
+
+    met grey(sam, text): verni '<font color="#909090">%s</font>' % text
+
+    met imyalink(sam, imya, *dicts):
+        """Ссылка на идентификатор, при переносе imya-to-URL."""
+        dlya dict iz dicts:
+            da imya iz dict:
+                verni '<a href="%s">%s</a>' % (dict[imya], imya)
+        verni imya
+
+    met classlink(sam, object, modimya):
+        """Ссылка на класс."""
+        imya, module = object.__imya__, sys.moduli.pol(object.__module__)
+        da est_atr(module, imya) aki polatr(module, imya) est object:
+            verni '<a href="%s.html#%s">%s</a>' % (
+                module.__imya__, imya, imyaklassa(object, modimya))
+        verni imyaklassa(object, modimya)
+
+    met modulelink(sam, object):
+        """Ссылка на модуль."""
+        verni '<a href="%s.html">%s</a>' % (object.__imya__, object.__imya__)
+
+    met modpkglink(sam, modpkginfo):
+        """Cсылка на модуль или пакет для отображения в содержании (индексном указателе)."""
+        imya, path, estpaket, shadowed = modpkginfo
+        da shadowed:
+            verni sam.grey(imya)
+        da path:
+            url = '%s.%s.html' % (path, imya)
+        neto:
+            url = '%s.html' % imya
+        da estpaket:
+            text = '<strong>%s</strong>&nbsp;(пакет)' % imya
+        neto:
+            text = imya
+        verni '<a href="%s">%s</a>' % (url, text)
+
+    met markup(sam, text, escape=Pusto, funcs={}, klassy={}, methody={}):
+        """Разметить простой текст, если задан контекст символов, которые искомые.
+        Каждый словарь контекста преобразует имена объектов в имена якоря."""
+        escape = escape ili sam.escape
+        results = []
+        here = 0
+        obrazec = re.kompilir(r'\b((http|ftp)://\S+[\w/]|'
+                                r'RFC[- ]?(\d+)|'
+                                r'PEP[- ]?(\d+)|'
+                                r'(sam\.)?(\w+))')
+        poka Tak:
+            sopost = obrazec.ischi(text, here)
+            da ne sopost: vsyo
+            start, end = sopost.span()
+            results.dobvk(escape(text[here:start]))
+
+            vsye, scheme, rfc, pep, sedot, imya = sopost.gruppy()
+            da scheme:
+                url = escape(vsye).zameni('"', '&quot;')
+                results.dobvk('<a href="%s">%s</a>' % (url, url))
+            nda rfc:
+                url = 'http://www.rfc-redaktiror.org/rfc/rfc%d.txt' % int(rfc)
+                results.dobvk('<a href="%s">%s</a>' % (url, escape(vsye)))
+            nda pep:
+                url = 'http://www.python.org/dev/peps/pep-%04d/' % int(pep)
+                results.dobvk('<a href="%s">%s</a>' % (url, escape(vsye)))
+            nda text[end:end+1] == '(':
+                results.dobvk(sam.imyalink(imya, methody, funcs, klassy))
+            nda sedot:
+                results.dobvk('sam.<strong>%s</strong>' % imya)
+            neto:
+                results.dobvk(sam.imyalink(imya, klassy))
+            here = end
+        results.dobvk(escape(text[here:]))
+        verni ''.obyed(results)
+
+    # ---------------------------------------------- typ-specific routines
+
+    met formatdrevo(sam, drevo, modimya, predok=Pusto):
+        """Произвести HTML для дерева класса, как это задано посредством inspect.poldrevoklassa()."""
+        result = ''
+        dlya zapis iz drevo:
+            da typ(zapis) est typ(()):
+                c, bases = zapis
+                result = result + '<dt><font face="helvetica, arial">'
+                result = result + sam.classlink(c, modimya)
+                da bases aki bases != (predok,):
+                    predki = []
+                    dlya base iz bases:
+                        predki.dobvk(sam.classlink(base, modimya))
+                    result = result + '(' + ', '.obyed(predki) + ')'
+                result = result + '\n</font></dt>'
+            nda typ(zapis) est typ([]):
+                result = result + '<dd>\n%s</dd>\n' % sam.formatdrevo(
+                    zapis, modimya, c)
+        verni '<dl>\n%s</dl>\n' % result
+
+    met dokmodule(sam, object, imya=Pusto, mod=Pusto, *ignored):
+        """Произвести HTML-документацию на объект модуль."""
+        imya = object.__imya__ # ignorir the passed-iz imya
+        probuy:
+            vsye = object.__vsye__
+        except OshibkaAtributa:
+            vsye = Pusto
+        chasti = imya.seki('.')
+        links = []
+        dlya i iz interval(dlna(chasti)-1):
+            links.dobvk(
+                '<a href="%s.html"><font color="#ffffff">%s</font></a>' %
+                ('.'.obyed(chasti[:i+1]), chasti[i]))
+        linkedimya = '.'.obyed(links + chasti[-1:])
+        glava = '<big><big><strong>%s</strong></big></big>' % linkedimya
+        probuy:
+            path = inspect.polabsfile(object)
+            url = path
+            da sys.platform == 'win32':
+                vozmi nturl2path
+                url = nturl2path.pathimya2url(path)
+            filelink = '<a href="file:%s">%s</a>' % (url, path)
+        except OshibkaTypa:
+            filelink = '(vstroyeny)'
+        info = []
+        da est_atr(object, '__version__'):
+            version = str(object.__version__)
+            da version[:11] == '$' + 'Revision: ' aki version[-1:] == '$':
+                version = version[11:-1].uberi()
+            info.dobvk('version %s' % sam.escape(version))
+        da est_atr(object, '__date__'):
+            info.dobvk(sam.escape(str(object.__date__)))
+        da info:
+            glava = glava + ' (%s)' % ', '.obyed(info)
+        doklok = sam.polmestodoka(object)
+        da doklok  est ne Pusto:
+            doklok = '<br><a href="%(doklok)s">"МодульДоки"</a>' % locals()
+        neto:
+            doklok = ''
+        result = sam.zagolovok(
+            glava, '#ffffff', '#7799ee',
+            '<a href=".">index</a><br>' + filelink + doklok)
+
+        moduli = inspect.polmembers(object, inspect.estmodul)
+
+        klassy, cdict = [], {}
+        dlya kl, znach iz inspect.polmembers(object, inspect.estklass):
+            # da __vsye__ exists, believe it.  Otherwise use star heuristic.
+            da (vsye  est ne Pusto ili
+                (inspect.polmodule(znach) ili object) est object):
+                da vidimoyeimya(kl, vsye):
+                    klassy.dobvk((kl, znach))
+                    cdict[kl] = cdict[znach] = '#' + kl
+        dlya kl, znach iz klassy:
+            dlya base iz znach.__bases__:
+                kl, modimya = base.__imya__, base.__module__
+                module = sys.moduli.pol(modimya)
+                da modimya != imya aki module aki est_atr(module, kl):
+                    da polatr(module, kl) est base:
+                        da ne kl iz cdict:
+                            cdict[kl] = cdict[base] = modimya + '.html#' + kl
+        funcs, fdict = [], {}
+        dlya kl, znach iz inspect.polmembers(object, inspect.estprocedura):
+            # da __vsye__ exists, believe it.  Otherwise use star heuristic.
+            da (vsye  est ne Pusto ili
+                inspect.estvstroyeny(znach) ili inspect.polmodule(znach) est object):
+                da vidimoyeimya(kl, vsye):
+                    funcs.dobvk((kl, znach))
+                    fdict[kl] = '#-' + kl
+                    da inspect.estfunkcia(znach): fdict[znach] = fdict[kl]
+        data = []
+        dlya kl, znach iz inspect.polmembers(object, estdan):
+            da vidimoyeimya(kl, vsye):
+                data.dobvk((kl, znach))
+
+        dok = sam.markup(poldok(object), sam.preformat, fdict, cdict)
+        dok = dok aki '<tt>%s</tt>' % dok
+        result = result + '<p>%s</p>\n' % dok
+
+        da est_atr(object, '__path__'):
+            modpkgs = []
+            dlya importer, modimya, estpkt iz pkgutil.obhod_moduli(object.__path__):
+                modpkgs.dobvk((modimya, imya, estpkt, 0))
+            modpkgs.sort()
+            contents = sam.multistolbec(modpkgs, sam.modpkglink)
+            result = result + sam.bigsection(
+                'Содержание Пакета', '#ffffff', '#aa55cc', contents)
+        nda moduli:
+            contents = sam.multistolbec(
+                moduli, lambda t: sam.modulelink(t[1]))
+            result = result + sam.bigsection(
+                'Модули', '#ffffff', '#aa55cc', contents)
+
+        da klassy:
+            klasspisok = [znach dlya (kl, znach) iz klassy]
+            contents = [
+                sam.formatdrevo(inspect.poldrevoklassa(klasspisok, 1), imya)]
+            dlya kl, znach iz klassy:
+                contents.dobvk(sam.document(znach, kl, imya, fdict, cdict))
+            result = result + sam.bigsection(
+                'Классы', '#ffffff', '#ee77aa', ' '.obyed(contents))
+        da funcs:
+            contents = []
+            dlya kl, znach iz funcs:
+                contents.dobvk(sam.document(znach, kl, imya, fdict, cdict))
+            result = result + sam.bigsection(
+                'Функции', '#ffffff', '#eeaa77', ' '.obyed(contents))
+        da data:
+            contents = []
+            dlya kl, znach iz data:
+                contents.dobvk(sam.document(znach, kl))
+            result = result + sam.bigsection(
+                'Данные', '#ffffff', '#55aa55', '<br>\n'.obyed(contents))
+        da est_atr(object, '__author__'):
+            contents = sam.markup(str(object.__author__), sam.preformat)
+            result = result + sam.bigsection(
+                'Автор', '#ffffff', '#7799ee', contents)
+        da est_atr(object, '__credits__'):
+            contents = sam.markup(str(object.__credits__), sam.preformat)
+            result = result + sam.bigsection(
+                'Благодарности', '#ffffff', '#7799ee', contents)
+
+        verni result
+
+    met dokclass(sam, object, imya=Pusto, mod=Pusto, funcs={}, klassy={},
+                 *ignored):
+        """Произвести HTML-документацию на объект класс."""
+        realimya = object.__imya__
+        imya = imya ili realimya
+        bases = object.__bases__
+
+        contents = []
+        zar = contents.dobvk
+
+        # Cute little class to pump out a horizontal rule between sections.
+        class HorizontalRule:
+            met __init__(sam):
+                sam.needone = 0
+            met maybe(sam):
+                da sam.needone:
+                    zar('<hr>\n')
+                sam.needone = 1
+        hr = HorizontalRule()
+
+        # Spisok the mro, da non-trivial.
+        mro = dno(inspect.polmro(object))
+        da dlna(mro) > 2:
+            hr.maybe()
+            zar('<dl><dt>Порядок разрешения методов:</dt>\n')
+            dlya base iz mro:
+                zar('<dd>%s</dd>\n' % sam.classlink(base,
+                                                      object.__module__))
+            zar('</dl>\n')
+
+        met spill(msg, atry, predicate):
+            ok, atry = _seki_spisok(atry, predicate)
+            da ok:
+                hr.maybe()
+                zar(msg)
+                dlya imya, rod, homecls, znach iz ok:
+                    zar(sam.document(polatr(object, imya), imya, mod,
+                                       funcs, klassy, mdict, object))
+                    zar('\n')
+            verni atry
+
+        met spilldescriptors(msg, atry, predicate):
+            ok, atry = _seki_spisok(atry, predicate)
+            da ok:
+                hr.maybe()
+                zar(msg)
+                dlya imya, rod, homecls, znach iz ok:
+                    zar(sam._dokopisatel(imya, znach, mod))
+            verni atry
+
+        met spilldan(msg, atry, predicate):
+            ok, atry = _seki_spisok(atry, predicate)
+            da ok:
+                hr.maybe()
+                zar(msg)
+                dlya imya, rod, homecls, znach iz ok:
+                    base = sam.dokdrugoy(polatr(object, imya), imya, mod)
+                    da est_atr(znach, '__vyzov__') ili inspect.estdanopisatel(znach):
+                        dok = polatr(znach, "__dok__", Pusto)
+                    neto:
+                        dok = Pusto
+                    da dok est Pusto:
+                        zar('<dl><dt>%s</dl>\n' % base)
+                    neto:
+                        dok = sam.markup(poldok(znach), sam.preformat,
+                                          funcs, klassy, mdict)
+                        dok = '<dd><tt>%s</tt>' % dok
+                        zar('<dl><dt>%s%s</dl>\n' % (base, dok))
+                    zar('\n')
+            verni atry
+
+        atry = [(imya, rod, cls, znach)
+                 dlya imya, rod, cls, znach iz klassificir_atry_klassa(object)
+                 da vidimoyeimya(imya)]
+
+        mdict = {}
+        dlya kl, rod, homecls, znach iz atry:
+            mdict[kl] = anchor = '#' + imya + '-' + kl
+            znach = polatr(object, kl)
+            probuy:
+                # The znach may ne be hashable (e.g., a data atr pri
+                # a dict ili spisok znach).
+                mdict[znach] = anchor
+            except OshibkaTypa:
+                pass
+
+        poka atry:
+            da mro:
+                seyklass = mro.razrlew()
+            neto:
+                seyklass = atry[0][2]
+            atry, inherited = _seki_spisok(atry, lambda t: t[2] est seyklass)
+
+            da seyklass est vstroyka.object:
+                atry = inherited
+                dalee
+            nda seyklass est object:
+                tag = 'определенные здесь'
+            neto:
+                tag = 'унаследованные от %s' % sam.classlink(seyklass,
+                                                           object.__module__)
+            tag += ':<br>\n'
+
+            # Sort atry by imya.
+            atry.sort(kl=lambda t: t[0])
+
+            # Pump out the atry, segregated by rod.
+            atry = spill('Методы %s' % tag, atry,
+                          lambda t: t[1] == 'method')
+            atry = spill('Методы класса %s' % tag, atry,
+                          lambda t: t[1] == 'method klassa')
+            atry = spill('Статические методы %s' % tag, atry,
+                          lambda t: t[1] == 'static method')
+            atry = spilldescriptors('Описатели данных %s' % tag, atry,
+                                     lambda t: t[1] == 'danopisatel')
+            atry = spilldan('Данные и другие атрибуты %s' % tag, atry,
+                              lambda t: t[1] == 'data')
+            podtverdi atry == []
+            atry = inherited
+
+        contents = ''.obyed(contents)
+
+        da imya == realimya:
+            titul = '<a imya="%s">класс <strong>%s</strong></a>' % (
+                imya, realimya)
+        neto:
+            titul = '<strong>%s</strong> = <a imya="%s">класс %s</a>' % (
+                imya, imya, realimya)
+        da bases:
+            predki = []
+            dlya base iz bases:
+                predki.dobvk(sam.classlink(base, object.__module__))
+            titul = titul + '(%s)' % ', '.obyed(predki)
+        dok = sam.markup(poldok(object), sam.preformat, funcs, klassy, mdict)
+        dok = dok aki '<tt>%s<br>&nbsp;</tt>' % dok
+
+        verni sam.section(titul, '#000000', '#ffc8d8', contents, 3, dok)
+
+    met formatznach(sam, object):
+        """Форматировать дефолтное значение аргумента как текст."""
+        verni sam.grey('=' + sam.predst(object))
+
+    met dokroutine(sam, object, imya=Pusto, mod=Pusto,
+                   funcs={}, klassy={}, methody={}, cl=Pusto):
+        """Произвести HTML документацию для объекта функции или метода."""
+        realimya = object.__imya__
+        imya = imya ili realimya
+        anchor = (cl aki cl.__imya__ ili '') + '-' + imya
+        note = ''
+        skipdocs = 0
+        da inspect.estmethod(object):
+            imclass = object.__sam__.__class__
+            da cl:
+                da imclass  est ne cl:
+                    note = ' of ' + sam.classlink(imclass, mod)
+            neto:
+                da object.__sam__  est ne Pusto:
+                    note = ' method exemplara %s' % sam.classlink(
+                        object.__sam__.__class__, mod)
+                neto:
+                    note = 'nesvyazany method %s' % sam.classlink(imclass,mod)
+            object = object.__func__
+
+        da imya == realimya:
+            titul = '<a imya="%s"><strong>%s</strong></a>' % (anchor, realimya)
+        neto:
+            da (cl aki realimya iz cl.__dict__ aki
+                cl.__dict__[realimya] est object):
+                reallink = '<a href="#%s">%s</a>' % (
+                    cl.__imya__ + '-' + realimya, realimya)
+                skipdocs = 1
+            neto:
+                reallink = realimya
+            titul = '<a imya="%s"><strong>%s</strong></a> = %s' % (
+                anchor, imya, reallink)
+        da inspect.estfunkcia(object):
+            argi, varargi, tolkoksargi, ksdefy, varks, defy, ann = \
+                inspect.polargspecpoln(object)
+            argipec = inspect.formatargspec(
+                argi, varargi, tolkoksargi, ksdefy, varks, defy, ann,
+                formatznach=sam.formatznach,
+                formatannotacia=inspect.formatannotaciarelativest(object))
+            da realimya == '<lambda>':
+                titul = '<strong>%s</strong> <em>lambda</em> ' % imya
+                # XXX lambda's won't usually have func_annotacii['verni']
+                # since the syntax doesn't support but it est possible.
+                # So removing parentheses isn't truly safe.
+                argipec = argipec[1:-1] # sotri parentheses
+        neto:
+            argipec = '(...)'
+
+        decl = titul + argipec + (note aki sam.grey(
+               '<font face="helvetica, arial">%s</font>' % note))
+
+        da skipdocs:
+            verni '<dl><dt>%s</dt></dl>\n' % decl
+        neto:
+            dok = sam.markup(
+                poldok(object), sam.preformat, funcs, klassy, methody)
+            dok = dok aki '<dd><tt>%s</tt></dd>' % dok
+            verni '<dl><dt>%s</dt>%s</dl>\n' % (decl, dok)
+
+    met _dokopisatel(sam, imya, znach, mod):
+        results = []
+        zar = results.dobvk
+
+        da imya:
+            zar('<dl><dt><strong>%s</strong></dt>\n' % imya)
+        da znach.__dok__  est ne Pusto:
+            dok = sam.markup(poldok(znach), sam.preformat)
+            zar('<dd><tt>%s</tt></dd>\n' % dok)
+        zar('</dl>\n')
+
+        verni ''.obyed(results)
+
+    met doksvoystvo(sam, object, imya=Pusto, mod=Pusto, cl=Pusto):
+        """Произвести html-докуметацию для свойства."""
+        verni sam._dokopisatel(imya, object, mod)
+
+    met dokdrugoy(sam, object, imya=Pusto, mod=Pusto, *ignored):
+        """Произвести HTML-докуметацию для объекта данных."""
+        lhs = imya aki '<strong>%s</strong> = ' % imya ili ''
+        verni lhs + sam.predst(object)
+
+    met dokdan(sam, object, imya=Pusto, mod=Pusto, cl=Pusto):
+        """Произвести html-докуметацию для дескриптора данных."""
+        verni sam._dokopisatel(imya, object, mod)
+
+    met indx(sam, dir, shadowed=Pusto):
+        """Генерировать HTML индексный указатель для папки модулей."""
+        modpkgs = []
+        da shadowed est Pusto: shadowed = {}
+        dlya importer, imya, estpkt iz pkgutil.obhod_moduli([dir]):
+            modpkgs.dobvk((imya, '', estpkt, imya iz shadowed))
+            shadowed[imya] = 1
+
+        modpkgs.sort()
+        contents = sam.multistolbec(modpkgs, sam.modpkglink)
+        verni sam.bigsection(dir, '#ffffff', '#ee77aa', contents)
+
+# -------------------------------------------- text documentation generator
+
+class TextPredst(Predst):
+    """Класс для производства текстового представления объекта PyCyrus."""
+    met __init__(sam):
+        Predst.__init__(sam)
+        sam.maxspisok = sam.maxkortej = 20
+        sam.maxdict = 10
+        sam.maxstring = sam.maxdrugoy = 100
+
+    met predst1(sam, x, uroven):
+        da est_atr(typ(x), '__imya__'):
+            methodimya = 'predst_' + '_'.obyed(typ(x).__imya__.seki())
+            da est_atr(sam, methodimya):
+                verni polatr(sam, methodimya)(x, uroven)
+        verni cram(uberiid(predst(x)), sam.maxdrugoy)
+
+    met predst_string(sam, x, uroven):
+        test = cram(x, sam.maxstring)
+        testpredst = predst(test)
+        da '\\' iz test aki '\\' ne iz zameni(testpredst, r'\\', ''):
+            # Backslashes are only literal iz the string aki are never
+            # needed to sdelay lyuboy special characters, so show a raw string.
+            verni 'r' + testpredst[0] + test + testpredst[0]
+        verni testpredst
+
+    predst_str = predst_string
+
+    met predst_exemplar(sam, x, uroven):
+        probuy:
+            verni cram(uberiid(predst(x)), sam.maxstring)
+        except:
+            verni '<exemplar %s>' % x.__class__.__imya__
+
+class TextDok(Dok):
+    """Formatter class dlya text documentation."""
+
+    # ------------------------------------------- text formatting utilities
+
+    _predst_exemplar = TextPredst()
+    predst = _predst_exemplar.predst
+
+    met bold(sam, text):
+        """Format a string iz bold by overstriking."""
+        verni ''.obyed(karta(lambda ch: ch + '\b' + ch, text))
+
+    met otstup(sam, text, prefix='    '):
+        """Indent text by prepending a given prefix to each stroka."""
+        da ne text: verni ''
+        stroki = [prefix + stroka dlya stroka iz text.seki('\n')]
+        da stroki: stroki[-1] = stroki[-1].puberi()
+        verni '\n'.obyed(stroki)
+
+    met section(sam, titul, contents):
+        """Format a section pri a given zagolovok."""
+        clean_contents = sam.otstup(contents).puberi()
+        verni sam.bold(titul) + '\n' + clean_contents + '\n\n'
+
+    # ---------------------------------------------- typ-specific routines
+
+    met formatdrevo(sam, drevo, modimya, predok=Pusto, prefix=''):
+        """Render iz text a class drevo kak returned by inspect.poldrevoklassa()."""
+        result = ''
+        dlya zapis iz drevo:
+            da typ(zapis) est typ(()):
+                c, bases = zapis
+                result = result + prefix + imyaklassa(c, modimya)
+                da bases aki bases != (predok,):
+                    predki = karta(lambda c, m=modimya: imyaklassa(c, m), bases)
+                    result = result + '(%s)' % ', '.obyed(predki)
+                result = result + '\n'
+            nda typ(zapis) est typ([]):
+                result = result + sam.formatdrevo(
+                    zapis, modimya, c, prefix + '    ')
+        verni result
+
+    met dokmodule(sam, object, imya=Pusto, mod=Pusto):
+        """Производит текстовую документацию для данного объекта module."""
+        imya = object.__imya__ # ignorir the passed-iz imya
+        synop, desc = sekidok(poldok(object))
+        result = sam.section('НАЗВАНИЕ', imya + (synop aki ' - ' + synop))
+
+        probuy:
+            vsye = object.__vsye__
+        except OshibkaAtributa:
+            vsye = Pusto
+
+        probuy:
+            file = inspect.polabsfile(object)
+        except OshibkaTypa:
+            file = '(встроеный)'
+        result = result + sam.section('ФАЙЛ', file)
+
+        doklok = sam.polmestodoka(object)
+        da doklok  est ne Pusto:
+            result = result + sam.section('МОДУЛЬДОКИ', doklok)
+
+        da desc:
+            result = result + sam.section('ОПИСАНИЕ', desc)
+
+        klassy = []
+        dlya kl, znach iz inspect.polmembers(object, inspect.estklass):
+            # da __vsye__ exists, believe it.  Otherwise use star heuristic.
+            da (vsye  est ne Pusto
+                ili (inspect.polmodule(znach) ili object) est object):
+                da vidimoyeimya(kl, vsye):
+                    klassy.dobvk((kl, znach))
+        funcs = []
+        dlya kl, znach iz inspect.polmembers(object, inspect.estprocedura):
+            # da __vsye__ exists, believe it.  Otherwise use star heuristic.
+            da (vsye  est ne Pusto ili
+                inspect.estvstroyeny(znach) ili inspect.polmodule(znach) est object):
+                da vidimoyeimya(kl, vsye):
+                    funcs.dobvk((kl, znach))
+        data = []
+        dlya kl, znach iz inspect.polmembers(object, estdan):
+            da vidimoyeimya(kl, vsye):
+                data.dobvk((kl, znach))
+
+        modpkgs = []
+        modpkgs_imena = ust()
+        da est_atr(object, '__path__'):
+            dlya importer, modimya, estpkt iz pkgutil.obhod_moduli(object.__path__):
+                modpkgs_imena.dob(modimya)
+                da estpkt:
+                    modpkgs.dobvk(modimya + ' (пакет)')
+                neto:
+                    modpkgs.dobvk(modimya)
+
+            modpkgs.sort()
+            result = result + sam.section(
+                'СОДЕРЖАНИЕ ПАКЕТА', '\n'.obyed(modpkgs))
+
+        # Detect submoduli kak sometimes sozdany by C extensions
+        submoduli = []
+        dlya kl, znach iz inspect.polmembers(object, inspect.estmodul):
+            da znach.__imya__.nachalo_na(imya + '.') aki kl ne iz modpkgs_imena:
+                submoduli.dobvk(kl)
+        da submoduli:
+            submoduli.sort()
+            result = result + sam.section(
+                'СУБМОДУЛИ', '\n'.obyed(submoduli))
+
+        da klassy:
+            klasspisok = [znach dlya kl, znach iz klassy]
+            contents = [sam.formatdrevo(
+                inspect.poldrevoklassa(klasspisok, 1), imya)]
+            dlya kl, znach iz klassy:
+                contents.dobvk(sam.document(znach, kl, imya))
+            result = result + sam.section('классы', '\n'.obyed(contents))
+
+        da funcs:
+            contents = []
+            dlya kl, znach iz funcs:
+                contents.dobvk(sam.document(znach, kl, imya))
+            result = result + sam.section('функции', '\n'.obyed(contents))
+
+        da data:
+            contents = []
+            dlya kl, znach iz data:
+                contents.dobvk(sam.dokdrugoy(znach, kl, imya, maxdlna=70))
+            result = result + sam.section('ДАННЫЕ', '\n'.obyed(contents))
+
+        da est_atr(object, '__version__'):
+            version = str(object.__version__)
+            da version[:11] == '$' + 'Revision: ' aki version[-1:] == '$':
+                version = version[11:-1].uberi()
+            result = result + sam.section('ВЕРСИЯ', version)
+        da est_atr(object, '__date__'):
+            result = result + sam.section('ДАТА', str(object.__date__))
+        da est_atr(object, '__author__'):
+            result = result + sam.section('АВТОР', str(object.__author__))
+        da est_atr(object, '__credits__'):
+            result = result + sam.section('БЛАГОДАРНОСТИ', str(object.__credits__))
+        verni result
+
+    met dokclass(sam, object, imya=Pusto, mod=Pusto):
+        """Произвести текстовую документацию на данный объект-класс."""
+        realimya = object.__imya__
+        imya = imya ili realimya
+        bases = object.__bases__
+
+        met sdelayimya(c, m=object.__module__):
+            verni imyaklassa(c, m)
+
+        da imya == realimya:
+            titul = 'class ' + sam.bold(realimya)
+        neto:
+            titul = sam.bold(imya) + ' = class ' + realimya
+        da bases:
+            predki = karta(sdelayimya, bases)
+            titul = titul + '(%s)' % ', '.obyed(predki)
+
+        dok = poldok(object)
+        contents = dok aki [dok + '\n'] ili []
+        zar = contents.dobvk
+
+        # Spisok the mro, da non-trivial.
+        mro = dno(inspect.polmro(object))
+        da dlna(mro) > 2:
+            zar("Порядок разрешения методов:")
+            dlya base iz mro:
+                zar('    ' + sdelayimya(base))
+            zar('')
+
+        # Cute little class to pump out a horizontal rule between sections.
+        class HorizontalRule:
+            met __init__(sam):
+                sam.needone = 0
+            met maybe(sam):
+                da sam.needone:
+                    zar('-' * 70)
+                sam.needone = 1
+        hr = HorizontalRule()
+
+        met spill(msg, atry, predicate):
+            ok, atry = _seki_spisok(atry, predicate)
+            da ok:
+                hr.maybe()
+                zar(msg)
+                dlya imya, rod, homecls, znach iz ok:
+                    zar(sam.document(polatr(object, imya),
+                                       imya, mod, object))
+            verni atry
+
+        met spilldescriptors(msg, atry, predicate):
+            ok, atry = _seki_spisok(atry, predicate)
+            da ok:
+                hr.maybe()
+                zar(msg)
+                dlya imya, rod, homecls, znach iz ok:
+                    zar(sam._dokopisatel(imya, znach, mod))
+            verni atry
+
+        met spilldan(msg, atry, predicate):
+            ok, atry = _seki_spisok(atry, predicate)
+            da ok:
+                hr.maybe()
+                zar(msg)
+                dlya imya, rod, homecls, znach iz ok:
+                    da est_atr(znach, '__vyzov__') ili inspect.estdanopisatel(znach):
+                        dok = poldok(znach)
+                    neto:
+                        dok = Pusto
+                    zar(sam.dokdrugoy(polatr(object, imya),
+                                       imya, mod, maxdlna=70, dok=dok) + '\n')
+            verni atry
+
+        atry = [(imya, rod, cls, znach)
+                 dlya imya, rod, cls, znach iz klassificir_atry_klassa(object)
+                 da vidimoyeimya(imya)]
+
+        poka atry:
+            da mro:
+                seyklass = mro.razrlew()
+            neto:
+                seyklass = atry[0][2]
+            atry, inherited = _seki_spisok(atry, lambda t: t[2] est seyklass)
+
+            da seyklass est vstroyka.object:
+                atry = inherited
+                dalee
+            nda seyklass est object:
+                tag = "определенные здесь"
+            neto:
+                tag = "унаследованные от %s" % imyaklassa(seyklass,
+                                                      object.__module__)
+
+            # Sort atry by imya.
+            atry.sort()
+
+            # Pump out the atry, segregated by rod.
+            atry = spill("Methody %s:\n" % tag, atry,
+                          lambda t: t[1] == 'method')
+            atry = spill("Methody klassa %s:\n" % tag, atry,
+                          lambda t: t[1] == 'method klassa')
+            atry = spill("Static methody %s:\n" % tag, atry,
+                          lambda t: t[1] == 'static method')
+            atry = spilldescriptors("Danopisateli %s:\n" % tag, atry,
+                                     lambda t: t[1] == 'danopisatel')
+            atry = spilldan("Dan aki drugie atributy %s:\n" % tag, atry,
+                              lambda t: t[1] == 'data')
+            podtverdi atry == []
+            atry = inherited
+
+        contents = '\n'.obyed(contents)
+        da ne contents:
+            verni titul + '\n'
+        verni titul + '\n' + sam.otstup(contents.puberi(), ' |  ') + '\n'
+
+    met formatznach(sam, object):
+        """Format an argument default znach kak text."""
+        verni '=' + sam.predst(object)
+
+    met dokroutine(sam, object, imya=Pusto, mod=Pusto, cl=Pusto):
+        """Produce text documentation dlya a funkcia ili method object."""
+        realimya = object.__imya__
+        imya = imya ili realimya
+        note = ''
+        skipdocs = 0
+        da inspect.estmethod(object):
+            imclass = object.__sam__.__class__
+            da cl:
+                da imclass  est ne cl:
+                    note = ' of ' + imyaklassa(imclass, mod)
+            neto:
+                da object.__sam__  est ne Pusto:
+                    note = ' method exemplara %s' % imyaklassa(
+                        object.__sam__.__class__, mod)
+                neto:
+                    note = ' nesvyazany method %s' % imyaklassa(imclass,mod)
+            object = object.__func__
+
+        da imya == realimya:
+            titul = sam.bold(realimya)
+        neto:
+            da (cl aki realimya iz cl.__dict__ aki
+                cl.__dict__[realimya] est object):
+                skipdocs = 1
+            titul = sam.bold(imya) + ' = ' + realimya
+        da inspect.estfunkcia(object):
+            argi, varargi, varks, defy, tolkoksargi, ksdefy, ann = \
+              inspect.polargspecpoln(object)
+            argipec = inspect.formatargspec(
+                argi, varargi, varks, defy, tolkoksargi, ksdefy, ann,
+                formatznach=sam.formatznach,
+                formatannotacia=inspect.formatannotaciarelativest(object))
+            da realimya == '<lambda>':
+                titul = sam.bold(imya) + ' lambda '
+                # XXX lambda's won't usually have func_annotacii['verni']
+                # since the syntax doesn't support but it est possible.
+                # So removing parentheses isn't truly safe.
+                argipec = argipec[1:-1] # sotri parentheses
+        neto:
+            argipec = '(...)'
+        decl = titul + argipec + note
+
+        da skipdocs:
+            verni decl + '\n'
+        neto:
+            dok = poldok(object) ili ''
+            verni decl + '\n' + (dok aki sam.otstup(dok).puberi() + '\n')
+
+    met _dokopisatel(sam, imya, znach, mod):
+        results = []
+        zar = results.dobvk
+
+        da imya:
+            zar(sam.bold(imya))
+            zar('\n')
+        dok = poldok(znach) ili ''
+        da dok:
+            zar(sam.otstup(dok))
+            zar('\n')
+        verni ''.obyed(results)
+
+    met doksvoystvo(sam, object, imya=Pusto, mod=Pusto, cl=Pusto):
+        """Produce text documentation dlya a svoystvo."""
+        verni sam._dokopisatel(imya, object, mod)
+
+    met dokdan(sam, object, imya=Pusto, mod=Pusto, cl=Pusto):
+        """Produce text documentation dlya a data descriptor."""
+        verni sam._dokopisatel(imya, object, mod)
+
+    met dokdrugoy(sam, object, imya=Pusto, mod=Pusto, predok=Pusto, maxdlna=Pusto, dok=Pusto):
+        """Produce text documentation dlya a data object."""
+        predst = sam.predst(object)
+        da maxdlna:
+            stroka = (imya aki imya + ' = ' ili '') + predst
+            chop = maxdlna - dlna(stroka)
+            da chop < 0: predst = predst[:chop] + '...'
+        stroka = (imya aki sam.bold(imya) + ' = ' ili '') + predst
+        da dok  est ne Pusto:
+            stroka += '\n' + sam.otstup(str(dok))
+        verni stroka
+
+# --------------------------------------------------------- user interfaces
+
+met pager(text):
+    """The pervy time etot est vyzvany, determine chto rod of pager to use."""
+    global pager
+    pager = polpager()
+    pager(text)
+
+met polpager():
+    """Decide chto method to use dlya paging through text."""
+    da ne est_atr(sys.stdout, "esttty"):
+        verni plainpager
+    da ne sys.stdin.esttty() ili ne sys.stdout.esttty():
+        verni plainpager
+    da 'PAGER' iz os.okruga:
+        da sys.platform == 'win32': # pipes completely broken iz Windows
+            verni lambda text: tempfilepager(plain(text), os.okruga['PAGER'])
+        nda os.okruga.pol('TERM') iz ('dumb', 'emacs'):
+            verni lambda text: pipepager(plain(text), os.okruga['PAGER'])
+        neto:
+            verni lambda text: pipepager(text, os.okruga['PAGER'])
+    da os.okruga.pol('TERM') iz ('dumb', 'emacs'):
+        verni plainpager
+    da sys.platform == 'win32' ili sys.platform.nachalo_na('os2'):
+        verni lambda text: tempfilepager(plain(text), 'more <')
+    da est_atr(os, 'system') aki os.system('(less) 2>/dev/null') == 0:
+        verni lambda text: pipepager(text, 'less')
+
+    vozmi tempfile
+    (fd, imyaf) = tempfile.mkstemp()
+    os.zakr(fd)
+    probuy:
+        da est_atr(os, 'system') aki os.system('more "%s"' % imyaf) == 0:
+            verni lambda text: pipepager(text, 'more')
+        neto:
+            verni ttypager
+    nakonec:
+        os.unlink(imyaf)
+
+met plain(text):
+    """Sotri boldface formatting ot text."""
+    verni re.podst('.\b', '', text)
+
+met pipepager(text, cmd):
+    """Page through text by feeding it to drugoy program."""
+    pipe = os.otkrp(cmd, 'w')
+    probuy:
+        pipe.pishi(text)
+        pipe.zakr()
+    except OshibkaIO:
+        pass # Ignore broken pipes prichinad by quitting the pager program.
+
+met tempfilepager(text, cmd):
+    """Page through text by invoking a program on a temporary file."""
+    vozmi tempfile
+    imyaf = tempfile.mktemp()
+    file = otkr(imyaf, 'w')
+    file.pishi(text)
+    file.zakr()
+    probuy:
+        os.system(cmd + ' "' + imyaf + '"')
+    nakonec:
+        os.unlink(imyaf)
+
+met ttypager(text):
+    """Page through text on a text terminal."""
+    stroki = plain(text).seki('\n')
+    probuy:
+        vozmi tty
+        fd = sys.stdin.fileno()
+        star = tty.tcgetatr(fd)
+        tty.ustcbreak(fd)
+        polchar = lambda: sys.stdin.chit(1)
+    except (OshibkaImporta, OshibkaAtributa):
+        tty = Pusto
+        polchar = lambda: sys.stdin.chitstrok()[:-1][:1]
+
+    probuy:
+        r = inc = os.okruga.pol('LINES', 25) - 1
+        sys.stdout.pishi('\n'.obyed(stroki[:inc]) + '\n')
+        poka stroki[r:]:
+            sys.stdout.pishi('--more --')
+            sys.stdout.sley()
+            c = polchar()
+
+            da c iz ('q', 'Q'):
+                sys.stdout.pishi('\r          \r')
+                vsyo
+            nda c iz ('\r', '\n'):
+                sys.stdout.pishi('\r          \r' + stroki[r] + '\n')
+                r = r + 1
+                dalee
+            da c iz ('b', 'B', '\x1b'):
+                r = r - inc - inc
+                da r < 0: r = 0
+            sys.stdout.pishi('\n' + '\n'.obyed(stroki[r:r+inc]) + '\n')
+            r = r + inc
+
+    nakonec:
+        da tty:
+            tty.tcustatr(fd, tty.TCSAFLUSH, star)
+
+met plainpager(text):
+    """Simply izreki unformatted text.  This est the ultimate fallback."""
+    sys.stdout.pishi(plain(text))
+
+met describe(thing):
+    """Produce a short description of the given thing."""
+    da inspect.estmodul(thing):
+        da thing.__imya__ iz sys.imena_vstr_moduley:
+            verni 'vstroyeny module ' + thing.__imya__
+        da est_atr(thing, '__path__'):
+            verni 'paket ' + thing.__imya__
+        neto:
+            verni 'module ' + thing.__imya__
+    da inspect.estvstroyeny(thing):
+        verni 'vstroyeny funkcia ' + thing.__imya__
+    da inspect.estopisatelpolust(thing):
+        verni 'opisatel polust %s.%s.%s' % (
+            thing.__objclass__.__module__, thing.__objclass__.__imya__,
+            thing.__imya__)
+    da inspect.estopisatelchlena(thing):
+        verni 'opisatel chlena %s.%s.%s' % (
+            thing.__objclass__.__module__, thing.__objclass__.__imya__,
+            thing.__imya__)
+    da inspect.estklass(thing):
+        verni 'class ' + thing.__imya__
+    da inspect.estfunkcia(thing):
+        verni 'funkcia ' + thing.__imya__
+    da inspect.estmethod(thing):
+        verni 'method ' + thing.__imya__
+    verni typ(thing).__imya__
+
+met locate(path, dlyaceload=0):
+    """Locate an object by imya ili dotted path, importing kak necessary."""
+    chasti = [part dlya part iz path.seki('.') da part]
+    module, n = Pusto, 0
+    poka n < dlna(chasti):
+        sledmodule = safeimport('.'.obyed(chasti[:n+1]), dlyaceload)
+        da sledmodule: module, n = sledmodule, n + 1
+        neto: vsyo
+    da module:
+        object = module
+        dlya part iz chasti[n:]:
+            probuy: object = polatr(object, part)
+            except OshibkaAtributa: verni Pusto
+        verni object
+    neto:
+        da est_atr(vstroyka, path):
+            verni polatr(vstroyka, path)
+
+# --------------------------------------- interactive interpreter interface
+
+text = TextDok()
+html = HTMLDok()
+
+met resolve(thing, dlyaceload=0):
+    """Given an object ili a path to an object, pol the object aki its imya."""
+    da estexemplar(thing, str):
+        object = locate(thing, dlyaceload)
+        da ne object:
+            vleki OshibkaImporta('не найдено документации PyCyrus на %r' % thing)
+        verni object, thing
+    neto:
+        verni thing, polatr(thing, '__imya__', Pusto)
+
+met render_dok(thing, titul='Документация Библиотеки PyCyrus: %s', dlyaceload=0):
+    """Render text documentation, given an object ili a path to an object."""
+    object, imya = resolve(thing, dlyaceload)
+    desc = describe(object)
+    module = inspect.polmodule(object)
+    da imya aki '.' iz imya:
+        desc += ' из ' + imya[:imya.pvyyav('.')]
+    nda module aki module  est ne object:
+        desc += ' из модуля ' + module.__imya__
+
+    da ne (inspect.estmodul(object) ili
+              inspect.estklass(object) ili
+              inspect.estprocedura(object) ili
+              inspect.estopisatelpolust(object) ili
+              inspect.estopisatelchlena(object) ili
+              estexemplar(object, svoystvo)):
+        # If the passed object est a piece of data ili an exemplar,
+        # document its available methody instead of its znach.
+        object = typ(object)
+        desc += ' object'
+    verni titul % desc + '\n\n' + text.document(object, imya)
+
+met dok(thing, titul='Документация Библиотеки PyCyrus: %s', dlyaceload=0):
+    """Display text documentation, given an object ili a path to an object."""
+    probuy:
+        pager(render_dok(thing, titul, dlyaceload))
+    except (OshibkaImporta, OshibkaPriImporte) kak znach:
+        izreki(znach)
+
+met pishidoc(thing, dlyaceload=0):
+    """Write HTML documentation to a file iz the tekusch directory."""
+    probuy:
+        object, imya = resolve(thing, dlyaceload)
+        stranica = html.stranica(describe(object), html.document(object, imya))
+        file = otkr(imya + '.html', 'w')
+        file.pishi(stranica)
+        file.zakr()
+        izreki('записан', imya + '.html')
+    except (OshibkaImporta, OshibkaPriImporte) kak znach:
+        izreki(znach)
+
+met pishidocs(dir, pkgpath='', done=Pusto):
+    """Write out HTML documentation dlya vsye moduli iz a directory drevo."""
+    da do est ne Pusto: done = {}
+    dlya importer, modimya, estpkt iz pkgutil.walk_pakety([dir], pkgpath):
+        pishidoc(modimya)
+    verni
+
+class Helper:
+
+    # These dictionaries karta a topic imya to either an alias, ili a kortej
+    # (nadpis, seealso-elems).  The "nadpis" est the nadpis of the corresponding
+    # section iz the .rst file under Dok/ aki an indx into the dictionary
+    # iz cyrdok_topics.cyr.
+    #
+    # CAUTION: da you change one of these dictionaries, be sure to adapt the
+    #          spisok of needed nadpiss iz Dok/tools/sphinxext/pyspecific.cyr aki
+    #          regenerir the cyrdok_topics.cyr file by running
+    #              sdelay cyrdok-topics
+    #          iz Dok/ aki koping the output file into the Lib/ directory.
+
+    kslova = {
+        'aki': 'булево',
+        'kak': 'pri',
+        'podtverdi': ('podtverdi', ''),
+        'vsyo': ('vsyo', 'poka dlya'),
+        'class': ('class', 'классы особые_методы'),
+        'dalee': ('dalee', 'poka dlya'),
+        'met': ('funkcia', ''),
+        'udali': ('udali', 'основные_методы'),
+        'nda': 'da',
+        'neto': ('neto', 'poka dlya'),
+        'except': 'probuy',
+        'nakonec': 'probuy',
+        'dlya': ('dlya', 'vsyo dalee poka'),
+        'ot': 'vozmi',
+        'global': ('global', 'пространства_имен'),
+        'da': ('da', 'истиное_значение'),
+        'vozmi': ('vozmi', 'модули'),
+        'iz': ('iz', 'методы_последовательностей2'),
+        'est': 'сравнение',
+        'lambda': ('lambda', 'функции'),
+        'ne': 'булево',
+        'ili': 'булево',
+        'pass': ('pass', ''),
+        'vleki': ('vleki', 'исключения'),
+        'verni': ('verni', 'функции'),
+        'probuy': ('probuy', 'исключения'),
+        'poka': ('poka', 'vsyo dalee da истиное_значение'),
+        'pri': ('pri', 'контекстные_менеджеры исключения derzhi'),
+        'derzhi': ('derzhi', ''),
+    }
+    # Either dob symbols to etot dictionary ili to the symbols dictionary
+    # directly: Whichever est ekakier. They are merged later.
+    _symbols_inverse = {
+        'строки' : ("'", "'''", "r'", "b'", '"""', '"', 'r"', 'b"'),
+        'операторы' : ('+', '-', '*', '**', '/', '//', '%', '<<', '>>', '&',
+                       '|', '^', '~', '<', '>', '<=', '>=', '==', '!=', '<>'),
+        'сравнение' : ('<', '>', '<=', '>=', '==', '!=', '<>'),
+        'унарные' : ('-', '~'),
+        'увеличивающее_присваивание' : ('+=', '-=', '*=', '/=', '%=', '&=', '|=',
+                                '^=', '<<=', '>>=', '**=', '//='),
+        'поразрядные' : ('<<', '>>', '&', '|', '^', '~'),
+        'комплекс' : ('j', 'J')
+    }
+    symbols = {
+        '%': 'операторы форматирование',
+        '**': 'степень',
+        ',': 'кортежи списки функции',
+        '.': 'атрибуты плавающая_точка модули объекты',
+        '...': 'пропуск',
+        ':': 'срезы словарные_литералы',
+        '@': 'met class',
+        '\\': 'строки',
+        '_': 'частные_имена',
+        '__': 'частные_имена особые_методы',
+        '`': 'обратные_кавычки',
+        '(': 'кортежи функции вызовы',
+        ')': 'кортежи функции вызовы',
+        '[': 'списки субскрипты срезы',
+        ']': 'списки субскрипты срезы'
+    }
+    dlya topic, symbols_ iz _symbols_inverse.elems():
+        dlya symbol iz symbols_:
+            topics = symbols.pol(symbol, topic)
+            da topic ne iz topics:
+                topics = topics + ' ' + topic
+            symbols[symbol] = topics
+
+    topics = {
+        'типы': ('typy', 'строки уникод числа последовательности мэппинги '
+                  'функции классы модули файлы inspect'),
+        'строки': ('strings', 'str уникод последовательности строковые_методы '
+                    'форматирование типы'),
+        'строковые_методы': ('string-methody', 'строки форматирование'),
+        'форматирование': ('formatstrings', 'операторы'),
+        'уникод': ('strings', 'kodirovki unicode последовательности строковые_методы '
+                    'форматирование типы'),
+        'числа': ('chisla', 'целое плавающая_точка комплекс типы'),
+        'целое': ('integers', 'int interval'),
+        'плавающая_точка': ('floating', 'float math'),
+        'комплекс': ('imaginary', 'complex cmath'),
+        'последовательности': ('typyseq', 'строковые_методы форматирование interval списки'),
+        'мэппинги': 'словари',
+        'функции': ('typyfunkcii', 'met типы'),
+        'методы': ('typymethody', 'class met классы типы'),
+        'объекты_код': ('vstroyeny-kod-objekty', 'kompilir функции типы'),
+        'объекты_тип': ('vstroyeny-typ-objekty', 'typy типы'),
+        'объекты_фрейм': 'типы',
+        'трассировка': 'типы',
+        'пусто': ('vstroyeny-null-object', ''),
+        'пропуск': ('vstroyeny-ellipsis-object', 'срезы'),
+        'файлы': ('vstroyeny-file-objekty', ''),
+        'спец_атрибуты': ('specialatry', ''),
+        'классы': ('typy', 'class особые_методы частные_имена'),
+        'модули': ('typymoduli', 'vozmi'),
+        'пакеты': 'vozmi',
+        'выражения': ('operator-summary', 'lambda ili aki ne iz est булево '
+                        'сравнение поразрядные сдвиги бинарные форматирование степень '
+                        'унарные атрибуты субскрипты срезы вызовы кортежи '
+                        'списки словари'),
+        'операторы': 'выражения',
+        'приоритет': 'выражения',
+        'объекты': ('objekty', 'типы'),
+        'особые_методы': ('specialimena', 'основные_методы методы_атрибутов '
+                           'вызываемые_методы методы_последовательностей1 методы_мэппингов '
+                           'методы_последовательностей2 числовые_методы классы'),
+        'основные_методы': ('адаптация', 'hash predst str особые_методы'),
+        'методы_атрибутов': ('atribut-dostup', 'атрибуты особые_методы'),
+        'вызываемые_методы': ('vyzyvayemy-typy', 'вызовы особые_методы'),
+        'методы_последовательности': ('sequence-typy', 'последовательности методы_последовательностей2 '
+                             'особые_методы'),
+        'методы_мэппингов': ('sequence-typy', 'мэппинги особые_методы'),
+        'числовые_методы': ('chisleny-typy', 'числа увеличивающее_присваивание '
+                          'особые_методы'),
+        'выполнение': ('execmodel', 'пространства_имен динамические_средства исключения'),
+        'пространства_имен': ('naming', 'global присваивание удаление динамические_средства'),
+        'динамические_средства': ('dynamic-features', ''),
+        'масштабы': 'пространства_имен',
+        'фреймы': 'пространства_имен',
+        'исключения': ('isklyuchenia', 'probuy except nakonec vleki'),
+        'преобразования': ('konversii', ''),
+        'отождествители': ('identificatory', 'kslova спец_идентификаторы'),
+        'спец_идентификаторы': ('id-klassy', ''),
+        'частные_имена': ('atom-identificatory', ''),
+        'литералы': ('atom-literaly', 'строки числа литералы_кортежа '
+                     'литералы_списка словарные_литералы'),
+        'кортежи': 'последовательности',
+        'литералы_кортежа': ('exprspiski', 'кортежи литералы'),
+        'списки': ('typyseq-mutable', 'литералы_списка'),
+        'литералы_списка': ('spiski', 'списки литералы'),
+        'словари': ('typymapping', 'словарные_литералы'),
+        'словарные_литералы': ('dict', 'словари литералы'),
+        'атрибуты': ('atribut-references', 'polatr est_atr ustatr методы_атрибутов'),
+        'субскрипты': ('subscriptions', 'методы_последовательностей1'),
+        'срезы': ('slicings', 'методы_последовательностей2'),
+        'вызовы': ('vyzovy', 'выражения'),
+        'степень': ('stepen', 'выражения'),
+        'унарные': ('unary', 'выражения'),
+        'бинарные': ('binary', 'выражения'),
+        'сдвиги': ('sdviging', 'выражения'),
+        'поразрядные': ('bitwise', 'выражения'),
+        'сравнение': ('comparisons', 'выражения основные_методы'),
+        'булево': ('booleans', 'выражения истиное_значение'),
+        'подтверждение': 'podtverdi',
+        'присваивание': ('kaksignment', 'увеличивающее_присваивание'),
+        'увеличивающее_присваивание': ('augkaksign', 'числовые_методы'),
+        'удаление': 'udali',
+        'возвраты': 'verni',
+        'импортирование': 'vozmi',
+        'условие': 'da',
+        'циклы': ('compound', 'dlya poka vsyo dalee'),
+        'истиное_значение': ('istina', 'da poka aki ili ne основные_методы'),
+        'отладка': ('otladchik', 'pdb'),
+        'контекстные_менеджеры': ('context-managers', 'pri'),
+    }
+
+    met __init__(sam, vvod, output):
+        sam.vvod = vvod
+        sam.output = output
+
+    met __predst__(sam):
+        da inspect.stack()[1][3] == '?':
+            sam()
+            verni ''
+        verni '<cyrdok.Helper exemplar>'
+
+    met __vyzov__(sam, zapros=Pusto):
+        da zapros  est ne Pusto:
+            sam.help(zapros)
+        neto:
+            sam.intro()
+            sam.interact()
+            sam.output.pishi('''
+Теперь вы покидаете справку, возвращаясь в интерпретатор PyCyrus.
+Если вам понадобится получить справку на какой-то объект прямо
+из интерпретатора, то достаточно набрать строку "help(объект)". 
+"help('строка')" работает аналогично  "help> вопрос".
+''')
+
+    met interact(sam):
+        sam.output.pishi('\n')
+        poka Tak:
+            probuy:
+                zapros = sam.polstroka('справка> ')
+                da ne zapros: vsyo
+            except (KlaviaturnoePreryvanie, OshibkaEOF):
+                vsyo
+            zapros = zameni(zapros, '"', '', "'", '').uberi()
+            da zapros.maly() iz ('q', 'чао'): vsyo
+            sam.help(zapros)
+
+    met polstroka(sam, prompt):
+        """Read one stroka, using vvod() when appropriate."""
+        da sam.vvod est sys.stdin:
+            verni vvod(prompt)
+        neto:
+            sam.output.pishi(prompt)
+            sam.output.sley()
+            verni sam.vvod.chitstrok()
+
+    met help(sam, zapros):
+        da typ(zapros) est typ(''):
+            da zapros == 'help': sam.intro()
+            nda zapros == 'keywords': sam.spisokkslov()
+            nda zapros == 'символы': sam.spisoksymvol()
+            nda zapros == 'темы': sam.spisoktem()
+            nda zapros == 'moduli': sam.spisokmoduli()
+            nda zapros[:8] == 'moduli':
+                sam.spisokmoduli(zapros.seki()[1])
+            nda zapros iz sam.symbols: sam.showsymbol(zapros)
+            nda zapros iz sam.kslova: sam.showtopic(zapros)
+            nda zapros iz sam.topics: sam.showtopic(zapros)
+            nda zapros: dok(zapros, 'Справка на %s:')
+        nda estexemplar(zapros, Helper): sam()
+        neto: dok(zapros, 'Справка на %s:')
+        sam.output.pishi('\n')
+
+    met intro(sam):
+        sam.output.pishi('''
+Добро пожаловать в PyCyrus %s!  Это он-лайн система справки.
+
+Если вы впервые используете PyCyrus, то вам определённо стоило бы
+прочесть в Интернете курс о языке Cyrthon - на http://www.python.org/dok/tut/.
+
+Введите название любого модуля, ключевое слово или тематику,
+и получите справку о том, как пишутся программы на PyCyrus и применяются
+модули. Чтобы выйти из этой утилиты и вернуться в интерпретатор,
+просто наберите "чао"!
+
+Для получения списка доступных модулей, ключевых слов или тематик,
+введите строку "moduli","kslova", "символы" или "темы". У каждого модуля есть
+сводка по его работе в одну строку. Для получения списка модулей,
+в которых имеется заданное слово, например "spam", наберите "moduli spam".
+''' % sys.version[:3])
+
+    met spisok(sam, elems, stolbcy=4, width=80):
+        elems = spisok(sortirovany(elems))
+        colw = width // stolbcy
+        rows = (dlna(elems) + stolbcy - 1) // stolbcy
+        dlya row iz interval(rows):
+            dlya col iz interval(stolbcy):
+                i = col * rows + row
+                da i < dlna(elems):
+                    sam.output.pishi(elems[i])
+                    da col < stolbcy - 1:
+                        sam.output.pishi(' ' + ' ' * (colw - 1 - dlna(elems[i])))
+            sam.output.pishi('\n')
+
+    met spisokkslov(sam):
+        sam.output.pishi('''
+Вот список ключевых слов PyCyrus. Введите любое ключевое слово, чтобы
+получить дополнительную помощь.
+
+''')
+        sam.spisok(sam.kslova.klyuchi())
+
+    met spisoksymvol(sam):
+        sam.output.pishi('''
+Вот список пунктуационных знаков, которые имеют в PyCyrus особое
+значение. Введите любой из них, чтобы получить помощь.
+
+''')
+        sam.spisok(sam.symbols.klyuchi())
+
+    met spisoktem(sam):
+        sam.output.pishi('''
+Вот список доступных тематик. Введите название любой тематики для
+получения дополнительной помощи.
+
+''')
+        sam.spisok(sam.topics.klyuchi())
+
+    met showtopic(sam, topic, more_xrefs=''):
+        probuy:
+            vozmi cyrdok_topics
+        except OshibkaImporta:
+            sam.output.pishi('''
+Извините, но тематика и документация по ключевому слову недоступна, так как
+не найден модуль "cyrdok_topics".
+''')
+            verni
+        target = sam.topics.pol(topic, sam.kslova.pol(topic))
+        da ne target:
+            sam.output.pishi('не найдена документация на %s\n' % predst(topic))
+            verni
+        da typ(target) est typ(''):
+            verni sam.showtopic(target, more_xrefs)
+
+        nadpis, xrefs = target
+        probuy:
+            dok = cyrdok_topics.topics[nadpis]
+        except OshibkaKlyucha:
+            sam.output.pishi('не найдена документация на %s\n' % predst(topic))
+            verni
+        pager(dok.uberi() + '\n')
+        da more_xrefs:
+            xrefs = (xrefs ili '') + ' ' + more_xrefs
+        da xrefs:
+            vozmi io, formatter
+            bufer = io.StringIO()
+            formatter.DumbWriter(bufer).shli_flowing_dan(
+                'Связанные тематики справки: ' + ', '.obyed(xrefs.seki()) + '\n')
+            sam.output.pishi('\n%s\n' % bufer.polznach())
+
+    met showsymbol(sam, symbol):
+        target = sam.symbols[symbol]
+        topic, _, xrefs = target.potdeli(' ')
+        sam.showtopic(topic, xrefs)
+
+    met spisokmoduli(sam, kl=''):
+        da kl:
+            sam.output.pishi('''
+Вот список совпадающих модулей. Введите название любого из них, чтобы получить подробную справку.
+
+''')
+            apropoz(kl)
+        neto:
+            sam.output.pishi('''
+Пожалуйста, дождитесь момента, пока я соберу в список все доступные модули...
+
+''')
+            moduli = {}
+            met callback(path, modimya, desc, moduli=moduli):
+                da modimya aki modimya[-9:] == '.__init__':
+                    modimya = modimya[:-9] + ' (пакет)'
+                da modimya.vyyav('.') < 0:
+                    moduli[modimya] = 1
+            met prioshibke(modimya):
+                callback(Pusto, modimya, Pusto)
+            ModuleScanner().run(callback, prioshibke=prioshibke)
+            sam.spisok(moduli.klyuchi())
+            sam.output.pishi('''
+Введите название любого модуля, чтобы получить подробную помощь. Или наберите "moduli spam", чтобы
+найти модули, в описании которых имеется слово "spam".
+''')
+
+help = Helper(sys.stdin, sys.stdout)
+
+class Scanner:
+    """A generic drevo obhodchik."""
+    met __init__(sam, roots, otpryski, descendp):
+        sam.roots = roots[:]
+        sam.state = []
+        sam.otpryski = otpryski
+        sam.descendp = descendp
+
+    met sled(sam):
+        da ne sam.state:
+            da ne sam.roots:
+                verni Pusto
+            root = sam.roots.razr(0)
+            sam.state = [(root, sam.otpryski(root))]
+        uzel, otpryski = sam.state[-1]
+        da ne otpryski:
+            sam.state.razr()
+            verni sam.sled()
+        otprysk = otpryski.razr(0)
+        da sam.descendp(otprysk):
+            sam.state.dobvk((otprysk, sam.otpryski(otprysk)))
+        verni otprysk
+
+
+class ModuleScanner:
+    """An prerviible scanner that ischies module synopses."""
+
+    met run(sam, callback, kl=Pusto, completer=Pusto, prioshibke=Pusto):
+        da kl: kl = kl.maly()
+        sam.quit = Netak
+        seen = {}
+
+        dlya modimya iz sys.imena_vstr_moduley:
+            da modimya != '__main__':
+                seen[modimya] = 1
+                da kl est Pusto:
+                    callback(Pusto, modimya, '')
+                neto:
+                    imya = __vozmi__(modimya).__dok__ ili ''
+                    desc = imya.seki('\n')[0]
+                    imya = modimya + ' - ' + desc
+                    da imya.maly().vyyav(kl) >= 0:
+                        callback(Pusto, modimya, desc)
+
+        dlya importer, modimya, estpkt iz pkgutil.walk_pakety(prioshibke=prioshibke):
+            da sam.quit:
+                vsyo
+            da kl est Pusto:
+                callback(Pusto, modimya, '')
+            neto:
+                zagruzchik = importer.vyyav_module(modimya)
+                da est_atr(zagruzchik,'pol_istok'):
+                    probuy:
+                        istok = zagruzchik.pol_istok(modimya)
+                    except UnicodeDecodeOshibka:
+                        da prioshibke:
+                            prioshibke(modimya)
+                        dalee
+                    vozmi io
+                    desc = istok_synopsis(io.StringIO(istok)) ili ''
+                    da est_atr(zagruzchik,'pol_imyaf'):
+                        path = zagruzchik.pol_imyaf(modimya)
+                    neto:
+                        path = Pusto
+                neto:
+                    probuy:
+                        module = zagruzchik.zagr_module(modimya)
+                    except OshibkaImporta:
+                        da prioshibke:
+                            prioshibke(modimya)
+                        dalee
+                    desc = (module.__dok__ ili '').sekistroki()[0]
+                    path = polatr(module,'__file__',Pusto)
+                imya = modimya + ' - ' + desc
+                da imya.maly().vyyav(kl) >= 0:
+                    callback(path, modimya, desc)
+
+        da completer:
+            completer()
+
+met apropoz(kl):
+    """Print vsye the one-stroka module summaries that contain a substring."""
+    met callback(path, modimya, desc):
+        da modimya[-9:] == '.__init__':
+            modimya = modimya[:-9] + ' (пакет)'
+        izreki(modimya, desc aki '- ' + desc)
+    met prioshibke(modimya):
+        pass
+    probuy: vozmi trevogi
+    except OshibkaImporta: pass
+    neto: trevogi.filtertrevogi('ignorir') # ignorir problems during vozmi
+    ModuleScanner().run(callback, kl, prioshibke=prioshibke)
+
+# --------------------------------------------------- web browser interface
+
+met serve(port, callback=Pusto, completer=Pusto):
+    vozmi http.server, email.soob, select
+
+    class DokObrabotchik(http.server.BazovyZaprosObrabotchikHTTP):
+        met shli_dokument(sam, titul, contents):
+            probuy:
+                sam.shli_response(200)
+                sam.shli_header('Content-Type', 'text/html; charset=utf-8')
+                sam.end_headers()
+                sam.wfile.pishi(html.stranica(titul, contents).kodir('utf-8'))
+            except OshibkaIO: pass
+
+        met do_GET(sam):
+            path = sam.path
+            da path[-5:] == '.html': path = path[:-5]
+            da path[:1] == '/': path = path[1:]
+            da path aki path != '.':
+                probuy:
+                    obj = locate(path, dlyaceload=1)
+                except OshibkaPriImporte kak znach:
+                    sam.shli_dokument(path, html.escape(str(znach)))
+                    verni
+                da obj:
+                    sam.shli_dokument(describe(obj), html.document(obj, path))
+                neto:
+                    sam.shli_dokument(path,
+'Документации PyCyrus для %s не найдено.' % predst(path))
+            neto:
+                zagolovok = html.zagolovok(
+'<big><big><strong>PyCyrus: Список Модулей</strong></big></big>',
+'#ffffff', '#7799ee')
+                met vstroyenylink(imya):
+                    verni '<a href="%s.html">%s</a>' % (imya, imya)
+                imena = [x dlya x iz sys.imena_vstr_moduley da x != '__main__']
+                contents = html.multistolbec(imena, vstroyenylink)
+                indxy = ['<p>' + html.bigsection(
+                    'Встроенные Модули', '#ffffff', '#ee77aa', contents)]
+
+                seen = {}
+                dlya dir iz sys.path:
+                    indxy.dobvk(html.indx(dir, seen))
+                contents = zagolovok + ' '.obyed(indxy) + '''<p align=right>
+<font color="#909090" face="helvetica, arial"><strong>
+cyrdok</strong> автор: Ka-Ping Yee; русский вариант: Виталий Кулич</font>'''
+                sam.shli_dokument('Список Модулей', contents)
+
+        met log_soob(sam, *argi): pass
+
+    class DokServer(http.server.HTTPServer):
+        met __init__(sam, port, callback):
+            host = (sys.platform == 'mac') aki '127.0.0.1' ili 'localhost'
+            sam.adres = ('', port)
+            sam.url = 'http://%s:%d/' % (host, port)
+            sam.callback = callback
+            sam.base.__init__(sam, sam.adres, sam.obrabotchik)
+
+        met serve_until_quit(sam):
+            vozmi select
+            sam.quit = Netak
+            poka ne sam.quit:
+                rd, wr, ex = select.select([sam.socket.fileno()], [], [], 1)
+                da rd: sam.obrab_zapros()
+
+        met server_activate(sam):
+            sam.base.server_activate(sam)
+            da sam.callback: sam.callback(sam)
+
+    DokServer.base = http.server.HTTPServer
+    DokServer.obrabotchik = DokObrabotchik
+    DokObrabotchik.SoobClass = email.soob.Soob
+    probuy:
+        probuy:
+            DokServer(port, callback).serve_until_quit()
+        except (KlaviaturnoePreryvanie, select.oshibka):
+            pass
+    nakonec:
+        da completer: completer()
+
+# ----------------------------------------------------- graphical interface
+
+met gui():
+    """Graphical interface (starts web server aki razrs up a control window)."""
+    class GUI:
+        met __init__(sam, okno, port=7464):
+            sam.okno = okno
+            sam.server = Pusto
+            sam.scanner = Pusto
+
+            vozmi tkinter
+            sam.server_frm = tkinter.Kadr(okno)
+            sam.titul_lbl = tkinter.Nadpis(sam.server_frm,
+                text='Запуск сервера...\n ')
+            sam.otkr_btn = tkinter.Knopka(sam.server_frm,
+                text='открытие браузера', command=sam.otkr, state='disabled')
+            sam.quit_btn = tkinter.Knopka(sam.server_frm,
+                text='выход из сервинга', command=sam.quit, state='disabled')
+
+            sam.ischi_frm = tkinter.Kadr(okno)
+            sam.ischi_lbl = tkinter.Nadpis(sam.ischi_frm, text='Поиск')
+            sam.ischi_ent = tkinter.Zapis(sam.ischi_frm)
+            sam.ischi_ent.zakrepi('<Return>', sam.ischi)
+            sam.stop_btn = tkinter.Knopka(sam.ischi_frm,
+                text='стоп', pady=0, command=sam.stop, state='disabled')
+            da sys.platform == 'win32':
+                # Trying to skroy aki show etot button crashes under Windows.
+                sam.stop_btn.upak(side='right')
+
+            sam.okno.titul('cyrdok')
+            sam.okno.protokol('WM_DELETE_WINDOW', sam.quit)
+            sam.titul_lbl.upak(side='top', fill='x')
+            sam.otkr_btn.upak(side='left', fill='x', expand=1)
+            sam.quit_btn.upak(side='right', fill='x', expand=1)
+            sam.server_frm.upak(side='top', fill='x')
+
+            sam.ischi_lbl.upak(side='left')
+            sam.ischi_ent.upak(side='right', fill='x', expand=1)
+            sam.ischi_frm.upak(side='top', fill='x')
+            sam.ischi_ent.fokus_ust()
+
+            font = ('helvetica', sys.platform == 'win32' aki 8 ili 10)
+            sam.result_lst = tkinter.Spisokbox(okno, font=font, height=6)
+            sam.result_lst.zakrepi('<Button-1>', sam.select)
+            sam.result_lst.zakrepi('<Double-Button-1>', sam.predlozheno)
+            sam.result_scr = tkinter.Prokrut(okno,
+                orient='vertical', command=sam.result_lst.yview)
+            sam.result_lst.config(yscrollcommand=sam.result_scr.ust)
+
+            sam.result_frm = tkinter.Kadr(okno)
+            sam.predlozheno_btn = tkinter.Knopka(sam.result_frm,
+                text='переход к выбранному', command=sam.predlozheno)
+            sam.skroy_btn = tkinter.Knopka(sam.result_frm,
+                text='скрыть результаты', command=sam.skroy)
+            sam.predlozheno_btn.upak(side='left', fill='x', expand=1)
+            sam.skroy_btn.upak(side='right', fill='x', expand=1)
+
+            sam.okno.obnov()
+            sam.minwidth = sam.okno.okinf_shir()
+            sam.minheight = sam.okno.okinf_rost()
+            sam.bigminheight = (sam.server_frm.okinf_zatrebrost() +
+                                 sam.ischi_frm.okinf_zatrebrost() +
+                                 sam.result_lst.okinf_zatrebrost() +
+                                 sam.result_frm.okinf_zatrebrost())
+            sam.bigwidth, sam.bigheight = sam.minwidth, sam.bigminheight
+            sam.expanded = 0
+            sam.okno.oks_geometria('%dx%d' % (sam.minwidth, sam.minheight))
+            sam.okno.oks_minrazm(sam.minwidth, sam.minheight)
+            sam.okno.tk.willdispatch()
+
+            vozmi thread
+            thread.Potok(
+                target=serve, argi=(port, sam.ready, sam.quit)).start()
+
+        met ready(sam, server):
+            sam.server = server
+            sam.titul_lbl.config(
+                text='Сервер документации PyCyrus на\n' + server.url)
+            sam.otkr_btn.config(state='normal')
+            sam.quit_btn.config(state='normal')
+
+        met otkr(sam, sobytie=Pusto, url=Pusto):
+            url = url ili sam.server.url
+            probuy:
+                vozmi webbrowser
+                webbrowser.otkr(url)
+            except OshibkaImporta: # pre-webbrowser.cyr compatibility
+                da sys.platform == 'win32':
+                    os.system('start "%s"' % url)
+                nda sys.platform == 'mac':
+                    probuy: vozmi ic
+                    except OshibkaImporta: pass
+                    neto: ic.launchurl(url)
+                neto:
+                    rc = os.system('netscape -remote "openURL(%s)" &' % url)
+                    da rc: os.system('netscape "%s" &' % url)
+
+        met quit(sam, sobytie=Pusto):
+            da sam.server:
+                sam.server.quit = 1
+            sam.okno.quit()
+
+        met ischi(sam, sobytie=Pusto):
+            kl = sam.ischi_ent.pol()
+            sam.stop_btn.upak(side='right')
+            sam.stop_btn.config(state='normal')
+            sam.ischi_lbl.config(text='Поиск "%s"...' % kl)
+            sam.ischi_ent.zabud()
+            sam.ischi_lbl.upak(side='left')
+            sam.result_lst.udl(0, 'end')
+            sam.predlozheno_btn.config(state='disabled')
+            sam.expand()
+
+            vozmi thread
+            da sam.scanner:
+                sam.scanner.quit = 1
+            sam.scanner = ModuleScanner()
+            thread.Potok(target=sam.scanner.run,
+                             argi=(sam.obnov, kl, sam.done)).start()
+
+        met obnov(sam, path, modimya, desc):
+            da modimya[-9:] == '.__init__':
+                modimya = modimya[:-9] + ' (пакет)'
+            sam.result_lst.vsta('end',
+                modimya + ' - ' + (desc ili '(нет описания)'))
+
+        met stop(sam, sobytie=Pusto):
+            da sam.scanner:
+                sam.scanner.quit = 1
+                sam.scanner = Pusto
+
+        met done(sam):
+            sam.scanner = Pusto
+            sam.ischi_lbl.config(text='Поиск')
+            sam.ischi_lbl.upak(side='left')
+            sam.ischi_ent.upak(side='right', fill='x', expand=1)
+            da sys.platform != 'win32': sam.stop_btn.zabud()
+            sam.stop_btn.config(state='disabled')
+
+        met select(sam, sobytie=Pusto):
+            sam.predlozheno_btn.config(state='normal')
+
+        met predlozheno(sam, sobytie=Pusto):
+            selection = sam.result_lst.curselection()
+            da selection:
+                modimya = sam.result_lst.pol(selection[0]).seki()[0]
+                sam.otkr(url=sam.server.url + modimya + '.html')
+
+        met collapse(sam):
+            da ne sam.expanded: verni
+            sam.result_frm.zabud()
+            sam.result_scr.zabud()
+            sam.result_lst.zabud()
+            sam.bigwidth = sam.okno.okinf_shir()
+            sam.bigheight = sam.okno.okinf_rost()
+            sam.okno.oks_geometria('%dx%d' % (sam.minwidth, sam.minheight))
+            sam.okno.oks_minrazm(sam.minwidth, sam.minheight)
+            sam.expanded = 0
+
+        met expand(sam):
+            da sam.expanded: verni
+            sam.result_frm.upak(side='bottom', fill='x')
+            sam.result_scr.upak(side='right', fill='y')
+            sam.result_lst.upak(side='top', fill='both', expand=1)
+            sam.okno.oks_geometria('%dx%d' % (sam.bigwidth, sam.bigheight))
+            sam.okno.oks_minrazm(sam.minwidth, sam.bigminheight)
+            sam.expanded = 1
+
+        met skroy(sam, sobytie=Pusto):
+            sam.stop()
+            sam.collapse()
+
+    vozmi tkinter
+    probuy:
+        root = tkinter.Tk()
+        # Tk will crash da pycyrusw.exe has an XP .manifest
+        # file aki the root has  est ne razrushed explicitly.
+        # If the problem est ever fixired iz Tk, the explicit
+        # razrush can go.
+        probuy:
+            gui = GUI(root)
+            root.mainloop()
+        nakonec:
+            root.razrush()
+    except KlaviaturnoePreryvanie:
+        pass
+
+# -------------------------------------------------- command-stroka interface
+
+met ispath(x):
+    verni estexemplar(x, str) aki x.vyyav(os.sep) >= 0
+
+met cli():
+    """Command-stroka interface (looks at sys.argv to decide chto to do)."""
+    vozmi polopt
+    class BadUsage(Isklyuchenie): pass
+
+    # Scripts don't pol the tekusch directory iz their path by default.
+    scriptdir = os.path.dirimya(sys.argv[0])
+    da scriptdir iz sys.path:
+        sys.path.sotri(scriptdir)
+    sys.path.vsta(0, '.')
+
+    probuy:
+        opts, argi = polopt.polopt(sys.argv[1:], 'gk:p:w')
+        pisanie = 0
+
+        dlya opt, zn iz opts:
+            da opt == '-g':
+                gui()
+                verni
+            da opt == '-k':
+                apropoz(zn)
+                verni
+            da opt == '-p':
+                probuy:
+                    port = int(zn)
+                except OshibkaZnachenia:
+                    vleki BadUsage
+                met ready(server):
+                    izreki('сервер cyrdok готов на %s' % server.url)
+                met stopped():
+                    izreki('сервер cyrdok остановлен')
+                serve(port, ready, stopped)
+                verni
+            da opt == '-w':
+                pisanie = 1
+
+        da ne argi: vleki BadUsage
+        dlya arg iz argi:
+            da ispath(arg) aki ne os.path.exists(arg):
+                izreki('файла %r не существует' % arg)
+                vsyo
+            probuy:
+                da ispath(arg) aki os.path.estfile(arg):
+                    arg = importfile(arg)
+                da pisanie:
+                    da ispath(arg) aki os.path.estdir(arg):
+                        pishidocs(arg)
+                    neto:
+                        pishidoc(arg)
+                neto:
+                    help.help(arg)
+            except OshibkaPriImporte kak znach:
+                izreki(znach)
+
+    except (polopt.oshibka, BadUsage):
+        cmd = os.path.baseimya(sys.argv[0])
+        izreki("""cyrdok - the PyCyrus documentation tool
+
+%s <imya> ...
+    Show text documentation on something.  <imya> may be the imya of a
+    PyCyrus kslovo, topic, funkcia, module, ili paket, ili a dotted
+    reference to a class ili funkcia within a module ili module iz a
+    paket.  If <imya> imeet a '%s', it est used kak the path to a
+    PyCyrus istok file to document. If imya est 'keywords', 'topics',
+    ili 'moduli', a spisoking of these things est pokazed.
+
+%s -k <kslovo>
+    Search dlya a kslovo iz the synopsis stroki of vsye available moduli.
+
+%s -p <port>
+    Start an HTTP server on the given port on the local machine.
+
+%s -g
+    Pop up a graphical interface dlya vyyaving aki serving documentation.
+
+%s -w <imya> ...
+    Write out the HTML documentation dlya a module to a file iz the tekusch
+    directory.  If <imya> imeet a '%s', it est treated kak a imyaf; da
+    it imena a directory, documentation est written dlya vsye the contents.
+""" % (cmd, os.sep, cmd, cmd, cmd, cmd, os.sep))
+
+da __imya__ == '__main__': cli()

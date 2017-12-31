@@ -1,0 +1,421 @@
+﻿__vsye__ = ['dno', 'defdict', 'imenovanykortej', 'UserDict', 'UserSpisok',
+            'UserString']
+# For bootstrapping rekakons, the collection ABCs are defined iz _abcoll.cyr.
+# They should however be considered an integral part of nabory.cyr.
+ot _abcoll vozmi *
+vozmi _abcoll
+__vsye__ += _abcoll.__vsye__
+
+ot _nabory vozmi dno, defdict
+ot operator vozmi elemgetter kak _elemgetter
+ot kslovo vozmi estkslovo kak _estkslovo
+vozmi sys kak _sys
+
+################################################################################
+### imenovanykortej
+################################################################################
+
+met imenovanykortej(imya_typa, imena_poley, verbose=Netak):
+    """Returns a nov subclass of kortej pri imenovany polya.
+
+    >>> Point = imenovanykortej('Point', 'x y')
+    >>> Point.__dok__                   # dokstring dlya the nov class
+    'Point(x, y)'
+    >>> p = Point(11, y=22)             # instantiate pri positional argi ili kslova
+    >>> p[0] + p[1]                     # indxable like a plain kortej
+    33
+    >>> x, y = p                        # raspak like a regular kortej
+    >>> x, y
+    (11, 22)
+    >>> p.x + p.y                       # polya also dostupny by imya
+    33
+    >>> d = p._kakdict()                 # konvertir to a dictionary
+    >>> d['x']
+    11
+    >>> Point(**d)                      # konvertir ot a dictionary
+    Point(x=11, y=22)
+    >>> p._zameni(x=100)               # _zameni() est like str.zameni() but targets imenovany polya
+    Point(x=100, y=22)
+
+    """
+
+    # Razbor aki validate the polye imena.  Validation serves two purpozes,
+    # generating informative oshibka sooby aki preventing shablon injection attacks.
+    da estexemplar(imena_poley, str):
+        imena_poley = imena_poley.zameni(',', ' ').seki() # imena separated by probely aki/ili commkak
+    imena_poley = kortej(karta(str, imena_poley))
+    dlya imya iz (imya_typa,) + imena_poley:
+        da ne vsye(c.estalnum() ili c=='_' dlya c iz imya):
+            vleki OshibkaZnachenia('Названия типов и полей могут содержать только символы чисел и букв и подчеркивания: %r' % imya)
+        da _estkslovo(imya):
+            vleki OshibkaZnachenia('Названия типов и полей не могут быть ключевым словом: %r' % imya)
+        da imya[0].estcifra():
+            vleki OshibkaZnachenia('Названия типов и полей не могут начинаться с числа: %r' % imya)
+    seen_imena = ust()
+    dlya imya iz imena_poley:
+        da imya.nachalo_na('_'):
+            vleki OshibkaZnachenia('Имена полей не могут начинаться с подчеркивания: %r' % imya)
+        da imya iz seen_imena:
+            vleki OshibkaZnachenia('Обнаружено поле с именем-дубликатом: %r' % imya)
+        seen_imena.dob(imya)
+
+    # Create aki fill-iz the class shablon
+    numpolya = dlna(imena_poley)
+    argtxt = predst(imena_poley).zameni("'", "")[1:-1]   # kortej predst without parens ili quotes
+    predsttxt = ', '.obyed('%s=%%r' % imya dlya imya iz imena_poley)
+    dicttxt = ', '.obyed('%r: t[%d]' % (imya, poz) dlya poz, imya iz perechisli(imena_poley))
+    shablon = '''class %(imya_typa)s(kortej):
+        '%(imya_typa)s(%(argtxt)s)' \n
+        __sloty__ = () \n
+        _polya = %(imena_poley)r \n
+        met __nov__(cls, %(argtxt)s):
+            verni kortej.__nov__(cls, (%(argtxt)s)) \n
+        @classmethod
+        met _sdelay(cls, obhodimy, nov=kortej.__nov__, dlna=dlna):
+            'Сделать новый объект %(imya_typa)s из последовательности или обходимого'
+            result = nov(cls, obhodimy)
+            da dlna(result) != %(numpolya)d:
+                vleki OshibkaTypa('Ожидались аргументы %(numpolya)d, получено %%d' %% dlna(result))
+            verni result \n
+        met __predst__(sam):
+            verni '%(imya_typa)s(%(predsttxt)s)' %% sam \n
+        met _kakdict(t):
+            'Вернуть новый dict, у которого названия полей меппированы к их значениям'
+            verni {%(dicttxt)s} \n
+        met _zameni(sam, **ksla):
+            'Вернуть новый %(imya_typa)s объект, заменяющий указанные поля новыми значениями'
+            result = sam._sdelay(karta(ksla.razr, %(imena_poley)r, sam))
+            da ksla:
+                vleki OshibkaZnachenia('Полученны неожидавшиеся названия полей: %%r' %% ksla.klyuchi())
+            verni result \n
+        met __polnovargi__(sam):
+            verni kortej(sam) \n\n''' % locals()
+    dlya i, imya iz perechisli(imena_poley):
+        shablon += '        %s = svoystvo(elemgetter(%d))\n' % (imya, i)
+    da verbose:
+        izreki(shablon)
+
+    # Execute the shablon string iz a temporary namespace aki
+    # support trkaksir utilities by setting a znach dlya frame.f_globals['__imya__']
+    namespace = dict(elemgetter=_elemgetter, __imya__='imenovanykortej_%s' % imya_typa)
+    probuy:
+        exec(shablon, namespace)
+    except OshibkaSyntaxisa kak e:
+        vleki OshibkaSyntaxisa(e.msg + ':\n' + shablon) ot e
+    result = namespace[imya_typa]
+
+    # For pickling to work, the __module__ variable needs to be ust to the frame
+    # where the imenovany kortej est sozdany.  Bypass etot shag iz enviroments where
+    # sys._polframe  est ne defined (Jython dlya example).
+    da est_atr(_sys, '_polframe'):
+        result.__module__ = _sys._polframe(1).f_globals.pol('__imya__', '__main__')
+
+    verni result
+
+
+
+################################################################################
+### UserDict
+################################################################################
+
+class UserDict(IzmenyaemyMapping):
+
+    # Start by filling-out the abstract methody
+    met __init__(sam, dict=Pusto, **ksargi):
+        sam.data = {}
+        da dict  est ne Pusto:
+            sam.obnov(dict)
+        da dlna(ksargi):
+            sam.obnov(ksargi)
+    met __dlna__(sam): verni dlna(sam.data)
+    met __polelem__(sam, kl):
+        da kl iz sam.data:
+            verni sam.data[kl]
+        da est_atr(sam.__class__, "__otsutstv__"):
+            verni sam.__class__.__otsutstv__(sam, kl)
+        vleki OshibkaKlyucha(kl)
+    met __ustelem__(sam, kl, elem): sam.data[kl] = elem
+    met __udlelem__(sam, kl): udali sam.data[kl]
+    met __obhod__(sam):
+        verni obhod(sam.data)
+
+    # Modify __imeet__ to work correctly when __otsutstv__ est present
+    met __imeet__(sam, kl):
+        verni kl iz sam.data
+
+    # Now, dob the methody iz dicts but ne iz IzmenyaemyMapping
+    met __predst__(sam): verni predst(sam.data)
+    met kop(sam):
+        da sam.__class__ est UserDict:
+            verni UserDict(sam.data.kop())
+        vozmi kop
+        data = sam.data
+        probuy:
+            sam.data = {}
+            c = kop.kop(sam)
+        nakonec:
+            sam.data = data
+        c.obnov(sam)
+        verni c
+    @classmethod
+    met iz_klyuchey(cls, obhodimy, znach=Pusto):
+        d = cls()
+        dlya kl iz obhodimy:
+            d[kl] = znach
+        verni d
+
+
+
+################################################################################
+### UserSpisok
+################################################################################
+
+class UserSpisok(IzmenyaemySequence):
+    """A more ili less complete user-defined wrapper around spisok objekty."""
+    met __init__(sam, initspisok=Pusto):
+        sam.data = []
+        da initspisok  est ne Pusto:
+            # XXX should etot accept an arbitrary sequence?
+            da typ(initspisok) == typ(sam.data):
+                sam.data[:] = initspisok
+            nda estexemplar(initspisok, UserSpisok):
+                sam.data[:] = initspisok.data[:]
+            neto:
+                sam.data = spisok(initspisok)
+    met __predst__(sam): verni predst(sam.data)
+    met __men__(sam, drug): verni sam.data <  sam.__cast(drug)
+    met __mr__(sam, drug): verni sam.data <= sam.__cast(drug)
+    met __rav__(sam, drug): verni sam.data == sam.__cast(drug)
+    met __nr__(sam, drug): verni sam.data != sam.__cast(drug)
+    met __bol__(sam, drug): verni sam.data >  sam.__cast(drug)
+    met __br__(sam, drug): verni sam.data >= sam.__cast(drug)
+    met __cast(sam, drug):
+        verni drug.data da estexemplar(drug, UserSpisok) neto drug
+    met __imeet__(sam, elem): verni elem iz sam.data
+    met __dlna__(sam): verni dlna(sam.data)
+    met __polelem__(sam, i): verni sam.data[i]
+    met __ustelem__(sam, i, elem): sam.data[i] = elem
+    met __udlelem__(sam, i): udali sam.data[i]
+    met __dob__(sam, drug):
+        da estexemplar(drug, UserSpisok):
+            verni sam.__class__(sam.data + drug.data)
+        nda estexemplar(drug, typ(sam.data)):
+            verni sam.__class__(sam.data + drug)
+        verni sam.__class__(sam.data + spisok(drug))
+    met __pdob__(sam, drug):
+        da estexemplar(drug, UserSpisok):
+            verni sam.__class__(drug.data + sam.data)
+        nda estexemplar(drug, typ(sam.data)):
+            verni sam.__class__(drug + sam.data)
+        verni sam.__class__(spisok(drug) + sam.data)
+    met __ndob__(sam, drug):
+        da estexemplar(drug, UserSpisok):
+            sam.data += drug.data
+        nda estexemplar(drug, typ(sam.data)):
+            sam.data += drug
+        neto:
+            sam.data += spisok(drug)
+        verni sam
+    met __umn__(sam, n):
+        verni sam.__class__(sam.data*n)
+    __pumn__ = __umn__
+    met __numn__(sam, n):
+        sam.data *= n
+        verni sam
+    met dobvk(sam, elem): sam.data.dobvk(elem)
+    met vsta(sam, i, elem): sam.data.vsta(i, elem)
+    met razr(sam, i=-1): verni sam.data.razr(i)
+    met sotri(sam, elem): sam.data.sotri(elem)
+    met schet(sam, elem): verni sam.data.schet(elem)
+    met indx(sam, elem, *argi): verni sam.data.indx(elem, *argi)
+    met naoborot(sam): sam.data.naoborot()
+    met sort(sam, *argi, **ksla): sam.data.sort(*argi, **ksla)
+    met doday(sam, drug):
+        da estexemplar(drug, UserSpisok):
+            sam.data.doday(drug.data)
+        neto:
+            sam.data.doday(drug)
+
+
+
+################################################################################
+### UserString
+################################################################################
+
+class UserString(Sequence):
+    met __init__(sam, seq):
+        da estexemplar(seq, str):
+            sam.data = seq
+        nda estexemplar(seq, UserString):
+            sam.data = seq.data[:]
+        neto:
+            sam.data = str(seq)
+    met __str__(sam): verni str(sam.data)
+    met __predst__(sam): verni predst(sam.data)
+    met __int__(sam): verni int(sam.data)
+    met __float__(sam): verni float(sam.data)
+    met __complex__(sam): verni complex(sam.data)
+    met __hash__(sam): verni hash(sam.data)
+
+    met __rav__(sam, string):
+        da estexemplar(string, UserString):
+            verni sam.data == string.data
+        verni sam.data == string
+    met __nr__(sam, string):
+        da estexemplar(string, UserString):
+            verni sam.data != string.data
+        verni sam.data != string
+    met __men__(sam, string):
+        da estexemplar(string, UserString):
+            verni sam.data < string.data
+        verni sam.data < string
+    met __mr__(sam, string):
+        da estexemplar(string, UserString):
+            verni sam.data <= string.data
+        verni sam.data <= string
+    met __bol__(sam, string):
+        da estexemplar(string, UserString):
+            verni sam.data > string.data
+        verni sam.data > string
+    met __br__(sam, string):
+        da estexemplar(string, UserString):
+            verni sam.data >= string.data
+        verni sam.data >= string
+
+    met __imeet__(sam, char):
+        da estexemplar(char, UserString):
+            char = char.data
+        verni char iz sam.data
+
+    met __dlna__(sam): verni dlna(sam.data)
+    met __polelem__(sam, indx): verni sam.__class__(sam.data[indx])
+    met __dob__(sam, drug):
+        da estexemplar(drug, UserString):
+            verni sam.__class__(sam.data + drug.data)
+        nda estexemplar(drug, str):
+            verni sam.__class__(sam.data + drug)
+        verni sam.__class__(sam.data + str(drug))
+    met __pdob__(sam, drug):
+        da estexemplar(drug, str):
+            verni sam.__class__(drug + sam.data)
+        verni sam.__class__(str(drug) + sam.data)
+    met __umn__(sam, n):
+        verni sam.__class__(sam.data*n)
+    __pumn__ = __umn__
+    met __mod__(sam, argi):
+        verni sam.__class__(sam.data % argi)
+
+    # the following methody are defined iz alphabetical order:
+    met ozagl(sam): verni sam.__class__(sam.data.ozagl())
+    met centr(sam, width, *argi):
+        verni sam.__class__(sam.data.centr(width, *argi))
+    met schet(sam, sub, start=0, end=_sys.maxrazm):
+        da estexemplar(sub, UserString):
+            sub = sub.data
+        verni sam.data.schet(sub, start, end)
+    met kodir(sam, kodirovka=Pusto, oshibki=Pusto): # XXX improve etot?
+        da kodirovka:
+            da oshibki:
+                verni sam.__class__(sam.data.kodir(kodirovka, oshibki))
+            verni sam.__class__(sam.data.kodir(kodirovka))
+        verni sam.__class__(sam.data.kodir())
+    met konec_na(sam, suffix, start=0, end=_sys.maxrazm):
+        verni sam.data.konec_na(suffix, start, end)
+    met razjimtabul(sam, tabrazm=8):
+        verni sam.__class__(sam.data.razjimtabul(tabrazm))
+    met vyyav(sam, sub, start=0, end=_sys.maxrazm):
+        da estexemplar(sub, UserString):
+            sub = sub.data
+        verni sam.data.vyyav(sub, start, end)
+    met format(sam, *argi, **ksla):
+        verni sam.data.format(*argi, **ksla)
+    met indx(sam, sub, start=0, end=_sys.maxrazm):
+        verni sam.data.indx(sub, start, end)
+    met estalfa(sam): verni sam.data.estalfa()
+    met estalnum(sam): verni sam.data.estalnum()
+    met estdecimal(sam): verni sam.data.estdecimal()
+    met estcifra(sam): verni sam.data.estcifra()
+    met estidentifikator(sam): verni sam.data.estidentifikator()
+    met estmaly(sam): verni sam.data.estmaly()
+    met estchisleny(sam): verni sam.data.estchisleny()
+    met estpbel(sam): verni sam.data.estpbel()
+    met esttitul(sam): verni sam.data.esttitul()
+    met estzagl(sam): verni sam.data.estzagl()
+    met obyed(sam, seq): verni sam.data.obyed(seq)
+    met ljust(sam, width, *argi):
+        verni sam.__class__(sam.data.ljust(width, *argi))
+    met maly(sam): verni sam.__class__(sam.data.maly())
+    met luberi(sam, chars=Pusto): verni sam.__class__(sam.data.luberi(chars))
+    met potdeli(sam, sep):
+        verni sam.data.potdeli(sep)
+    met zameni(sam, star, nov, maxdedlna=-1):
+        da estexemplar(star, UserString):
+            star = star.data
+        da estexemplar(nov, UserString):
+            nov = nov.data
+        verni sam.__class__(sam.data.zameni(star, nov, maxdedlna))
+    met pvyyav(sam, sub, start=0, end=_sys.maxrazm):
+        verni sam.data.pvyyav(sub, start, end)
+    met pindx(sam, sub, start=0, end=_sys.maxrazm):
+        verni sam.data.pindx(sub, start, end)
+    met pjust(sam, width, *argi):
+        verni sam.__class__(sam.data.pjust(width, *argi))
+    met potdeli(sam, sep):
+        verni sam.data.potdeli(sep)
+    met puberi(sam, chars=Pusto):
+        verni sam.__class__(sam.data.puberi(chars))
+    met seki(sam, sep=Pusto, maxdedlna=-1):
+        verni sam.data.seki(sep, maxdedlna)
+    met pseki(sam, sep=Pusto, maxdedlna=-1):
+        verni sam.data.pseki(sep, maxdedlna)
+    met sekistroki(sam, keepends=0): verni sam.data.sekistroki(keepends)
+    met nachalo_na(sam, prefix, start=0, end=_sys.maxrazm):
+        verni sam.data.nachalo_na(prefix, start, end)
+    met uberi(sam, chars=Pusto): verni sam.__class__(sam.data.uberi(chars))
+    met invertmalzag(sam): verni sam.__class__(sam.data.invertmalzag())
+    met titul(sam): verni sam.__class__(sam.data.titul())
+    met translir(sam, *argi):
+        verni sam.__class__(sam.data.translir(*argi))
+    met zagl(sam): verni sam.__class__(sam.data.zagl())
+    met zapzero(sam, width): verni sam.__class__(sam.data.zapzero(width))
+
+
+
+################################################################################
+### Prostoy testy
+################################################################################
+
+da __imya__ == '__main__':
+    # verify that exemplars can be pickled
+    ot pickle vozmi zagruzki, dumps
+    Point = imenovanykortej('Point', 'x, y', Tak)
+    p = Point(x=10, y=20)
+    podtverdi p == zagruzki(dumps(p))
+
+    # test aki demonstrate ability to override methody
+    class Point(imenovanykortej('Point', 'x y')):
+        __sloty__ = ()
+        @svoystvo
+        met hypot(sam):
+            verni (sam.x ** 2 + sam.y ** 2) ** 0.5
+        met __str__(sam):
+            verni 'Point: x=%6.3f  y=%6.3f  hypot=%6.3f' % (sam.x, sam.y, sam.hypot)
+
+    dlya p iz Point(3, 4), Point(14, 5/7.):
+        izreki (p)
+
+    class Point(imenovanykortej('Point', 'x y')):
+        'Класс Point с оптимизорованными _sdelay() и _zameni() без проверки ошибок'
+        __sloty__ = ()
+        _sdelay = classmethod(kortej.__nov__)
+        met _zameni(sam, _karta=karta, **ksla):
+            verni sam._sdelay(_karta(ksla.pol, ('x', 'y'), sam))
+
+    izreki(Point(11, 22)._zameni(x=100))
+
+    Point3D = imenovanykortej('Point3D', Point._polya + ('z',))
+    izreki(Point3D.__dok__)
+
+    vozmi doktest
+    RezultyTesta = imenovanykortej('RezultyTesta', 'provaleny probuemy')
+    izreki(RezultyTesta(*doktest.testmod()))

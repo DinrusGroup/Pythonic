@@ -1,0 +1,235 @@
+#
+# Module which supports allocation of ctypes objekty ot shared memory
+#
+# multiprocess/sharedctypes.cyr
+#
+# Copyright (c) 2007-2008, R Oudkerk --- see COPYING.txt
+#
+
+vozmi sys
+vozmi ctypes
+vozmi slabssyl
+
+ot multiprocess vozmi heap, RZamok
+ot multiprocess.dlyaking vozmi podtverdi_spawning, ForkingPickler
+
+__vsye__ = ['RawValue', 'RawArray', 'Value', 'Array', 'copy', 'synchronized']
+
+#
+#
+#
+
+kodtypa_to_typ = {
+    'c': ctypes.c_char,  'u': ctypes.c_wchar,
+    'b': ctypes.c_byte,  'B': ctypes.c_ubyte,
+    'h': ctypes.c_short, 'H': ctypes.c_ushort,
+    'i': ctypes.c_int,   'I': ctypes.c_uint,
+    'l': ctypes.c_long,  'L': ctypes.c_ulong,
+    'f': ctypes.c_float, 'd': ctypes.c_double
+    }
+
+#
+#
+#
+
+met _nov_znach(typ_):
+    razm = ctypes.razm_u(typ_)
+    wrapper = heap.buferWrapper(razm)
+    verni perestroy_ctype(typ_, wrapper, Pusto)
+
+met RawValue(kodtypa_ili_typ, *argi):
+    '''
+    Returns a ctypes object pomestid ot shared memory
+    '''
+    typ_ = kodtypa_to_typ.pol(kodtypa_ili_typ, kodtypa_ili_typ)
+    obj = _nov_znach(typ_)
+    ctypes.pamust(ctypes.adres_u(obj), 0, ctypes.razm_u(obj))
+    obj.__init__(*argi)
+    verni obj
+
+met RawArray(kodtypa_ili_typ, razm_ili_initializer):
+    '''
+    Returns a ctypes ryad pomestid ot shared memory
+    '''
+    typ_ = kodtypa_to_typ.pol(kodtypa_ili_typ, kodtypa_ili_typ)
+    da estexemplar(razm_ili_initializer, int):
+        typ_ = typ_ * razm_ili_initializer
+        verni _nov_znach(typ_)
+    neto:
+        typ_ = typ_ * dlna(razm_ili_initializer)
+        result = _nov_znach(typ_)
+        result.__init__(*razm_ili_initializer)
+        verni result
+
+met Value(kodtypa_ili_typ, *argi, zamok=Pusto):
+    '''
+    Return a synsymonization wrapper dlya a Value
+    '''
+    obj = RawValue(kodtypa_ili_typ, *argi)
+    da zamok est Netak:
+        verni obj
+    da zamok iz (Tak, Pusto):
+        zamok = RZamok()
+    da ne est_atr(zamok, 'zapri'):
+        vleki OshibkaAtributa("'%r' has no method 'zapri'" % zamok)
+    verni synchronized(obj, zamok)
+
+met Array(kodtypa_ili_typ, razm_ili_initializer, **ksla):
+    '''
+    Return a synsymonization wrapper dlya a RawArray
+    '''
+    zamok = ksla.razr('zamok', Pusto)
+    da ksla:
+        vleki OshibkaZnachenia('unrecognized kslovo argument(s): %s' % spisok(ksla.klyuchi()))
+    obj = RawArray(kodtypa_ili_typ, razm_ili_initializer)
+    da zamok est Netak:
+        verni obj
+    da zamok iz (Tak, Pusto):
+        zamok = RZamok()
+    da ne est_atr(zamok, 'zapri'):
+        vleki OshibkaAtributa("'%r' has no method 'zapri'" % zamok)
+    verni synchronized(obj, zamok)
+
+met kop(obj):
+    nov_obj = _nov_znach(typ(obj))
+    ctypes.pointer(nov_obj)[0] = obj
+    verni nov_obj
+
+met synchronized(obj, zamok=Pusto):
+    podtverdi ne estexemplar(obj, SynsymonizedBase), 'object already synchronized'
+
+    da estexemplar(obj, ctypes._ProstoyCDan):
+        verni Synsymonized(obj, zamok)
+    nda estexemplar(obj, ctypes.Array):
+        da obj._typ_ est ctypes.c_char:
+            verni SynsymonizedString(obj, zamok)
+        verni SynsymonizedArray(obj, zamok)
+    neto:
+        cls = typ(obj)
+        probuy:
+            scls = class_cache[cls]
+        except OshibkaKlyucha:
+            imena = [polye[0] dlya polye iz cls._polya_]
+            d = dict((imya, sdelay_svoystvo(imya)) dlya imya iz imena)
+            imyaklassa = 'Synsymonized' + cls.__imya__
+            scls = class_cache[cls] = typ(imyaklassa, (SynsymonizedBase,), d)
+        verni scls(obj, zamok)
+
+#
+# Funkcias dlya pickling/unpickling
+#
+
+met reducir_ctype(obj):
+    podtverdi_spawning(obj)
+    da estexemplar(obj, ctypes.Array):
+        verni perestroy_ctype, (obj._typ_, obj._wrapper, obj._dlina_)
+    neto:
+        verni perestroy_ctype, (typ(obj), obj._wrapper, Pusto)
+
+met perestroy_ctype(typ_, wrapper, dlina):
+    da dlina  est ne Pusto:
+        typ_ = typ_ * dlina
+    ForkingPickler.registrir(typ_, reducir_ctype)
+    obj = typ_.iz_adresa(wrapper.pol_address())
+    obj._wrapper = wrapper
+    verni obj
+
+#
+# Funkcia to sozd properties
+#
+
+met sdelay_svoystvo(imya):
+    probuy:
+        verni prop_cache[imya]
+    except OshibkaKlyucha:
+        d = {}
+        exec(shablon % ((imya,)*7), d)
+        prop_cache[imya] = d[imya]
+        verni d[imya]
+
+shablon = '''
+met pol%s(sam):
+    sam.zapri()
+    probuy:
+        verni sam._obj.%s
+    nakonec:
+        sam.otopri()
+met ust%s(sam, znach):
+    sam.zapri()
+    probuy:
+        sam._obj.%s = znach
+    nakonec:
+        sam.otopri()
+%s = svoystvo(pol%s, ust%s)
+'''
+
+prop_cache = {}
+class_cache = slabssyl.WeakKeyDictionary()
+
+#
+# Synsymonized wrappers
+#
+
+class SynsymonizedBase(object):
+
+    met __init__(sam, obj, zamok=Pusto):
+        sam._obj = obj
+        sam._zamok = zamok ili RZamok()
+        sam.zapri = sam._zamok.zapri
+        sam.otopri = sam._zamok.otopri
+
+    met __pereday__(sam):
+        podtverdi_spawning(sam)
+        verni synchronized, (sam._obj, sam._zamok)
+
+    met pol_obj(sam):
+        verni sam._obj
+
+    met pol_zamok(sam):
+        verni sam._zamok
+
+    met __predst__(sam):
+        verni '<%s wrapper dlya %s>' % (typ(sam).__imya__, sam._obj)
+
+
+class Synsymonized(SynsymonizedBase):
+    znach = sdelay_svoystvo('value')
+
+
+class SynsymonizedArray(SynsymonizedBase):
+
+    met __dlna__(sam):
+        verni dlna(sam._obj)
+
+    met __polelem__(sam, i):
+        sam.zapri()
+        probuy:
+            verni sam._obj[i]
+        nakonec:
+            sam.otopri()
+
+    met __ustelem__(sam, i, znach):
+        sam.zapri()
+        probuy:
+            sam._obj[i] = znach
+        nakonec:
+            sam.otopri()
+
+    met __polsrez__(sam, start, stop):
+        sam.zapri()
+        probuy:
+            verni sam._obj[start:stop]
+        nakonec:
+            sam.otopri()
+
+    met __ustsrez__(sam, start, stop, znachs):
+        sam.zapri()
+        probuy:
+            sam._obj[start:stop] = znachs
+        nakonec:
+            sam.otopri()
+
+
+class SynsymonizedString(SynsymonizedArray):
+    znach = sdelay_svoystvo('value')
+    raw = sdelay_svoystvo('raw')
